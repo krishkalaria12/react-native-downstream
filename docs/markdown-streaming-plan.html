@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Downstream · native Markdown streaming plan</title>
+    <style>
+      :root {
+        --paper: #f5f8f8;
+        --surface: #ffffff;
+        --surface-soft: #edf3f2;
+        --ink: #17272d;
+        --ink-soft: #486167;
+        --muted: #667c80;
+        --line: #cddcda;
+        --line-strong: #94aeaa;
+        --accent: #146e69;
+        --accent-soft: #d9efeb;
+        --tail: #aa681b;
+        --tail-soft: #f8eddb;
+        --risk: #a64242;
+        --risk-soft: #faeaea;
+        --code: #e8f0ef;
+        --shadow: 0 12px 32px rgba(16, 57, 55, 0.07);
+        --sans: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --paper: #0f1b1e;
+          --surface: #152528;
+          --surface-soft: #1c3334;
+          --ink: #e8f2ef;
+          --ink-soft: #b6cac5;
+          --muted: #92aca7;
+          --line: #34504e;
+          --line-strong: #537872;
+          --accent: #84d4c6;
+          --accent-soft: #1b4643;
+          --tail: #efbb72;
+          --tail-soft: #46351f;
+          --risk: #ef9993;
+          --risk-soft: #462d30;
+          --code: #223a3b;
+          --shadow: none;
+        }
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font: 16px/1.58 var(--sans);
+      }
+      a { color: var(--accent); text-underline-offset: 0.18em; }
+      a:hover { text-decoration-thickness: 2px; }
+      :focus-visible { outline: 3px solid var(--tail); outline-offset: 3px; border-radius: 3px; }
+      .skip {
+        position: absolute;
+        left: -9999px;
+        top: 0.5rem;
+        z-index: 10;
+        background: var(--surface);
+        padding: 0.6rem 1rem;
+      }
+      .skip:focus { left: 0.5rem; }
+      .shell { display: grid; grid-template-columns: 15.5rem minmax(0, 1fr); min-height: 100vh; }
+      .rail {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        overflow-y: auto;
+        padding: 2.1rem 1.3rem 2rem 1.6rem;
+        border-right: 1px solid var(--line);
+        background: var(--surface);
+      }
+      .mark { width: 2.65rem; height: 2.65rem; border: 2px solid var(--accent); position: relative; margin-bottom: 1.4rem; }
+      .mark::before, .mark::after { content: ""; position: absolute; height: 2px; background: var(--accent); left: 0.42rem; }
+      .mark::before { width: 1.5rem; top: 0.86rem; }
+      .mark::after { width: 0.85rem; top: 1.48rem; }
+      .rail-title { font-weight: 800; letter-spacing: -0.035em; line-height: 1.18; font-size: 1.18rem; margin: 0 0 0.35rem; }
+      .rail-subtitle { margin: 0; color: var(--muted); font-size: 0.8rem; line-height: 1.4; }
+      .rail nav { margin-top: 2.5rem; display: grid; gap: 0.06rem; }
+      .rail nav a { display: block; padding: 0.52rem 0.6rem; color: var(--ink-soft); text-decoration: none; font-size: 0.86rem; line-height: 1.32; border-left: 2px solid transparent; }
+      .rail nav a:hover, .rail nav a:focus-visible { color: var(--ink); background: var(--surface-soft); }
+      .rail nav a.active { border-left-color: var(--accent); color: var(--ink); font-weight: 700; background: var(--accent-soft); }
+      .rail-foot { border-top: 1px solid var(--line); margin-top: 2rem; padding-top: 1rem; color: var(--muted); font-size: 0.76rem; }
+      main { min-width: 0; }
+      .wrap { max-width: 77rem; padding: 3.5rem clamp(1.25rem, 4.8vw, 5rem) 7rem; margin: 0 auto; }
+      .mast { border-bottom: 2px solid var(--ink); padding-bottom: 2.4rem; margin-bottom: 2.6rem; }
+      .topline { display: flex; justify-content: space-between; gap: 1rem; color: var(--ink-soft); font-size: 0.83rem; margin-bottom: 1.7rem; }
+      .topline span:last-child { text-align: right; }
+      h1 { font-size: clamp(2.6rem, 5.2vw, 5.1rem); letter-spacing: -0.07em; line-height: 0.99; margin: 0 0 1.5rem; max-width: 13ch; font-weight: 760; }
+      .lede { font-size: clamp(1.08rem, 1.5vw, 1.3rem); line-height: 1.48; max-width: 48rem; margin: 0; color: var(--ink-soft); }
+      .decision { margin-top: 2.2rem; padding: 1.2rem 1.4rem; background: var(--accent-soft); border-left: 5px solid var(--accent); max-width: 60rem; }
+      .decision strong { display: block; margin-bottom: 0.25rem; }
+      .decision p { margin: 0; }
+      .document-section { scroll-margin-top: 1.8rem; padding: 2.7rem 0 3.3rem; border-top: 1px solid var(--line); }
+      .section-head { display: grid; grid-template-columns: minmax(0, 2.4fr) minmax(12rem, 1fr); align-items: end; gap: 2rem; margin-bottom: 1.75rem; }
+      .section-head h2 { font-size: clamp(1.9rem, 2.8vw, 2.7rem); letter-spacing: -0.055em; line-height: 1.13; margin: 0; }
+      .section-head p { margin: 0; color: var(--ink-soft); font-size: 0.94rem; line-height: 1.45; }
+      h3 { font-size: 1.22rem; letter-spacing: -0.025em; line-height: 1.25; margin: 2rem 0 0.7rem; }
+      h4 { font-size: 1rem; margin: 1.4rem 0 0.4rem; }
+      p { max-width: 70ch; margin: 0.5rem 0 1rem; }
+      ul, ol { padding-left: 1.35rem; max-width: 78ch; }
+      li { margin: 0.37rem 0; }
+      li ul { margin: 0.35rem 0 0.7rem; }
+      code, pre { font-family: var(--mono); }
+      code { background: var(--code); border-radius: 3px; padding: 0.08rem 0.25rem; font-size: 0.88em; overflow-wrap: anywhere; }
+      pre { background: var(--ink); color: var(--surface); padding: 1.1rem 1.3rem; overflow-x: auto; font-size: 0.82rem; line-height: 1.65; }
+      pre code { background: none; color: inherit; padding: 0; font-size: inherit; overflow-wrap: normal; }
+      .kicker { font: 700 0.77rem/1.3 var(--mono); color: var(--accent); letter-spacing: 0.02em; margin: 0 0 0.7rem; }
+      .meta-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 2rem; }
+      .meta-grid > div { background: var(--surface); padding: 1rem 1.1rem; }
+      .meta-grid b { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; }
+      .meta-grid span { color: var(--ink-soft); font-size: 0.9rem; }
+      .callout { padding: 1rem 1.25rem; background: var(--surface-soft); border-left: 4px solid var(--line-strong); margin: 1.3rem 0; }
+      .callout p:last-child { margin-bottom: 0; }
+      .callout.warning { border-left-color: var(--tail); background: var(--tail-soft); }
+      .callout.risk { border-left-color: var(--risk); background: var(--risk-soft); }
+      .callout strong { display: block; margin-bottom: 0.2rem; }
+      .label { font: 700 0.73rem/1.25 var(--mono); color: var(--ink-soft); display: inline-block; border: 1px solid var(--line-strong); padding: 0.18rem 0.35rem; margin-right: 0.35rem; white-space: nowrap; }
+      .label.proposed { color: var(--tail); border-color: var(--tail); }
+      .label.observed { color: var(--accent); border-color: var(--accent); }
+      .table-wrap { max-width: 100%; overflow-x: auto; border: 1px solid var(--line); background: var(--surface); margin: 1.25rem 0 1.5rem; }
+      table { border-collapse: collapse; width: 100%; min-width: 650px; font-size: 0.88rem; line-height: 1.43; }
+      th, td { padding: 0.78rem 0.87rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+      th { background: var(--surface-soft); color: var(--ink); font-size: 0.78rem; font-weight: 750; }
+      tr:last-child td { border-bottom: 0; }
+      td p { margin: 0; }
+      td ul { margin: 0; padding-left: 1rem; }
+      .small { color: var(--ink-soft); font-size: 0.86rem; }
+      .sequence { border-top: 2px solid var(--accent); margin: 1.5rem 0 2.2rem; }
+      .seq-row { display: grid; grid-template-columns: 10.5rem minmax(0, 1fr) 15.5rem; gap: 1.2rem; border-bottom: 1px solid var(--line); padding: 1.1rem 0; align-items: start; }
+      .seq-row .stage { font-weight: 800; line-height: 1.25; }
+      .seq-row .stage span { display: block; color: var(--muted); font: 0.74rem/1.45 var(--mono); margin-bottom: 0.2rem; }
+      .seq-row p { margin: 0; max-width: 62ch; }
+      .seq-row .gate { color: var(--ink-soft); font-size: 0.82rem; padding-left: 0.8rem; border-left: 2px solid var(--tail); }
+      .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.4rem; margin: 1.5rem 0 0.65rem; }
+      .flow-node { min-height: 8rem; padding: 0.9rem; background: var(--surface); border: 1px solid var(--line-strong); position: relative; }
+      .flow-node:not(:last-child)::after { content: "→"; position: absolute; top: 0.48rem; right: -0.51rem; z-index: 1; width: 0.62rem; background: var(--paper); color: var(--accent); text-align: center; font-size: 1rem; font-weight: bold; }
+      .flow-node b { display: block; font-size: 0.89rem; line-height: 1.24; margin-bottom: 0.4rem; }
+      .flow-node span { display: block; font-size: 0.78rem; line-height: 1.4; color: var(--ink-soft); }
+      .flow-node.tail { border-color: var(--tail); background: var(--tail-soft); }
+      .flow-node.committed { border-color: var(--accent); background: var(--accent-soft); }
+      .flow-note { display: flex; flex-wrap: wrap; gap: 1.5rem; font-size: 0.8rem; color: var(--ink-soft); margin-bottom: 1.6rem; }
+      .swatch { display: inline-block; width: 0.65rem; height: 0.65rem; border: 1px solid currentColor; margin-right: 0.4rem; vertical-align: baseline; }
+      .swatch.green { color: var(--accent); background: var(--accent-soft); }
+      .swatch.amber { color: var(--tail); background: var(--tail-soft); }
+      .two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; }
+      .panel { border: 1px solid var(--line); background: var(--surface); padding: 1.1rem 1.25rem; }
+      .panel h3 { margin-top: 0; }
+      .panel p:last-child, .panel ul:last-child { margin-bottom: 0; }
+      .source-list { display: grid; gap: 1px; border: 1px solid var(--line); background: var(--line); }
+      .source-list a { display: grid; grid-template-columns: 13rem minmax(0, 1fr); gap: 1rem; padding: 0.8rem 1rem; background: var(--surface); text-decoration: none; }
+      .source-list a:hover { background: var(--surface-soft); }
+      .source-list b { color: var(--ink); font-size: 0.88rem; }
+      .source-list span { color: var(--ink-soft); font-size: 0.83rem; overflow-wrap: anywhere; }
+      footer { padding-top: 1.8rem; border-top: 2px solid var(--ink); color: var(--ink-soft); font-size: 0.86rem; }
+      @media (max-width: 1100px) {
+        .shell { grid-template-columns: 12.7rem minmax(0, 1fr); }
+        .rail { padding-left: 1rem; padding-right: 0.7rem; }
+        .seq-row { grid-template-columns: 8rem minmax(0, 1fr); }
+        .seq-row .gate { grid-column: 2; }
+        .flow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .flow-node:not(:last-child)::after { display: none; }
+      }
+      @media (max-width: 760px) {
+        .shell { display: block; }
+        .rail { position: static; height: auto; padding: 0.85rem 1rem; border-right: 0; border-bottom: 1px solid var(--line); }
+        .mark, .rail-subtitle, .rail-foot { display: none; }
+        .rail-title { font-size: 1rem; margin: 0; }
+        .rail nav { display: flex; overflow-x: auto; margin: 0.7rem -0.2rem 0; gap: 0.35rem; padding-bottom: 0.1rem; }
+        .rail nav a { white-space: nowrap; border-left: 0; border-bottom: 2px solid transparent; padding: 0.25rem 0.4rem; font-size: 0.75rem; }
+        .rail nav a.active { border-left: 0; border-bottom-color: var(--accent); }
+        .wrap { padding: 2rem 1rem 4rem; }
+        .topline { margin-bottom: 1.2rem; }
+        .section-head { display: block; }
+        .section-head p { margin-top: 0.65rem; }
+        .meta-grid, .two-col { grid-template-columns: 1fr; }
+        .flow { grid-template-columns: 1fr; }
+        .flow-node { min-height: 0; }
+        .seq-row { grid-template-columns: 1fr; gap: 0.45rem; }
+        .seq-row .gate { grid-column: 1; }
+        .source-list a { grid-template-columns: 1fr; gap: 0.1rem; }
+      }
+      @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+      @media print {
+        :root { color-scheme: light; --paper: #fff; --surface: #fff; --surface-soft: #f1f5f4; --ink: #111; --ink-soft: #333; --muted: #555; --line: #bbb; --line-strong: #777; --accent: #125b57; --accent-soft: #e9f3f1; --tail: #7d4b13; --tail-soft: #f7f0e7; --risk: #843434; --risk-soft: #f8eeee; }
+        html { scroll-behavior: auto; }
+        body { font-size: 10pt; }
+        .shell { display: block; }
+        .rail { display: none; }
+        .wrap { padding: 0; max-width: none; }
+        .mast { margin-bottom: 1rem; }
+        h1 { font-size: 30pt; }
+        .document-section { padding: 1.2rem 0; break-inside: auto; }
+        .section-head { margin-bottom: 0.75rem; }
+        h2, h3, h4, .panel, .callout, .seq-row { break-inside: avoid; }
+        .table-wrap { overflow: visible; }
+        table { min-width: 0; font-size: 8pt; }
+        th, td { padding: 0.32rem 0.38rem; }
+        a { color: var(--ink); }
+        pre { background: #eee; color: #111; }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to plan</a>
+    <div class="shell">
+      <aside class="rail" aria-label="Document navigation">
+        <div class="mark" aria-hidden="true"></div>
+        <p class="rail-title">Downstream<br />Markdown streaming</p>
+        <p class="rail-subtitle">Research and implementation plan</p>
+        <nav aria-label="Sections">
+          <a href="#decision">Decision</a>
+          <a href="#evidence">Repository findings</a>
+          <a href="#architecture">Native architecture</a>
+          <a href="#semantics">Streaming semantics</a>
+          <a href="#performance">Performance strategy</a>
+          <a href="#benchmarks">Benchmark protocol</a>
+          <a href="#delivery">Build sequence</a>
+          <a href="#quality">Production quality</a>
+          <a href="#risks">Risks and gates</a>
+          <a href="#sources">Sources</a>
+        </nav>
+        <div class="rail-foot">Plan date: 27 September 2026<br />Research only; no renderer has been implemented in this repository.</div>
+      </aside>
+      <main id="main">
+        <div class="wrap">
+          <header class="mast" id="decision">
+            <div class="topline"><span>Engineering plan / React Native 0.83.2</span><span>27 September 2026</span></div>
+            <h1>Render the stream, not the growing document.</h1>
+            <p class="lede">A production plan for Markdown that arrives in small chunks, stays responsive in chat lists, and renders through native iOS and Android text systems. It records what the existing libraries actually do, the architecture we intend to prove, and the measurements that will decide the final shape.</p>
+            <div class="decision">
+              <strong>Recommended direction</strong>
+              <p>Use a single Fabric display component with native text layout. Establish Enriched Markdown + React Native Streamdown as the measured baseline. Then build a native append session that coalesces chunks, retains completed blocks, reparses a conservative active tail, and applies only the latest snapshot. Keep Nitro optional unless a public headless API or measured crossing cost justifies it.</p>
+            </div>
+            <div class="meta-grid" aria-label="Current state and decision status">
+              <div><b>Current repository</b><span>Library template. <code>src/index.tsx</code> exports only <code>multiply</code>; no native or Markdown code exists.</span></div>
+              <div><b>Chosen technical direction</b><span>Fabric display view, md4c parser, native session, platform text rendering.</span></div>
+              <div><b>Still to prove</b><span>Whether native full parsing once per frame is enough, or a reparsable tail provides a material device-level win.</span></div>
+            </div>
+          </header>
+
+          <section class="document-section" id="evidence">
+            <div class="section-head"><h2>What the repositories tell us</h2><p>Source inspection supports these architecture findings. Repository claims about speed are kept separate from measured device evidence.</p></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th style="width: 18%">Project</th><th style="width: 32%">Verified implementation</th><th style="width: 30%">Fit for Downstream</th><th style="width: 20%">Constraint</th></tr></thead>
+                <tbody>
+                  <tr><td><a href="https://github.com/software-mansion-labs/react-native-streamdown">React Native Streamdown</a></td><td>A small React Native wrapper. It sends each full Markdown prop through <a href="https://github.com/software-mansion-labs/react-native-streamdown/blob/main/src/worklets/remendWorklet.ts">remend on a Worklets runtime</a>, then passes repaired text to <a href="https://github.com/software-mansion-labs/react-native-streamdown/blob/main/src/StreamdownText.tsx">EnrichedMarkdownText</a>. It gates stale worklet results by version.</td><td>Best immediate streaming UX baseline. Borrow incomplete-syntax policy, stale-result protection, and demo cases.</td><td>It processes the growing string on every update. Bundle Mode needs Babel and Metro configuration; its README recommends a Metro patch.</td></tr>
+                  <tr><td><a href="https://github.com/software-mansion/enriched-markdown">Enriched Markdown</a></td><td>A <a href="https://github.com/software-mansion/enriched-markdown/blob/main/packages/react-native-enriched-markdown/src/EnrichedMarkdownTextNativeComponent.ts">Fabric/codegen native component</a> using md4c and platform native text rendering. It covers GFM, selection, accessibility, images, math, code, and <a href="https://github.com/software-mansion/enriched-markdown/blob/main/docs/MARKDOWN_STREAMING.md">streaming display policy</a>.</td><td>Strongest renderer foundation to benchmark, depend on, or adapt. Its native layout and streaming behavior avoid re-creating years of platform details.</td><td>The public input is a complete <code>markdown</code> prop. A native append-session path is still needed for high-rate deltas.</td></tr>
+                  <tr><td><a href="https://github.com/vercel/streamdown">Vercel Streamdown</a></td><td>Web React/DOM rendering with per-block behavior. Its <a href="https://github.com/vercel/streamdown/blob/main/packages/remend/README.md">remend</a> library repairs incomplete Markdown as a full-string transformation.</td><td>Behavior reference for speculative completion, links, images, fences, math, and test fixtures.</td><td>DOM, CSS, and web rendering code do not become a native view by adding JSI.</td></tr>
+                  <tr><td><a href="https://github.com/JoaoPauloCMarra/react-native-nitro-markdown">Nitro Markdown</a></td><td>md4c through Nitro/JSI; a native text session; React Native component rendering. <a href="https://github.com/JoaoPauloCMarra/react-native-nitro-markdown/blob/main/docs/streaming.md">Its streaming docs</a> identify true no-parse paths for plain text and open fenced code. Structural changes parse again, then reuse stable AST nodes.</td><td>Reference for session API, frame batching, source ranges, typed errors, and safe fallback behavior.</td><td>Structural updates still parse; the React tree and layout stay in the hot path.</td></tr>
+                  <tr><td><a href="https://github.com/siinghd/brookmd">BrookMD</a></td><td>Rust incremental core with stable completed blocks and active-tail patches. Its React Native package uses JSI and RN element rendering. The <a href="https://github.com/siinghd/brookmd/blob/main/packages/brookmd-react-native/src/native-pool.ts">RN worker runs synchronously in-process</a>.</td><td>Best public model for block identity, patch protocol, and parser conformance work.</td><td>RN binding is experimental; its JSI call can still occupy the JS thread, and its renderer is not one native text view.</td></tr>
+                  <tr><td><a href="https://github.com/alizahid/react-native-jet-markdown">Jet Markdown</a></td><td>One Fabric view, md4c, TextKit on iOS, StaticLayout/Spannable on Android, shared parse/layout cache.</td><td>Concrete reference for the native view and Fabric measurement design.</td><td>No streaming session. Requires RN 0.86+ and labels Android experimental, so it is not a drop-in dependency for this RN 0.83.2 example.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <h3>What published numbers do and do not show</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Published observation</th><th>What it measures</th><th>Decision value</th></tr></thead>
+                <tbody>
+                  <tr><td><a href="https://github.com/JoaoPauloCMarra/react-native-nitro-markdown/blob/main/docs/comparison.md">Nitro Markdown</a> reports a plain-text append helper reduction from 3.283 ms to 0.033 ms p50 for a 280,004-unit input in an Android emulator Hermes run.</td><td>Only that helper. The maintainers explicitly exclude native parsing, rendering, frame rate, and physical-device performance.</td><td>Good evidence to avoid full-buffer scans on an append. It cannot rank complete renderers.</td></tr>
+                  <tr><td><a href="https://github.com/alizahid/react-native-jet-markdown#performance">Jet Markdown</a> reports 4.1 ms to parse a 160 KB document.</td><td>Shared C++ core on an Apple M-series host at <code>-O2</code>.</td><td>Useful parser scale check. It is not a phone paint-time measurement; Jet requires a newer RN version.</td></tr>
+                  <tr><td>Streamdown/Enriched and BrookMD publish architecture and tests but no directly comparable physical-device stream-to-paint result in the inspected sources.</td><td>No shared corpus, device, build, or frame-trace protocol.</td><td>The benchmark in this plan must choose the implementation.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="callout warning"><strong>Interpretation</strong><p>No repo currently proves “fastest React Native Markdown streaming” across parsing, reconciliation, layout, and paint. We will avoid choosing by parser-only microbenchmarks or comparing Node timings with phone timings.</p></div>
+            <h3>Other projects screened out</h3>
+            <p><a href="https://github.com/s77rt/react-native-markdown">s77rt/react-native-markdown</a> and <a href="https://github.com/Expensify/react-native-live-markdown">Expensify Live Markdown</a> focus on native Markdown <em>input</em> rather than assistant-message display. They are useful references for selection and text ranges, but do not supply the streaming display architecture. <a href="https://github.com/ensunluer/react-native-markdown-stream">react-native-markdown-stream</a> and <a href="https://github.com/RonRadtke/react-native-markdown-display">react-native-markdown-display</a> render through JavaScript parsers and React Native element trees; they can inform API behavior, but they leave parsing and reconciliation on the streaming path.</p>
+          </section>
+
+          <section class="document-section" id="architecture">
+            <div class="section-head"><h2>The native system we would build</h2><p>One native ownership chain for text, parse state, block identity, measurement, and visible output.</p></div>
+            <div class="flow" role="img" aria-label="Network chunks are batched by a JavaScript adapter, appended to a native session, parsed into committed blocks and a mutable tail on a worker, measured by Fabric, then painted in a native view">
+              <div class="flow-node"><b>Stream adapter</b><span>Receives SSE or socket deltas. Preserves chunk order and flushes at a bounded cadence.</span></div>
+              <div class="flow-node"><b>Native session</b><span>Owns canonical UTF-8 source, sequence number, limits, reset and finalize operations.</span></div>
+              <div class="flow-node tail"><b>Parser worker</b><span>md4c parses an uncertain tail; the whole source is a safe fallback. Expensive extras wait.</span></div>
+              <div class="flow-node committed"><b>Render snapshot</b><span>Immutable completed blocks plus one replaceable tail. Cached measurement keys.</span></div>
+              <div class="flow-node"><b>Fabric view</b><span>Applies latest snapshot to native text/layout on the required platform thread.</span></div>
+            </div>
+            <div class="flow-note"><span><i class="swatch green" aria-hidden="true"></i>Completed content keeps stable identity</span><span><i class="swatch amber" aria-hidden="true"></i>Tail may change while more bytes arrive</span></div>
+            <div class="two-col">
+              <div class="panel"><h3>Public display API</h3><p>Offer a simple controlled <code>markdown</code> prop for static and low-rate updates. Offer a session/ref API for high-rate streams: <code>append(chunk)</code>, <code>reset(source)</code>, <code>finish()</code>, and <code>dispose()</code>. A controlled prop replacement starts a new source generation, so an old async parse cannot overwrite it.</p><p>Keep the raw source available for copy and completion. A later headless parse export can expose AST/source offsets without making AST materialization part of every paint.</p></div>
+              <div class="panel"><h3>Native responsibilities</h3><p>C++ owns parsing and source bookkeeping. iOS owns attributed text through TextKit; Android owns spans and native layout. Codegen defines the Fabric component contract and native commands. Native parser work uses an owned worker queue. The platform view applies only current results and remains safe under RN measurement or remount.</p><p>Use Nitro only if a public JSI session/headless parser is valuable and benchmarks show its extra dependency earns a place in the package.</p></div>
+            </div>
+            <h3>Thread and version contract</h3>
+            <ol>
+              <li><code>append</code> adds bytes to the session and increments a monotonic generation/sequence. A reset changes the generation and invalidates pending results.</li>
+              <li>The worker reads an immutable input snapshot, computes a parse/render model, and records its generation and sequence.</li>
+              <li>The view applies the result only when both identifiers still match. Older work is discarded. Cancellation is an optimization, not the correctness mechanism.</li>
+              <li>UIKit and Android view mutations occur on their permitted thread. Worker code cannot hold or mutate live view objects.</li>
+              <li>Fabric measurement must use a coherent snapshot and width/style cache key. A size computed for an older width or content version cannot be mounted as current.</li>
+            </ol>
+            <p class="small">React Native’s <a href="https://reactnative.dev/architecture/fabric-renderer">Fabric</a> and <a href="https://reactnative.dev/architecture/threading-model">threading model</a> support this direction, but Fabric does not promise a dedicated background layout thread for every operation.</p>
+            <h3>Where Hermes and Nitro fit</h3>
+            <p><a href="https://reactnative.dev/docs/javascript-environment">Hermes is React Native’s usual JavaScript engine</a>; it improves the JS runtime but cannot make native text layout disappear. <a href="https://nitro.margelo.com/">Nitro Modules</a> can expose a typed, stateful JSI session or headless parser with low crossing overhead. A synchronous JSI method still runs during the caller’s JS turn. The production path therefore makes append cheap and moves parsing to an owned native worker. Fabric owns the display view; Nitro is a possible API layer, not the renderer.</p>
+          </section>
+
+          <section class="document-section" id="semantics">
+            <div class="section-head"><h2>Streaming Markdown is a parsing policy</h2><p>Native code helps only if partial documents stay correct, stable, and predictable as syntax arrives.</p></div>
+            <h3>Canonical source and visible preview</h3>
+            <p>The session stores exactly the received Markdown. A temporary display view may close an unfinished delimiter, hide an unresolved image URL, or show code as plain monospace until its closing fence arrives. That preview never changes the stored source or the completed result. <a href="https://github.com/vercel/streamdown/blob/main/packages/remend/README.md">Remend</a> is a behavior reference for this temporary repair layer.</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Incoming prefix</th><th>Preview policy to evaluate</th><th>Commit condition</th></tr></thead>
+                <tbody>
+                  <tr><td><code>hello **wor</code></td><td>Show provisional bold when the opener is unambiguous; keep source unchanged.</td><td>Closing delimiter or finalization determines final parse.</td></tr>
+                  <tr><td><code>[docs](https://exam</code></td><td>Show label as text or provisional link, but never open a partial URL.</td><td>Closing <code>)</code> and URL validation.</td></tr>
+                  <tr><td><code>```ts\nconst x</code></td><td>Show progressive code text. Defer syntax highlighting and copy controls that depend on completion.</td><td>Matching close fence or finalization.</td></tr>
+                  <tr><td><code>| A | B |</code></td><td>Wait for separator row before treating it as a table; then show progressive rows or a stable placeholder.</td><td>Enough GFM table structure to classify the block.</td></tr>
+                  <tr><td><code>![alt](https://partial</code></td><td>Do not request an incomplete image URL.</td><td>Complete safe URL and block classification.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <h3>Conservative completed-prefix rule</h3>
+            <p>md4c’s <a href="https://github.com/mity/md4c">document parser</a> reads a complete input and emits SAX-style callbacks. We must build the incremental layer around it. A newline alone is not a safe cut: setext headings, list continuation, tables, reference links, emphasis, and fences can change classification when more text arrives. The initial algorithm should commit only blocks whose context is proven closed, reparse from the last uncertain boundary, and fall back to a full parse for any case it cannot prove safe.</p>
+            <div class="callout warning"><strong>Correctness takes precedence over a local speed win</strong><p>Every finalized document must match a fresh full md4c parse. When the active tail grows too large or a global construct changes prior interpretation, use a full parse and record that fallback in telemetry. A faster wrong prefix cache is not an optimization.</p></div>
+            <h3>Documented input boundaries</h3>
+            <ul>
+              <li>Choose and document the range unit. JS APIs commonly use UTF-16 indices; native parsing uses UTF-8 bytes. Reject a range that splits a surrogate pair rather than silently shifting it.</li>
+              <li>Normalize or deliberately preserve CRLF handling, tabs, NUL bytes, grapheme clusters, RTL text, and emoji across chunks.</li>
+              <li>Bound input bytes, nesting depth where possible, pending chunk queue, active-tail memory, image count, and highlighted code size. Errors retain the last valid snapshot.</li>
+              <li>Specify raw HTML, URLs, images, math, and custom schemes explicitly. Default handling should be safe for untrusted assistant output.</li>
+            </ul>
+          </section>
+
+          <section class="document-section" id="performance">
+            <div class="section-head"><h2>Performance engineering, end to end</h2><p>Each optimization names the work it removes. We will profile before retaining complexity.</p></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Cost center</th><th>Production approach</th><th>Evidence to collect</th></tr></thead>
+                <tbody>
+                  <tr><td>Many tiny JS-to-native calls</td><td>Batch adjacent deltas once per frame or a bounded interval. Keep input ordered; let the caller flush on finish.</td><td>Calls/s, queued bytes, append time, chunk-to-paint latency.</td></tr>
+                  <tr><td>Growing-string copies</td><td>Use native append for high-rate streams rather than sending a full string each update. Keep a controlled-source path for simple usage.</td><td>Transferred bytes, JS allocations/GC, native buffer capacity.</td></tr>
+                  <tr><td>Repeated full parse</td><td>Begin with coalesced native full parse as baseline. Add completed-block cache and tail reparse only when device traces justify it.</td><td>Parse duration by source length and syntax, fallback rate, bytes reparsed/update.</td></tr>
+                  <tr><td>AST serialization and React reconciliation</td><td>Keep render model native on the display path. Return only events needed by JS, such as link presses or typed errors.</td><td>JS commit time, node count, transferred payload size.</td></tr>
+                  <tr><td>Native text measurement</td><td>Cache completed block layout by content, style, width, font scale, and platform text settings. Invalidate only affected measurements.</td><td>Layout duration, cache hit rate, width-change cost, height corrections.</td></tr>
+                  <tr><td>Expensive content</td><td>Defer code highlighting, math rendering, and remote image work until syntax or URL is stable. Keep streaming text visible.</td><td>Worst-case UI frame time, image request count, highlight duration.</td></tr>
+                  <tr><td>Concurrent messages and scrolling</td><td>Only live messages subscribe to updates. Completed messages freeze their session and layout; list cells recycle safely.</td><td>Frame misses while scrolling, retained memory/message, remount cost.</td></tr>
+                  <tr><td>Stale work</td><td>Generation/sequence checks at both parse completion and view apply. Drop superseded snapshots.</td><td>Discarded jobs, stale-paint count, time spent on cancelled work.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <h3>Proposed budgets, not measured results</h3>
+            <p>These are initial review gates for the benchmark harness. Tune them against a chosen supported device class before treating them as release criteria. At 60 Hz the whole frame is 16.7 ms; at 120 Hz it is 8.3 ms. The Markdown view does not own that entire budget.</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Metric</th><th>Initial target under defined test load</th><th>Why it matters</th></tr></thead>
+                <tbody>
+                  <tr><td>Chunk arrival → visible glyph, p95</td><td>&lt; 50 ms during a live stream; record p99 and worst outliers.</td><td>Balances batching efficiency with perceived responsiveness.</td></tr>
+                  <tr><td>Markdown work on UI thread, p95</td><td>&lt; 4 ms per displayed update on a 60 Hz target device.</td><td>Leaves room for the rest of app rendering and input.</td></tr>
+                  <tr><td>JS work per append batch, p95</td><td>&lt; 2 ms; no work proportional to the entire message on the fast path.</td><td>Protects gestures, scroll, and network processing.</td></tr>
+                  <tr><td>Final correctness</td><td>100% match against the agreed CommonMark/GFM fixture oracle.</td><td>Correct output cannot be traded for a faster preview.</td></tr>
+                  <tr><td>Memory</td><td>Bounded by source, retained visible blocks, and documented caches; no growth after sessions dispose.</td><td>Long chats and recycled cells expose leaks quickly.</td></tr>
+                  <tr><td>Stale visible results</td><td>Zero in sequence/reset stress tests.</td><td>Async parsing must never rewind the message.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="small"><span class="label proposed">Proposed</span> No device measurement has been taken in this repository yet. A result above a budget triggers profiling and review, not an automatic claim that a particular parser is at fault.</p>
+          </section>
+
+          <section class="document-section" id="benchmarks">
+            <div class="section-head"><h2>The benchmark that decides the design</h2><p>A common harness must measure complete visible behavior, on the hardware and build type users will run.</p></div>
+            <div class="two-col">
+              <div class="panel"><h3>Implementations to compare</h3><ol><li>Enriched Markdown + React Native Streamdown, as installed and configured for this project.</li><li>A minimal native Fabric view that reparses the full source at most once per visual update.</li><li>The same view with completed-prefix caching and active-tail reparse.</li></ol><p>Use the same Markdown fixtures, display styles, chunk schedule, viewport, and device for each.</p></div>
+              <div class="panel"><h3>Environment to record</h3><ul><li>Release builds, Hermes, New Architecture, exact RN/Expo/library revisions.</li><li>Physical iPhone and lower or mid-range Android device; simulator/emulator for development only.</li><li>Device model, OS, refresh rate, thermal state, battery mode, and test order.</li><li>Warm and cold runs, repeated samples, raw traces, and p50/p95/p99.</li></ul></div>
+            </div>
+            <h3>Workload matrix</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Axis</th><th>Required cases</th><th>Failure it exposes</th></tr></thead>
+                <tbody>
+                  <tr><td>Arrival pattern</td><td>1–20 characters every 10–50 ms; bursty SSE; pause/resume; completion; reset during pending work.</td><td>Excess calls, batching lag, stale results.</td></tr>
+                  <tr><td>Message size</td><td>10 KB, 50 KB, 100 KB; one long open block and many short closed blocks.</td><td>Quadratic copies/parses and unbounded tail.</td></tr>
+                  <tr><td>Syntax</td><td>Plain prose; split emphasis and links; nested lists; reference links; GFM tables; open/closing code fences; images; math if supported.</td><td>Incorrect safe boundaries and expensive block transitions.</td></tr>
+                  <tr><td>Unicode</td><td>Emoji, combining marks, CJK, RTL, CRLF; chunks split around UTF-8 and UTF-16 boundaries.</td><td>Corrupted source ranges and layout instability.</td></tr>
+                  <tr><td>Screen load</td><td>1, 4, and 8 simultaneous streams; scrolling a list of completed and active messages.</td><td>JS/UI contention, memory retention, cell recycling errors.</td></tr>
+                  <tr><td>Width and style changes</td><td>Rotation, font scaling, theme update, width change while streaming.</td><td>Invalid layout caches and wrong heights.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <h3>Instrumentation and reporting</h3>
+            <ul>
+              <li>Timestamp chunk receipt, batch flush, native append, parse start/end, measurement start/end, snapshot apply, and first visible frame. Use trace IDs and sequence numbers to join these events.</li>
+              <li>Record JS and UI frame duration, missed frames during scroll, CPU and energy where tools permit, allocations/GC, resident memory, cache hit rate, bytes reparsed, and fallback count.</li>
+              <li>Compare final output against fresh full md4c/fixture output. For every input prefix, test that displayed text is ordered, no completed text disappears, and temporary previews follow the documented policy.</li>
+              <li>Keep benchmark source, fixtures, device metadata, raw traces, and summary tables in the repo. Show variance; avoid a single best run.</li>
+            </ul>
+            <div class="callout"><strong>Decision rule</strong><p>If coalesced full native parsing already meets the latency and frame budgets at 100 KB and concurrent streams, retain it until a harder workload proves otherwise. Adopt the incremental tail only if it produces a repeatable end-to-end improvement without correctness regressions or disproportionate maintenance cost.</p></div>
+          </section>
+
+          <section class="document-section" id="delivery">
+            <div class="section-head"><h2>Build sequence and exit gates</h2><p>These are dependency-ordered engineering stages, not calendar promises. Each stage leaves a reviewable result.</p></div>
+            <div class="sequence">
+              <div class="seq-row"><div class="stage"><span>Stage 0</span>Contract and scope</div><p>Define supported Markdown flavor, raw HTML and URL policy, incomplete-prefix presentation, selection and accessibility expectations, API modes, source offsets, size limits, and platform/RN support. Freeze the fixture corpus and release benchmark devices.</p><div class="gate"><b>Exit:</b> Behavior and performance acceptance documents are reviewable; ambiguities are recorded explicitly.</div></div>
+              <div class="seq-row"><div class="stage"><span>Stage 1</span>Measured baseline</div><p>Run Streamdown + Enriched in the Expo example development build and release build. Add the shared chunk simulator, realistic chat list, tracing, fixtures, and full metric collection. Confirm RN 0.83.2 / Expo 55 compatibility rather than assuming it.</p><div class="gate"><b>Exit:</b> Reproducible physical-device baseline, known setup cost, raw traces, and first bottleneck ranking.</div></div>
+              <div class="seq-row"><div class="stage"><span>Stage 2</span>Native static view</div><p>Implement or adapt the native Fabric renderer chosen after Stage 1. Cover md4c parsing, iOS and Android text layout, native measurement, style contract, links, and typed errors. Validate complete Markdown first, including platform parity and font scaling.</p><div class="gate"><b>Exit:</b> Final-document conformance and native layout tests pass on both platforms; packaging works from a clean install.</div></div>
+              <div class="seq-row"><div class="stage"><span>Stage 3</span>Streaming session</div><p>Add ordered append/reset/finish/dispose, batching, worker snapshots, sequence protection, and a native full-reparse-per-flush path. Implement safe incomplete display policy and keep original source separate.</p><div class="gate"><b>Exit:</b> No lost or stale text, valid output for every fixture prefix, and a measured comparison with Stage 1.</div></div>
+              <div class="seq-row"><div class="stage"><span>Stage 4</span>Incremental tail</div><p>Add conservative completed-block identity and reparsable tail. Maintain native parse/layout caches and instrument every fallback. Keep the full parse as the correctness path when context is uncertain.</p><div class="gate"><b>Exit:</b> Final parse equivalence plus repeatable device-level gain under the agreed workload. If the gain is absent, stop at Stage 3.</div></div>
+              <div class="seq-row"><div class="stage"><span>Stage 5</span>Feature completion</div><p>Harden GFM tables, code, images, math if in scope, native selection/copy, links, accessibility, RTL, font scaling, and recycled chat cells. Add asynchronous resource policies and limits.</p><div class="gate"><b>Exit:</b> Feature matrix passes on both platforms and expensive content stays within the frame budget.</div></div>
+              <div class="seq-row"><div class="stage"><span>Stage 6</span>Release readiness</div><p>Test clean consumer installation, pods/Gradle/Codegen, Expo development builds, package tarball contents, release builds, docs, examples, and supported RN versions. Run performance regressions against saved Stage 1–4 traces.</p><div class="gate"><b>Exit:</b> Two-platform installation and runtime smoke tests, correctness suite, benchmark report, and documented limitations.</div></div>
+            </div>
+            <p class="small">Component ownership follows the architecture: JS adapter/API, shared parser/session, iOS rendering/measurement, Android rendering/measurement, and benchmark harness. No person or delivery date has been assigned.</p>
+          </section>
+
+          <section class="document-section" id="quality">
+            <div class="section-head"><h2>Production quality contract</h2><p>Performance is a property of the whole screen. Packaging, recovery, correctness, and accessibility are part of the design.</p></div>
+            <div class="two-col">
+              <div class="panel"><h3>Correctness and resilience</h3><ul><li>Run CommonMark 0.31 and selected GFM conformance cases against md4c output; include adversarial input and fuzz/property tests.</li><li>Feed every prefix of selected fixtures, including splits at each byte or code point boundary. Check final equivalence and preview invariants.</li><li>Verify stale worker completions after reset, unmount, navigation, width change, and rapid start/stop.</li><li>Set documented limits for input, output, caches, image requests, and open-tail growth. On parse error, retain the last valid render and report a typed failure.</li><li>Test text selection, links, images, a11y semantics, screen readers, dynamic fonts, RTL, and theme changes on device.</li></ul></div>
+              <div class="panel"><h3>Library integration</h3><ul><li>Use React Native Codegen/Fabric with a minimal peer dependency set. The fast display path should not require an AST crossing into JS.</li><li>Make Expo prebuild/development build instructions explicit; native code cannot run in Expo Go.</li><li>Ship podspec, Gradle/CMake configuration, vendored parser license, platform source, TypeScript declarations, and clean-package smoke tests.</li><li>Verify the package against the repo’s RN 0.83.2 / Expo 55 example and supported versions rather than extrapolating from another library’s matrix.</li><li>Provide a real streaming example, API reference, performance methodology, known limits, and migration notes when behavior changes.</li></ul></div>
+            </div>
+            <h3>Security and content behavior</h3>
+            <p>Assistant output is untrusted input. Bound parsing work and memory, reject unsafe link protocols by default, avoid fetching partial or disallowed image URLs, and state whether raw HTML is ignored or sanitized. Custom link handlers may receive the original target, but the built-in opener should validate it. Keep network image loading outside the parser worker and ensure recycled views cancel requests for previous content.</p>
+          </section>
+
+          <section class="document-section" id="risks">
+            <div class="section-head"><h2>Risks and decision gates</h2><p>Each concern has an observable trigger and a concrete response. None is treated as solved by choosing a fashionable native interface.</p></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Risk</th><th>How we detect it</th><th>Response</th></tr></thead>
+                <tbody>
+                  <tr><td>Incremental cache commits a block too early.</td><td>Prefix fixtures or final full-parse oracle disagree; reference links or table/list continuation change prior content.</td><td>Move the safe boundary back, invalidate dependent blocks, or full-reparse. Keep the fallback counted.</td></tr>
+                  <tr><td>Parser is fast but UI layout misses frames.</td><td>UI frame traces spike at snapshot application or measure, with low parse time.</td><td>Cache completed block measurement, reduce native view churn, and defer code/math/image work.</td></tr>
+                  <tr><td>JSI call blocks the JS thread.</td><td>JS frame spikes align with synchronous append or parse calls.</td><td>Make append cheap, batch calls, and run parse on a native worker. Do not assume Nitro itself moves work.</td></tr>
+                  <tr><td>Worker result paints after newer content.</td><td>Sequence stress test observes a rewind or old dimensions after reset.</td><td>Apply only matching generation + sequence; invalidate all older layout keys.</td></tr>
+                  <tr><td>Native view diverges by platform.</td><td>Golden fixture and accessibility comparisons fail on iOS/Android.</td><td>Keep shared parse semantics in C++; isolate platform styling and document unavoidable differences.</td></tr>
+                  <tr><td>Native maintenance exceeds performance value.</td><td>Full native parse already meets budgets or tail optimization has small/unstable benefit.</td><td>Retain the simpler full-parse path, or use Enriched as the renderer and focus this package on its streaming API.</td></tr>
+                  <tr><td>Consumer installation is brittle.</td><td>Clean Expo/bare app tests fail, package tarball omits assets, or Metro setup is required unexpectedly.</td><td>Keep default install minimal, automate clean installation smoke tests, and isolate optional modules.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="callout risk"><strong>Open decision after Stage 1</strong><p>We have not chosen between adapting Enriched’s native renderer and implementing a new Fabric view. The baseline must show which work dominates. Adapting established native text behavior reduces feature risk; an owned renderer gives more control over session, layout, and dependencies. The benchmark and required feature matrix decide.</p></div>
+          </section>
+
+          <section class="document-section" id="sources">
+            <div class="section-head"><h2>Sources and provenance</h2><p>Primary repository code and official documentation. Links point to the implementation or claim discussed above.</p></div>
+            <div class="source-list">
+              <a href="https://github.com/software-mansion-labs/react-native-streamdown/blob/main/src/StreamdownText.tsx"><b>RN Streamdown wrapper</b><span>src/StreamdownText.tsx</span></a>
+              <a href="https://github.com/software-mansion-labs/react-native-streamdown/blob/main/src/worklets/remendWorklet.ts"><b>RN Streamdown worker</b><span>src/worklets/remendWorklet.ts</span></a>
+              <a href="https://github.com/software-mansion-labs/react-native-streamdown#required-setup--bundle-mode"><b>RN Streamdown setup</b><span>Bundle Mode, Babel, Metro, patch recommendation</span></a>
+              <a href="https://github.com/software-mansion/enriched-markdown"><b>Enriched Markdown</b><span>Fabric renderer and platform feature set</span></a>
+              <a href="https://github.com/software-mansion/enriched-markdown/blob/main/docs/MARKDOWN_STREAMING.md"><b>Enriched streaming behavior</b><span>Tables and code while streaming</span></a>
+              <a href="https://github.com/vercel/streamdown/blob/main/packages/remend/README.md"><b>Remend</b><span>Incomplete Markdown repair policy</span></a>
+              <a href="https://github.com/JoaoPauloCMarra/react-native-nitro-markdown/blob/main/docs/streaming.md"><b>Nitro Markdown streaming</b><span>Session, batching, parse fast paths and fallback</span></a>
+              <a href="https://github.com/JoaoPauloCMarra/react-native-nitro-markdown/blob/main/docs/comparison.md"><b>Nitro Markdown benchmarks</b><span>Methodology and reported limits</span></a>
+              <a href="https://github.com/siinghd/brookmd/blob/main/packages/brookmd-react-native/src/native-pool.ts"><b>BrookMD RN worker</b><span>Synchronous in-process behavior</span></a>
+              <a href="https://github.com/siinghd/brookmd/blob/main/crates/brookmd-core/WIRE.md"><b>BrookMD wire protocol</b><span>Committed blocks and patches</span></a>
+              <a href="https://github.com/alizahid/react-native-jet-markdown"><b>Jet Markdown</b><span>Single native Fabric view and compatibility</span></a>
+              <a href="https://github.com/s77rt/react-native-markdown"><b>s77rt Markdown input</b><span>Native formatting reference for TextInput</span></a>
+              <a href="https://github.com/Expensify/react-native-live-markdown"><b>Expensify Live Markdown</b><span>Native Markdown TextInput behavior</span></a>
+              <a href="https://github.com/ensunluer/react-native-markdown-stream"><b>Markdown Stream</b><span>JavaScript streaming renderer</span></a>
+              <a href="https://github.com/RonRadtke/react-native-markdown-display"><b>Markdown Display</b><span>JavaScript CommonMark renderer</span></a>
+              <a href="https://github.com/mity/md4c"><b>md4c</b><span>Complete-document SAX-style parser API</span></a>
+              <a href="https://nitro.margelo.com/"><b>Nitro Modules</b><span>Typed JSI native binding framework</span></a>
+              <a href="https://reactnative.dev/docs/fabric-native-components-introduction"><b>React Native Fabric components</b><span>Official native component and Codegen guide</span></a>
+              <a href="https://reactnative.dev/architecture/threading-model"><b>React Native threading</b><span>Official render and host-view threading model</span></a>
+              <a href="https://reactnative.dev/docs/javascript-environment"><b>React Native JavaScript engines</b><span>Hermes and runtime behavior</span></a>
+            </div>
+          </section>
+          <footer>Downstream Markdown streaming plan. The design and budgets are proposals; repository implementation and physical-device measurements are future work. This HTML file is self-contained and printable.</footer>
+        </div>
+      </main>
+    </div>
+    <script>
+      (() => {
+        const links = [...document.querySelectorAll('.rail nav a')];
+        const map = new Map(links.map((a) => [a.hash.slice(1), a]));
+        if (!('IntersectionObserver' in window)) return;
+        const observer = new IntersectionObserver((entries) => {
+          const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+          if (!visible.length) return;
+          const active = map.get(visible[0].target.id);
+          if (!active) return;
+          links.forEach((link) => {
+            link.classList.toggle('active', link === active);
+            if (link === active) link.setAttribute('aria-current', 'location');
+            else link.removeAttribute('aria-current');
+          });
+        }, { rootMargin: '-10% 0px -72% 0px', threshold: 0 });
+        map.forEach((_, id) => { const section = document.getElementById(id); if (section) observer.observe(section); });
+      })();
+    </script>
+  </body>
+</html>
