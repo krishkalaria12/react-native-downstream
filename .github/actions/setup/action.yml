@@ -1,0 +1,11 @@
+name: Setup
+description: Setup pnpm, Node.js, and install dependencies
+
+runs:
+  using: composite
+  steps:
+    - name: Setup pnpm and Node.js
+      uses: pnpm/setup@v3
+      with:
+        cache: true
+        require-lockfile: true
