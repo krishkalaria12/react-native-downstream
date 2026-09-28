@@ -51,6 +51,7 @@ example/vendor/
 # node.js
 #
 node_modules/
+__pycache__/
 npm-debug.log
 pnpm-debug.log
 
@@ -63,6 +64,8 @@ android/keystores/debug.keystore
 # Expo
 .expo/
 example/dist/
+example/ios/
+example/android/
 
 # Turborepo
 .turbo/

@@ -3,7 +3,17 @@
     "name": "Downstream Example",
     "slug": "react-native-downstream-example",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
+    "newArchEnabled": true,
+    "plugins": [
+      [
+        "react-native-enriched-markdown",
+        {
+          "enableMath": false
+        }
+      ],
+      "./plugins/withIosSceneLifecycle"
+    ],
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "splash": {
