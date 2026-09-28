@@ -237,7 +237,12 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
 @property (nonatomic) NSArray<NSValue *> *blockRanges;
 @end
 
-@implementation DSTextSegment
+@implementation DSTextSegment {
+  NSLock *_heightLock;
+  CGFloat _heightWidth;
+  CGFloat _height;
+  BOOL _hasHeight;
+}
 
 + (instancetype)segmentWithDocument:(const Document &)document
                                from:(size_t)from
@@ -245,6 +250,7 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
                               scale:(CGFloat)scale
                          markerFont:(UIFont *)markerFont {
   DSTextSegment *segment = [DSTextSegment new];
+  segment->_heightLock = [NSLock new];
   NSMutableAttributedString *text = [NSMutableAttributedString new];
   NSMutableArray<DSBlockInfo *> *blocks = [NSMutableArray arrayWithCapacity:to - from];
   NSMutableArray<NSValue *> *blockRanges = [NSMutableArray arrayWithCapacity:to - from];
@@ -354,12 +360,26 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   if (_attributedString.length == 0) {
     return 0;
   }
+  [_heightLock lock];
+  if (_hasHeight && _heightWidth == width) {
+    const CGFloat height = _height;
+    [_heightLock unlock];
+    return height;
+  }
+  [_heightLock unlock];
+
   DSTextKitStack *stack = [[DSTextKitStack alloc] initWithLayoutManager:[NSLayoutManager new]];
   stack.textContainer.size = CGSizeMake(std::isfinite(width) ? width : CGFLOAT_MAX, CGFLOAT_MAX);
   [stack.textStorage setAttributedString:_attributedString];
   [stack.layoutManager ensureLayoutForTextContainer:stack.textContainer];
   const CGRect used = [stack.layoutManager usedRectForTextContainer:stack.textContainer];
-  return std::ceil(_topInset + CGRectGetMaxY(used) + _bottomInset);
+  const CGFloat height = std::ceil(_topInset + CGRectGetMaxY(used) + _bottomInset);
+  [_heightLock lock];
+  _heightWidth = width;
+  _height = height;
+  _hasHeight = YES;
+  [_heightLock unlock];
+  return height;
 }
 
 @end
@@ -490,6 +510,38 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
 
 #pragma mark - Document
 
+// Keep the completed source blocks so an identity collision across sessions
+// cannot reuse text from a different source. The active tail is not retained.
+@interface DSCompletedPrefix : NSObject {
+@public
+  std::vector<Block> blocks;
+  CGFloat fontScale;
+  DSTextSegment *segment;
+}
+- (BOOL)matches:(const Document &)candidate count:(size_t)count scale:(CGFloat)scale;
+@end
+
+@implementation DSCompletedPrefix
+
+- (BOOL)matches:(const Document &)candidate count:(size_t)count scale:(CGFloat)scale {
+  if (blocks.size() != count || fontScale != scale || candidate.blocks.size() < count) {
+    return NO;
+  }
+  for (size_t index = 0; index < count; index++) {
+    const Block &oldBlock = blocks[index];
+    const Block &newBlock = candidate.blocks[index];
+    if (oldBlock.identity != newBlock.identity || oldBlock.text != newBlock.text ||
+        oldBlock.sourceRange.start != newBlock.sourceRange.start ||
+        oldBlock.sourceRange.end != newBlock.sourceRange.end || oldBlock.spacingBefore != newBlock.spacingBefore ||
+        oldBlock.kind != newBlock.kind || !newBlock.containers.empty() || !newBlock.runs.empty()) {
+      return NO;
+    }
+  }
+  return YES;
+}
+
+@end
+
 @implementation DSRenderedDocument {
   NSArray *_segments;
   std::vector<CGFloat> _gaps;
@@ -508,31 +560,77 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   return cache;
 }
 
++ (NSCache<NSString *, DSCompletedPrefix *> *)completedPrefixCache {
+  static NSCache *cache;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    cache = [NSCache new];
+    cache.countLimit = 16;
+    cache.totalCostLimit = 16 * 1024 * 1024;
+  });
+  return cache;
+}
+
 + (instancetype)renderedDocumentFor:(const DocumentHandle &)document fontScale:(CGFloat)fontScale {
   if (!document) {
-    return [[self alloc] initWithDocument:Document{} fontScale:fontScale];
+    return [[self alloc] initWithDocument:document fontScale:fontScale];
   }
   NSString *key = [NSString stringWithFormat:@"%llu:%.4f", (unsigned long long)document->id, fontScale];
   DSRenderedDocument *rendered = [self.cache objectForKey:key];
   if (rendered == nil) {
-    rendered = [[self alloc] initWithDocument:*document fontScale:fontScale];
+    rendered = [[self alloc] initWithDocument:document fontScale:fontScale];
     [self.cache setObject:rendered forKey:key];
   }
   return rendered;
 }
 
-- (instancetype)initWithDocument:(const Document &)document fontScale:(CGFloat)rawScale {
+- (instancetype)initWithDocument:(const DocumentHandle &)documentHandle fontScale:(CGFloat)rawScale {
   if (!(self = [super init])) {
     return nil;
   }
   _lock = [NSLock new];
   _cachedWidth = -1;
   const CGFloat scale = rawScale > 0 ? rawScale : 1;
+  const Document emptyDocument;
+  const Document &document = documentHandle ? *documentHandle : emptyDocument;
   UIFont *markerFont = [UIFont monospacedDigitSystemFontOfSize:kBodySize * scale weight:UIFontWeightRegular];
   NSMutableArray *segments = [NSMutableArray new];
 
   size_t from = 0;
   const size_t count = document.blocks.size();
+  size_t completed = 0;
+  while (completed < count) {
+    const Block &block = document.blocks[completed];
+    if (block.identity == 0 || block.kind != BlockKind::Paragraph || !block.containers.empty() ||
+        !block.runs.empty()) {
+      break;
+    }
+    completed++;
+  }
+  if (completed > 0 && documentHandle) {
+    const Block &last = document.blocks[completed - 1];
+    NSString *key = [NSString stringWithFormat:@"%llu:%llu:%zu:%.4f", (unsigned long long)document.blocks[0].identity,
+                                               (unsigned long long)last.identity, completed, scale];
+    DSCompletedPrefix *cached = [[DSRenderedDocument completedPrefixCache] objectForKey:key];
+    if (cached == nil || ![cached matches:document count:completed scale:scale]) {
+      cached = [DSCompletedPrefix new];
+      cached->blocks.assign(document.blocks.begin(), document.blocks.begin() + completed);
+      cached->fontScale = scale;
+      cached->segment = [DSTextSegment segmentWithDocument:document
+                                                     from:0
+                                                       to:completed
+                                                    scale:scale
+                                               markerFont:markerFont];
+      NSUInteger cost = cached->segment.attributedString.length * 8 + completed * 256;
+      for (const Block &block : cached->blocks) {
+        cost += block.text.size() * sizeof(char16_t) + sizeof(Block);
+      }
+      [[DSRenderedDocument completedPrefixCache] setObject:cached forKey:key cost:cost];
+    }
+    [segments addObject:cached->segment];
+    _gaps.push_back(0);
+    from = completed;
+  }
   while (from < count) {
     const Block &first = document.blocks[from];
     size_t to = from + 1;
