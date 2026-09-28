@@ -66,6 +66,14 @@ def setUpModule():
          objects[0], objects[1], "-o", BUILD_DIR / "test_incremental"],
         check=True,
     )
+    subprocess.run(
+        [cxx, "-std=c++20", "-O1", "-Wall", "-Wextra", "-Werror", "-pthread", "-DMD4C_USE_UTF8",
+         *SYMBOL_PREFIXES, f"-I{md4c}", f"-I{CPP / 'downstream'}", f"-I{CPP / 'session'}",
+         CPP / "tests" / "test_session_registry.cpp", CPP / "session" / "SessionRegistry.cpp",
+         CPP / "session" / "IncrementalParser.cpp", *engine, objects[0], objects[1],
+         "-o", BUILD_DIR / "test_session_registry"],
+        check=True,
+    )
 
 
 def tearDownModule():
@@ -313,6 +321,9 @@ class LinkTests(unittest.TestCase):
 
 
 class InputTests(unittest.TestCase):
+    def test_native_session_versions_and_lifecycle(self):
+        subprocess.run([BUILD_DIR / "test_session_registry"], check=True, timeout=15)
+
     def test_rejects_malformed_utf8(self):
         self.assertEqual(parse(b"a\xff")["error"], "invalid_input")
         self.assertEqual(parse(b"\xed\xa0\x80")["error"], "invalid_input")

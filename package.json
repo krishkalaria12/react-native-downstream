@@ -161,7 +161,7 @@
   },
   "codegenConfig": {
     "name": "DownstreamSpec",
-    "type": "components",
+    "type": "all",
     "jsSrcsDir": "src",
     "android": {
       "javaPackageName": "com.downstream"

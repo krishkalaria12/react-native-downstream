@@ -1,6 +1,7 @@
 #include "DownstreamMarkdownShadowNode.h"
 
 #include "MarkdownParser.h"
+#include "SessionRegistry.h"
 
 #include <react/renderer/core/LayoutContext.h>
 
@@ -17,7 +18,15 @@ DownstreamMarkdownShadowNode::DownstreamMarkdownShadowNode(const ShadowNode &sou
   // Keep the last valid document either way: it is reused when the source is
   // unchanged, and retained as the fallback when a new source fails to parse.
   document_ = source.document_;
-  if (source.getConcreteProps().markdown == getConcreteProps().markdown) {
+  if (source.getConcreteProps().sessionId != getConcreteProps().sessionId ||
+      (!getConcreteProps().sessionId.empty() &&
+       source.getConcreteProps().generation != getConcreteProps().generation)) {
+    document_.reset();
+    needsParse_ = true;
+  } else if (source.getConcreteProps().markdown == getConcreteProps().markdown &&
+             source.getConcreteProps().generation == getConcreteProps().generation &&
+             source.getConcreteProps().sessionSequence == getConcreteProps().sessionSequence &&
+             source.getConcreteProps().sessionRevision == getConcreteProps().sessionRevision) {
     needsParse_ = source.needsParse_;
     pendingError_ = source.pendingError_;
   } else {
@@ -34,6 +43,17 @@ void DownstreamMarkdownShadowNode::setLayoutManager(
 const downstream::DocumentHandle &DownstreamMarkdownShadowNode::getDocument() const {
   if (needsParse_) {
     needsParse_ = false;
+    const auto &props = getConcreteProps();
+    if (!props.sessionId.empty()) {
+      // A session document is prepared on its worker. Measurement never parses
+      // streaming input and never reads a snapshot from a different version.
+      auto ready = downstream::SessionRegistry::snapshot(props.sessionId, props.generation,
+                                                          props.sessionSequence);
+      if (ready) {
+        document_ = std::move(ready);
+      }
+      return document_;
+    }
     auto result = downstream::parseMarkdown(getConcreteProps().markdown);
     if (result.status == downstream::ParseStatus::Ok) {
       document_ = std::move(result.document);

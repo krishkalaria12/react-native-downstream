@@ -20,6 +20,7 @@ Pod::Spec.new do |s|
   s.source_files = [
     "ios/**/*.{h,m,mm}",
     "cpp/downstream/*.{h,cpp}",
+    "cpp/session/*.{h,cpp}",
     "cpp/fabric/*.{h,cpp}",
     "cpp/md4c/md4c.{c,h}",
     "cpp/md4c/entity.{c,h}",
@@ -29,6 +30,7 @@ Pod::Spec.new do |s|
   s.pod_target_xcconfig = {
     "HEADER_SEARCH_PATHS" => [
       "\"$(PODS_TARGET_SRCROOT)/cpp/downstream\"",
+      "\"$(PODS_TARGET_SRCROOT)/cpp/session\"",
       "\"$(PODS_TARGET_SRCROOT)/cpp/fabric\"",
       "\"$(PODS_TARGET_SRCROOT)/cpp/md4c\"",
     ].join(" "),
