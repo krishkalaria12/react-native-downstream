@@ -59,6 +59,10 @@ using namespace facebook::react;
 
 - (void)updateProps:(const Props::Shared &)props oldProps:(const Props::Shared &)oldProps {
   const auto &newProps = *std::static_pointer_cast<const DownstreamMarkdownViewProps>(props);
+  const auto &previous = *std::static_pointer_cast<const DownstreamMarkdownViewProps>(oldProps);
+  if (newProps.sessionId != previous.sessionId || newProps.generation != previous.generation) {
+    [_documentView resetTableScrollPositions];
+  }
   _documentView.selectable = newProps.selectable;
   [super updateProps:props oldProps:oldProps];
 }

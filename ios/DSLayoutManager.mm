@@ -67,7 +67,7 @@ constexpr CGFloat kCodeCornerRadius = 6;
                      [self drawCodeBackground:info
                                           top:origin.y + bounds.top
                                        bottom:origin.y + bounds.bottom
-                                         left:origin.x + info.contentLeading
+                                         left:origin.x + (info.rightToLeft ? 0 : info.contentLeading)
                                         width:container.size.width];
                    }];
 }
@@ -102,18 +102,23 @@ constexpr CGFloat kCodeCornerRadius = 6;
       if (containerInfo.barColor != nil) {
         const CGFloat barTop = containerInfo.continuesPrevious ? top - info.spacingBefore - 1 : top;
         [containerInfo.barColor setFill];
-        UIRectFill(CGRectMake(origin.x + containerInfo.leading + 2, barTop, kBarWidth, bottom - barTop));
+        const CGFloat x = info.rightToLeft
+            ? width - containerInfo.leading - 2 - kBarWidth
+            : containerInfo.leading + 2;
+        UIRectFill(CGRectMake(origin.x + x, barTop, kBarWidth, bottom - barTop));
       }
       if (containerInfo.marker != nil) {
         UIFont *markerFont = [containerInfo.marker attribute:NSFontAttributeName atIndex:0 effectiveRange:NULL];
         const CGSize markerSize = containerInfo.marker.size;
-        const CGFloat x = containerInfo.leading + containerInfo.width - kMarkerGap - markerSize.width;
+        const CGFloat x = info.rightToLeft
+            ? width - containerInfo.leading - containerInfo.width + kMarkerGap
+            : containerInfo.leading + containerInfo.width - kMarkerGap - markerSize.width;
         const CGFloat y = bounds.firstBaseline - markerFont.ascender;
         [containerInfo.marker drawAtPoint:CGPointMake(origin.x + x, origin.y + y)];
       }
     }
 
-    const CGFloat left = origin.x + info.contentLeading;
+    const CGFloat left = origin.x + (info.rightToLeft ? 0 : info.contentLeading);
     switch (info.decoration) {
       case DSBlockDecorationCode:
         if (self.drawsCodeBackgrounds) {

@@ -48,6 +48,7 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 @property (nonatomic, readonly) CGFloat spacingBefore;
 @property (nonatomic, readonly) CGFloat contentLeading;
 @property (nonatomic, readonly) CGFloat codePadding;
+@property (nonatomic, readonly) BOOL rightToLeft;
 @property (nonatomic, readonly) NSArray<DSContainerInfo *> *containers;
 /// Spoken summary of the block's markers, such as "checked".
 @property (nonatomic, readonly, nullable) NSString *accessibilityPrefix;
@@ -75,6 +76,10 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 @property (nonatomic, readonly) NSArray<NSArray<DSTableCell *> *> *rows;
 @property (nonatomic, readonly) BOOL hasHeader;
 @property (nonatomic, readonly) CGFloat contentLeading;
+@property (nonatomic, readonly) BOOL rightToLeft;
+/// Identifies the table across snapshots while its first row is unchanged.
+@property (nonatomic, readonly) uint32_t tableIdentifier;
+@property (nonatomic, readonly) NSString *firstRowText;
 @property (nonatomic, readonly) NSArray<DSContainerInfo *> *containers;
 @property (nonatomic, readonly) NSArray<NSNumber *> *columnWidths;
 @property (nonatomic, readonly) NSArray<NSNumber *> *rowHeights;

@@ -76,6 +76,29 @@ CGFloat baseGap(const Block &block, CGFloat scale) {
   return 0;
 }
 
+/// Find the first strong letter. Digits and punctuation do not decide the
+/// direction, so a numbered Arabic or Hebrew item still starts on the right.
+NSWritingDirection writingDirection(const std::u16string &text) {
+  NSCharacterSet *letters = NSCharacterSet.letterCharacterSet;
+  for (size_t i = 0; i < text.size(); i++) {
+    UTF32Char scalar = text[i];
+    if (scalar >= 0xd800 && scalar <= 0xdbff && i + 1 < text.size() &&
+        text[i + 1] >= 0xdc00 && text[i + 1] <= 0xdfff) {
+      scalar = 0x10000 + ((scalar - 0xd800) << 10) + (text[++i] - 0xdc00);
+    }
+    if (![letters longCharacterIsMember:scalar]) {
+      continue;
+    }
+    const BOOL rtl = (scalar >= 0x0590 && scalar <= 0x08ff) ||
+        (scalar >= 0xfb1d && scalar <= 0xfdff) ||
+        (scalar >= 0xfe70 && scalar <= 0xfeff) ||
+        (scalar >= 0x10800 && scalar <= 0x10fff) ||
+        (scalar >= 0x1e800 && scalar <= 0x1efff);
+    return rtl ? NSWritingDirectionRightToLeft : NSWritingDirectionLeftToRight;
+  }
+  return NSWritingDirectionNatural;
+}
+
 /// Applies a block's inline runs within [clampStart, clampEnd) to text that
 /// starts at `offset`.
 void applyRuns(NSMutableAttributedString *text, const Block &block, NSUInteger offset, CGFloat baseSize,
@@ -143,6 +166,7 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, NSUInteger o
 @property (nonatomic) CGFloat spacingBefore;
 @property (nonatomic) CGFloat contentLeading;
 @property (nonatomic) CGFloat codePadding;
+@property (nonatomic) BOOL rightToLeft;
 @property (nonatomic) NSArray<DSContainerInfo *> *containers;
 @property (nonatomic, nullable) NSString *accessibilityPrefix;
 @end
@@ -251,6 +275,12 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
     info.index = static_cast<NSInteger>(index);
     info.headingLevel = block.headingLevel;
     info.codePadding = isCode ? kCodePadding * scale : 0;
+    NSWritingDirection direction = writingDirection(block.text);
+    if (direction == NSWritingDirectionNatural && blocks.count > 0) {
+      direction = blocks.lastObject.rightToLeft ? NSWritingDirectionRightToLeft
+                                                 : NSWritingDirectionLeftToRight;
+    }
+    info.rightToLeft = direction == NSWritingDirectionRightToLeft;
     info.decoration = isCode ? DSBlockDecorationCode
         : block.kind == BlockKind::ThematicBreak ? DSBlockDecorationRule
                                                  : DSBlockDecorationNone;
@@ -306,10 +336,10 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
 
     NSMutableParagraphStyle *style = [NSMutableParagraphStyle new];
     style.lineBreakMode = NSLineBreakByWordWrapping;
-    style.baseWritingDirection = NSWritingDirectionNatural;
-    style.firstLineHeadIndent = leading + info.codePadding;
-    style.headIndent = leading + info.codePadding;
-    style.tailIndent = -info.codePadding;
+    style.baseWritingDirection = direction;
+    style.firstLineHeadIndent = info.rightToLeft ? info.codePadding : leading + info.codePadding;
+    style.headIndent = style.firstLineHeadIndent;
+    style.tailIndent = -(info.rightToLeft ? leading + info.codePadding : info.codePadding);
     NSMutableParagraphStyle *firstStyle = [style mutableCopy];
     firstStyle.paragraphSpacingBefore = gap;
 
@@ -386,6 +416,9 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
 @property (nonatomic) NSArray<NSArray<DSTableCell *> *> *rows;
 @property (nonatomic) BOOL hasHeader;
 @property (nonatomic) CGFloat contentLeading;
+@property (nonatomic) BOOL rightToLeft;
+@property (nonatomic) uint32_t tableIdentifier;
+@property (nonatomic) NSString *firstRowText;
 @property (nonatomic) NSArray<DSContainerInfo *> *containers;
 @property (nonatomic) NSArray<NSNumber *> *columnWidths;
 @property (nonatomic) NSArray<NSNumber *> *rowHeights;
@@ -406,6 +439,13 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   NSMutableArray<NSString *> *spoken = [NSMutableArray new];
   bool inQuote = false;
   segment.contentLeading = buildContainers(first, nullptr, scale, markerFont, containers, spoken, &inQuote);
+  NSWritingDirection direction = NSWritingDirectionNatural;
+  for (size_t index = from; index < to && direction == NSWritingDirectionNatural; index++) {
+    direction = writingDirection(document.blocks[index].text);
+  }
+  segment.rightToLeft = direction == NSWritingDirectionRightToLeft;
+  segment.tableIdentifier = first.table;
+  segment.firstRowText = toNSString(first.text);
   segment.containers = containers;
   segment.hasHeader = first.tableHeader;
   segment.cellPadding = UIEdgeInsetsMake(kCellPaddingVertical * scale, kCellPaddingHorizontal * scale,

@@ -2,6 +2,7 @@
 
 #import "DSLayoutManager.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -239,8 +240,14 @@ NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *cont
 
 - (CGRect)contentRectForRow:(NSUInteger)row column:(NSUInteger)column {
   CGFloat x = 0;
-  for (NSUInteger i = 0; i < column; i++) {
-    x += _segment.columnWidths[i].doubleValue;
+  if (_segment.rightToLeft) {
+    for (NSUInteger i = column + 1; i < _segment.columnWidths.count; i++) {
+      x += _segment.columnWidths[i].doubleValue;
+    }
+  } else {
+    for (NSUInteger i = 0; i < column; i++) {
+      x += _segment.columnWidths[i].doubleValue;
+    }
   }
   CGFloat y = 0;
   for (NSUInteger i = 0; i < row; i++) {
@@ -279,10 +286,10 @@ NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *cont
     UIRectFill(CGRectMake(0, y, size.width - 1, hairline));
   }
   CGFloat x = 0;
-  UIRectFill(CGRectMake(0, 0, hairline, y));
+  UIRectFill(CGRectMake(_segment.rightToLeft ? size.width - 1 : 0, 0, hairline, y));
   for (NSNumber *width in _segment.columnWidths) {
     x += width.doubleValue;
-    UIRectFill(CGRectMake(x, 0, hairline, y));
+    UIRectFill(CGRectMake(_segment.rightToLeft ? size.width - 1 - x : x, 0, hairline, y));
   }
 }
 
@@ -351,6 +358,10 @@ NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *cont
   DSTableSegment *_segment;
   UIScrollView *_scrollView;
   DSTableGridView *_grid;
+  BOOL _needsScrollRestore;
+  BOOL _preserveScrollPosition;
+  BOOL _forceScrollReset;
+  CGFloat _savedScrollPosition;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -378,20 +389,48 @@ NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *cont
   if (segment == _segment) {
     return;
   }
+  _preserveScrollPosition = !_forceScrollReset && _segment != nil && segment != nil &&
+      _segment.tableIdentifier == segment.tableIdentifier &&
+      _segment.rightToLeft == segment.rightToLeft &&
+      [_segment.firstRowText isEqualToString:segment.firstRowText];
+  const CGFloat oldMaximum = std::max<CGFloat>(0, _scrollView.contentSize.width - _scrollView.bounds.size.width);
+  _savedScrollPosition = _segment.rightToLeft
+      ? oldMaximum - _scrollView.contentOffset.x
+      : _scrollView.contentOffset.x;
+  _needsScrollRestore = YES;
   _segment = segment;
   _grid.segment = segment;
-  _scrollView.contentOffset = CGPointZero;
   [self setNeedsLayout];
   [self setNeedsDisplay];
 }
 
+- (void)resetScrollPosition {
+  _forceScrollReset = YES;
+  _preserveScrollPosition = NO;
+  _needsScrollRestore = YES;
+  [self setNeedsLayout];
+}
+
 - (void)layoutSubviews {
   [super layoutSubviews];
+  if (_segment == nil) {
+    return;
+  }
   const CGFloat leading = _segment.contentLeading;
-  _scrollView.frame = CGRectMake(leading, 0, std::max<CGFloat>(0, self.bounds.size.width - leading),
+  _scrollView.frame = CGRectMake(_segment.rightToLeft ? 0 : leading, 0,
+                                 std::max<CGFloat>(0, self.bounds.size.width - leading),
                                  self.bounds.size.height);
   _grid.frame = CGRectMake(0, 0, _segment.tableSize.width, _segment.tableSize.height);
   _scrollView.contentSize = _segment.tableSize;
+  if (_needsScrollRestore) {
+    const CGFloat maximum = std::max<CGFloat>(0, _segment.tableSize.width - _scrollView.bounds.size.width);
+    const CGFloat position = _preserveScrollPosition ? _savedScrollPosition : 0;
+    _scrollView.contentOffset = CGPointMake(_segment.rightToLeft
+        ? std::clamp(maximum - position, 0.0, maximum)
+        : std::clamp(position, 0.0, maximum), 0);
+    _needsScrollRestore = NO;
+    _forceScrollReset = NO;
+  }
 }
 
 // Quote bars and the list marker live in the non-scrolling margin.
@@ -402,16 +441,26 @@ NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *cont
   for (DSContainerInfo *container in _segment.containers) {
     if (container.barColor != nil) {
       [container.barColor setFill];
-      UIRectFill(CGRectMake(container.leading + 2, 0, kBarWidth, self.bounds.size.height));
+      const CGFloat x = _segment.rightToLeft
+          ? self.bounds.size.width - container.leading - 2 - kBarWidth
+          : container.leading + 2;
+      UIRectFill(CGRectMake(x, 0, kBarWidth, self.bounds.size.height));
     }
     if (container.marker != nil) {
       UIFont *font = [container.marker attribute:NSFontAttributeName atIndex:0 effectiveRange:NULL];
       const CGSize markerSize = container.marker.size;
       const CGFloat baseline = _segment.cellPadding.top + font.ascender;
-      [container.marker drawAtPoint:CGPointMake(container.leading + container.width - kMarkerGap - markerSize.width,
-                                                baseline - font.ascender)];
+      const CGFloat x = _segment.rightToLeft
+          ? self.bounds.size.width - container.leading - container.width + kMarkerGap
+          : container.leading + container.width - kMarkerGap - markerSize.width;
+      [container.marker drawAtPoint:CGPointMake(x, baseline - font.ascender)];
     }
   }
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+  [super traitCollectionDidChange:previousTraitCollection];
+  [self setNeedsDisplay];
 }
 
 - (NSInteger)linkIndexAtPoint:(CGPoint)point {
@@ -486,6 +535,14 @@ NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *cont
   for (UIView *view in _segmentViews) {
     if ([view isKindOfClass:DSTextSegmentView.class]) {
       ((DSTextSegmentView *)view).selectable = selectable;
+    }
+  }
+}
+
+- (void)resetTableScrollPositions {
+  for (UIView *view in _segmentViews) {
+    if ([view isKindOfClass:DSTableSegmentView.class]) {
+      [(DSTableSegmentView *)view resetScrollPosition];
     }
   }
 }

@@ -35,6 +35,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
 @property (nonatomic) BOOL selectable;
 - (void)setRendered:(nullable DSRenderedDocument *)rendered;
+- (void)resetTableScrollPositions;
 - (NSInteger)linkIndexAtPoint:(CGPoint)point;
 @end
 
