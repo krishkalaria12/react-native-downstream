@@ -61,6 +61,7 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 @property (nonatomic, readonly) CGFloat bottomInset;
 @property (nonatomic, readonly) NSArray<DSBlockInfo *> *blocks;
 @property (nonatomic, readonly) NSArray<NSValue *> *blockRanges;
+/// Unrounded layout height at a width; segmentFramesForWidth rounds edges.
 - (CGFloat)heightForWidth:(CGFloat)width;
 @end
 

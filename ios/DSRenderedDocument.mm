@@ -1,5 +1,7 @@
 #import "DSRenderedDocument.h"
 
+#include "SegmentPlan.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -72,21 +74,6 @@ CGFloat baseGap(const Block &block, CGFloat scale) {
       return (block.kind == BlockKind::Heading ? kGapHeading : kGapNormal) * scale;
   }
   return 0;
-}
-
-/// The synthetic title paragraph is the first block inside an admonition.
-bool isAdmonitionTitle(const Document &document, size_t index) {
-  const Block &block = document.blocks[index];
-  if (block.kind != BlockKind::Paragraph || block.containers.empty() ||
-      block.containers.back().kind != ContainerKind::Admonition) {
-    return false;
-  }
-  if (index == 0) {
-    return true;
-  }
-  const size_t depth = block.containers.size() - 1;
-  const auto &previous = document.blocks[index - 1].containers;
-  return previous.size() <= depth || previous[depth].id != block.containers.back().id;
 }
 
 /// Applies a block's inline runs within [clampStart, clampEnd) to text that
@@ -373,7 +360,9 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   [stack.textStorage setAttributedString:_attributedString];
   [stack.layoutManager ensureLayoutForTextContainer:stack.textContainer];
   const CGRect used = [stack.layoutManager usedRectForTextContainer:stack.textContainer];
-  const CGFloat height = std::ceil(_topInset + CGRectGetMaxY(used) + _bottomInset);
+  // Unrounded, so a run split into several segments stacks to the same
+  // height as one segment; the document rounds the segment edges.
+  const CGFloat height = _topInset + CGRectGetMaxY(used) + _bottomInset;
   [_heightLock lock];
   _heightWidth = width;
   _height = height;
@@ -510,36 +499,18 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
 
 #pragma mark - Document
 
-// Keep the completed source blocks so an identity collision across sessions
-// cannot reuse text from a different source. The active tail is not retained.
-@interface DSCompletedPrefix : NSObject {
+// Committed blocks are immutable under their identity, and identities are
+// never reused, so a segment built from committed blocks can be reused by
+// every later snapshot of the stream. The identities guard against a stale
+// entry under the same key.
+@interface DSCommittedSegment : NSObject {
 @public
-  std::vector<Block> blocks;
-  CGFloat fontScale;
-  DSTextSegment *segment;
+  std::vector<uint64_t> identities;
+  id segment;
 }
-- (BOOL)matches:(const Document &)candidate count:(size_t)count scale:(CGFloat)scale;
 @end
 
-@implementation DSCompletedPrefix
-
-- (BOOL)matches:(const Document &)candidate count:(size_t)count scale:(CGFloat)scale {
-  if (blocks.size() != count || fontScale != scale || candidate.blocks.size() < count) {
-    return NO;
-  }
-  for (size_t index = 0; index < count; index++) {
-    const Block &oldBlock = blocks[index];
-    const Block &newBlock = candidate.blocks[index];
-    if (oldBlock.identity != newBlock.identity || oldBlock.text != newBlock.text ||
-        oldBlock.sourceRange.start != newBlock.sourceRange.start ||
-        oldBlock.sourceRange.end != newBlock.sourceRange.end || oldBlock.spacingBefore != newBlock.spacingBefore ||
-        oldBlock.kind != newBlock.kind || !newBlock.containers.empty() || !newBlock.runs.empty()) {
-      return NO;
-    }
-  }
-  return YES;
-}
-
+@implementation DSCommittedSegment
 @end
 
 @implementation DSRenderedDocument {
@@ -560,15 +531,44 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   return cache;
 }
 
-+ (NSCache<NSString *, DSCompletedPrefix *> *)completedPrefixCache {
++ (NSCache<NSString *, DSCommittedSegment *> *)committedSegmentCache {
   static NSCache *cache;
   static dispatch_once_t once;
   dispatch_once(&once, ^{
     cache = [NSCache new];
-    cache.countLimit = 16;
-    cache.totalCostLimit = 16 * 1024 * 1024;
+    cache.countLimit = 512;
+    cache.totalCostLimit = 32 * 1024 * 1024;
   });
   return cache;
+}
+
++ (id)committedSegmentFor:(const Document &)document
+                     from:(size_t)from
+                       to:(size_t)to
+                    scale:(CGFloat)scale
+               markerFont:(UIFont *)markerFont {
+  const bool isTable = document.blocks[from].kind == BlockKind::TableRow;
+  NSString *key = [NSString stringWithFormat:@"%llu:%zu:%.4f", (unsigned long long)document.blocks[from].identity,
+                                             to - from, scale];
+  DSCommittedSegment *cached = [self.committedSegmentCache objectForKey:key];
+  bool matches = cached != nil && cached->identities.size() == to - from;
+  for (size_t index = from; matches && index < to; index++) {
+    matches = cached->identities[index - from] == document.blocks[index].identity;
+  }
+  if (matches) {
+    return cached->segment;
+  }
+  cached = [DSCommittedSegment new];
+  NSUInteger cost = 0;
+  for (size_t index = from; index < to; index++) {
+    cached->identities.push_back(document.blocks[index].identity);
+    cost += document.blocks[index].text.size() * 16 + 256;
+  }
+  cached->segment = isTable
+      ? (id)[DSTableSegment segmentWithDocument:document from:from to:to scale:scale markerFont:markerFont]
+      : (id)[DSTextSegment segmentWithDocument:document from:from to:to scale:scale markerFont:markerFont];
+  [self.committedSegmentCache setObject:cached forKey:key cost:cost];
+  return cached->segment;
 }
 
 + (instancetype)renderedDocumentFor:(const DocumentHandle &)document fontScale:(CGFloat)fontScale {
@@ -596,67 +596,27 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   UIFont *markerFont = [UIFont monospacedDigitSystemFontOfSize:kBodySize * scale weight:UIFontWeightRegular];
   NSMutableArray *segments = [NSMutableArray new];
 
-  size_t from = 0;
-  const size_t count = document.blocks.size();
-  size_t completed = 0;
-  while (completed < count) {
-    const Block &block = document.blocks[completed];
-    if (block.identity == 0 || block.kind != BlockKind::Paragraph || !block.containers.empty() ||
-        !block.runs.empty()) {
-      break;
-    }
-    completed++;
-  }
-  if (completed > 0 && documentHandle) {
-    const Block &last = document.blocks[completed - 1];
-    NSString *key = [NSString stringWithFormat:@"%llu:%llu:%zu:%.4f", (unsigned long long)document.blocks[0].identity,
-                                               (unsigned long long)last.identity, completed, scale];
-    DSCompletedPrefix *cached = [[DSRenderedDocument completedPrefixCache] objectForKey:key];
-    if (cached == nil || ![cached matches:document count:completed scale:scale]) {
-      cached = [DSCompletedPrefix new];
-      for (size_t index = 0; index < completed; index++) {
-        cached->blocks.push_back(document.blocks[index]);
-      }
-      cached->fontScale = scale;
-      cached->segment = [DSTextSegment segmentWithDocument:document
-                                                     from:0
-                                                       to:completed
-                                                    scale:scale
-                                               markerFont:markerFont];
-      NSUInteger cost = cached->segment.attributedString.length * 8 + completed * 256;
-      for (const Block &block : cached->blocks) {
-        cost += block.text.size() * sizeof(char16_t) + sizeof(Block);
-      }
-      [[DSRenderedDocument completedPrefixCache] setObject:cached forKey:key cost:cost];
-    }
-    [segments addObject:cached->segment];
-    _gaps.push_back(0);
-    from = completed;
-  }
-  while (from < count) {
-    const Block &first = document.blocks[from];
-    size_t to = from + 1;
-    if (first.kind == BlockKind::TableRow) {
-      while (to < count && document.blocks[to].kind == BlockKind::TableRow && document.blocks[to].table == first.table) {
-        to++;
-      }
+  for (const SegmentPlan &segment : planSegments(document)) {
+    if (segment.committed) {
+      [segments addObject:[DSRenderedDocument committedSegmentFor:document
+                                                             from:segment.from
+                                                               to:segment.to
+                                                            scale:scale
+                                                       markerFont:markerFont]];
+    } else if (segment.table) {
       [segments addObject:[DSTableSegment segmentWithDocument:document
-                                                         from:from
-                                                           to:to
+                                                         from:segment.from
+                                                           to:segment.to
                                                         scale:scale
                                                    markerFont:markerFont]];
     } else {
-      while (to < count && document.blocks[to].kind != BlockKind::TableRow) {
-        to++;
-      }
       [segments addObject:[DSTextSegment segmentWithDocument:document
-                                                        from:from
-                                                          to:to
+                                                        from:segment.from
+                                                          to:segment.to
                                                        scale:scale
                                                   markerFont:markerFont]];
     }
-    _gaps.push_back(from == 0 ? 0 : baseGap(first, scale));
-    from = to;
+    _gaps.push_back(segment.from == 0 ? 0 : baseGap(document.blocks[segment.from], scale));
   }
   _segments = [segments copy];
   return self;
@@ -676,6 +636,8 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   [_lock unlock];
 
   NSMutableArray<NSValue *> *frames = [NSMutableArray arrayWithCapacity:_segments.count];
+  // Segment edges round up from their exact positions, so frames stay on
+  // whole points without rounding error accumulating across segments.
   CGFloat y = 0;
   CGFloat unconstrainedWidth = 0;
   for (NSUInteger index = 0; index < _segments.count; index++) {
@@ -689,7 +651,8 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
       height = table.tableSize.height;
       unconstrainedWidth = std::max(unconstrainedWidth, table.contentLeading + table.tableSize.width);
     }
-    [frames addObject:[NSValue valueWithCGRect:CGRectMake(0, y, 0, height)]];
+    const CGFloat top = std::ceil(y);
+    [frames addObject:[NSValue valueWithCGRect:CGRectMake(0, top, 0, std::ceil(y + height) - top)]];
     y += height;
   }
 

@@ -1,4 +1,5 @@
 #include "IncrementalParser.h"
+#include "SegmentPlan.h"
 
 #include <array>
 #include <cstdlib>
@@ -284,6 +285,59 @@ bool snapshotsShareCommittedBlocks() {
       &before.document->blocks[1] == &after.document->blocks[1] && after.document->blocks.tail().size() == 1;
 }
 
+// Renderers reuse committed segments by first identity and block count, so a
+// committed segment that is followed by another must keep its boundaries in
+// every later snapshot, and a text chunk must not split a quote or list.
+bool committedSegmentsAreStable() {
+  std::string text;
+  for (int i = 0; i < 40; i++) {
+    text += "Paragraph " + std::to_string(i) + " has enough words to be worth committing on its own line.\n\n";
+    if (i % 7 == 3) text += "> quoted\n> lines\n\n- one\n- two\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n";
+  }
+  IncrementalParser parser(ParseMode::IncrementalTail);
+  std::map<std::pair<uint64_t, size_t>, size_t> sealed;
+  std::string source;
+  size_t committedSegments = 0;
+  for (const auto &chunk : splitChunks(text, 3)) {
+    source += chunk;
+    const auto result = feed(parser, source, false);
+    if (result.status != ParseStatus::Ok) return false;
+    const Document &document = *result.document;
+    const auto plan = planSegments(document);
+    for (size_t i = 0; i < plan.size(); i++) {
+      const SegmentPlan &segment = plan[i];
+      if (!segment.committed) continue;
+      committedSegments++;
+      // Text chunks also end where a table starts; any other end is top-level.
+      const bool beforeTable = segment.to < document.blocks.size() &&
+          document.blocks[segment.to].kind == BlockKind::TableRow;
+      if (!segment.table && !beforeTable && !document.blocks[segment.to - 1].containers.empty()) return false;
+      for (size_t block = segment.from; block < segment.to; block++) {
+        if (document.blocks[block].identity == 0) return false;
+      }
+      // A committed segment followed by another committed segment is sealed.
+      if (i + 1 < plan.size() && plan[i + 1].committed) {
+        const auto key = std::make_pair(document.blocks[segment.from].identity, segment.to - segment.from);
+        const auto [entry, added] = sealed.try_emplace(key, segment.from);
+        if (!added && entry->second != segment.from) return false;
+      }
+    }
+    // Every sealed chunk seen so far is still present with the same extent.
+    for (const auto &[key, from] : sealed) {
+      if (from >= document.blocks.size() || document.blocks[from].identity != key.first) return false;
+      bool found = false;
+      for (const SegmentPlan &segment : plan) {
+        found = found || (segment.from == from && segment.to - segment.from == key.second);
+      }
+      if (!found) {
+        std::cerr << "Sealed committed segment changed\n";
+        return false;
+      }
+    }
+  }
+  return committedSegments > 0 && sealed.size() > 2;
+}
+
 bool identitiesAreGlobal() {
   const std::string source = std::string(200, 'a') + "\n\nnext";
   IncrementalParser first(ParseMode::IncrementalTail);
@@ -366,6 +420,7 @@ int main() {
   }
   return check(chunks, "fixture") && seededCases() && fastPathAndFallbacks() &&
       identityRangesAndSnapshots() && tailLimitPreservesIdentity() && openFencePath() &&
-      md4cOffsetQuirk() && fenceEdgeCases() && blockLimitKeepsTail() && snapshotsShareCommittedBlocks() && identitiesAreGlobal() &&
+      md4cOffsetQuirk() && fenceEdgeCases() && blockLimitKeepsTail() && snapshotsShareCommittedBlocks() && committedSegmentsAreStable() &&
+      identitiesAreGlobal() &&
       realisticAnswer() ? 0 : 1;
 }

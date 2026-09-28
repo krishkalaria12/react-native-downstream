@@ -69,10 +69,8 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
   }
 
   internal fun pressLink(index: Int) {
-    val document = rendered?.document ?: return
-    if (index in 0 until document.linkCount) {
-      onLinkPress?.invoke(this, document.linkUrl(index), document.linkRangeStart(index), document.linkRangeEnd(index))
-    }
+    val link = DownstreamNative.readLink(documentId, index) ?: return
+    onLinkPress?.invoke(this, link.url, link.start, link.end)
   }
 
   // Reuse views of the same kind in place, so unchanged segments keep their

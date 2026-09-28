@@ -62,7 +62,8 @@ def setUpModule():
     subprocess.run(
         [cxx, "-std=c++20", "-O1", "-Wall", "-Wextra", "-Werror", "-DMD4C_USE_UTF8", *SYMBOL_PREFIXES,
          f"-I{md4c}", f"-I{CPP / 'downstream'}", f"-I{CPP / 'session'}",
-         CPP / "tests" / "test_incremental.cpp", CPP / "session" / "IncrementalParser.cpp", *engine,
+         CPP / "tests" / "test_incremental.cpp", CPP / "session" / "IncrementalParser.cpp",
+         CPP / "downstream" / "SegmentPlan.cpp", *engine,
          objects[0], objects[1], "-o", BUILD_DIR / "test_incremental"],
         check=True,
     )

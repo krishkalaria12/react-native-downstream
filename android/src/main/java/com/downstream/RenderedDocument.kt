@@ -214,10 +214,24 @@ internal class Palette(night: Boolean) {
   }
 }
 
-internal sealed class Segment
+/** One unit of layout. [gapBefore] is the space above it in the document. */
+internal sealed class Segment(val gapBefore: Int)
 
 /** A run of non-table blocks laid out as one text layout. */
-internal class TextSegment(val text: Spanned) : Segment()
+internal class TextSegment(val text: Spanned, gapBefore: Int) : Segment(gapBefore) {
+  private var heightWidth = -1
+  private var height = 0
+
+  /** Layout height at a width. Committed segments are shared by snapshots, so this is cached. */
+  @Synchronized
+  fun height(width: Int, paint: TextPaint): Int {
+    if (width != heightWidth) {
+      height = RenderedDocument.buildLayout(text, paint, width.coerceAtLeast(1), Layout.Alignment.ALIGN_NORMAL).height
+      heightWidth = width
+    }
+    return height
+  }
+}
 
 /**
  * One table. Column widths depend only on content, so the table is the same
@@ -235,7 +249,8 @@ internal class TableSegment(
   val markerPaint: TextPaint,
   val colors: Palette,
   val density: Float,
-) : Segment() {
+  gapBefore: Int,
+) : Segment(gapBefore) {
   val tableWidth = columnWidths.sum() + 1
   val tableHeight = rowHeights.sum() + 1
   val accessibilityText: String = cells.joinToString("\n") { row -> row.joinToString(", ") { it.text.toString() } }
@@ -243,12 +258,12 @@ internal class TableSegment(
 
 /**
  * A document rendered to segments at one font scale. The same instance
- * measures and lays out, so both agree. Mirrors ios/DSRenderedDocument.mm.
+ * measures and lays out, so both agree. Committed segments are shared with
+ * earlier snapshots of the same stream. Mirrors ios/DSRenderedDocument.mm.
  */
 internal class RenderedDocument(
-  val document: NativeDocument,
+  val documentId: Long,
   val segments: List<Segment>,
-  private val gaps: IntArray,
   val paint: TextPaint,
 ) {
   private var cachedWidth = -1
@@ -266,9 +281,9 @@ internal class RenderedDocument(
     val frames = IntArray(segments.size * 2)
     var y = 0
     segments.forEachIndexed { index, segment ->
-      y += gaps[index]
+      y += segment.gapBefore
       val height = when (segment) {
-        is TextSegment -> createTextLayout(segment, width).height
+        is TextSegment -> segment.height(width, paint)
         is TableSegment -> segment.tableHeight
       }
       frames[index * 2] = y
@@ -318,6 +333,18 @@ internal class RenderedDocument(
 
     private val cache = LruCache<String, RenderedDocument>(32)
 
+    /**
+     * Committed segments by first block identity, block count, font scale,
+     * and appearance. Identities are never reused, so a hit is the same
+     * content. Sized in approximate bytes.
+     */
+    private val committedSegments = object : LruCache<String, Segment>(16 * 1024 * 1024) {
+      override fun sizeOf(key: String, value: Segment) = when (value) {
+        is TextSegment -> value.text.length * 16 + 256
+        is TableSegment -> value.accessibilityText.length * 32 + 1024
+      }
+    }
+
     /** The text layout configuration shared by measurement and TextViews. */
     fun buildLayout(text: CharSequence, paint: TextPaint, width: Int, alignment: Layout.Alignment): StaticLayout {
       val builder = StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
@@ -339,20 +366,43 @@ internal class RenderedDocument(
         Configuration.UI_MODE_NIGHT_YES
       val key = "$documentId:$fontScale:$night"
       cache.get(key)?.let { return it }
-      val document = DownstreamNative.readDocument(documentId) ?: return null
-      return build(document, fontScale, Palette(night)).also { cache.put(key, it) }
+      val plan = DownstreamNative.readSegmentPlan(documentId) ?: return null
+      val style = Style(fontScale, Palette(night))
+      val segments = ArrayList<Segment>(plan.size)
+      for (planned in plan) {
+        // Only the uncommitted tail and newly committed chunks cross JNI.
+        val segmentKey = "${planned.identity}:${planned.to - planned.from}:$fontScale:$night"
+        val segment = (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
+          ?: DownstreamNative.readDocument(documentId, planned.from, planned.to)
+            ?.let { buildSegment(it, style, planned.from == 0, planned.followsCode) }
+            ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
+          ?: return null
+        segments.add(segment)
+      }
+      return RenderedDocument(documentId, segments, style.paint).also { cache.put(key, it) }
     }
 
-    private fun build(document: NativeDocument, fontScale: Float, colors: Palette): RenderedDocument {
+    /** Paints and metrics for one font scale and appearance. */
+    private class Style(fontScale: Float, val colors: Palette) {
       val scale = if (fontScale > 0) fontScale else 1f
       val density = PixelUtil.toPixelFromDIP(1f)
-      fun px(dp: Float) = dp * density * scale
-
       val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = px(BODY_SIZE)
         color = colors.text
       }
       val markerPaint = TextPaint(paint).apply { color = colors.secondary }
+
+      fun px(dp: Float) = dp * density * scale
+    }
+
+    /** Builds one planned segment from its flattened blocks. */
+    private fun buildSegment(document: NativeDocument, style: Style, first: Boolean, followsCode: Boolean): Segment {
+      val colors = style.colors
+      val density = style.density
+      val paint = style.paint
+      val markerPaint = style.markerPaint
+      fun px(dp: Float) = style.px(dp)
+
       val text = SpannableStringBuilder(document.text)
       val flags = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
 
@@ -396,28 +446,9 @@ internal class RenderedDocument(
         return Triple(containers, leading, inQuote)
       }
 
-      fun isAdmonitionTitle(block: Int): Boolean {
-        val depth = document.containerCount(block) - 1
-        if (document.blockKind(block) != NativeDocument.KIND_PARAGRAPH || depth < 0 ||
-          document.containerKind(block, depth) != NativeDocument.CONTAINER_ADMONITION
-        ) {
-          return false
-        }
-        val previous = block - 1
-        return previous < 0 || document.containerCount(previous) <= depth ||
-          document.containerId(previous, depth) != document.containerId(block, depth)
-      }
-
-      // Style every non-table block in place; segments copy their ranges.
-      val segmentStarts = ArrayList<Int>()
+      // Style every non-table block in place; a table copies its cells.
       for (block in 0 until document.blockCount) {
         val kind = document.blockKind(block)
-        val startsSegment = block == 0 ||
-          (kind == NativeDocument.KIND_TABLE_ROW) != (document.blockKind(block - 1) == NativeDocument.KIND_TABLE_ROW) ||
-          (kind == NativeDocument.KIND_TABLE_ROW && document.tableId(block) != document.tableId(block - 1))
-        if (startsSegment) {
-          segmentStarts.add(block)
-        }
         if (kind == NativeDocument.KIND_TABLE_ROW) {
           continue
         }
@@ -425,7 +456,7 @@ internal class RenderedDocument(
         val start = document.blockStart(block)
         val end = document.blockEnd(block)
         val spanEnd = if (block + 1 < document.blockCount) end + 1 else end
-        val previous = if (startsSegment) -1 else block - 1
+        val previous = block - 1
         val (containers, leading, inQuote) = containersOf(block, previous)
 
         var gap = 0f
@@ -453,7 +484,7 @@ internal class RenderedDocument(
         }
         text.setSpan(AbsoluteSizeSpan(size.toInt()), start, spanEnd, flags)
         val color = when {
-          isAdmonitionTitle(block) -> colors.admonition(document.marker(block, document.containerCount(block) - 1))
+          document.isAdmonitionTitle(block) -> colors.admonition(document.marker(block, document.containerCount(block) - 1))
           inQuote || (kind == NativeDocument.KIND_HEADING && document.headingLevel(block) == 6) -> colors.secondary
           else -> null
         }
@@ -513,21 +544,21 @@ internal class RenderedDocument(
         }
       }
 
-      val segments = ArrayList<Segment>(segmentStarts.size)
-      val gaps = IntArray(segmentStarts.size)
-      segmentStarts.forEachIndexed { index, from ->
-        val to = if (index + 1 < segmentStarts.size) segmentStarts[index + 1] else document.blockCount
-        gaps[index] = if (from == 0) 0 else baseGap(from).toInt()
-        if (document.blockKind(from) == NativeDocument.KIND_TABLE_ROW) {
-          segments.add(buildTable(document, text, from, to, paint, markerPaint, colors, density, ::px, containersOf(from, -1)))
-        } else {
-          // Drop the separator after the segment's last block.
-          val start = document.blockStart(from)
-          val end = document.blockEnd(to - 1)
-          segments.add(TextSegment(SpannableStringBuilder(text, start, end)))
-        }
+      val isTable = document.blockKind(0) == NativeDocument.KIND_TABLE_ROW
+      // A text segment that a committed chunk split off gets the gap it
+      // would have inside one segment, so both stack to the same height.
+      val gapBefore = when {
+        first -> 0
+        followsCode && !isTable -> (baseGap(0) + px(CODE_PADDING)).toInt()
+        else -> baseGap(0).toInt()
       }
-      return RenderedDocument(document, segments, gaps, paint)
+      if (isTable) {
+        return buildTable(
+          document, text, 0, document.blockCount, paint, markerPaint, colors, density, ::px, containersOf(0, -1),
+          gapBefore,
+        )
+      }
+      return TextSegment(text, gapBefore)
     }
 
     private fun buildTable(
@@ -541,6 +572,7 @@ internal class RenderedDocument(
       density: Float,
       px: (Float) -> Float,
       containers: Triple<List<ContainerDecoration>, Float, Boolean>,
+      gapBefore: Int,
     ): TableSegment {
       val cellPaint = TextPaint(paint).apply { if (containers.third) color = colors.secondary }
       val maxWidth = px(MAX_COLUMN_WIDTH)
@@ -583,6 +615,7 @@ internal class RenderedDocument(
         markerPaint = markerPaint,
         colors = colors,
         density = density,
+        gapBefore = gapBefore,
       )
     }
   }
