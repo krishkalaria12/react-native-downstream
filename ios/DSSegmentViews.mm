@@ -13,30 +13,18 @@ constexpr CGFloat kMarkerGap = 6;
 
 NSString *const kPlaceholder = @"\u200b";
 
-/// VoiceOver actions for the links in a range, labeled with their text.
-NSArray<UIAccessibilityCustomAction *> *linkActions(NSAttributedString *text, NSRange range,
-                                                    id<DSLinkDelegate> delegate) {
-  NSMutableArray<UIAccessibilityCustomAction *> *actions = [NSMutableArray new];
-  __weak id<DSLinkDelegate> weakDelegate = delegate;
+BOOL hasLink(NSAttributedString *text, NSRange range) {
+  __block BOOL found = NO;
   [text enumerateAttribute:DSLinkIndexAttributeName
                    inRange:range
                    options:0
-                usingBlock:^(NSNumber *link, NSRange linkRange, BOOL *stop) {
-                  if (link == nil) {
-                    return;
+                usingBlock:^(NSNumber *link, NSRange effectiveRange, BOOL *stop) {
+                  if (link != nil) {
+                    found = YES;
+                    *stop = YES;
                   }
-                  const NSInteger index = link.integerValue;
-                  NSString *name =
-                      [NSString stringWithFormat:@"Link: %@", [text.string substringWithRange:linkRange]];
-                  [actions addObject:[[UIAccessibilityCustomAction alloc]
-                                          initWithName:name
-                                         actionHandler:^BOOL(UIAccessibilityCustomAction *action) {
-                                           id<DSLinkDelegate> strongDelegate = weakDelegate;
-                                           [strongDelegate didPressLinkAtIndex:index];
-                                           return strongDelegate != nil;
-                                         }]];
                 }];
-  return actions;
+  return found;
 }
 
 /// Link index under a point in a laid-out TextKit stack, or -1.
@@ -57,6 +45,83 @@ NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *cont
   const NSUInteger character = [layoutManager characterIndexForGlyphAtIndex:glyph];
   NSNumber *link = [layoutManager.textStorage attribute:DSLinkIndexAttributeName atIndex:character effectiveRange:NULL];
   return link != nil ? link.integerValue : -1;
+}
+
+} // namespace
+
+@interface DSLinkAccessibilityElement : UIAccessibilityElement
+@property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
+@property (nonatomic) NSInteger linkIndex;
+@end
+
+@implementation DSLinkAccessibilityElement
+
+- (BOOL)accessibilityActivate {
+  id<DSLinkDelegate> delegate = self.linkDelegate;
+  if (delegate == nil) {
+    return NO;
+  }
+  [delegate didPressLinkAtIndex:self.linkIndex];
+  return YES;
+}
+
+@end
+
+namespace {
+
+void invalidateAccessibleLinks(NSArray<UIAccessibilityElement *> *elements) {
+  for (UIAccessibilityElement *element in elements) {
+    if ([element isKindOfClass:DSLinkAccessibilityElement.class]) {
+      ((DSLinkAccessibilityElement *)element).linkDelegate = nil;
+    }
+  }
+}
+
+/// Split only ranges containing links. Each link gets a focusable element in
+/// source order; plain text remains readable without repeating link labels.
+void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, NSAttributedString *text,
+                            NSRange range, UIView *container, NSLayoutManager *layoutManager,
+                            NSTextContainer *textContainer, CGPoint origin, CGRect fallbackFrame,
+                            NSString *prefix, UIAccessibilityTraits firstTraits,
+                            id<DSLinkDelegate> delegate) {
+  NSUInteger cursor = range.location;
+  const NSUInteger end = NSMaxRange(range);
+  BOOL first = YES;
+  while (cursor < end) {
+    NSRange slice;
+    NSNumber *link = [text attribute:DSLinkIndexAttributeName
+                           atIndex:cursor
+             longestEffectiveRange:&slice
+                           inRange:range];
+    if (slice.length == 0) {
+      break;
+    }
+    UIAccessibilityElement *element;
+    if (link != nil) {
+      DSLinkAccessibilityElement *linkElement =
+          [[DSLinkAccessibilityElement alloc] initWithAccessibilityContainer:container];
+      linkElement.linkDelegate = delegate;
+      linkElement.linkIndex = link.integerValue;
+      element = linkElement;
+    } else {
+      element = [[UIAccessibilityElement alloc] initWithAccessibilityContainer:container];
+    }
+    NSString *label = [text.string substringWithRange:slice];
+    if (first && prefix.length > 0) {
+      label = [NSString stringWithFormat:@"%@, %@", prefix, label];
+    }
+    element.accessibilityLabel = label;
+    element.accessibilityTraits = (link != nil ? UIAccessibilityTraitLink : UIAccessibilityTraitStaticText) |
+        (first ? firstTraits : 0);
+    const NSRange glyphs = [layoutManager glyphRangeForCharacterRange:slice actualCharacterRange:NULL];
+    const CGRect glyphFrame = [layoutManager boundingRectForGlyphRange:glyphs inTextContainer:textContainer];
+    element.accessibilityFrameInContainerSpace = CGRectIsEmpty(glyphFrame)
+        ? fallbackFrame
+        : CGRectOffset(glyphFrame, origin.x, origin.y);
+    [elements addObject:element];
+    first = NO;
+    cursor = NSMaxRange(slice);
+  }
 }
 
 } // namespace
@@ -132,8 +197,15 @@ NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *cont
   self.textContainerInset = UIEdgeInsetsMake(segment.topInset, 0, segment.bottomInset, 0);
   [_stack.textStorage setAttributedString:segment.attributedString];
   self.selectedRange = NSMakeRange(0, 0);
+  invalidateAccessibleLinks(_cachedAccessibilityElements);
   _cachedAccessibilityElements = nil;
   [_codeBackground setNeedsDisplay];
+}
+
+- (void)setLinkDelegate:(id<DSLinkDelegate>)linkDelegate {
+  _linkDelegate = linkDelegate;
+  invalidateAccessibleLinks(_cachedAccessibilityElements);
+  _cachedAccessibilityElements = nil;
 }
 
 - (void)layoutSubviews {
@@ -143,6 +215,7 @@ NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *cont
     [_codeBackground setNeedsDisplay];
   }
   [self sendSubviewToBack:_codeBackground];
+  invalidateAccessibleLinks(_cachedAccessibilityElements);
   _cachedAccessibilityElements = nil;
 }
 
@@ -193,18 +266,21 @@ NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *cont
     if (info.decoration == DSBlockDecorationRule || ![layoutManager textBoundsForCharacterRange:range bounds:&bounds]) {
       return;
     }
-    NSString *text = [storage.string substringWithRange:range];
-    UIAccessibilityElement *element = [[UIAccessibilityElement alloc] initWithAccessibilityContainer:self];
-    element.accessibilityLabel =
-        info.accessibilityPrefix != nil ? [NSString stringWithFormat:@"%@, %@", info.accessibilityPrefix, text] : text;
-    element.accessibilityFrameInContainerSpace =
-        CGRectMake(0, top + bounds.top, self.bounds.size.width, bounds.bottom - bounds.top);
-    element.accessibilityTraits = info.headingLevel > 0 ? UIAccessibilityTraitHeader : UIAccessibilityTraitStaticText;
-    NSArray *actions = linkActions(storage, range, self.linkDelegate);
-    if (actions.count > 0) {
-      element.accessibilityCustomActions = actions;
+    const CGRect blockFrame = CGRectMake(0, top + bounds.top, self.bounds.size.width, bounds.bottom - bounds.top);
+    if (hasLink(storage, range)) {
+      appendAccessibleSlices(elements, storage, range, self, layoutManager, self.textContainer,
+                             CGPointMake(self.textContainerInset.left, top), blockFrame,
+                             info.accessibilityPrefix,
+                             info.headingLevel > 0 ? UIAccessibilityTraitHeader : 0, self.linkDelegate);
+    } else {
+      NSString *text = [storage.string substringWithRange:range];
+      UIAccessibilityElement *element = [[UIAccessibilityElement alloc] initWithAccessibilityContainer:self];
+      element.accessibilityLabel = info.accessibilityPrefix != nil
+          ? [NSString stringWithFormat:@"%@, %@", info.accessibilityPrefix, text] : text;
+      element.accessibilityFrameInContainerSpace = blockFrame;
+      element.accessibilityTraits = info.headingLevel > 0 ? UIAccessibilityTraitHeader : UIAccessibilityTraitStaticText;
+      [elements addObject:element];
     }
-    [elements addObject:element];
   }];
   return elements;
 }
@@ -234,8 +310,15 @@ NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *cont
 
 - (void)setSegment:(DSTableSegment *)segment {
   _segment = segment;
+  invalidateAccessibleLinks(_cachedAccessibilityElements);
   _cachedAccessibilityElements = nil;
   [self setNeedsDisplay];
+}
+
+- (void)setLinkDelegate:(id<DSLinkDelegate>)linkDelegate {
+  _linkDelegate = linkDelegate;
+  invalidateAccessibleLinks(_cachedAccessibilityElements);
+  _cachedAccessibilityElements = nil;
 }
 
 - (CGRect)contentRectForRow:(NSUInteger)row column:(NSUInteger)column {
@@ -327,25 +410,43 @@ NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *cont
   if (_cachedAccessibilityElements != nil || _segment == nil) {
     return _cachedAccessibilityElements ?: @[];
   }
-  NSMutableArray *elements = [NSMutableArray arrayWithCapacity:_segment.rows.count];
+  NSMutableArray<UIAccessibilityElement *> *elements = [NSMutableArray arrayWithCapacity:_segment.rows.count];
   CGFloat y = 0;
   for (NSUInteger row = 0; row < _segment.rows.count; row++) {
     NSMutableArray<NSString *> *cells = [NSMutableArray new];
-    NSMutableArray<UIAccessibilityCustomAction *> *actions = [NSMutableArray new];
+    BOOL rowHasLinks = NO;
     for (DSTableCell *cell in _segment.rows[row]) {
       [cells addObject:cell.text.string];
-      [actions addObjectsFromArray:linkActions(cell.text, NSMakeRange(0, cell.text.length), self.linkDelegate)];
+      rowHasLinks |= hasLink(cell.text, NSMakeRange(0, cell.text.length));
     }
     const CGFloat height = _segment.rowHeights[row].doubleValue;
-    UIAccessibilityElement *element = [[UIAccessibilityElement alloc] initWithAccessibilityContainer:self];
-    element.accessibilityLabel = [cells componentsJoinedByString:@", "];
-    element.accessibilityFrameInContainerSpace = CGRectMake(0, y, _segment.tableSize.width, height);
-    element.accessibilityTraits = row == 0 && _segment.hasHeader ? UIAccessibilityTraitHeader
-                                                                 : UIAccessibilityTraitStaticText;
-    if (actions.count > 0) {
-      element.accessibilityCustomActions = actions;
+    if (!rowHasLinks) {
+      UIAccessibilityElement *element = [[UIAccessibilityElement alloc] initWithAccessibilityContainer:self];
+      element.accessibilityLabel = [cells componentsJoinedByString:@", "];
+      element.accessibilityFrameInContainerSpace = CGRectMake(0, y, _segment.tableSize.width, height);
+      element.accessibilityTraits = row == 0 && _segment.hasHeader ? UIAccessibilityTraitHeader
+                                                                   : UIAccessibilityTraitStaticText;
+      [elements addObject:element];
+    } else {
+      const NSUInteger rowStart = elements.count;
+      for (NSUInteger column = 0; column < _segment.rows[row].count; column++) {
+        DSTableCell *cell = _segment.rows[row][column];
+        if (cell.text.length == 0) {
+          continue;
+        }
+        const CGRect content = [self contentRectForRow:row column:column];
+        DSTextKitStack *stack = [[DSTextKitStack alloc] initWithLayoutManager:[NSLayoutManager new]];
+        stack.textContainer.size = CGSizeMake(content.size.width, CGFLOAT_MAX);
+        [stack.textStorage setAttributedString:cell.text];
+        [stack.layoutManager ensureLayoutForTextContainer:stack.textContainer];
+        const BOOL firstCell = elements.count == rowStart;
+        NSString *prefix = firstCell ? [NSString stringWithFormat:@"Row %lu", (unsigned long)row + 1] : nil;
+        appendAccessibleSlices(elements, cell.text, NSMakeRange(0, cell.text.length), self,
+                               stack.layoutManager, stack.textContainer, content.origin, content, prefix,
+                               firstCell && row == 0 && _segment.hasHeader ? UIAccessibilityTraitHeader : 0,
+                               self.linkDelegate);
+      }
     }
-    [elements addObject:element];
     y += height;
   }
   _cachedAccessibilityElements = elements;
