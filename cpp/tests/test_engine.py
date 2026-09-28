@@ -205,6 +205,10 @@ class RenderModelTests(unittest.TestCase):
         self.assertEqual(blocks[1]["text"], "1\t2\t")
         self.assertEqual([b["spacing"] for b in blocks], [0, 1])
 
+    def test_adjacent_tables_have_distinct_ids(self):
+        blocks = parse("| a |\n| - |\n| 1 |\n\n| b |\n| - |\n\npara\n")["blocks"]
+        self.assertEqual([b["table"] for b in blocks], [1, 1, 2, 0])
+
     def test_admonition_and_footnotes(self):
         blocks = parse("> [!WARNING]\n> careful\n\nA[^n].\n\n[^n]: *why*\n")["blocks"]
         self.assertEqual([b["text"] for b in blocks], ["Warning", "careful", "A1.", "", "why"])

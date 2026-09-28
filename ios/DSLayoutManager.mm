@@ -31,6 +31,47 @@ constexpr CGFloat kCodeCornerRadius = 6;
   return YES;
 }
 
+- (instancetype)init {
+  if (self = [super init]) {
+    _drawsCodeBackgrounds = YES;
+  }
+  return self;
+}
+
+- (void)drawCodeBackground:(DSBlockInfo *)info
+                       top:(CGFloat)top
+                    bottom:(CGFloat)bottom
+                      left:(CGFloat)left
+                     width:(CGFloat)width {
+  const CGRect rect = CGRectMake(left, top - info.codePadding, width - info.contentLeading,
+                                 bottom - top + 2 * info.codePadding);
+  [UIColor.tertiarySystemFillColor setFill];
+  [[UIBezierPath bezierPathWithRoundedRect:rect cornerRadius:kCodeCornerRadius] fill];
+}
+
+- (void)drawCodeBackgroundsAtPoint:(CGPoint)origin {
+  NSTextStorage *storage = self.textStorage;
+  NSTextContainer *container = self.textContainers.firstObject;
+  if (storage.length == 0 || container == nil) {
+    return;
+  }
+  [storage enumerateAttribute:DSBlockInfoAttributeName
+                      inRange:NSMakeRange(0, storage.length)
+                      options:0
+                   usingBlock:^(DSBlockInfo *info, NSRange range, BOOL *stop) {
+                     DSBlockTextBounds bounds;
+                     if (info.decoration != DSBlockDecorationCode ||
+                         ![self textBoundsForCharacterRange:range bounds:&bounds]) {
+                       return;
+                     }
+                     [self drawCodeBackground:info
+                                          top:origin.y + bounds.top
+                                       bottom:origin.y + bounds.bottom
+                                         left:origin.x + info.contentLeading
+                                        width:container.size.width];
+                   }];
+}
+
 - (void)drawBackgroundForGlyphRange:(NSRange)glyphsToShow atPoint:(CGPoint)origin {
   [super drawBackgroundForGlyphRange:glyphsToShow atPoint:origin];
 
@@ -40,7 +81,6 @@ constexpr CGFloat kCodeCornerRadius = 6;
     return;
   }
   const CGFloat width = container.size.width;
-  const CGFloat hairline = 1.0 / UIScreen.mainScreen.scale;
   const NSRange visible = [self characterRangeForGlyphRange:glyphsToShow actualGlyphRange:NULL];
 
   NSUInteger index = visible.location;
@@ -75,20 +115,14 @@ constexpr CGFloat kCodeCornerRadius = 6;
 
     const CGFloat left = origin.x + info.contentLeading;
     switch (info.decoration) {
-      case DSBlockDecorationCode: {
-        const CGRect rect = CGRectMake(left, top - info.codePadding, width - info.contentLeading,
-                                       bottom - top + 2 * info.codePadding);
-        [UIColor.tertiarySystemFillColor setFill];
-        [[UIBezierPath bezierPathWithRoundedRect:rect cornerRadius:kCodeCornerRadius] fill];
+      case DSBlockDecorationCode:
+        if (self.drawsCodeBackgrounds) {
+          [self drawCodeBackground:info top:top bottom:bottom left:left width:width];
+        }
         break;
-      }
       case DSBlockDecorationRule:
         [UIColor.separatorColor setFill];
         UIRectFill(CGRectMake(left, round((top + bottom) / 2), width - info.contentLeading, 1));
-        break;
-      case DSBlockDecorationTableHeader:
-        [UIColor.separatorColor setFill];
-        UIRectFill(CGRectMake(left, bottom + 1, width - info.contentLeading, hairline));
         break;
       case DSBlockDecorationNone:
         break;

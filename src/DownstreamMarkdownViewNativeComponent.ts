@@ -24,6 +24,7 @@ export interface NativeProps extends ViewProps {
   markdown: string;
   /** Source generation reported back with errors, so stale ones are dropped. */
   generation?: CodegenTypes.WithDefault<CodegenTypes.Int32, 0>;
+  selectable?: CodegenTypes.WithDefault<boolean, false>;
   onLinkPress?: CodegenTypes.DirectEventHandler<NativeLinkPressEvent>;
   onMarkdownError?: CodegenTypes.DirectEventHandler<NativeMarkdownErrorEvent>;
 }

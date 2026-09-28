@@ -61,9 +61,9 @@ int main() {
   std::printf("{\"blocks\":[");
   for (size_t b = 0; b < document.blocks.size(); b++) {
     const Block &block = document.blocks[b];
-    std::printf("%s{\"kind\":%d,\"headingLevel\":%d,\"tableHeader\":%s,\"spacing\":%d,\"language\":", b ? "," : "",
-                static_cast<int>(block.kind), block.headingLevel, block.tableHeader ? "true" : "false",
-                static_cast<int>(block.spacingBefore));
+    std::printf("%s{\"kind\":%d,\"headingLevel\":%d,\"tableHeader\":%s,\"table\":%u,\"spacing\":%d,\"language\":",
+                b ? "," : "", static_cast<int>(block.kind), block.headingLevel, block.tableHeader ? "true" : "false",
+                block.table, static_cast<int>(block.spacingBefore));
     writeString(block.language);
     std::printf(",\"text\":");
     writeString(block.text);

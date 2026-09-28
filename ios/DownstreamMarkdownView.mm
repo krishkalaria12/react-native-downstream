@@ -1,6 +1,7 @@
 #import "DownstreamMarkdownView.h"
 
-#import "DSMarkdownTextView.h"
+#import "DSRenderedDocument.h"
+#import "DSSegmentViews.h"
 
 #import <React/RCTConversions.h>
 #import <react/renderer/components/DownstreamSpec/EventEmitters.h>
@@ -11,12 +12,14 @@
 
 using namespace facebook::react;
 
-@interface DownstreamMarkdownView () <RCTDownstreamMarkdownViewViewProtocol, DSMarkdownTextViewDelegate>
+@interface DownstreamMarkdownView () <RCTDownstreamMarkdownViewViewProtocol, DSLinkDelegate>
 @end
 
 @implementation DownstreamMarkdownView {
-  DSMarkdownTextView *_textView;
+  DSDocumentView *_documentView;
   DownstreamMarkdownShadowNode::ConcreteState::Shared _state;
+  downstream::DocumentHandle _document;
+  CGFloat _fontScale;
 }
 
 + (ComponentDescriptorProvider)componentDescriptorProvider {
@@ -28,9 +31,9 @@ using namespace facebook::react;
     static const auto defaultProps = std::make_shared<const DownstreamMarkdownViewProps>();
     _props = defaultProps;
 
-    _textView = [[DSMarkdownTextView alloc] initWithFrame:self.bounds];
-    _textView.delegate = self;
-    self.contentView = _textView;
+    _documentView = [[DSDocumentView alloc] initWithFrame:self.bounds];
+    _documentView.linkDelegate = self;
+    self.contentView = _documentView;
 
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap:)];
     tap.cancelsTouchesInView = NO;
@@ -41,29 +44,43 @@ using namespace facebook::react;
 
 - (void)updateState:(const State::Shared &)state oldState:(const State::Shared &)oldState {
   _state = std::static_pointer_cast<const DownstreamMarkdownShadowNode::ConcreteState>(state);
-  if (_state) {
-    const auto &data = _state->getData();
-    [_textView setDocument:data.document fontScale:data.fontSizeMultiplier];
+  if (!_state) {
+    return;
   }
+  const auto &data = _state->getData();
+  if (data.document == _document && data.fontSizeMultiplier == _fontScale) {
+    return;
+  }
+  _document = data.document;
+  _fontScale = data.fontSizeMultiplier;
+  _documentView.rendered =
+      _document ? [DSRenderedDocument renderedDocumentFor:_document fontScale:_fontScale] : nil;
+}
+
+- (void)updateProps:(const Props::Shared &)props oldProps:(const Props::Shared &)oldProps {
+  const auto &newProps = *std::static_pointer_cast<const DownstreamMarkdownViewProps>(props);
+  _documentView.selectable = newProps.selectable;
+  [super updateProps:props oldProps:oldProps];
 }
 
 - (void)prepareForRecycle {
   [super prepareForRecycle];
   _state.reset();
-  [_textView setDocument:nullptr fontScale:1];
+  _document.reset();
+  _documentView.rendered = nil;
 }
 
 - (void)handleTap:(UITapGestureRecognizer *)recognizer {
   if (recognizer.state != UIGestureRecognizerStateEnded) {
     return;
   }
-  const NSInteger linkIndex = [_textView linkIndexAtPoint:[recognizer locationInView:_textView]];
+  const NSInteger linkIndex = [_documentView linkIndexAtPoint:[recognizer locationInView:_documentView]];
   if (linkIndex >= 0) {
-    [self markdownTextView:_textView didPressLinkAtIndex:linkIndex];
+    [self didPressLinkAtIndex:linkIndex];
   }
 }
 
-- (void)markdownTextView:(DSMarkdownTextView *)view didPressLinkAtIndex:(NSInteger)linkIndex {
+- (void)didPressLinkAtIndex:(NSInteger)linkIndex {
   if (!_state || !_eventEmitter) {
     return;
   }

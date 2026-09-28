@@ -178,9 +178,11 @@ public:
         break;
       case MD_BLOCK_TABLE:
         tableRow_ = 0;
+        tableCount_++;
         break;
       case MD_BLOCK_TR:
         beginLeaf(BlockKind::TableRow);
+        current_->table = tableCount_;
         if (tableRow_++ > 0) {
           current_->spacingBefore = BlockSpacing::Tight;
         }
@@ -680,6 +682,7 @@ private:
   size_t cursor_{0};
   unsigned tableRow_{0};
   uint32_t containerCount_{0};
+  uint32_t tableCount_{0};
   int strongDepth_{0};
   int emphasisDepth_{0};
   int strikeDepth_{0};

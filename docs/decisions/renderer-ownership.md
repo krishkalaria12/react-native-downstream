@@ -32,8 +32,8 @@ The streaming session planned for Phase 2 replaces the shadow node's parse with 
 
 ## Costs we accept
 
-- Selection, rich table layout, images, and syntax highlighting must be built here. The plan schedules them for the feature phase.
-- Very tall documents draw into a single layer on iOS and a single `StaticLayout` on Android. Per-block layers are a candidate once the incremental tail gives blocks stable identity.
+- Selection, table layout, images, and syntax highlighting are built here. Selection and tables follow [the display behavior decisions](display-behavior.md); images and highlighting are later.
+- A long text segment draws into one text view on each platform. Per-block views are a candidate once the incremental tail gives blocks stable identity.
 
 ## How this gets revisited
 

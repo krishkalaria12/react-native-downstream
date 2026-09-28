@@ -11,6 +11,7 @@ internal class NativeDocument(
   private val runs: IntArray,
   private val links: IntArray,
   private val strings: Array<String>,
+  private val cells: IntArray,
 ) {
   val blockCount: Int get() = blocks.size / BLOCK_STRIDE
   val runCount: Int get() = runs.size / RUN_STRIDE
@@ -23,7 +24,14 @@ internal class NativeDocument(
   fun blockStart(block: Int) = blocks[block * BLOCK_STRIDE + 4]
   fun blockEnd(block: Int) = blocks[block * BLOCK_STRIDE + 5]
   fun containerCount(block: Int) = blocks[block * BLOCK_STRIDE + 7]
-  fun cellCount(block: Int) = blocks[block * BLOCK_STRIDE + 8]
+  fun cellCount(block: Int) = blocks[block * BLOCK_STRIDE + 9]
+  fun tableId(block: Int) = blocks[block * BLOCK_STRIDE + 10]
+
+  private fun cell(block: Int, column: Int) = (blocks[block * BLOCK_STRIDE + 8] + column) * CELL_STRIDE
+
+  fun cellStart(block: Int, column: Int) = cells[cell(block, column)]
+  fun cellEnd(block: Int, column: Int) = cells[cell(block, column) + 1]
+  fun cellAlign(block: Int, column: Int) = cells[cell(block, column) + 2]
 
   private fun container(block: Int, depth: Int) = (blocks[block * BLOCK_STRIDE + 6] + depth) * CONTAINER_STRIDE
 
@@ -43,7 +51,8 @@ internal class NativeDocument(
   fun linkRangeEnd(link: Int) = links[link * LINK_STRIDE + 2]
 
   companion object {
-    private const val BLOCK_STRIDE = 9
+    private const val BLOCK_STRIDE = 11
+    private const val CELL_STRIDE = 3
     private const val CONTAINER_STRIDE = 5
     private const val RUN_STRIDE = 4
     private const val LINK_STRIDE = 3
@@ -59,6 +68,9 @@ internal class NativeDocument(
     const val CONTAINER_LIST_ITEM = 1
     const val CONTAINER_ADMONITION = 2
     const val CONTAINER_FOOTNOTE = 3
+
+    const val ALIGN_CENTER = 2
+    const val ALIGN_RIGHT = 3
 
     const val TASK_UNCHECKED = 1
     const val TASK_CHECKED = 2
@@ -87,6 +99,7 @@ internal object DownstreamNative {
       runs = parts[3] as IntArray,
       links = parts[4] as IntArray,
       strings = parts[5] as Array<String>,
+      cells = parts[6] as IntArray,
     )
   }
 

@@ -37,6 +37,10 @@ class DownstreamMarkdownViewManager :
 
   override fun setGeneration(view: DownstreamMarkdownView, value: Int) = Unit
 
+  override fun setSelectable(view: DownstreamMarkdownView, value: Boolean) {
+    view.setSelectable(value)
+  }
+
   override fun updateState(
     view: DownstreamMarkdownView,
     props: ReactStylesDiffMap,
@@ -73,10 +77,9 @@ class DownstreamMarkdownViewManager :
     } else {
       width.toInt()
     }
-    val layout = rendered.createLayout(layoutWidth)
     return YogaMeasureOutput.make(
-      PixelUtil.toDIPFromPixel(layout.width.toFloat()),
-      PixelUtil.toDIPFromPixel(layout.height.toFloat()),
+      PixelUtil.toDIPFromPixel(layoutWidth.toFloat()),
+      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth).toFloat()),
     )
   }
 

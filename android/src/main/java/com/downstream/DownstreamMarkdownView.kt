@@ -3,28 +3,47 @@ package com.downstream
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
-import android.os.Bundle
-import android.text.StaticLayout
+import android.graphics.Paint
+import android.os.Build
+import android.text.Layout
+import android.text.Spanned
+import android.util.TypedValue
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
-import android.view.accessibility.AccessibilityNodeInfo
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
+import android.widget.TextView
+
+private const val HIT_SLOP = 8f
+
+/** Link index at a point in a laid-out text, or -1. */
+private fun linkAt(layout: Layout, x: Float, y: Float): Int {
+  if (y < 0 || y > layout.height) {
+    return -1
+  }
+  val line = layout.getLineForVertical(y.toInt())
+  if (x < layout.getLineLeft(line) - HIT_SLOP || x > layout.getLineRight(line) + HIT_SLOP) {
+    return -1
+  }
+  val offset = layout.getOffsetForHorizontal(line, x)
+  val text = layout.text as? Spanned ?: return -1
+  return text.getSpans(offset, offset, LinkSpan::class.java).firstOrNull()?.index ?: -1
+}
 
 /**
- * Draws a rendered document with the same StaticLayout configuration that
- * measured it. The view never parses; documents arrive through Fabric state.
+ * Fabric host view for <DownstreamMarkdown>: stacks segment views at the
+ * frames the measurement computed. Documents arrive through Fabric state; the
+ * view never parses.
  */
-class DownstreamMarkdownView(context: Context) : View(context) {
+class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
   internal var onLinkPress: ((view: DownstreamMarkdownView, url: String, start: Int, end: Int) -> Unit)? = null
 
   private var documentId = 0L
   private var fontScale = 1f
   private var rendered: RenderedDocument? = null
-  private var layout: StaticLayout? = null
-  private var pressedLink = -1
-
-  init {
-    importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
-  }
+  private var selectable = false
 
   fun setDocument(documentId: Long, fontScale: Float) {
     if (documentId == this.documentId && fontScale == this.fontScale && rendered != null) {
@@ -33,101 +52,328 @@ class DownstreamMarkdownView(context: Context) : View(context) {
     this.documentId = documentId
     this.fontScale = fontScale
     rendered = if (documentId != 0L) RenderedDocument.obtain(context, documentId, fontScale) else null
-    layout = null
-    contentDescription = rendered?.accessibilityBlocks?.joinToString("\n")
-    invalidate()
+    syncSegmentViews()
+  }
+
+  fun setSelectable(selectable: Boolean) {
+    this.selectable = selectable
+    for (index in 0 until childCount) {
+      (getChildAt(index) as? TextSegmentView)?.setSelectable(selectable)
+    }
   }
 
   fun reset() {
     documentId = 0L
     rendered = null
-    layout = null
-    pressedLink = -1
-    contentDescription = null
+    removeAllViews()
+  }
+
+  internal fun pressLink(index: Int) {
+    val document = rendered?.document ?: return
+    if (index in 0 until document.linkCount) {
+      onLinkPress?.invoke(this, document.linkUrl(index), document.linkRangeStart(index), document.linkRangeEnd(index))
+    }
+  }
+
+  // Reuse views of the same kind in place, so unchanged segments keep their
+  // selection and scroll position across updates.
+  private fun syncSegmentViews() {
+    val segments = rendered?.segments.orEmpty()
+    segments.forEachIndexed { index, segment ->
+      var view = if (index < childCount) getChildAt(index) else null
+      val reusable = when (segment) {
+        is TextSegment -> view is TextSegmentView
+        is TableSegment -> view is TableSegmentView
+      }
+      if (!reusable) {
+        if (view != null) removeViewAt(index)
+        view = when (segment) {
+          is TextSegment -> TextSegmentView(context).apply { setSelectable(selectable) }
+          is TableSegment -> TableSegmentView(context)
+        }
+        addView(view, index)
+      }
+      when (segment) {
+        is TextSegment -> (view as TextSegmentView).setSegment(segment, rendered!!)
+        is TableSegment -> (view as TableSegmentView).setSegment(segment)
+      }
+    }
+    while (childCount > segments.size) {
+      removeViewAt(childCount - 1)
+    }
+    layoutSegments()
+  }
+
+  // React Native does not relayout children that request it, so segments are
+  // laid out here whenever the document or size changes.
+  private fun layoutSegments() {
+    val document = rendered ?: return
+    val width = width - paddingLeft - paddingRight
+    if (width <= 0) {
+      return
+    }
+    val frames = document.frames(width)
+    for (index in 0 until minOf(childCount, frames.size / 2)) {
+      val child = getChildAt(index)
+      val top = paddingTop + frames[index * 2]
+      val height = frames[index * 2 + 1]
+      child.measure(
+        MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+        MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY),
+      )
+      child.layout(paddingLeft, top, paddingLeft + width, top + height)
+    }
+  }
+
+  override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.getSize(heightMeasureSpec))
+  }
+
+  override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+    layoutSegments()
+  }
+
+  private var layoutPosted = false
+
+  override fun requestLayout() {
+    super.requestLayout()
+    // Children changing text or scroll range need a pass the host never runs.
+    // Runs during the superclass constructor too, before fields initialize.
+    if (!layoutPosted) {
+      layoutPosted = true
+      post {
+        layoutPosted = false
+        layoutSegments()
+      }
+    }
+  }
+}
+
+/**
+ * A text segment in a TextView configured like the measuring StaticLayout
+ * (RenderedDocument.buildLayout), which gives selection and text navigation.
+ */
+@SuppressLint("ViewConstructor")
+internal class TextSegmentView(context: Context) : TextView(context) {
+  private var segment: TextSegment? = null
+  private var pressedLink = -1
+
+  init {
+    includeFontPadding = false
+    setPadding(0, 0, 0, 0)
+    setLineSpacing(0f, 1f)
+    breakStrategy = Layout.BREAK_STRATEGY_HIGH_QUALITY
+    hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
+    textDirection = View.TEXT_DIRECTION_FIRST_STRONG_LTR
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      isFallbackLineSpacing = true
+    }
+    gravity = Gravity.TOP or Gravity.START
+    setBackgroundColor(0)
+    highlightColor = 0x33007AFF
+  }
+
+  fun setSelectable(selectable: Boolean) {
+    if (isTextSelectable != selectable) {
+      setTextIsSelectable(selectable)
+    }
+  }
+
+  fun setSegment(segment: TextSegment, rendered: RenderedDocument) {
+    if (segment === this.segment) {
+      return
+    }
+    this.segment = segment
+    paint.typeface = rendered.paint.typeface
+    setTextSize(TypedValue.COMPLEX_UNIT_PX, rendered.paint.textSize)
+    setTextColor(rendered.paint.color)
+    setText(segment.text, BufferType.SPANNABLE)
+  }
+
+  @SuppressLint("ClickableViewAccessibility")
+  override fun onTouchEvent(event: MotionEvent): Boolean {
+    val layout = layout
+    if (layout != null) {
+      val x = event.x - totalPaddingLeft + scrollX
+      val y = event.y - totalPaddingTop + scrollY
+      when (event.actionMasked) {
+        MotionEvent.ACTION_DOWN -> pressedLink = linkAt(layout, x, y)
+        MotionEvent.ACTION_UP -> {
+          val link = pressedLink
+          pressedLink = -1
+          if (link >= 0 && linkAt(layout, x, y) == link) {
+            findHost()?.pressLink(link)
+            return true
+          }
+        }
+        MotionEvent.ACTION_CANCEL -> pressedLink = -1
+      }
+    }
+    return super.onTouchEvent(event) || pressedLink >= 0
+  }
+
+  private fun findHost(): DownstreamMarkdownView? {
+    var parent = parent
+    while (parent != null && parent !is DownstreamMarkdownView) {
+      parent = parent.parent
+    }
+    return parent as? DownstreamMarkdownView
+  }
+}
+
+/**
+ * One table: fixed column widths in a horizontal scroll view, with container
+ * bars and the list marker drawn in the leading margin.
+ */
+internal class TableSegmentView(context: Context) : FrameLayout(context) {
+  private val scroll = HorizontalScrollView(context).apply {
+    isHorizontalScrollBarEnabled = true
+    isFillViewport = false
+    overScrollMode = OVER_SCROLL_NEVER
+  }
+  private val grid = TableGridView(context)
+  private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+  private var segment: TableSegment? = null
+
+  init {
+    setWillNotDraw(false)
+    scroll.addView(grid, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
+    addView(scroll)
+  }
+
+  fun setSegment(segment: TableSegment) {
+    if (segment === this.segment) {
+      return
+    }
+    this.segment = segment
+    grid.segment = segment
+    scroll.scrollTo(0, 0)
+    contentDescription = segment.accessibilityText
+    requestLayout()
     invalidate()
   }
 
-  private fun currentLayout(): StaticLayout? {
-    val document = rendered ?: return null
-    val width = width - paddingLeft - paddingRight
-    val existing = layout
-    if (existing != null && existing.width == width) {
-      return existing
-    }
-    return document.createLayout(width).also { layout = it }
+  override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+    val segment = segment ?: return
+    val leading = segment.contentLeading.toInt()
+    val width = (right - left - leading).coerceAtLeast(0)
+    val height = bottom - top
+    scroll.measure(
+      MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+      MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY),
+    )
+    scroll.layout(leading, 0, leading + width, height)
+    grid.measure(
+      MeasureSpec.makeMeasureSpec(segment.tableWidth, MeasureSpec.EXACTLY),
+      MeasureSpec.makeMeasureSpec(segment.tableHeight, MeasureSpec.EXACTLY),
+    )
+    grid.layout(0, 0, segment.tableWidth, segment.tableHeight)
   }
 
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
-    val layout = currentLayout() ?: return
-    canvas.save()
-    canvas.translate(paddingLeft.toFloat(), paddingTop.toFloat())
-    layout.draw(canvas)
-    canvas.restore()
+    val segment = segment ?: return
+    val density = segment.density
+    for (container in segment.containers) {
+      val barColor = container.barColor
+      if (barColor != null) {
+        paint.color = barColor
+        val x = container.leading + 2 * density
+        canvas.drawRect(x, 0f, x + 3 * density, height.toFloat(), paint)
+      }
+      val marker = container.marker
+      if (marker != null) {
+        val firstCell = segment.cells.firstOrNull()?.firstOrNull() ?: continue
+        val baseline = segment.paddingVertical + firstCell.getLineBaseline(0).toFloat()
+        val x = container.leading + container.width - 6 * density - segment.markerPaint.measureText(marker)
+        canvas.drawText(marker, x, baseline, segment.markerPaint)
+      }
+    }
+  }
+}
+
+private class TableGridView(context: Context) : View(context) {
+  var segment: TableSegment? = null
+    set(value) {
+      field = value
+      invalidate()
+    }
+  private val paint = Paint()
+  private var pressedLink = -1
+
+  private fun cellOrigin(segment: TableSegment, row: Int, column: Int): Pair<Int, Int> {
+    var x = 0
+    for (i in 0 until column) x += segment.columnWidths[i]
+    var y = 0
+    for (i in 0 until row) y += segment.rowHeights[i]
+    return Pair(x + segment.paddingHorizontal, y + segment.paddingVertical)
   }
 
-  private fun linkAt(x: Float, y: Float): Int {
-    val layout = currentLayout() ?: return -1
-    val localX = x - paddingLeft
-    val localY = y - paddingTop
-    if (localY < 0 || localY > layout.height) {
-      return -1
+  override fun onDraw(canvas: Canvas) {
+    val segment = segment ?: return
+    val width = segment.tableWidth.toFloat() - 1
+    if (segment.hasHeader && segment.rowHeights.isNotEmpty()) {
+      paint.color = segment.colors.codeBackground
+      canvas.drawRect(0f, 0f, width, segment.rowHeights[0].toFloat(), paint)
     }
-    val line = layout.getLineForVertical(localY.toInt())
-    if (localX < layout.getLineLeft(line) - HIT_SLOP || localX > layout.getLineRight(line) + HIT_SLOP) {
-      return -1
+    segment.cells.forEachIndexed { row, cells ->
+      cells.forEachIndexed { column, cell ->
+        val (x, y) = cellOrigin(segment, row, column)
+        canvas.save()
+        canvas.translate(x.toFloat(), y.toFloat())
+        cell.draw(canvas)
+        canvas.restore()
+      }
     }
-    val offset = layout.getOffsetForHorizontal(line, localX)
-    val spans = layout.text.let { it as? android.text.Spanned }?.getSpans(offset, offset, LinkSpan::class.java)
-    return spans?.firstOrNull()?.index ?: -1
+    paint.color = segment.colors.separator
+    var y = 0f
+    canvas.drawRect(0f, 0f, width, 1f, paint)
+    for (height in segment.rowHeights) {
+      y += height
+      canvas.drawRect(0f, y, width, y + 1f, paint)
+    }
+    var x = 0f
+    canvas.drawRect(0f, 0f, 1f, y, paint)
+    for (columnWidth in segment.columnWidths) {
+      x += columnWidth
+      canvas.drawRect(x, 0f, x + 1f, y, paint)
+    }
+  }
+
+  private fun linkAtPoint(px: Float, py: Float): Int {
+    val segment = segment ?: return -1
+    segment.cells.forEachIndexed { row, cells ->
+      cells.forEachIndexed { column, cell ->
+        val (x, y) = cellOrigin(segment, row, column)
+        val right = x + segment.columnWidths[column] - 2 * segment.paddingHorizontal
+        val bottom = y + segment.rowHeights[row] - 2 * segment.paddingVertical
+        if (px >= x - HIT_SLOP && px <= right + HIT_SLOP && py >= y - HIT_SLOP && py <= bottom + HIT_SLOP) {
+          return linkAt(cell, px - x, py - y)
+        }
+      }
+    }
+    return -1
   }
 
   @SuppressLint("ClickableViewAccessibility")
   override fun onTouchEvent(event: MotionEvent): Boolean {
     when (event.actionMasked) {
       MotionEvent.ACTION_DOWN -> {
-        pressedLink = linkAt(event.x, event.y)
+        pressedLink = linkAtPoint(event.x, event.y)
         return pressedLink >= 0
       }
       MotionEvent.ACTION_UP -> {
         val link = pressedLink
         pressedLink = -1
-        if (link >= 0 && linkAt(event.x, event.y) == link) {
-          pressLink(link)
+        if (link >= 0 && linkAtPoint(event.x, event.y) == link) {
+          var parent = parent
+          while (parent != null && parent !is DownstreamMarkdownView) parent = parent.parent
+          (parent as? DownstreamMarkdownView)?.pressLink(link)
           return true
         }
       }
       MotionEvent.ACTION_CANCEL -> pressedLink = -1
     }
     return pressedLink >= 0
-  }
-
-  private fun pressLink(link: Int) {
-    val document = rendered?.document ?: return
-    if (link < document.linkCount) {
-      onLinkPress?.invoke(this, document.linkUrl(link), document.linkRangeStart(link), document.linkRangeEnd(link))
-    }
-  }
-
-  override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
-    super.onInitializeAccessibilityNodeInfo(info)
-    val document = rendered?.document ?: return
-    for (link in 0 until document.linkCount) {
-      info.addAction(AccessibilityNodeInfo.AccessibilityAction(LINK_ACTION_BASE + link, "Link: ${document.linkUrl(link)}"))
-    }
-  }
-
-  override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
-    val document = rendered?.document
-    if (document != null && action >= LINK_ACTION_BASE && action < LINK_ACTION_BASE + document.linkCount) {
-      pressLink(action - LINK_ACTION_BASE)
-      return true
-    }
-    return super.performAccessibilityAction(action, arguments)
-  }
-
-  private companion object {
-    const val HIT_SLOP = 8f
-    const val LINK_ACTION_BASE = 0x44530000
   }
 }

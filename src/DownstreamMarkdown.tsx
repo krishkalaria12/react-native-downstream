@@ -44,6 +44,7 @@ const ERROR_CODES: ReadonlySet<string> = new Set<MarkdownErrorCode>([
 export function DownstreamMarkdown({
   markdown,
   style,
+  selectable = false,
   onLinkPress,
   onError,
 }: DownstreamMarkdownProps) {
@@ -98,6 +99,7 @@ export function DownstreamMarkdown({
       style={style}
       markdown={current.source}
       generation={generation}
+      selectable={selectable}
       onLinkPress={onLinkPress ? handleLinkPress : undefined}
       onMarkdownError={handleError}
     />

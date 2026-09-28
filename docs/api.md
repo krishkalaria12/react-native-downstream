@@ -58,17 +58,18 @@ The first release targets iOS and Android with the New Architecture enabled. Pha
 
 ## Implementation status
 
-The static native display path renders complete documents on iOS and Android. Parsing, measurement, and drawing are native; see [the renderer decision](decisions/renderer-ownership.md).
+The native display path renders complete documents on iOS and Android. Parsing, measurement, and drawing are native; see [the renderer decision](decisions/renderer-ownership.md) and [display behavior decisions](decisions/display-behavior.md).
+
+A document is a vertical stack of segments. A text segment is a run of non-table blocks in one platform text view. A table segment is one table in a horizontal scroll view.
 
 | Area | Current behavior | Planned |
 | --- | --- | --- |
 | Input | `markdown` prop only. Lone surrogates and sources over 1 MiB are rejected in JavaScript with `invalid_input` or `input_limit`, and the last valid source stays visible. | `createMarkdownStream` and the `stream` prop in the session phase |
 | Line breaks | Soft line breaks display as line breaks, as the fixture contract requires. | None |
-| Tables | Rows render as tab-separated lines with a bold header and a header rule. Column alignment is parsed but not applied. | Stable column sizing and horizontal overflow in the feature phase |
-| Admonitions and footnotes | md4c's GFM dialect enables both. Admonitions render as a titled quote with a colored bar. Footnote references are superscript numbers; definitions follow a rule at the end. | None |
-| Links | Tap hit-testing emits `onLinkPress` with the validated URL and the UTF-16 range of the whole Markdown occurrence. VoiceOver exposes links as custom actions on each block; TalkBack exposes them as custom actions on the view. | Long press in the feature phase |
-| Accessibility | iOS exposes one element per block, with the header trait on headings and task state in the label. Android exposes the whole view with a readable description; headings have no separate role yet. | Per-block Android nodes and heading roles in the feature phase |
-| Selection | `selectable` is accepted and ignored. | Selection and copy in the feature phase |
+| Tables | Columns take their widest cell, clamped to 56–280 points plus padding, with md4c's column alignment. Rows are as tall as their tallest cell. Wide tables scroll horizontally. Cells keep inline styles and links. | Progressive rows during streaming in the session phase |
+| Admonitions and footnotes | Admonitions render as a quote whose bar and title use the GitHub alert color. Footnote references are superscript numbers; definitions follow a rule at the end. | None |
+| Links | Tap hit-testing emits `onLinkPress` with the validated URL and the UTF-16 range of the whole Markdown occurrence, in text and table cells. VoiceOver exposes links as custom actions on each block and table row; TalkBack lists them as text links. | Long press in the feature phase |
+| Selection | `selectable` enables native selection and copy in text segments: `UITextView` on iOS, `TextView` on Android. Copy is plain visible text. A selection cannot span a table. | Copying the canonical source through `getSource()` in the session phase |
+| Accessibility | iOS exposes one element per block, with the header trait on headings and task state in the label, and one element per table row. Android text segments read as text, and tables read row by row; headings and task states have no separate role yet. | Android heading roles and task states in the feature phase |
 | RTL | Text uses natural writing direction, but indents, quote bars, and markers are drawn on the left. | Mirrored decorations in the feature phase |
 | Colors | System colors follow light and dark mode on both platforms. There is no style prop yet. | Style customization after the feature set is fixed |
-

@@ -39,6 +39,7 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env, jclass /*cl
   std::vector<jint> containers;
   std::vector<jint> runs;
   std::vector<jint> links;
+  std::vector<jint> cells;
   std::vector<std::u16string> strings;
 
   for (size_t index = 0; index < document->blocks.size(); index++) {
@@ -57,8 +58,14 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env, jclass /*cl
                                     static_cast<jint>(text.size()),
                                     static_cast<jint>(containers.size() / 5),
                                     static_cast<jint>(block.containers.size()),
+                                    static_cast<jint>(cells.size() / 3),
                                     static_cast<jint>(block.cells.size()),
+                                    static_cast<jint>(block.table),
                                 });
+    for (const TableCell &cell : block.cells) {
+      cells.insert(cells.end(), {start + static_cast<jint>(cell.start), start + static_cast<jint>(cell.end),
+                                 static_cast<jint>(cell.align)});
+    }
     for (const Container &container : block.containers) {
       jint marker = -1;
       if (!container.marker.empty()) {
@@ -98,12 +105,13 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env, jclass /*cl
     env->DeleteLocalRef(value);
   }
 
-  jobjectArray result = env->NewObjectArray(6, objectClass, nullptr);
+  jobjectArray result = env->NewObjectArray(7, objectClass, nullptr);
   env->SetObjectArrayElement(result, 0, toJavaString(env, text));
   env->SetObjectArrayElement(result, 1, toJavaArray(env, blocks));
   env->SetObjectArrayElement(result, 2, toJavaArray(env, containers));
   env->SetObjectArrayElement(result, 3, toJavaArray(env, runs));
   env->SetObjectArrayElement(result, 4, toJavaArray(env, links));
   env->SetObjectArrayElement(result, 5, stringArray);
+  env->SetObjectArrayElement(result, 6, toJavaArray(env, cells));
   return result;
 }

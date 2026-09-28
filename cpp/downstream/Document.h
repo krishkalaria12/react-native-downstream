@@ -100,6 +100,8 @@ struct Block {
   BlockKind kind{BlockKind::Paragraph};
   uint8_t headingLevel{0};
   bool tableHeader{false};
+  /// TableRow: unique per table, shared by all rows of one table.
+  uint32_t table{0};
   BlockSpacing spacingBefore{BlockSpacing::Normal};
   std::vector<Container> containers;
   /// Visible text. Hard line breaks and code lines are '\n'; table cells are
