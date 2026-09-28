@@ -1,4 +1,4 @@
-/** Phase 0 API draft. Runtime exports are introduced with the native view/session. */
+/** Public API types. The stream controller types describe the planned session API. */
 import type { StyleProp, ViewStyle } from 'react-native';
 
 /** Half-open offsets in the canonical JavaScript UTF-16 source string. */

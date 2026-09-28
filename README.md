@@ -10,13 +10,17 @@ pnpm add react-native-downstream
 
 ## Usage
 
-```js
-import { multiply } from 'react-native-downstream';
+```tsx
+import { DownstreamMarkdown } from 'react-native-downstream';
 
-// ...
-
-const result = await multiply(3, 7);
+<DownstreamMarkdown
+  markdown={message}
+  onLinkPress={({ url }) => Linking.openURL(url)}
+  onError={(error) => console.warn(error.code, error.message)}
+/>;
 ```
+
+The view parses with md4c and lays text out natively (TextKit on iOS, `StaticLayout` on Android). It needs the New Architecture and a development build; Expo Go cannot load it. The library never opens links itself.
 
 ## Contributing
 
@@ -26,7 +30,9 @@ const result = await multiply(3, 7);
 
 ## Markdown implementation plan
 
-Phase 0 defines the proposed [API contract](docs/api.md), [streaming behavior](docs/streaming-semantics.md), and [parser fixtures](benchmarks/fixtures/README.md). The Markdown view and stream controller are planned runtime APIs; this package still exports only `multiply`.
+Phase 0 defines the [API contract](docs/api.md), [streaming behavior](docs/streaming-semantics.md), and [parser fixtures](benchmarks/fixtures/README.md). The static native display path is implemented; see the [renderer ownership decision](docs/decisions/renderer-ownership.md). The stream controller is planned for the native session phase.
+
+Run the shared C++ engine tests with `python3 cpp/tests/test_engine.py`.
 
 ## License
 

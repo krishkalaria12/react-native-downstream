@@ -1,6 +1,6 @@
 # Markdown display API contract
 
-This is the Phase 0 contract for the planned native Markdown component. `src/types.ts` is a checked TypeScript draft. The component and stream factory are not runtime exports yet. Both iOS and Android follow this contract. The first supported app target is the repository's React Native 0.83.2 and Expo 55 example, using a development build.
+This is the Phase 0 contract for the native Markdown component. `src/types.ts` holds the public types. `DownstreamMarkdown` with the controlled `markdown` prop is implemented; the stream factory is not a runtime export yet. See [implementation status](#implementation-status) for what the current build covers. Both iOS and Android follow this contract. The first supported app target is the repository's React Native 0.83.2 and Expo 55 example, using a development build.
 
 ## Feature scope
 
@@ -55,3 +55,20 @@ The initial limits are 1 MiB UTF-8 per source, 64 KiB UTF-8 per append, 256 KiB 
 ## Platform and baseline target
 
 The first release targets iOS and Android with the New Architecture enabled. Phase 1's fixed baseline device targets are a physical iPhone 13 and Pixel 6a, both measured in release builds at their native refresh rates. Record exact OS versions, thermal state, and hardware identifiers with each trace. Device availability and any substitutions must be recorded before comparison; no physical device or runtime compatibility has been verified in Phase 0.
+
+## Implementation status
+
+The static native display path renders complete documents on iOS and Android. Parsing, measurement, and drawing are native; see [the renderer decision](decisions/renderer-ownership.md).
+
+| Area | Current behavior | Planned |
+| --- | --- | --- |
+| Input | `markdown` prop only. Lone surrogates and sources over 1 MiB are rejected in JavaScript with `invalid_input` or `input_limit`, and the last valid source stays visible. | `createMarkdownStream` and the `stream` prop in the session phase |
+| Line breaks | Soft line breaks display as line breaks, as the fixture contract requires. | None |
+| Tables | Rows render as tab-separated lines with a bold header and a header rule. Column alignment is parsed but not applied. | Stable column sizing and horizontal overflow in the feature phase |
+| Admonitions and footnotes | md4c's GFM dialect enables both. Admonitions render as a titled quote with a colored bar. Footnote references are superscript numbers; definitions follow a rule at the end. | None |
+| Links | Tap hit-testing emits `onLinkPress` with the validated URL and the UTF-16 range of the whole Markdown occurrence. VoiceOver exposes links as custom actions on each block; TalkBack exposes them as custom actions on the view. | Long press in the feature phase |
+| Accessibility | iOS exposes one element per block, with the header trait on headings and task state in the label. Android exposes the whole view with a readable description; headings have no separate role yet. | Per-block Android nodes and heading roles in the feature phase |
+| Selection | `selectable` is accepted and ignored. | Selection and copy in the feature phase |
+| RTL | Text uses natural writing direction, but indents, quote bars, and markers are drawn on the left. | Mirrored decorations in the feature phase |
+| Colors | System colors follow light and dark mode on both platforms. There is no style prop yet. | Style customization after the feature set is fixed |
+
