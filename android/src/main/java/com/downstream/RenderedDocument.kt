@@ -101,6 +101,23 @@ internal class ContainerDecoration(
   val marker: String?,
 )
 
+/** One native block's reading order and role inside a shared text layout. */
+internal class AccessibleBlock(val start: Int, val end: Int, val heading: Boolean, val taskState: Int)
+
+private fun startsRightToLeft(text: CharSequence, start: Int, end: Int): Boolean {
+  var index = start
+  while (index < end) {
+    val codePoint = Character.codePointAt(text, index)
+    when (Character.getDirectionality(codePoint)) {
+      Character.DIRECTIONALITY_LEFT_TO_RIGHT -> return false
+      Character.DIRECTIONALITY_RIGHT_TO_LEFT,
+      Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC -> return true
+    }
+    index += Character.charCount(codePoint)
+  }
+  return false
+}
+
 /**
  * Block spacing and decoration in one paragraph span: extra space above the
  * block and around code, then code backgrounds, quote bars, list markers, and
@@ -116,6 +133,7 @@ private class BlockSpan(
   private val markerPaint: TextPaint,
   private val colors: Palette,
   private val density: Float,
+  private val rtl: Boolean,
 ) : LineHeightSpan, LineBackgroundSpan {
   private fun blockStart(text: CharSequence) = (text as Spanned).getSpanStart(this)
 
@@ -167,26 +185,29 @@ private class BlockSpan(
       if (barColor != null) {
         paint.color = barColor
         val barTop = if (first && !container.continuesPrevious) textTop else top
-        val x = left + container.leading + 2 * density
+        val x = if (rtl) right - container.leading - (2 + BAR_WIDTH) * density
+          else left + container.leading + 2 * density
         canvas.drawRect(x, barTop.toFloat(), x + BAR_WIDTH * density, bottom.toFloat(), paint)
       }
       val marker = container.marker
       if (first && marker != null) {
-        val x = left + container.leading + container.width - MARKER_GAP * density - markerPaint.measureText(marker)
+        val x = if (rtl) right - container.leading - container.width + MARKER_GAP * density
+          else left + container.leading + container.width - MARKER_GAP * density - markerPaint.measureText(marker)
         canvas.drawText(marker, x, baseline.toFloat(), markerPaint)
       }
     }
 
-    val x = left + contentLeading
+    val x = if (rtl) left.toFloat() else left + contentLeading
+    val endX = if (rtl) right - contentLeading else right.toFloat()
     when (decoration) {
       DECORATION_CODE -> {
         paint.color = colors.codeBackground
-        canvas.drawRect(x, textTop.toFloat(), right.toFloat(), bottom.toFloat(), paint)
+        canvas.drawRect(x, textTop.toFloat(), endX, bottom.toFloat(), paint)
       }
       DECORATION_RULE -> {
         paint.color = colors.separator
         val y = ((textTop + bottom) / 2).toFloat()
-        canvas.drawRect(x, y, right.toFloat(), y + density, paint)
+        canvas.drawRect(x, y, endX, y + density, paint)
       }
     }
     paint.color = savedColor
@@ -225,7 +246,7 @@ internal class Palette(night: Boolean) {
 internal sealed class Segment(val gapBefore: Int)
 
 /** A run of non-table blocks laid out as one text layout. */
-internal class TextSegment(val text: Spanned, gapBefore: Int) : Segment(gapBefore) {
+internal class TextSegment(val text: Spanned, val accessibleBlocks: List<AccessibleBlock>, gapBefore: Int) : Segment(gapBefore) {
   private var heightWidth = -1
   private var height = 0
 
@@ -256,11 +277,20 @@ internal class TableSegment(
   val markerPaint: TextPaint,
   val colors: Palette,
   val density: Float,
+  val rtl: Boolean,
+  val identity: Long,
   gapBefore: Int,
 ) : Segment(gapBefore) {
   val tableWidth = columnWidths.sum() + 1
   val tableHeight = rowHeights.sum() + 1
-  val accessibilityText: String = cells.joinToString("\n") { row -> row.joinToString(", ") { it.text.toString() } }
+  val rowTops = IntArray(rowHeights.size + 1).also { tops ->
+    for (index in rowHeights.indices) tops[index + 1] = tops[index] + rowHeights[index]
+  }
+  val accessibilityRows: List<String> = cells.mapIndexed { index, row ->
+    val label = row.joinToString(", ") { it.text.toString() }
+    if (hasHeader && index == 0) "Header: $label" else label
+  }
+  val accessibilityText: String = accessibilityRows.joinToString("\n")
 }
 
 /**
@@ -381,7 +411,7 @@ internal class RenderedDocument(
         val segmentKey = "${planned.identity}:${planned.to - planned.from}:$fontScale:$night"
         val segment = (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
           ?: DownstreamNative.readDocument(documentId, planned.from, planned.to)
-            ?.let { buildSegment(it, style, planned.from == 0, planned.followsCode) }
+            ?.let { buildSegment(it, style, planned.from == 0, planned.followsCode, planned.identity) }
             ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
           ?: return null
         segments.add(segment)
@@ -403,7 +433,7 @@ internal class RenderedDocument(
     }
 
     /** Builds one planned segment from its flattened blocks. */
-    private fun buildSegment(document: NativeDocument, style: Style, first: Boolean, followsCode: Boolean): Segment {
+    private fun buildSegment(document: NativeDocument, style: Style, first: Boolean, followsCode: Boolean, identity: Long): Segment {
       val colors = style.colors
       val density = style.density
       val paint = style.paint
@@ -411,6 +441,7 @@ internal class RenderedDocument(
       fun px(dp: Float) = style.px(dp)
 
       val text = SpannableStringBuilder(document.text)
+      val accessibleBlocks = ArrayList<AccessibleBlock>(document.blockCount)
       val isTable = document.blockKind(0) == NativeDocument.KIND_TABLE_ROW
       val flags = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
 
@@ -463,6 +494,13 @@ internal class RenderedDocument(
 
         val start = document.blockStart(block)
         val end = document.blockEnd(block)
+        var taskState = 0
+        for (depth in 0 until document.containerCount(block)) {
+          if (document.showsMarker(block, depth) && document.taskState(block, depth) != 0) {
+            taskState = document.taskState(block, depth)
+          }
+        }
+        accessibleBlocks.add(AccessibleBlock(start, end, kind == NativeDocument.KIND_HEADING, taskState))
         val spanEnd = if (block + 1 < document.blockCount) end + 1 else end
         val previous = block - 1
         val (containers, leading, inQuote) = containersOf(block, previous)
@@ -504,7 +542,8 @@ internal class RenderedDocument(
           text.setSpan(LeadingMarginSpan.Standard(margin), start, spanEnd, Spanned.SPAN_PARAGRAPH)
         }
         text.setSpan(
-          BlockSpan(gap.toInt(), codePadding.toInt(), leading, decoration, containers, markerPaint, colors, density),
+          BlockSpan(gap.toInt(), codePadding.toInt(), leading, decoration, containers, markerPaint, colors, density,
+            startsRightToLeft(text, start, end)),
           start,
           spanEnd,
           Spanned.SPAN_PARAGRAPH,
@@ -572,10 +611,10 @@ internal class RenderedDocument(
       if (isTable) {
         return buildTable(
           document, text, 0, document.blockCount, paint, markerPaint, colors, density, ::px, containersOf(0, -1),
-          gapBefore,
+          gapBefore, identity,
         )
       }
-      return TextSegment(text, gapBefore)
+      return TextSegment(text, accessibleBlocks, gapBefore)
     }
 
     private fun buildTable(
@@ -590,6 +629,7 @@ internal class RenderedDocument(
       px: (Float) -> Float,
       containers: Triple<List<ContainerDecoration>, Float, Boolean>,
       gapBefore: Int,
+      identity: Long,
     ): TableSegment {
       val cellPaint = TextPaint(paint).apply { if (containers.third) color = colors.secondary }
       val maxWidth = px(MAX_COLUMN_WIDTH)
@@ -632,6 +672,8 @@ internal class RenderedDocument(
         markerPaint = markerPaint,
         colors = colors,
         density = density,
+        rtl = startsRightToLeft(text, document.blockStart(from), document.blockEnd(from)),
+        identity = identity,
         gapBefore = gapBefore,
       )
     }

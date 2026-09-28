@@ -35,9 +35,13 @@ class DownstreamMarkdownViewManager :
   // The shadow node parses these props; the view reads the result from state.
   override fun setMarkdown(view: DownstreamMarkdownView, value: String?) = Unit
 
-  override fun setGeneration(view: DownstreamMarkdownView, value: Int) = Unit
+  override fun setGeneration(view: DownstreamMarkdownView, value: Int) {
+    view.setGeneration(value)
+  }
 
-  override fun setSessionId(view: DownstreamMarkdownView, value: String?) = Unit
+  override fun setSessionId(view: DownstreamMarkdownView, value: String?) {
+    view.setSessionId(value)
+  }
 
   override fun setSessionSequence(view: DownstreamMarkdownView, value: Int) = Unit
 

@@ -2,13 +2,16 @@ package com.downstream
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Build
 import android.text.Layout
 import android.text.Spanned
+import android.text.SpannableStringBuilder
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -17,6 +20,8 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.TextView
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityNodeProvider
 
 private const val HIT_SLOP = 8f
 
@@ -46,6 +51,30 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
   private var fontScale = 1f
   private var rendered: RenderedDocument? = null
   private var selectable = false
+  private var generation = 0
+  private var sessionId: String? = null
+  private var sourceEpoch = 0
+
+  fun setGeneration(value: Int) {
+    if (value != generation) {
+      generation = value
+      sourceChanged()
+    }
+  }
+
+  fun setSessionId(value: String?) {
+    if (value != sessionId) {
+      sessionId = value
+      sourceChanged()
+    }
+  }
+
+  private fun sourceChanged() {
+    sourceEpoch++
+    for (index in 0 until childCount) {
+      (getChildAt(index) as? TableSegmentView)?.resetScroll()
+    }
+  }
 
   fun setDocument(documentId: Long, fontScale: Float) {
     if (documentId == this.documentId && fontScale == this.fontScale && rendered != null) {
@@ -67,7 +96,20 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
   fun reset() {
     documentId = 0L
     rendered = null
+    generation = 0
+    sessionId = null
+    sourceEpoch++
     removeAllViews()
+  }
+
+  override fun onConfigurationChanged(newConfig: Configuration) {
+    super.onConfigurationChanged(newConfig)
+    if (documentId != 0L) {
+      RenderedDocument.obtain(context, documentId, fontScale)?.let {
+        rendered = it
+        syncSegmentViews()
+      }
+    }
   }
 
   internal fun pressLink(index: Int) {
@@ -95,7 +137,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
       }
       when (segment) {
         is TextSegment -> (view as TextSegmentView).setSegment(segment, rendered!!)
-        is TableSegment -> (view as TableSegmentView).setSegment(segment)
+        is TableSegment -> (view as TableSegmentView).setSegment(segment, sourceEpoch)
       }
     }
     while (childCount > segments.size) {
@@ -160,6 +202,7 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   private val codePaint = Paint()
   private val codePath = Path()
   private val codeBounds = RectF()
+  private val accessibility = MarkdownAccessibility(this, { segment?.accessibleBlocks?.size ?: 0 }) { accessibleBlock(it) }
 
   init {
     includeFontPadding = false
@@ -191,6 +234,47 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     setTextSize(TypedValue.COMPLEX_UNIT_PX, rendered.paint.textSize)
     setTextColor(rendered.paint.color)
     setText(segment.text, BufferType.SPANNABLE)
+    accessibility.contentChanged()
+  }
+
+  override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = accessibility
+
+  override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
+    super.onInitializeAccessibilityNodeInfo(info)
+    // The provider exposes one reading stop per Markdown block.
+    info.text = null
+    info.contentDescription = null
+    info.isFocusable = false
+  }
+
+  private fun accessibleBlock(index: Int): MarkdownAccessibility.Entry? {
+    val segment = segment ?: return null
+    val layout = layout ?: return null
+    val block = segment.accessibleBlocks.getOrNull(index) ?: return null
+    val start = block.start.coerceIn(0, segment.text.length)
+    val end = block.end.coerceIn(start, segment.text.length)
+    val visible = SpannableStringBuilder(segment.text, start, end)
+    val label = when (block.taskState) {
+      NativeDocument.TASK_CHECKED -> SpannableStringBuilder("Checked, ").append(visible)
+      NativeDocument.TASK_UNCHECKED -> SpannableStringBuilder("Unchecked, ").append(visible)
+      else -> visible
+    }
+    val firstLine = layout.getLineForOffset(start)
+    val lastLine = layout.getLineForOffset(if (end > start) end - 1 else start)
+    val links = segment.text.getSpans(start, end, LinkSpan::class.java)
+    return MarkdownAccessibility.Entry(
+      text = label,
+      bounds = Rect(0, layout.getLineTop(firstLine) - scrollY, width,
+        layout.getLineBottom(lastLine) - scrollY),
+      heading = block.heading,
+      actions = links.map { link ->
+        val labelStart = segment.text.getSpanStart(link).coerceAtLeast(start)
+        val labelEnd = segment.text.getSpanEnd(link).coerceAtMost(end)
+        MarkdownAccessibility.Action("Open link: ${segment.text.subSequence(labelStart, labelEnd)}") {
+          findHost()?.pressLink(link.index)
+        }
+      },
+    )
   }
 
   override fun onDraw(canvas: Canvas) {
@@ -277,6 +361,7 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
   private val grid = TableGridView(context)
   private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
   private var segment: TableSegment? = null
+  private var sourceEpoch = -1
 
   init {
     setWillNotDraw(false)
@@ -284,16 +369,25 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     addView(scroll)
   }
 
-  fun setSegment(segment: TableSegment) {
+  fun setSegment(segment: TableSegment, sourceEpoch: Int) {
     if (segment === this.segment) {
       return
     }
+    val previous = this.segment
+    val sameTable = this.sourceEpoch == sourceEpoch && previous != null &&
+      previous.accessibilityRows.firstOrNull() == segment.accessibilityRows.firstOrNull() &&
+      (previous.identity == segment.identity || previous.identity == 0L || segment.identity == 0L)
     this.segment = segment
-    grid.segment = segment
-    scroll.scrollTo(0, 0)
-    contentDescription = segment.accessibilityText
+    this.sourceEpoch = sourceEpoch
+    grid.updateSegment(segment, resetFocus = !sameTable)
+    if (!sameTable) scroll.scrollTo(0, 0)
     requestLayout()
     invalidate()
+  }
+
+  fun resetScroll() {
+    sourceEpoch = -1
+    scroll.scrollTo(0, 0)
   }
 
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -305,7 +399,8 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
       MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
       MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY),
     )
-    scroll.layout(leading, 0, leading + width, height)
+    val scrollLeft = if (segment.rtl) 0 else leading
+    scroll.layout(scrollLeft, 0, scrollLeft + width, height)
     grid.measure(
       MeasureSpec.makeMeasureSpec(segment.tableWidth, MeasureSpec.EXACTLY),
       MeasureSpec.makeMeasureSpec(segment.tableHeight, MeasureSpec.EXACTLY),
@@ -321,14 +416,16 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
       val barColor = container.barColor
       if (barColor != null) {
         paint.color = barColor
-        val x = container.leading + 2 * density
+        val x = if (segment.rtl) width - container.leading - 5 * density
+          else container.leading + 2 * density
         canvas.drawRect(x, 0f, x + 3 * density, height.toFloat(), paint)
       }
       val marker = container.marker
       if (marker != null) {
         val firstCell = segment.cells.firstOrNull()?.firstOrNull() ?: continue
         val baseline = segment.paddingVertical + firstCell.getLineBaseline(0).toFloat()
-        val x = container.leading + container.width - 6 * density - segment.markerPaint.measureText(marker)
+        val x = if (segment.rtl) width - container.leading - container.width + 6 * density
+          else container.leading + container.width - 6 * density - segment.markerPaint.measureText(marker)
         canvas.drawText(marker, x, baseline, segment.markerPaint)
       }
     }
@@ -336,20 +433,42 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
 }
 
 private class TableGridView(context: Context) : View(context) {
-  var segment: TableSegment? = null
-    set(value) {
-      field = value
-      invalidate()
-    }
+  private val accessibility = MarkdownAccessibility(this, { segment?.accessibilityRows?.size ?: 0 }) { accessibleRow(it) }
+  private var segment: TableSegment? = null
   private val paint = Paint()
   private var pressedLink = -1
+
+  fun updateSegment(segment: TableSegment, resetFocus: Boolean) {
+    this.segment = segment
+    invalidate()
+    accessibility.contentChanged(resetFocus)
+  }
+
+  override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = accessibility
+
+  private fun accessibleRow(index: Int): MarkdownAccessibility.Entry? {
+    val segment = segment ?: return null
+    val label = segment.accessibilityRows.getOrNull(index) ?: return null
+    val top = segment.rowTops[index]
+    val bottom = segment.rowTops[index + 1]
+    val actions = segment.cells[index].flatMap { cell ->
+      val text = cell.text as? Spanned ?: return@flatMap emptyList()
+      text.getSpans(0, text.length, LinkSpan::class.java).map { link ->
+        val linkedText = text.subSequence(text.getSpanStart(link), text.getSpanEnd(link))
+        MarkdownAccessibility.Action("Open link: $linkedText") {
+          var parent = parent
+          while (parent != null && parent !is DownstreamMarkdownView) parent = parent.parent
+          (parent as? DownstreamMarkdownView)?.pressLink(link.index)
+        }
+      }
+    }
+    return MarkdownAccessibility.Entry(label, Rect(0, top, segment.tableWidth, bottom), actions = actions)
+  }
 
   private fun cellOrigin(segment: TableSegment, row: Int, column: Int): Pair<Int, Int> {
     var x = 0
     for (i in 0 until column) x += segment.columnWidths[i]
-    var y = 0
-    for (i in 0 until row) y += segment.rowHeights[i]
-    return Pair(x + segment.paddingHorizontal, y + segment.paddingVertical)
+    return Pair(x + segment.paddingHorizontal, segment.rowTops[row] + segment.paddingVertical)
   }
 
   override fun onDraw(canvas: Canvas) {
