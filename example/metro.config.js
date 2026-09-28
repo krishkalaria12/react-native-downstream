@@ -17,7 +17,13 @@ const defaultResolver = config.resolver.resolveRequest;
 config = getBundleModeMetroConfig(config);
 const bundleModeResolver = config.resolver.resolveRequest;
 
+const librarySource = path.resolve(__dirname, '..', 'src', 'index.tsx');
+
 config.resolver.resolveRequest = (context, moduleName, platform) => {
+  // Use the library source, not a possibly stale lib/ build.
+  if (moduleName === 'react-native-downstream') {
+    return { type: 'sourceFile', filePath: librarySource };
+  }
   if (moduleName.startsWith('react-native-worklets/.worklets/')) {
     return bundleModeResolver(context, moduleName, platform);
   }
