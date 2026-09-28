@@ -22,6 +22,15 @@ An absent key leaves that part of the preview unspecified. `enabledLinks` and
 styles and block classification may change as more chunks arrive. They never
 change the canonical source or the final parse result.
 
+`adversarial/` holds streams whose later input changes, or seems to change,
+earlier blocks: late reference and footnote definitions, setext underlines and
+table delimiter rows, fences that close across chunks or contain other fence
+markers, tabs and CRLF inside fences, lists that become loose, HTML blocks that
+span blank lines, empty list items, and split CRLF or emoji sequences. Its
+manifest uses the same schema. Every checkpoint records `visibleText` and
+`enabledLinks` for that prefix, and the engine tests stream each fixture through
+the incremental parser, comparing every prefix with a full parse.
+
 To rebuild the oracle binary and validate the files:
 
 ```sh

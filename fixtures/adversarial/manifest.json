@@ -1,0 +1,968 @@
+{
+  "schemaVersion": 1,
+  "oracle": {
+    "name": "md4c md2html",
+    "revision": "902b1bc9172ab45a7ea2539c9db4496ead77daa8",
+    "version": "0.6.0",
+    "flags": [
+      "--gfm"
+    ],
+    "format": "HTML fragment",
+    "note": "Fresh final-document parser output; rendering safety policy is a separate projection."
+  },
+  "fixtures": [
+    {
+      "id": "list-two-blank-lines",
+      "description": "A list after committed prose, then two blank lines and an indented line; md4c's result depends on line offsets",
+      "source": "list-two-blank-lines.md",
+      "expectedHtml": "list-two-blank-lines.expected.html",
+      "chunks": [
+        "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+        "  - nested\n",
+        "\n",
+        "\n",
+        "    indented code\n",
+        "\nafter\n"
+      ],
+      "checkpoints": [
+        {
+          "afterChunk": 1,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 2,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n  - nested\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nnested",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 3,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n  - nested\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nnested",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 4,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n  - nested\n\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nnested",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 5,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n  - nested\n\n\n    indented code\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nnested\nindented code",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 6,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n  - nested\n\n\n    indented code\n\nafter\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nnested\nindented code\nafter",
+            "enabledLinks": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "late-reference-definition",
+      "description": "A reference link resolves only when its definition arrives after more committed prose",
+      "source": "late-reference-definition.md",
+      "expectedHtml": "late-reference-definition.expected.html",
+      "chunks": [
+        "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+        "See [the guide][guide] for details.\n\n",
+        "A second committed paragraph keeps the stream going, with commas, periods, and apostrophes that don't block a commit.\n\n",
+        "[guide]: https://example.com/guide\n"
+      ],
+      "checkpoints": [
+        {
+          "afterChunk": 1,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 2,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\nSee [the guide][guide] for details.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nSee [the guide][guide] for details.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 3,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\nSee [the guide][guide] for details.\n\nA second committed paragraph keeps the stream going, with commas, periods, and apostrophes that don't block a commit.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nSee [the guide][guide] for details.\nA second committed paragraph keeps the stream going, with commas, periods, and apostrophes that don't block a commit.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 4,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\nSee [the guide][guide] for details.\n\nA second committed paragraph keeps the stream going, with commas, periods, and apostrophes that don't block a commit.\n\n[guide]: https://example.com/guide\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nSee the guide for details.\nA second committed paragraph keeps the stream going, with commas, periods, and apostrophes that don't block a commit.",
+            "enabledLinks": [
+              "https://example.com/guide"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "late-setext-underline",
+      "description": "A long paragraph becomes a heading when its underline arrives",
+      "source": "late-setext-underline.md",
+      "expectedHtml": "late-setext-underline.expected.html",
+      "chunks": [
+        "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first. ",
+        "It continues on the same paragraph without a blank line.\n",
+        "===\n",
+        "\nNext paragraph.\n"
+      ],
+      "checkpoints": [
+        {
+          "afterChunk": 1,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first. ",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 2,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first. It continues on the same paragraph without a blank line.\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first. It continues on the same paragraph without a blank line.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 3,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first. It continues on the same paragraph without a blank line.\n===\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first. It continues on the same paragraph without a blank line.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 4,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first. It continues on the same paragraph without a blank line.\n===\n\nNext paragraph.\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first. It continues on the same paragraph without a blank line.\nNext paragraph.",
+            "enabledLinks": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "late-table-delimiter",
+      "description": "A header row becomes a table only when the delimiter row completes",
+      "source": "late-table-delimiter.md",
+      "expectedHtml": "late-table-delimiter.expected.html",
+      "chunks": [
+        "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+        "| Name | Value |\n",
+        "|---",
+        "|---|\n",
+        "| a | 1 |\n",
+        "\nAfter the table.\n"
+      ],
+      "checkpoints": [
+        {
+          "afterChunk": 1,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 2,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n| Name | Value |\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n| Name | Value |",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 3,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n| Name | Value |\n|---",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 4,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n| Name | Value |\n|---|---|\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 5,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n| Name | Value |\n|---|---|\n| a | 1 |\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 6,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n| Name | Value |\n|---|---|\n| a | 1 |\n\nAfter the table.\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nAfter the table.",
+            "enabledLinks": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "fence-close-split",
+      "description": "A closing fence arrives split across chunks",
+      "source": "fence-close-split.md",
+      "expectedHtml": "fence-close-split.expected.html",
+      "chunks": [
+        "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+        "```js\n",
+        "const a = 1;\n",
+        "``",
+        "`\n",
+        "after the fence\n"
+      ],
+      "checkpoints": [
+        {
+          "afterChunk": 1,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 2,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n```js\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 3,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n```js\nconst a = 1;\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nconst a = 1;",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 4,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n```js\nconst a = 1;\n``",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nconst a = 1;\n``",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 5,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n```js\nconst a = 1;\n```\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nconst a = 1;",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 6,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n```js\nconst a = 1;\n```\nafter the fence\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nconst a = 1;\nafter the fence",
+            "enabledLinks": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "fence-inner-markers",
+      "description": "Fence-like lines inside other fences do not close them",
+      "source": "fence-inner-markers.md",
+      "expectedHtml": "fence-inner-markers.expected.html",
+      "chunks": [
+        "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+        "~~~\n",
+        "```\n",
+        "inside\n",
+        "``` not closing\n",
+        "~~~\n",
+        "````\n",
+        "```\n",
+        "````\n",
+        "done\n"
+      ],
+      "checkpoints": [
+        {
+          "afterChunk": 1,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 2,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n~~~\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 3,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n~~~\n```\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n```",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 4,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n~~~\n```\ninside\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n```\ninside",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 5,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n~~~\n```\ninside\n``` not closing\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n```\ninside\n``` not closing",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 6,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n~~~\n```\ninside\n``` not closing\n~~~\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n```\ninside\n``` not closing",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 7,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n~~~\n```\ninside\n``` not closing\n~~~\n````\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n```\ninside\n``` not closing\n",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 8,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n~~~\n```\ninside\n``` not closing\n~~~\n````\n```\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n```\ninside\n``` not closing\n```",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 9,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n~~~\n```\ninside\n``` not closing\n~~~\n````\n```\n````\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n```\ninside\n``` not closing\n```",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 10,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n~~~\n```\ninside\n``` not closing\n~~~\n````\n```\n````\ndone\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n```\ninside\n``` not closing\n```\ndone",
+            "enabledLinks": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "fence-tabs-crlf",
+      "description": "Tabs and CRLF inside an open fence, which md4c rewrites",
+      "source": "fence-tabs-crlf.md",
+      "expectedHtml": "fence-tabs-crlf.expected.html",
+      "chunks": [
+        "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+        "```\r\n",
+        "a\r\n",
+        "\tb\r\n",
+        "```\r\n",
+        "tail\r\n"
+      ],
+      "checkpoints": [
+        {
+          "afterChunk": 1,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 2,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n```\r\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 3,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n```\r\na\r\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\na",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 4,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n```\r\na\r\n\tb\r\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\na\n    b",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 5,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n```\r\na\r\n\tb\r\n```\r\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\na\n    b",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 6,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n```\r\na\r\n\tb\r\n```\r\ntail\r\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\na\n    b\ntail",
+            "enabledLinks": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "loose-list-join",
+      "description": "A blank line and a later item make an earlier list loose",
+      "source": "loose-list-join.md",
+      "expectedHtml": "loose-list-join.expected.html",
+      "chunks": [
+        "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+        "- one\n",
+        "- two\n",
+        "\n",
+        "- three\n",
+        "\nEnd.\n"
+      ],
+      "checkpoints": [
+        {
+          "afterChunk": 1,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 2,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n- one\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\none",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 3,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n- one\n- two\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\none\ntwo",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 4,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n- one\n- two\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\none\ntwo",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 5,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n- one\n- two\n\n- three\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\none\ntwo\nthree",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 6,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n- one\n- two\n\n- three\n\nEnd.\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\none\ntwo\nthree\nEnd.",
+            "enabledLinks": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "pre-block-blank-lines",
+      "description": "A pre HTML block continues across blank lines until it closes",
+      "source": "pre-block-blank-lines.md",
+      "expectedHtml": "pre-block-blank-lines.expected.html",
+      "chunks": [
+        "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+        "<pre>\n",
+        "line one\n",
+        "\n",
+        "\n",
+        "line two\n",
+        "</pre>\n",
+        "\nAfter.\n"
+      ],
+      "checkpoints": [
+        {
+          "afterChunk": 1,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 2,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n<pre>\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n<pre>",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 3,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n<pre>\nline one\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n<pre>\nline one",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 4,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n<pre>\nline one\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n<pre>\nline one\n",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 5,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n<pre>\nline one\n\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n<pre>\nline one\n\n",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 6,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n<pre>\nline one\n\n\nline two\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n<pre>\nline one\n\n\nline two",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 7,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n<pre>\nline one\n\n\nline two\n</pre>\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n<pre>\nline one\n\n\nline two\n</pre>",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 8,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n<pre>\nline one\n\n\nline two\n</pre>\n\nAfter.\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n<pre>\nline one\n\n\nline two\n</pre>\nAfter.",
+            "enabledLinks": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "empty-list-items",
+      "description": "Empty list items followed by blank lines and later content",
+      "source": "empty-list-items.md",
+      "expectedHtml": "empty-list-items.expected.html",
+      "chunks": [
+        "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+        "1.\n",
+        "\n",
+        "1. second\n",
+        "\n- \n",
+        "\n  foo\n"
+      ],
+      "checkpoints": [
+        {
+          "afterChunk": 1,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 2,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n1.\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 3,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n1.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 4,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n1.\n\n1. second\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nsecond",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 5,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n1.\n\n1. second\n\n- \n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nsecond",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 6,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n1.\n\n1. second\n\n- \n\n  foo\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nsecond\nfoo",
+            "enabledLinks": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "footnote-late-definition",
+      "description": "A footnote reference resolves when its definition arrives later",
+      "source": "footnote-late-definition.md",
+      "expectedHtml": "footnote-late-definition.expected.html",
+      "chunks": [
+        "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+        "Claim.[^1]\n\n",
+        "A second committed paragraph keeps the stream going, with commas, periods, and apostrophes that don't block a commit.\n\n",
+        "[^1]: Source.\n"
+      ],
+      "checkpoints": [
+        {
+          "afterChunk": 1,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 2,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\nClaim.[^1]\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nClaim.[^1]",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 3,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\nClaim.[^1]\n\nA second committed paragraph keeps the stream going, with commas, periods, and apostrophes that don't block a commit.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nClaim.[^1]\nA second committed paragraph keeps the stream going, with commas, periods, and apostrophes that don't block a commit.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 4,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\nClaim.[^1]\n\nA second committed paragraph keeps the stream going, with commas, periods, and apostrophes that don't block a commit.\n\n[^1]: Source.\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nClaim.1\nA second committed paragraph keeps the stream going, with commas, periods, and apostrophes that don't block a commit.\n\nSource.",
+            "enabledLinks": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "crlf-split-boundary",
+      "description": "CR and LF of a blank-line boundary arrive in different chunks",
+      "source": "crlf-split-boundary.md",
+      "expectedHtml": "crlf-split-boundary.expected.html",
+      "chunks": [
+        "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\r",
+        "\n\r",
+        "\nNext paragraph\r\n"
+      ],
+      "checkpoints": [
+        {
+          "afterChunk": 1,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\r",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 2,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\r\n\r",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 3,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\r\n\r\nNext paragraph\r\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nNext paragraph",
+            "enabledLinks": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "zwj-emoji-split",
+      "description": "A ZWJ emoji sequence and CJK text split between code points",
+      "source": "zwj-emoji-split.md",
+      "expectedHtml": "zwj-emoji-split.expected.html",
+      "chunks": [
+        "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+        "Family: 👩",
+        "‍",
+        "👩",
+        "‍",
+        "👧",
+        " done\n\n",
+        "**bold 漢",
+        "字**\n"
+      ],
+      "checkpoints": [
+        {
+          "afterChunk": 1,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 2,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\nFamily: 👩",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nFamily: 👩",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 3,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\nFamily: 👩‍",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nFamily: 👩‍",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 4,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\nFamily: 👩‍👩",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nFamily: 👩‍👩",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 5,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\nFamily: 👩‍👩‍",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nFamily: 👩‍👩‍",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 6,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\nFamily: 👩‍👩‍👧",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nFamily: 👩‍👩‍👧",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 7,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\nFamily: 👩‍👩‍👧 done\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nFamily: 👩‍👩‍👧 done",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 8,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\nFamily: 👩‍👩‍👧 done\n\n**bold 漢",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nFamily: 👩‍👩‍👧 done\n**bold 漢",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 9,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\nFamily: 👩‍👩‍👧 done\n\n**bold 漢字**\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nFamily: 👩‍👩‍👧 done\nbold 漢字",
+            "enabledLinks": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "admonition-streaming",
+      "description": "An admonition marker completes across chunks",
+      "source": "admonition-streaming.md",
+      "expectedHtml": "admonition-streaming.expected.html",
+      "chunks": [
+        "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+        "> [!",
+        "NOTE]\n",
+        "> Body text\n",
+        "\nAfter\n"
+      ],
+      "checkpoints": [
+        {
+          "afterChunk": 1,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 2,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n> [!",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n[!",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 3,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n> [!NOTE]\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nNote",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 4,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n> [!NOTE]\n> Body text\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nNote\nBody text",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 5,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n> [!NOTE]\n> Body text\n\nAfter\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\nNote\nBody text\nAfter",
+            "enabledLinks": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "html-comment-open",
+      "description": "An HTML comment stays open across blank lines",
+      "source": "html-comment-open.md",
+      "expectedHtml": "html-comment-open.expected.html",
+      "chunks": [
+        "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+        "<!--\n",
+        "\n",
+        "comment\n",
+        "-->\n",
+        "text\n"
+      ],
+      "checkpoints": [
+        {
+          "afterChunk": 1,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 2,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n<!--\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n<!--",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 3,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n<!--\n\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n<!--\n",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 4,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n<!--\n\ncomment\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n<!--\n\ncomment",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 5,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n<!--\n\ncomment\n-->\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n<!--\n\ncomment\n-->",
+            "enabledLinks": []
+          }
+        },
+        {
+          "afterChunk": 6,
+          "prefix": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n<!--\n\ncomment\n-->\ntext\n",
+          "expectedPreview": {
+            "visibleText": "Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n<!--\n\ncomment\n-->\ntext",
+            "enabledLinks": []
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -11,7 +11,13 @@ FIXTURE_DIR = Path(__file__).resolve().parent
 
 
 def validate(md2html: Path) -> None:
-    manifest = json.loads((FIXTURE_DIR / "manifest.json").read_text(encoding="utf-8"))
+    # The adversarial set shares the schema and oracle.
+    for directory in (FIXTURE_DIR, FIXTURE_DIR / "adversarial"):
+        validate_directory(md2html, directory)
+
+
+def validate_directory(md2html: Path, directory: Path) -> None:
+    manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
     if manifest["schemaVersion"] != 1:
         raise ValueError("unsupported manifest schema")
     if manifest["oracle"]["flags"] != ["--gfm"]:
@@ -30,7 +36,7 @@ def validate(md2html: Path) -> None:
             raise ValueError(f"duplicate fixture ID: {fixture_id}")
         seen.add(fixture_id)
 
-        source = (FIXTURE_DIR / fixture["source"]).read_bytes()
+        source = (directory / fixture["source"]).read_bytes()
         chunks = fixture["chunks"]
         if not chunks or any(not isinstance(chunk, str) or not chunk for chunk in chunks):
             raise ValueError(f"{fixture_id}: chunks must be nonempty strings")
@@ -53,7 +59,7 @@ def validate(md2html: Path) -> None:
         result = subprocess.run(
             [str(md2html), "--gfm"], input=source, capture_output=True, check=True
         )
-        expected = (FIXTURE_DIR / fixture["expectedHtml"]).read_bytes()
+        expected = (directory / fixture["expectedHtml"]).read_bytes()
         if result.stdout != expected:
             raise ValueError(f"{fixture_id}: final HTML differs from fresh md4c parse")
         print(f"ok {fixture_id}: {len(chunks)} chunks, {len(checkpoints)} checkpoints")

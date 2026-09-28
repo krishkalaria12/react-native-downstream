@@ -18,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CPP = ROOT / "cpp"
 FIXTURES = ROOT / "fixtures"
+ADVERSARIAL = FIXTURES / "adversarial"
 
 KIND = {"paragraph": 0, "heading": 1, "code": 2, "html": 3, "hr": 4, "table": 5}
 LIST_ITEM = 1
@@ -98,6 +99,21 @@ def styles_of(block, substring):
     return [run for run in block["runs"] if run[0] < end and run[1] > start]
 
 
+def assert_incremental_matches(test, manifest):
+    """Streams each fixture's exact chunks through the incremental parser,
+    which checks every prefix against a full parse."""
+    # The prefix exceeds the minimum commit size, so the fixture streams as
+    # an active tail after committed prose.
+    prefix = b"A plain prefix paragraph, with punctuation! It's long enough to commit " \
+        b"before the fixture starts streaming, so the tail path is exercised.\n\n"
+    for fixture in manifest["fixtures"]:
+        with test.subTest(fixture=fixture["id"]):
+            chunks = [chunk.encode("utf-8") for chunk in fixture["chunks"]]
+            for sequence in (chunks, [prefix, *chunks]):
+                framed = b"".join(struct.pack("<I", len(chunk)) + chunk for chunk in sequence)
+                subprocess.run([BUILD_DIR / "test_incremental"], input=framed, check=True, capture_output=True)
+
+
 class FixtureTests(unittest.TestCase):
     def setUp(self):
         self.manifest = json.loads((FIXTURES / "manifest.json").read_text(encoding="utf-8"))
@@ -112,16 +128,7 @@ class FixtureTests(unittest.TestCase):
                 self.assertEqual(html, (FIXTURES / fixture["expectedHtml"]).read_bytes())
 
     def test_incremental_matches_full_parse_at_every_prefix(self):
-        for fixture in self.manifest["fixtures"]:
-            with self.subTest(fixture=fixture["id"]):
-                chunks = [chunk.encode("utf-8") for chunk in fixture["chunks"]]
-                # The prefix exceeds the minimum commit size, so the fixture
-                # streams as an active tail after committed prose.
-                prefix = b"A plain prefix paragraph, with punctuation! It's long enough to commit " \
-                    b"before the fixture starts streaming, so the tail path is exercised.\n\n"
-                for sequence in (chunks, [prefix, *chunks]):
-                    framed = b"".join(struct.pack("<I", len(chunk)) + chunk for chunk in sequence)
-                    subprocess.run([BUILD_DIR / "test_incremental"], input=framed, check=True, capture_output=True)
+        assert_incremental_matches(self, self.manifest)
 
     def test_final_checkpoints(self):
         for fixture in self.manifest["fixtures"]:
@@ -171,6 +178,35 @@ class FixtureTests(unittest.TestCase):
                         if c["kind"] == LIST_ITEM and c["showsMarker"] and c["task"]
                     ]
                     self.assertEqual(tasks, expected["taskStates"])
+
+
+class AdversarialFixtureTests(unittest.TestCase):
+    """Streams whose later input changes, or seems to change, earlier blocks."""
+
+    def setUp(self):
+        self.manifest = json.loads((ADVERSARIAL / "manifest.json").read_text(encoding="utf-8"))
+
+    def test_vendored_parser_matches_oracle_html(self):
+        for fixture in self.manifest["fixtures"]:
+            with self.subTest(fixture=fixture["id"]):
+                source = (ADVERSARIAL / fixture["source"]).read_bytes()
+                self.assertEqual("".join(fixture["chunks"]).encode("utf-8"), source)
+                html = subprocess.run(
+                    [BUILD_DIR / "oracle_html"], input=source, capture_output=True, check=True
+                ).stdout
+                self.assertEqual(html, (ADVERSARIAL / fixture["expectedHtml"]).read_bytes())
+
+    def test_every_checkpoint(self):
+        for fixture in self.manifest["fixtures"]:
+            for checkpoint in fixture["checkpoints"]:
+                with self.subTest(fixture=fixture["id"], afterChunk=checkpoint["afterChunk"]):
+                    document = parse(checkpoint["prefix"])
+                    expected = checkpoint["expectedPreview"]
+                    self.assertEqual(visible_text(document), expected["visibleText"])
+                    self.assertEqual([link["url"] for link in document["links"]], expected["enabledLinks"])
+
+    def test_incremental_matches_full_parse_at_every_prefix(self):
+        assert_incremental_matches(self, self.manifest)
 
 
 class RenderModelTests(unittest.TestCase):
