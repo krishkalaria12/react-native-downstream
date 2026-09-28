@@ -41,6 +41,10 @@ console.log(answer);
 Raw <b>HTML</b> stays literal, $x^2$ too, and ![image alt](https://example.com/a.png) shows alt text.
 Unsafe [javascript](javascript:alert(1)) links are plain text. Autolinks: https://example.com and <mailto:hi@example.com>.
 
+> فقرة عربية مع [رابط](https://example.com/rtl) وكلمة English.
+>
+> - [x] مهمة مكتملة
+
 A footnote reference[^1].
 
 [ref]: https://example.com/ref

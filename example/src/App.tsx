@@ -5,6 +5,7 @@ import {
   SafeAreaView,
   StatusBar,
   StyleSheet,
+  useColorScheme,
   View,
 } from 'react-native';
 
@@ -13,8 +14,9 @@ import { StreamingChat } from './StreamingChat';
 
 export default function App() {
   const [screen, setScreen] = useState<'gallery' | 'stream'>('gallery');
+  const dark = useColorScheme() === 'dark';
   return (
-    <SafeAreaView style={styles.root}>
+    <SafeAreaView style={[styles.root, dark ? styles.dark : styles.light]}>
       <View style={styles.navigation}>
         <Button title="Gallery" onPress={() => setScreen('gallery')} />
         <Button title="Stream" onPress={() => setScreen('stream')} />
@@ -28,8 +30,9 @@ const styles = StyleSheet.create({
   // SafeAreaView pads only on iOS; Android draws under the status bar.
   root: {
     flex: 1,
-    backgroundColor: '#fff',
     paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
   },
+  light: { backgroundColor: '#fff' },
+  dark: { backgroundColor: '#000' },
   navigation: { flexDirection: 'row', justifyContent: 'space-around' },
 });

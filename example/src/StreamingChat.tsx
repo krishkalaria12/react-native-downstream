@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Button, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  Button,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useColorScheme,
+  View,
+} from 'react-native';
 import {
   DownstreamMarkdown,
   type MarkdownStreamController,
@@ -15,6 +22,7 @@ import { featureSample } from './gallery/sample';
 
 /** Device smoke screen for the session path, including unmount and replay. */
 export function StreamingChat() {
+  const dark = useColorScheme() === 'dark';
   const [run, setRun] = useState(0);
   const [mode, setMode] = useState<ParseMode>('full');
   const [stream, setStream] = useState<MarkdownStreamController | null>(null);
@@ -53,7 +61,9 @@ export function StreamingChat() {
   return (
     <View style={styles.screen}>
       <View style={styles.toolbar}>
-        <Text style={styles.status}>{status}</Text>
+        <Text style={dark ? styles.statusDark : styles.statusLight}>
+          {status}
+        </Text>
         <Button
           title={mode === 'full' ? 'Full parse' : 'Incremental'}
           onPress={() => {
@@ -86,6 +96,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     padding: 12,
   },
-  status: { color: '#555' },
+  statusLight: { color: '#555' },
+  statusDark: { color: '#aaa' },
   content: { padding: 16 },
 });
