@@ -14,21 +14,24 @@
 namespace downstream {
 namespace {
 
-class Session {
+class Session : public std::enable_shared_from_this<Session> {
 public:
-  Session(std::string id, ParseMode mode, SnapshotCallback callback)
-      : id_(std::move(id)), parser_(mode), callback_(std::move(callback)), worker_([this] { run(); }) {}
+  Session(std::string id, ParseMode mode, SessionCallback callback)
+      : id_(std::move(id)), parser_(mode), callback_(std::move(callback)) {}
 
-  ~Session() {
+  /// The worker holds its own reference, so a disposed session lives until
+  /// the parse in progress finishes and nobody has to wait for it.
+  void start() {
+    std::thread([self = shared_from_this()] { self->run(); }).detach();
+  }
+
+  void stop() {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       stopped_ = true;
       dirty_ = false;
     }
     changed_.notify_one();
-    if (worker_.joinable()) {
-      worker_.join();
-    }
   }
 
   bool append(const std::string &chunk, uint64_t generation, uint64_t sequence) {
@@ -122,29 +125,28 @@ private:
       }
       parser_.append(pending);
       auto result = parser_.parse(finished);
-      if (result.status != ParseStatus::Ok || !result.document) {
+      const bool parsed = result.status == ParseStatus::Ok && result.document;
+
+      // The callback runs under the lock so that no event follows stop().
+      // It must not call back into this session.
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (stopped_ || generation != generation_ || sequence != sequence_ || finished != finished_) {
         continue;
       }
-
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (stopped_ || generation != generation_ || sequence != sequence_ || finished != finished_) {
-          continue;
-        }
+      if (parsed) {
         snapshot_ = std::move(result.document);
         readyGeneration_ = generation;
         readySequence_ = sequence;
       }
-      callback_(id_, generation, sequence);
+      callback_({id_, generation, sequence, parsed ? ParseStatus::Ok : result.status, std::move(result.message)});
     }
   }
 
   const std::string id_;
   IncrementalParser parser_;
-  const SnapshotCallback callback_;
+  const SessionCallback callback_;
   mutable std::mutex mutex_;
   std::condition_variable changed_;
-  std::thread worker_;
   std::optional<std::string> replacement_;
   std::string pending_;
   size_t sourceBytes_{0};
@@ -169,7 +171,7 @@ std::shared_ptr<Session> findSession(const std::string &id) {
 
 } // namespace
 
-bool SessionRegistry::create(const std::string &id, ParseMode mode, SnapshotCallback callback) {
+bool SessionRegistry::create(const std::string &id, ParseMode mode, SessionCallback callback) {
   if (id.empty() || !callback) {
     return false;
   }
@@ -177,7 +179,9 @@ bool SessionRegistry::create(const std::string &id, ParseMode mode, SnapshotCall
   if (sessions.count(id) != 0) {
     return false;
   }
-  sessions.emplace(id, std::make_shared<Session>(id, mode, std::move(callback)));
+  auto session = std::make_shared<Session>(id, mode, std::move(callback));
+  session->start();
+  sessions.emplace(id, std::move(session));
   return true;
 }
 
@@ -207,8 +211,9 @@ void SessionRegistry::dispose(const std::string &id) {
       sessions.erase(found);
     }
   }
-  // Joining the worker outside the registry lock lets other sessions proceed.
-  removed.reset();
+  if (removed) {
+    removed->stop();
+  }
 }
 
 DocumentHandle SessionRegistry::snapshot(const std::string &id, uint64_t generation, uint64_t sequence) {

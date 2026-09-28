@@ -37,6 +37,12 @@ class DownstreamMarkdownViewManager :
 
   override fun setGeneration(view: DownstreamMarkdownView, value: Int) = Unit
 
+  override fun setSessionId(view: DownstreamMarkdownView, value: String?) = Unit
+
+  override fun setSessionSequence(view: DownstreamMarkdownView, value: Int) = Unit
+
+  override fun setSessionRevision(view: DownstreamMarkdownView, value: Int) = Unit
+
   override fun setSelectable(view: DownstreamMarkdownView, value: Boolean) {
     view.setSelectable(value)
   }

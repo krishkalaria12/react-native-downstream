@@ -9,6 +9,9 @@ module.exports = {
         // Codegen does not generate for interfaceOnly components.
         cmakeListsPath: 'src/main/jni/CMakeLists.txt',
         componentDescriptors: ['DownstreamMarkdownViewComponentDescriptor'],
+        // The session TurboModule is shared C++ (cpp/session), compiled by
+        // the CMakeLists above.
+        cxxModuleHeaderName: 'DownstreamSessionModule',
       },
     },
   },

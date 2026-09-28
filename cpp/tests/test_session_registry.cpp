@@ -1,11 +1,13 @@
 #include "SessionRegistry.h"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -16,13 +18,13 @@ int main() {
   std::condition_variable ready;
   std::vector<std::tuple<uint64_t, uint64_t>> published;
   const std::string id = "session-test";
-  const auto callback = [&](const std::string &sessionId, uint64_t generation, uint64_t sequence) {
-    if (sessionId != id) {
+  const auto callback = [&](const SessionEvent &event) {
+    if (event.sessionId != id || event.status != ParseStatus::Ok) {
       return;
     }
     {
       std::lock_guard<std::mutex> lock(mutex);
-      published.emplace_back(generation, sequence);
+      published.emplace_back(event.generation, event.sequence);
     }
     ready.notify_one();
   };
@@ -75,5 +77,34 @@ int main() {
     std::cerr << "Disposed session remained accessible\n";
     return 1;
   }
+
+  // Dispose returns while a large parse is in flight and no event follows it.
+  const std::string busy = "busy-session";
+  std::atomic<int> busyEvents{0};
+  std::atomic<bool> disposed{false};
+  std::atomic<bool> lateEvent{false};
+  if (!SessionRegistry::create(busy, ParseMode::FullParse, [&](const SessionEvent &) {
+        busyEvents++;
+        if (disposed) lateEvent = true;
+      })) {
+    std::cerr << "Could not create busy session\n";
+    return 1;
+  }
+  std::string chunk;
+  while (chunk.size() < 60 * 1024) chunk += "- **item** with [a link](https://example.com) and `code`\n";
+  for (uint64_t sequence = 1; sequence <= 12; sequence++) {
+    if (!SessionRegistry::append(busy, chunk, 0, sequence)) {
+      std::cerr << "Busy append failed\n";
+      return 1;
+    }
+  }
+  SessionRegistry::dispose(busy);
+  disposed = true;
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  if (lateEvent || SessionRegistry::create(busy, ParseMode::FullParse, callback) == false) {
+    std::cerr << "Disposed session published an event or kept its ID\n";
+    return 1;
+  }
+  SessionRegistry::dispose(busy);
   return 0;
 }
