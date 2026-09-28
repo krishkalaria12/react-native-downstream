@@ -1,23 +1,30 @@
 import { useEffect, useState } from 'react';
 import { Button, ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
-  createMarkdownStream,
   DownstreamMarkdown,
   type MarkdownStreamController,
 } from 'react-native-downstream';
 
+// The parse-mode switch is internal to the package, so Phase 5 can compare
+// both modes from one build without making it public API.
+import {
+  createMarkdownStreamWithMode,
+  type ParseMode,
+} from '../../src/createMarkdownStream';
 import { featureSample } from './gallery/sample';
 
 /** Device smoke screen for the session path, including unmount and replay. */
 export function StreamingChat() {
   const [run, setRun] = useState(0);
+  const [mode, setMode] = useState<ParseMode>('full');
   const [stream, setStream] = useState<MarkdownStreamController | null>(null);
   const [status, setStatus] = useState('Starting stream');
 
   useEffect(() => {
-    const controller = createMarkdownStream({
-      onError: (error) => setStatus(`${error.code}: ${error.message}`),
-    });
+    const controller = createMarkdownStreamWithMode(
+      { onError: (error) => setStatus(`${error.code}: ${error.message}`) },
+      mode
+    );
     const characters = Array.from(featureSample);
     let offset = 0;
     setStream(controller);
@@ -41,12 +48,21 @@ export function StreamingChat() {
       clearInterval(timer);
       controller.dispose();
     };
-  }, [run]);
+  }, [run, mode]);
 
   return (
     <View style={styles.screen}>
       <View style={styles.toolbar}>
         <Text style={styles.status}>{status}</Text>
+        <Button
+          title={mode === 'full' ? 'Full parse' : 'Incremental'}
+          onPress={() => {
+            setStream(null);
+            setMode((previous) =>
+              previous === 'full' ? 'incremental' : 'full'
+            );
+          }}
+        />
         <Button
           title="Replay"
           onPress={() => {
