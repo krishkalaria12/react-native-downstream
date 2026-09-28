@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -39,10 +40,11 @@ public:
     }
     std::lock_guard<std::mutex> lock(mutex_);
     if (stopped_ || finished_ || generation != generation_ || sequence <= sequence_ ||
-        chunk.size() > 64 * 1024 || source_.size() + chunk.size() > kMaxSourceBytes) {
+        chunk.size() > 64 * 1024 || sourceBytes_ + chunk.size() > kMaxSourceBytes) {
       return false;
     }
-    source_.append(chunk);
+    pending_.append(chunk);
+    sourceBytes_ += chunk.size();
     sequence_ = sequence;
     dirty_ = true;
     changed_.notify_one();
@@ -57,11 +59,12 @@ public:
     if (stopped_ || generation <= generation_) {
       return false;
     }
-    source_ = source;
+    replacement_ = source;
+    pending_.clear();
+    sourceBytes_ = source.size();
     generation_ = generation;
     sequence_ = 0;
     finished_ = false;
-    appendOnly_ = false;
     dirty_ = true;
     snapshot_.reset();
     readyGeneration_ = 0;
@@ -92,12 +95,13 @@ public:
 
 private:
   void run() {
-    uint64_t parserGeneration = 0;
     for (;;) {
-      std::string source;
+      // Only the bytes accepted since the last pass cross the lock; the
+      // parser owns the canonical source.
+      std::optional<std::string> replacement;
+      std::string pending;
       uint64_t generation;
       uint64_t sequence;
-      bool appendOnly;
       bool finished;
       {
         std::unique_lock<std::mutex> lock(mutex_);
@@ -105,21 +109,19 @@ private:
         if (stopped_) {
           return;
         }
-        source = source_;
+        replacement.swap(replacement_);
+        pending.swap(pending_);
         generation = generation_;
         sequence = sequence_;
-        appendOnly = appendOnly_;
         finished = finished_;
         dirty_ = false;
-        appendOnly_ = true;
       }
 
-      if (generation != parserGeneration) {
-        parser_.reset();
-        parserGeneration = generation;
-        appendOnly = false;
+      if (replacement) {
+        parser_.replace(*replacement);
       }
-      auto result = parser_.update(source, appendOnly, finished);
+      parser_.append(pending);
+      auto result = parser_.parse(finished);
       if (result.status != ParseStatus::Ok || !result.document) {
         continue;
       }
@@ -143,14 +145,15 @@ private:
   mutable std::mutex mutex_;
   std::condition_variable changed_;
   std::thread worker_;
-  std::string source_;
+  std::optional<std::string> replacement_;
+  std::string pending_;
+  size_t sourceBytes_{0};
   uint64_t generation_{0};
   uint64_t sequence_{0};
   uint64_t readyGeneration_{0};
   uint64_t readySequence_{0};
   DocumentHandle snapshot_;
   bool dirty_{false};
-  bool appendOnly_{true};
   bool finished_{false};
   bool stopped_{false};
 };

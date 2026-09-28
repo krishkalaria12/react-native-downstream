@@ -614,7 +614,9 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
     DSCompletedPrefix *cached = [[DSRenderedDocument completedPrefixCache] objectForKey:key];
     if (cached == nil || ![cached matches:document count:completed scale:scale]) {
       cached = [DSCompletedPrefix new];
-      cached->blocks.assign(document.blocks.begin(), document.blocks.begin() + completed);
+      for (size_t index = 0; index < completed; index++) {
+        cached->blocks.push_back(document.blocks[index]);
+      }
       cached->fontScale = scale;
       cached->segment = [DSTextSegment segmentWithDocument:document
                                                      from:0

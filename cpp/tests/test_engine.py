@@ -114,7 +114,11 @@ class FixtureTests(unittest.TestCase):
         for fixture in self.manifest["fixtures"]:
             with self.subTest(fixture=fixture["id"]):
                 chunks = [chunk.encode("utf-8") for chunk in fixture["chunks"]]
-                for sequence in (chunks, [b"plain prefix\n\n", *chunks]):
+                # The prefix exceeds the minimum commit size, so the fixture
+                # streams as an active tail after committed prose.
+                prefix = b"A plain prefix paragraph, with punctuation! It's long enough to commit " \
+                    b"before the fixture starts streaming, so the tail path is exercised.\n\n"
+                for sequence in (chunks, [prefix, *chunks]):
                     framed = b"".join(struct.pack("<I", len(chunk)) + chunk for chunk in sequence)
                     subprocess.run([BUILD_DIR / "test_incremental"], input=framed, check=True, capture_output=True)
 

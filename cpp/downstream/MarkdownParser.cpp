@@ -343,6 +343,10 @@ public:
     return document_;
   }
 
+  uint32_t containerCount() const { return containerCount_; }
+  uint32_t tableCount() const { return tableCount_; }
+  std::vector<ByteRange> takeBlockSource() { return std::move(blockSource_); }
+
 private:
   struct ListFrame {
     bool ordered;
@@ -444,6 +448,12 @@ private:
     }
     document_->blocks.push_back(std::move(*current_));
     current_.reset();
+    if (leafStart_ == kUnknownOffset) {
+      leafStart_ = leafEnd_ = lastLeafEnd_;
+    }
+    blockSource_.push_back({static_cast<uint32_t>(leafStart_), static_cast<uint32_t>(leafEnd_)});
+    lastLeafEnd_ = leafEnd_;
+    leafStart_ = kUnknownOffset;
   }
 
   void beginCell(bool header, MD_ALIGN align) {
@@ -520,6 +530,13 @@ private:
     }
     const size_t begin = static_cast<size_t>(text - source_.data());
     const size_t end = begin + size;
+    if (leafStart_ == kUnknownOffset) {
+      leafStart_ = begin;
+      leafEnd_ = end;
+    } else {
+      leafStart_ = std::min(leafStart_, begin);
+      leafEnd_ = std::max(leafEnd_, end);
+    }
     for (auto &span : spans_) {
       if (span.firstText == kUnknownOffset) {
         span.firstText = begin;
@@ -667,7 +684,7 @@ private:
     }
 
     if (!span.image && span.link >= 0) {
-      auto &link = document_->links[static_cast<size_t>(span.link)];
+      auto &link = document_->links.tail()[static_cast<size_t>(span.link)];
       if (range) {
         link.range.start = offsets_.toUtf16(range->first);
         link.range.end = offsets_.toUtf16(range->second);
@@ -685,6 +702,10 @@ private:
   std::vector<ContainerFrame> containers_;
   std::vector<ListFrame> lists_;
   std::vector<SpanFrame> spans_;
+  std::vector<ByteRange> blockSource_;
+  size_t leafStart_{kUnknownOffset};
+  size_t leafEnd_{0};
+  size_t lastLeafEnd_{0};
   size_t cursor_{0};
   unsigned tableRow_{0};
   uint32_t containerCount_{0};
@@ -717,6 +738,7 @@ ParseResult parseMarkdown(std::string_view source) {
   DocumentBuilder builder(source);
   if (source.empty()) {
     result.document = builder.finish();
+    result.blockSource = builder.takeBlockSource();
     return result;
   }
   MD_PARSER parser{};
@@ -744,6 +766,9 @@ ParseResult parseMarkdown(std::string_view source) {
     return result;
   }
   result.document = builder.finish();
+  result.containerCount = builder.containerCount();
+  result.tableCount = builder.tableCount();
+  result.blockSource = builder.takeBlockSource();
   return result;
 }
 

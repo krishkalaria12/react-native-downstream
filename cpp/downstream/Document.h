@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
@@ -100,7 +102,8 @@ struct Block {
   /// Nonzero only for a completed block whose source boundary is proven
   /// stable. The same identity survives later append-only snapshots.
   uint64_t identity{0};
-  /// UTF-16 range in canonical source when identity is nonzero.
+  /// UTF-16 range of the canonical source text that produced this block's
+  /// text, excluding block markers. Set only when identity is nonzero.
   SourceRange sourceRange;
   BlockKind kind{BlockKind::Paragraph};
   uint8_t headingLevel{0};
@@ -126,11 +129,95 @@ struct Link {
   SourceRange range;
 };
 
+/// A list whose leading items are immutable and shared between documents.
+/// Streaming snapshots share their committed blocks this way, so each new
+/// snapshot copies only its active tail. Reads behave like a vector.
+template <typename T>
+class SharedList {
+public:
+  /// Immutable leading items, stored in the chunks they were added in.
+  class Prefix {
+  public:
+    size_t size() const { return items_.size(); }
+    const T &operator[](size_t index) const { return *items_[index]; }
+
+    /// Returns a new prefix with `chunk` appended. `prefix` may be null and
+    /// is not changed, so documents that share it are unaffected.
+    static std::shared_ptr<const Prefix> extend(const std::shared_ptr<const Prefix> &prefix, std::vector<T> chunk) {
+      auto next = std::make_shared<Prefix>();
+      if (prefix) {
+        next->chunks_ = prefix->chunks_;
+        next->items_ = prefix->items_;
+      }
+      auto stored = std::make_shared<const std::vector<T>>(std::move(chunk));
+      next->items_.reserve(next->items_.size() + stored->size());
+      for (const T &item : *stored) {
+        next->items_.push_back(&item);
+      }
+      next->chunks_.push_back(std::move(stored));
+      return next;
+    }
+
+  private:
+    std::vector<std::shared_ptr<const std::vector<T>>> chunks_;
+    std::vector<const T *> items_;
+  };
+
+  class const_iterator {
+  public:
+    using iterator_category = std::forward_iterator_tag;
+    using value_type = T;
+    using difference_type = std::ptrdiff_t;
+    using pointer = const T *;
+    using reference = const T &;
+
+    const_iterator(const SharedList *list, size_t index) : list_(list), index_(index) {}
+    reference operator*() const { return (*list_)[index_]; }
+    pointer operator->() const { return &(*list_)[index_]; }
+    const_iterator &operator++() {
+      index_++;
+      return *this;
+    }
+    bool operator==(const const_iterator &other) const { return index_ == other.index_; }
+
+  private:
+    const SharedList *list_;
+    size_t index_;
+  };
+
+  SharedList() = default;
+  SharedList(std::shared_ptr<const Prefix> prefix, std::vector<T> tail)
+      : prefix_(std::move(prefix)), tail_(std::move(tail)) {}
+
+  size_t size() const { return sharedSize() + tail_.size(); }
+  bool empty() const { return size() == 0; }
+  const T &operator[](size_t index) const {
+    const size_t shared = sharedSize();
+    return index < shared ? (*prefix_)[index] : tail_[index - shared];
+  }
+  const T &front() const { return (*this)[0]; }
+  const T &back() const { return (*this)[size() - 1]; }
+  const_iterator begin() const { return {this, 0}; }
+  const_iterator end() const { return {this, size()}; }
+
+  /// Number of leading items held in the shared prefix.
+  size_t sharedSize() const { return prefix_ ? prefix_->size() : 0; }
+  const std::shared_ptr<const Prefix> &prefix() const { return prefix_; }
+  /// Items after the shared prefix, owned by this list.
+  std::vector<T> &tail() { return tail_; }
+  const std::vector<T> &tail() const { return tail_; }
+  void push_back(T item) { tail_.push_back(std::move(item)); }
+
+private:
+  std::shared_ptr<const Prefix> prefix_;
+  std::vector<T> tail_;
+};
+
 /// Immutable parse result shared by measurement and mounting.
 struct Document {
   uint64_t id{0};
-  std::vector<Block> blocks;
-  std::vector<Link> links;
+  SharedList<Block> blocks;
+  SharedList<Link> links;
 };
 
 using DocumentHandle = std::shared_ptr<const Document>;
