@@ -18,6 +18,7 @@ import {
   createMarkdownStreamWithMode,
   type ParseMode,
 } from '../../src/createMarkdownStream';
+import { featureCases } from './gallery/featureCases';
 import { featureSample } from './gallery/sample';
 
 /** Device smoke screen for the session path, including unmount and replay. */
@@ -83,6 +84,14 @@ export function StreamingChat() {
       </View>
       <ScrollView contentContainerStyle={styles.content}>
         {stream && <DownstreamMarkdown stream={stream} selectable />}
+        {featureCases.map((feature) => (
+          <View key={feature.id} style={styles.completed}>
+            <Text style={dark ? styles.statusDark : styles.statusLight}>
+              Completed: {feature.title}
+            </Text>
+            <DownstreamMarkdown markdown={feature.markdown} selectable />
+          </View>
+        ))}
       </ScrollView>
     </View>
   );
@@ -99,4 +108,5 @@ const styles = StyleSheet.create({
   statusLight: { color: '#555' },
   statusDark: { color: '#aaa' },
   content: { padding: 16 },
+  completed: { paddingTop: 24 },
 });
