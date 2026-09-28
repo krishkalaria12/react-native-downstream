@@ -15,8 +15,11 @@ using namespace facebook::react;
 namespace {
 
 std::string utf8(NSString *value) {
-  const char *bytes = value.UTF8String;
-  return bytes == nullptr ? std::string() : std::string(bytes);
+  NSData *encoded = [value dataUsingEncoding:NSUTF8StringEncoding];
+  if (encoded.length == 0) {
+    return {};
+  }
+  return std::string(static_cast<const char *>(encoded.bytes), encoded.length);
 }
 
 bool validCounter(double value) {
