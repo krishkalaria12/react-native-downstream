@@ -172,7 +172,12 @@ class StreamState implements MarkdownStreamController {
     this.assertActive();
     if (this.finished) return;
     this.flush();
-    if (this.pending.length) return;
+    if (this.pending.length) {
+      throw operationError(
+        'render_failed',
+        'Native append failed; finish was not sent. Retry finish or reset the stream.'
+      );
+    }
     NativeDownstreamSession.finish(
       this.sessionId,
       this.generation,

@@ -82,6 +82,35 @@ describe('createMarkdownStream', () => {
     stream.dispose();
   });
 
+  it('reports a failed finish and permits a retry without losing accepted source', async () => {
+    const errors: object[] = [];
+    const stream = createMarkdownStream({
+      onError: (error) => errors.push(error),
+    });
+    const id = getStreamState(stream).binding().sessionId;
+    jest.mocked(native.append).mockImplementationOnce(() => {
+      throw new Error('unavailable');
+    });
+
+    stream.append('a');
+    expect(() => stream.finish()).toThrow(
+      expect.objectContaining({ code: 'render_failed' })
+    );
+    expect(native.finish).not.toHaveBeenCalled();
+    expect(errors).toMatchObject([{ code: 'render_failed', sequence: 1 }]);
+    expect(await stream.getSource()).toBe('a');
+
+    stream.append('b');
+    stream.finish();
+    expect(native.append).toHaveBeenLastCalledWith(id, 'ab', 0, 2);
+    expect(native.finish).toHaveBeenCalledWith(id, 0, 2);
+    expect(await stream.getSource()).toBe('ab');
+    expect(() => stream.append('c')).toThrow(
+      expect.objectContaining({ code: 'invalid_state' })
+    );
+    stream.dispose();
+  });
+
   it('splits large frame batches at 64 KiB and bounds unacknowledged bytes', () => {
     const stream = createMarkdownStream();
     const id = getStreamState(stream).binding().sessionId;
