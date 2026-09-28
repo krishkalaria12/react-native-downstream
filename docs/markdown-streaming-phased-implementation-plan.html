@@ -250,7 +250,7 @@
           <a href="#risks">Risks and gates</a>
           <a href="#sources">Sources</a>
         </nav>
-        <div class="rail-foot">Plan date: 27 September 2026<br />Research only; no renderer has been implemented in this repository.</div>
+        <div class="rail-foot">Plan date: 27 September 2026<br />Revised 28 September 2026: implementation first, benchmark after.<br />Research only; no renderer has been implemented in this repository.</div>
       </aside>
       <main id="main">
         <div class="wrap">
@@ -260,12 +260,12 @@
             <p class="lede">A production plan for Markdown that arrives in small chunks, stays responsive in chat lists, and renders through native iOS and Android text systems. This edition adds the exact implementation sequence, proposed module boundaries, verification work, and stop conditions for every phase.</p>
             <div class="decision">
               <strong>Recommended direction</strong>
-              <p>Use a single Fabric display component with native text layout. Establish Enriched Markdown + React Native Streamdown as the measured baseline. Then build a native append session that coalesces chunks, retains completed blocks, reparses a conservative active tail, and applies only the latest snapshot. Keep Nitro optional unless a public headless API or measured crossing cost justifies it.</p>
+              <p>Use a single Fabric display component with native text layout. Build the complete Downstream path first: a native append session that coalesces chunks, retains completed blocks, reparses a conservative active tail, and applies only the latest snapshot, with coalesced full parsing kept as a selectable mode. Correctness gates each implementation stage. Once the implementation is complete, benchmark it against Enriched Markdown + React Native Streamdown on physical devices to choose the default parse mode and direct tuning. Keep Nitro optional unless a public headless API or measured crossing cost justifies it.</p>
             </div>
             <div class="meta-grid" aria-label="Current state and decision status">
               <div><b>Current repository</b><span>Library template. <code>src/index.tsx</code> exports only <code>multiply</code>; no native or Markdown code exists.</span></div>
               <div><b>Chosen technical direction</b><span>Fabric display view, md4c parser, native session, platform text rendering.</span></div>
-              <div><b>Still to prove</b><span>Whether native full parsing once per frame is enough, or a reparsable tail provides a material device-level win.</span></div>
+              <div><b>Still to prove</b><span>Whether native full parsing once per frame is enough, or a reparsable tail provides a material device-level win. Both modes are built first and measured together after implementation.</span></div>
             </div>
           </header>
 
@@ -291,7 +291,7 @@
                 <tbody>
                   <tr><td><a href="https://github.com/JoaoPauloCMarra/react-native-nitro-markdown/blob/main/docs/comparison.md">Nitro Markdown</a> reports a plain-text append helper reduction from 3.283 ms to 0.033 ms p50 for a 280,004-unit input in an Android emulator Hermes run.</td><td>Only that helper. The maintainers explicitly exclude native parsing, rendering, frame rate, and physical-device performance.</td><td>Good evidence to avoid full-buffer scans on an append. It cannot rank complete renderers.</td></tr>
                   <tr><td><a href="https://github.com/alizahid/react-native-jet-markdown#performance">Jet Markdown</a> reports 4.1 ms to parse a 160 KB document.</td><td>Shared C++ core on an Apple M-series host at <code>-O2</code>.</td><td>Useful parser scale check. It is not a phone paint-time measurement; Jet requires a newer RN version.</td></tr>
-                  <tr><td>Streamdown/Enriched and BrookMD publish architecture and tests but no directly comparable physical-device stream-to-paint result in the inspected sources.</td><td>No shared corpus, device, build, or frame-trace protocol.</td><td>The benchmark in this plan must choose the implementation.</td></tr>
+                  <tr><td>Streamdown/Enriched and BrookMD publish architecture and tests but no directly comparable physical-device stream-to-paint result in the inspected sources.</td><td>No shared corpus, device, build, or frame-trace protocol.</td><td>The post-implementation benchmark in this plan provides that comparison.</td></tr>
                 </tbody>
               </table>
             </div>
@@ -363,7 +363,7 @@
                 <tbody>
                   <tr><td>Many tiny JS-to-native calls</td><td>Batch adjacent deltas once per frame or a bounded interval. Keep input ordered; let the caller flush on finish.</td><td>Calls/s, queued bytes, append time, chunk-to-paint latency.</td></tr>
                   <tr><td>Growing-string copies</td><td>Use native append for high-rate streams rather than sending a full string each update. Keep a controlled-source path for simple usage.</td><td>Transferred bytes, JS allocations/GC, native buffer capacity.</td></tr>
-                  <tr><td>Repeated full parse</td><td>Begin with coalesced native full parse as baseline. Add completed-block cache and tail reparse only when device traces justify it.</td><td>Parse duration by source length and syntax, fallback rate, bytes reparsed/update.</td></tr>
+                  <tr><td>Repeated full parse</td><td>Implement coalesced native full parse first, then add the completed-block cache and tail reparse behind an internal mode switch. Post-implementation device traces decide the default and whether the tail stays.</td><td>Parse duration by source length and syntax, fallback rate, bytes reparsed/update.</td></tr>
                   <tr><td>AST serialization and React reconciliation</td><td>Keep render model native on the display path. Return only events needed by JS, such as link presses or typed errors.</td><td>JS commit time, node count, transferred payload size.</td></tr>
                   <tr><td>Native text measurement</td><td>Cache completed block layout by content, style, width, font scale, and platform text settings. Invalidate only affected measurements.</td><td>Layout duration, cache hit rate, width-change cost, height corrections.</td></tr>
                   <tr><td>Expensive content</td><td>Defer code highlighting, math rendering, and remote image work until syntax or URL is stable. Keep streaming text visible.</td><td>Worst-case UI frame time, image request count, highlight duration.</td></tr>
@@ -373,7 +373,7 @@
               </table>
             </div>
             <h3>Proposed budgets, not measured results</h3>
-            <p>These are initial review gates for the benchmark harness. Tune them against a chosen supported device class before treating them as release criteria. At 60 Hz the whole frame is 16.7 ms; at 120 Hz it is 8.3 ms. The Markdown view does not own that entire budget.</p>
+            <p>These are initial review gates for the post-implementation benchmark. Implementation stages are gated on correctness, not on these numbers. Tune them against a chosen supported device class before treating them as release criteria. At 60 Hz the whole frame is 16.7 ms; at 120 Hz it is 8.3 ms. The Markdown view does not own that entire budget.</p>
             <div class="table-wrap">
               <table>
                 <thead><tr><th>Metric</th><th>Initial target under defined test load</th><th>Why it matters</th></tr></thead>
@@ -391,9 +391,9 @@
           </section>
 
           <section class="document-section" id="benchmarks">
-            <div class="section-head"><h2>The benchmark that decides the design</h2><p>A common harness must measure complete visible behavior, on the hardware and build type users will run.</p></div>
+            <div class="section-head"><h2>The benchmark that runs after implementation</h2><p>It runs once Downstream is feature-complete. A common harness measures complete visible behavior, on the hardware and build type users will run.</p></div>
             <div class="two-col">
-              <div class="panel"><h3>Implementations to compare</h3><ol><li>Enriched Markdown + React Native Streamdown, as installed and configured for this project.</li><li>A minimal native Fabric view that reparses the full source at most once per visual update.</li><li>The same view with completed-prefix caching and active-tail reparse.</li></ol><p>Use the same Markdown fixtures, display styles, chunk schedule, viewport, and device for each.</p></div>
+              <div class="panel"><h3>Implementations to compare</h3><ol><li>Enriched Markdown + React Native Streamdown, as installed and configured for this project.</li><li>Downstream in full-parse mode: the complete source is reparsed at most once per visual update.</li><li>Downstream in incremental-tail mode: completed-prefix caching and active-tail reparse.</li></ol><p>Use the same Markdown fixtures, display styles, chunk schedule, viewport, and device for each. Modes 2 and 3 come from the same build, selected per session.</p></div>
               <div class="panel"><h3>Environment to record</h3><ul><li>Release builds, Hermes, New Architecture, exact RN/Expo/library revisions.</li><li>Physical iPhone and lower or mid-range Android device; simulator/emulator for development only.</li><li>Device model, OS, refresh rate, thermal state, battery mode, and test order.</li><li>Warm and cold runs, repeated samples, raw traces, and p50/p95/p99.</li></ul></div>
             </div>
             <h3>Workload matrix</h3>
@@ -412,29 +412,30 @@
             </div>
             <h3>Instrumentation and reporting</h3>
             <ul>
-              <li>Timestamp chunk receipt, batch flush, native append, parse start/end, measurement start/end, snapshot apply, and first visible frame. Use trace IDs and sequence numbers to join these events.</li>
+              <li>Timestamp chunk receipt, batch flush, native append, parse start/end, measurement start/end, snapshot apply, and first visible frame. The native trace points are built during implementation and disabled by default; the benchmark turns them on. Use trace IDs and sequence numbers to join these events.</li>
               <li>Record JS and UI frame duration, missed frames during scroll, CPU and energy where tools permit, allocations/GC, resident memory, cache hit rate, bytes reparsed, and fallback count.</li>
               <li>Compare final output against fresh full md4c/fixture output. For every input prefix, test that displayed text is ordered, no completed text disappears, and temporary previews follow the documented policy.</li>
               <li>Keep benchmark source, fixtures, device metadata, raw traces, and summary tables in the repo. Show variance; avoid a single best run.</li>
             </ul>
-            <div class="callout"><strong>Decision rule</strong><p>If coalesced full native parsing already meets the latency and frame budgets at 100 KB and concurrent streams, retain it until a harder workload proves otherwise. Adopt the incremental tail only if it produces a repeatable end-to-end improvement without correctness regressions or disproportionate maintenance cost.</p></div>
+            <div class="callout"><strong>Decision rule</strong><p>If full-parse mode already meets the latency and frame budgets at 100 KB and concurrent streams, make it the default and remove the incremental tail unless a harder workload proves otherwise. Make the incremental tail the default only if it produces a repeatable end-to-end improvement without correctness regressions or disproportionate maintenance cost.</p></div>
           </section>
 
           <section class="document-section" id="delivery">
-            <div class="section-head"><h2>How we implement it, phase by phase</h2><p>Each phase has concrete code boundaries, a validation task, and a reason to proceed or stop. Paths below are proposed; Stage 0 fixes the public contract before files are created.</p></div>
+            <div class="section-head"><h2>How we implement it, phase by phase</h2><p>Each phase has concrete code boundaries, a validation task, and a reason to proceed or stop. Paths below are proposed; Phase 0 fixes the public contract before files are created.</p></div>
             <div class="phase-jump" aria-label="Jump to implementation phase">
-              <a href="#phase-0">0 · contract</a><a href="#phase-1">1 · baseline</a><a href="#phase-2">2 · native display</a><a href="#phase-3">3 · session</a><a href="#phase-4">4 · incremental tail</a><a href="#phase-5">5 · features</a><a href="#phase-6">6 · release</a>
+              <a href="#phase-0">0 · contract</a><a href="#phase-1">1 · native display</a><a href="#phase-2">2 · session</a><a href="#phase-3">3 · incremental tail</a><a href="#phase-4">4 · features</a><a href="#phase-5">5 · benchmark</a><a href="#phase-6">6 · release</a>
             </div>
-            <div class="milestone-note"><strong>Critical path</strong><p>We first establish the device benchmark and behavior oracle. The Stage 1 trace decides whether to adapt Enriched or own a Fabric renderer. Stage 3 then tests the simpler native full-parse path. Stage 4 is conditional on a measured end-to-end gain. This keeps the hardest parser state work behind evidence rather than making it a prerequisite for the first usable component.</p></div>
+            <div class="milestone-note"><strong>Critical path</strong><p>Implement first; benchmark once the implementation is complete. Phases 1–4 build the full Downstream path against the Phase 0 behavior oracle and are gated by correctness, not device timings. Both parse modes, coalesced full parse and incremental tail, ship behind an internal switch, and native trace points are built in along the way but stay disabled. Phase 5 measures the finished implementation against Enriched + Streamdown on physical devices, picks the default parse mode, and drives performance fixes. A benchmark taken earlier would measure an incomplete renderer rather than the finished design.</p></div>
+            <div class="callout"><strong>Baseline harness is parked, not discarded</strong><p>The baseline work already drafted in the repository (<code>example/src/bench/</code>, <code>benchmarks/summarize.py</code>, <code>docs/performance-methodology.md</code>, and the Streamdown + Enriched example setup) becomes a Phase 5 input. It is not a prerequisite for Phases 1–4. The fixture corpus in <code>benchmarks/fixtures/</code> remains the Phase 0 correctness oracle and is used throughout.</p></div>
             <h3>Proposed code boundaries</h3>
             <div class="table-wrap">
               <table>
                 <thead><tr><th>Boundary</th><th>Proposed location</th><th>Responsibility</th></tr></thead>
                 <tbody>
                   <tr><td>Public TypeScript API</td><td><code>src/</code></td><td>Controlled view, stream controller/ref, native component spec, type-safe events, source and style types. No Markdown parser in the live render path.</td></tr>
-                  <tr><td>Shared native engine</td><td><code>cpp/</code></td><td>Vendored md4c, bounded source buffer, parser adapter, block model, session sequencing, cache and fallbacks.</td></tr>
+                  <tr><td>Shared native engine</td><td><code>cpp/</code></td><td>Vendored md4c, bounded source buffer, parser adapter, block model, session sequencing, parse-mode switch, cache and fallbacks, trace points.</td></tr>
                   <tr><td>Platform rendering</td><td><code>ios/</code>, <code>android/</code></td><td>Attributed text or spans, layout measurement, images, selection, accessibility, Codegen/Fabric registration.</td></tr>
-                  <tr><td>Example and performance rig</td><td><code>example/</code>, <code>benchmarks/</code></td><td>Reference renderer comparison, deterministic chunk playback, fixture corpus, trace collection, screenshot states.</td></tr>
+                  <tr><td>Example and performance rig</td><td><code>example/</code>, <code>benchmarks/</code></td><td>Streaming demo and fixture playback for correctness during Phases 1–4; reference renderer comparison, trace collection, and results in Phase 5.</td></tr>
                   <tr><td>Packaging and release</td><td><code>package.json</code>, podspec, Gradle/CMake, CI</td><td>Autolinking, Codegen metadata, build compatibility, parser license, clean install and tarball verification.</td></tr>
                 </tbody>
               </table>
@@ -457,41 +458,19 @@
                   <h4>Proposed artifacts</h4>
                   <ul class="path-list"><li><code>docs/api.md</code> and <code>docs/streaming-semantics.md</code></li><li><code>benchmarks/fixtures/*.md</code></li><li><code>benchmarks/fixtures/manifest.json</code></li><li><code>src/types.ts</code> draft</li></ul>
                   <h4>Verification</h4><p>Review every prefix policy against a fixture; compare final expected output with a fresh md4c/CommonMark/GFM parse. Check that app-facing methods can represent reset, completion, and errors without implicit state.</p>
-                  <p class="gate"><strong>Exit gate.</strong> Feature scope, public API, fixtures, supported platforms, and baseline devices are fixed. Unresolved syntax policies are listed explicitly.</p>
+                  <p class="gate"><strong>Exit gate.</strong> Feature scope, public API, fixtures, and supported platforms are fixed. Unresolved syntax policies are listed explicitly.</p>
                 </div>
               </div>
             </article>
 
             <article class="phase-block" id="phase-1">
-              <div class="phase-head"><span class="phase-number">01</span><div><h3>Build the benchmark and measure the existing solution</h3><p>Find the real bottleneck before choosing our renderer implementation.</p></div></div>
+              <div class="phase-head"><span class="phase-number">01</span><div><h3>Ship a correct static native display path</h3><p>Prove complete-document parsing and platform layout before adding streaming state.</p></div></div>
               <div class="phase-grid">
                 <div>
                   <h4>Implementation work</h4>
                   <ol>
-                    <li>Add a deterministic playback screen to the Expo example. It must replay the same fixture as one-character, 1–20-character, and bursty network chunks; support pause, reset, finish, simultaneous streams, and scrolling through completed messages.</li>
-                    <li>Install Streamdown + Enriched as a benchmark baseline in the example, including the documented Worklets Bundle Mode and Metro setup. Verify the exact versions against this repository’s RN 0.83.2 and Expo 55 build; the dependency matrix alone is not runtime proof.</li>
-                    <li>Build an instrumentation layer that timestamps receipt, batching, renderer update, native parse/layout if exposed, and first visible frame. Collect JS/UI frame traces, allocations, memory, CPU, and repeated end-to-end latency samples.</li>
-                    <li>Run a release build on physical iOS and Android devices. Keep device metadata, raw traces, fixture hash, build revision, and sample order with the results.</li>
-                    <li>Rank the dominant cost by workload: full-string repair/copies, JS scheduling, parsing, native measurement, image/code work, or list-cell behavior.</li>
-                  </ol>
-                  <div class="callout warning"><strong>Decision at this phase</strong><p>If Enriched’s native renderer has the needed feature coverage and measurement behavior, adapt or fork that renderer to accept a native session. If its architecture blocks the session or measured layout goals, implement an owned Fabric view. Record the reason in the benchmark report.</p></div>
-                </div>
-                <div class="phase-side">
-                  <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>example/src/bench/</code></li><li><code>benchmarks/fixtures/</code></li><li><code>benchmarks/results/</code></li><li><code>docs/performance-methodology.md</code></li></ul>
-                  <h4>Verification</h4><p>Two independent runs of the same fixture should preserve output and show comparable distributions. Validate instrumentation overhead by running with tracing enabled and disabled. Inspect video/screenshots for text flashes and stale content.</p>
-                  <p class="gate"><strong>Exit gate.</strong> A reproducible device baseline exists, RN/Expo integration is demonstrated, and the renderer ownership decision has evidence.</p>
-                </div>
-              </div>
-            </article>
-
-            <article class="phase-block" id="phase-2">
-              <div class="phase-head"><span class="phase-number">02</span><div><h3>Ship a correct static native display path</h3><p>Prove complete-document parsing and platform layout before adding streaming state.</p></div></div>
-              <div class="phase-grid">
-                <div>
-                  <h4>Implementation work</h4>
-                  <ol>
-                    <li>Implement or adapt the Fabric component chosen in Stage 1. Define the Codegen spec, native registration, props and link/error events, and a self-sizing measurement path. Start with <code>&lt;DownstreamMarkdown markdown={text} /&gt;</code>.</li>
+                    <li>Decide renderer ownership from source review and the Phase 0 feature matrix. Adapt or fork Enriched’s native renderer if it can accept a session-owned render snapshot and covers the first-release features without a long-lived divergent fork. Otherwise implement an owned Fabric view. Record the reason.</li>
+                    <li>Implement or adapt the chosen Fabric component. Define the Codegen spec, native registration, props and link/error events, and a self-sizing measurement path. Start with <code>&lt;DownstreamMarkdown markdown={text} /&gt;</code>.</li>
                     <li>Use md4c as the shared parser. Map callbacks to a compact native render model with block and inline style runs; avoid serializing a full AST to JavaScript for display. Keep parser options and unsafe URL policy explicit.</li>
                     <li>Render text through platform APIs: attributed text/TextKit on iOS and Spannable/StaticLayout on Android. Use consistent spacing, font scale, width handling, link hit tests, and accessibility semantics.</li>
                     <li>Connect Fabric measurement to a versioned render snapshot. Cache only when source, width, style, font scale, and relevant platform settings match. Invalidate on any change that affects line breaks or block height.</li>
@@ -500,24 +479,24 @@
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>src/DownstreamMarkdownNativeComponent.ts</code></li><li><code>src/DownstreamMarkdown.tsx</code></li><li><code>cpp/parser/</code>, <code>cpp/render-model/</code></li><li><code>ios/</code>, <code>android/</code></li><li><code>Downstream.podspec</code>, <code>package.json</code> Codegen config</li></ul>
+                  <ul class="path-list"><li><code>docs/decisions/renderer-ownership.md</code></li><li><code>src/DownstreamMarkdownNativeComponent.ts</code></li><li><code>src/DownstreamMarkdown.tsx</code></li><li><code>cpp/parser/</code>, <code>cpp/render-model/</code></li><li><code>ios/</code>, <code>android/</code></li><li><code>Downstream.podspec</code>, <code>package.json</code> Codegen config</li></ul>
                   <h4>Verification</h4><p>Run CommonMark/GFM final-document fixtures, native layout tests, font-scale and width-change tests, platform screenshot comparisons, clean-install builds, and link/accessibility checks on device.</p>
                   <p class="gate"><strong>Exit gate.</strong> Complete documents render correctly on both platforms and the native component measures, mounts, and recycles without stale content.</p>
                 </div>
               </div>
             </article>
 
-            <article class="phase-block" id="phase-3">
-              <div class="phase-head"><span class="phase-number">03</span><div><h3>Add a native streaming session with full-parse fallback</h3><p>Make the hot path ordered and thread-safe before trying to make parsing incremental.</p></div></div>
+            <article class="phase-block" id="phase-2">
+              <div class="phase-head"><span class="phase-number">02</span><div><h3>Add a native streaming session with full-parse mode</h3><p>Make the hot path ordered and thread-safe before trying to make parsing incremental.</p></div></div>
               <div class="phase-grid">
                 <div>
                   <h4>Implementation work</h4>
                   <ol>
                     <li>Add an imperative session/controller that sends ordered chunks to native without re-sending the growing document. Use a Codegen TurboModule for session lifetime and append/reset/finish/dispose; bind the Fabric view to a session ID. This lets a stream continue while a list cell unmounts and rebind when it appears again. Batch deltas at most once per visual update; expose an explicit flush for <code>finish</code> and tests. Keep the controlled string prop as a separate reset path.</li>
                     <li>Give each session a native source buffer, generation, and monotonic sequence. <code>reset</code> invalidates all prior work; <code>dispose</code> releases buffer, caches, queued jobs, and image work. Define clear behavior for append after finish or dispose.</li>
-                    <li>Run md4c parsing on an owned native worker queue. For this stage, parse the complete current source once per coalesced update. Prepare an immutable render snapshot off the view thread and apply it only when generation and sequence still match. Hold the previous valid layout while new work runs, then invalidate measurement and mount the matching new snapshot together.</li>
-                    <li>Apply the Stage 0 preview policy to the visible copy only. Incomplete links/images never trigger unsafe actions; open code is shown progressively with expensive highlighting deferred.</li>
-                    <li>Instrument queue delay, parse time, snapshot transfer, measurement, apply time, dropped work, and arrival-to-paint latency. Preserve the last good snapshot on parse or resource failure.</li>
+                    <li>Run md4c parsing on an owned native worker queue. In this mode, parse the complete current source once per coalesced update. Prepare an immutable render snapshot off the view thread and apply it only when generation and sequence still match. Hold the previous valid layout while new work runs, then invalidate measurement and mount the matching new snapshot together.</li>
+                    <li>Apply the Phase 0 preview policy to the visible copy only. Incomplete links/images never trigger unsafe actions; open code is shown progressively with expensive highlighting deferred.</li>
+                    <li>Add native trace points for queue delay, parse time, snapshot transfer, measurement, apply time, dropped work, and arrival-to-paint. Keep them disabled by default; Phase 5 turns them on. Preserve the last good snapshot on parse or resource failure.</li>
                   </ol>
                   <pre><code>append(chunk) → queue bytes → flush batch → parse full snapshot
                                   ↓
@@ -525,15 +504,15 @@
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>src/createMarkdownSession.ts</code></li><li><code>src/NativeDownstreamSession.ts</code> Codegen spec</li><li><code>cpp/session/</code>, <code>cpp/worker/</code></li><li><code>example/src/StreamingChat.tsx</code></li></ul>
-                  <h4>Verification</h4><p>Replay every fixture prefix. Stress reset/unmount while work is in flight, split Unicode at allowed boundaries, run simultaneous sessions, and compare completed output with a fresh full parse. Measure against Stage 1 in release builds.</p>
-                  <p class="gate"><strong>Exit gate.</strong> Zero stale paints or lost chunks, bounded queue/memory, correct final output, and device traces that identify whether repeated full parsing remains material.</p>
+                  <ul class="path-list"><li><code>src/createMarkdownSession.ts</code></li><li><code>src/NativeDownstreamSession.ts</code> Codegen spec</li><li><code>cpp/session/</code>, <code>cpp/worker/</code>, <code>cpp/trace/</code></li><li><code>example/src/StreamingChat.tsx</code></li></ul>
+                  <h4>Verification</h4><p>Replay every fixture prefix. Stress reset/unmount while work is in flight, split Unicode at allowed boundaries, run simultaneous sessions, and compare completed output with a fresh full parse.</p>
+                  <p class="gate"><strong>Exit gate.</strong> Zero stale paints or lost chunks, bounded queue/memory, and correct output for every fixture prefix.</p>
                 </div>
               </div>
             </article>
 
-            <article class="phase-block" id="phase-4">
-              <div class="phase-head"><span class="phase-number">04</span><div><h3>Optimize with committed blocks and an active tail</h3><p>Implement only if Stage 3 misses the agreed device budget or shows scaling cost.</p></div></div>
+            <article class="phase-block" id="phase-3">
+              <div class="phase-head"><span class="phase-number">03</span><div><h3>Add committed blocks and an active tail</h3><p>Built behind an internal parse-mode switch; Phase 5 decides whether it becomes the default or is removed.</p></div></div>
               <div class="phase-grid">
                 <div>
                   <h4>Implementation work</h4>
@@ -542,37 +521,61 @@
                     <li>Build a conservative boundary classifier around md4c. Keep prior paragraph lines mutable until setext/table ambiguity ends; retain open lists, quotes, fences, and inline constructs. If a reference definition or another global construct can change earlier output, invalidate affected blocks or take the full-parse path.</li>
                     <li>On append, reparse only the contextually safe tail and splice its new render blocks into the previous immutable snapshot. Preserve completed block identity and its measured layout when source, width, style, and font scale remain valid.</li>
                     <li>Bound retained tail bytes and cache entries. A tail over limit, uncertain context, non-append replacement, style change, or parser disagreement triggers a full parse. Record reason and frequency.</li>
-                    <li>Check each optimized result against an independent full parse in test builds. Run seeded fuzz cases and every-prefix fixtures; include CRLF, Unicode, references, nested containers, and closing transitions.</li>
+                    <li>Keep the Phase 2 full-parse mode selectable per session, so Phase 5 can compare both modes from one build.</li>
+                    <li>Check each incremental result against an independent full parse in test builds. Run seeded fuzz cases and every-prefix fixtures; include CRLF, Unicode, references, nested containers, and closing transitions.</li>
                   </ol>
-                  <div class="callout"><strong>Practical first fast path</strong><p>Start with append-only plain text and open fenced-code content, where the safe update is easiest to prove. Expand to completed-block tail parsing one syntax family at a time. The optimization is complete only when device traces show less work and the full-parse oracle remains equal.</p></div>
+                  <div class="callout"><strong>Practical first fast path</strong><p>Start with append-only plain text and open fenced-code content, where the safe update is easiest to prove. Expand to completed-block tail parsing one syntax family at a time. In this phase, the mode is complete when the full-parse oracle stays equal and deterministic counters show fewer bytes reparsed. Phase 5 decides whether that reduction improves end-to-end device performance.</p></div>
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
                   <ul class="path-list"><li><code>cpp/session/block-index.*</code></li><li><code>cpp/session/tail-classifier.*</code></li><li><code>cpp/session/snapshot-diff.*</code></li><li><code>benchmarks/fixtures/adversarial/</code></li></ul>
-                  <h4>Verification</h4><p>Track bytes reparsed per update, full-parse fallback rate, cache hit rate, memory, p95/p99 arrival-to-paint, and missed frames on the same devices/fixtures as Stages 1 and 3.</p>
-                  <p class="gate"><strong>Exit gate.</strong> No final-output divergence and a repeatable end-to-end improvement. If improvement is small or unstable, keep the Stage 3 implementation and remove the extra state machinery.</p>
+                  <h4>Verification</h4><p>Track bytes reparsed per update, full-parse fallback rate, and cache hit rate as deterministic counters in tests. Timing and frame metrics wait for Phase 5.</p>
+                  <p class="gate"><strong>Exit gate.</strong> No final-output divergence across every-prefix and fuzz runs; fallback reasons are counted; full-parse mode remains selectable.</p>
                 </div>
               </div>
             </article>
 
-            <article class="phase-block" id="phase-5">
-              <div class="phase-head"><span class="phase-number">05</span><div><h3>Complete the selected Markdown feature set</h3><p>Extend the native renderer without letting rare rich blocks stall ordinary prose.</p></div></div>
+            <article class="phase-block" id="phase-4">
+              <div class="phase-head"><span class="phase-number">04</span><div><h3>Complete the selected Markdown feature set</h3><p>Extend the native renderer without letting rare rich blocks stall ordinary prose.</p></div></div>
               <div class="phase-grid">
                 <div>
                   <h4>Implementation work</h4>
                   <ol>
-                    <li>Implement the Stage 0 feature matrix in priority order. GFM tables need progressive classification, stable column sizing, horizontal overflow, and row updates. Code blocks need progressive plain rendering and deferred highlighting.</li>
+                    <li>Implement the Phase 0 feature matrix in priority order. GFM tables need progressive classification, stable column sizing, horizontal overflow, and row updates. Code blocks need progressive plain rendering and deferred highlighting.</li>
                     <li>Fetch images only after URL completion and policy validation. Support placeholders or known dimensions to reduce layout jumps; cancel work when a session resets or a list cell recycles.</li>
                     <li>Add selection/copy of canonical text, link press/long press, VoiceOver/TalkBack roles, font scaling, RTL, and dynamic colors. Keep platform differences in a documented behavior matrix.</li>
-                    <li>Implement math only if Stage 0 placed it in the first release. Defer heavy layout until a stable expression is available, with a safe text fallback during streaming.</li>
-                    <li>Re-run performance tests after each expensive feature. The ordinary prose path should not load highlighters, math, or image machinery unless the content uses them.</li>
+                    <li>Implement math only if Phase 0 placed it in the first release. Defer heavy layout until a stable expression is available, with a safe text fallback during streaming.</li>
+                    <li>Keep expensive features lazy: the ordinary prose path should not load highlighters, math, or image machinery unless the content uses them. Add trace points for highlight, math, and image work for Phase 5.</li>
                   </ol>
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
                   <ul class="path-list"><li><code>cpp/render-model/</code> rich block types</li><li><code>ios/</code> and <code>android/</code> feature renderers</li><li><code>example/src/fixtures/</code> feature gallery</li><li><code>docs/feature-matrix.md</code></li></ul>
                   <h4>Verification</h4><p>Use platform screenshots, accessibility traversal, link/image policy tests, rotation/font-scale tests, long tables and code blocks, and scroll tests with active and completed messages.</p>
-                  <p class="gate"><strong>Exit gate.</strong> Every first-release feature passes the same correctness and streaming checks on iOS and Android; expensive content remains inside the agreed latency/frame budgets.</p>
+                  <p class="gate"><strong>Exit gate.</strong> Every first-release feature passes the same correctness and streaming checks on iOS and Android. Downstream is feature-complete and ready to benchmark.</p>
+                </div>
+              </div>
+            </article>
+
+            <article class="phase-block" id="phase-5">
+              <div class="phase-head"><span class="phase-number">05</span><div><h3>Benchmark the finished implementation and tune</h3><p>Measure complete visible behavior once the full system exists.</p></div></div>
+              <div class="phase-grid">
+                <div>
+                  <h4>Implementation work</h4>
+                  <ol>
+                    <li>Resume the parked playback screen in the Expo example. It replays the same fixture as one-character, 1–20-character, and bursty network chunks; supports pause, reset, finish, simultaneous streams, and scrolling through completed messages. Add Downstream as a renderer option next to Streamdown + Enriched. Verify the baseline’s exact versions against this repository’s RN 0.83.2 and Expo 55 build; the dependency matrix alone is not runtime proof.</li>
+                    <li>Turn on the native trace points from Phases 2–4 and join them with JS timestamps for receipt, batching, append, parse, measurement, apply, and first visible frame. Collect JS/UI frame traces, allocations, memory, CPU, and repeated end-to-end latency samples.</li>
+                    <li>Run release builds on physical iOS and Android devices for three candidates: Enriched + Streamdown, Downstream full-parse mode, and Downstream incremental-tail mode. Keep device metadata, raw traces, fixture hash, build revision, and sample order with the results.</li>
+                    <li>Apply the decision rule. Choose the default parse mode; if the incremental tail shows no repeatable end-to-end gain, remove its state machinery. Rank remaining cost by workload: batching, JS scheduling, parsing, native measurement, image/code work, or list-cell behavior.</li>
+                    <li>Fix what traces show above budget, such as layout caching, view churn, or deferring rich content. Re-run the same workload after each fix and keep before/after traces.</li>
+                  </ol>
+                  <div class="callout warning"><strong>Decision at this phase</strong><p>The default parse mode, and whether the incremental tail stays. If Downstream misses budgets that Enriched + Streamdown meets on the same workload, profile before changing architecture. The fallback is to render with Enriched and keep this package’s streaming session API. Record the outcome in the benchmark report.</p></div>
+                </div>
+                <div class="phase-side">
+                  <h4>Proposed artifacts</h4>
+                  <ul class="path-list"><li><code>example/src/bench/</code></li><li><code>benchmarks/results/</code></li><li><code>benchmarks/summarize.py</code></li><li><code>docs/performance-methodology.md</code></li></ul>
+                  <h4>Verification</h4><p>Two independent runs of the same fixture should preserve output and show comparable distributions. Validate instrumentation overhead by running with tracing enabled and disabled. Inspect video/screenshots for text flashes and stale content. Re-run the full correctness suite after every tuning change.</p>
+                  <p class="gate"><strong>Exit gate.</strong> Reproducible physical-device results for all three candidates, an evidence-backed default parse mode, and budgets either met or documented as known limits.</p>
                 </div>
               </div>
             </article>
@@ -585,7 +588,7 @@
                   <ol>
                     <li>Create clean consumer apps for bare React Native and Expo development builds. Install from the packed package, run pods/Gradle/Codegen, and launch the native view on both platforms. Verify supported RN versions rather than relying on the example alone.</li>
                     <li>Check package contents: JS output and declarations, native sources, parser license, podspec, CMake/Gradle files, config metadata, and documentation. Confirm no build output or local path leaks into the tarball.</li>
-                    <li>Automate parser conformance, prefix/property tests, platform build/smoke tests, and fixture rendering. Keep performance comparisons on stable physical devices with recorded environment; use CI emulators for correctness/build gates.</li>
+                    <li>Automate parser conformance, prefix/property tests, platform build/smoke tests, and fixture rendering. Keep performance regressions against the saved Phase 5 traces on stable physical devices with recorded environment; use CI emulators for correctness/build gates.</li>
                     <li>Document controlled and streaming APIs, lifecycle, URL policy, incomplete-preview behavior, limits, Expo setup, failure recovery, supported versions, and measured benchmark results with raw methodology.</li>
                     <li>Review the final API and native memory ownership. Audit unmount/reset races, worker shutdown, cache eviction, image cancellation, and very long unclosed blocks before publishing.</li>
                   </ol>
@@ -623,11 +626,12 @@
                   <tr><td>Worker result paints after newer content.</td><td>Sequence stress test observes a rewind or old dimensions after reset.</td><td>Apply only matching generation + sequence; invalidate all older layout keys.</td></tr>
                   <tr><td>Native view diverges by platform.</td><td>Golden fixture and accessibility comparisons fail on iOS/Android.</td><td>Keep shared parse semantics in C++; isolate platform styling and document unavoidable differences.</td></tr>
                   <tr><td>Native maintenance exceeds performance value.</td><td>Full native parse already meets budgets or tail optimization has small/unstable benefit.</td><td>Retain the simpler full-parse path, or use Enriched as the renderer and focus this package on its streaming API.</td></tr>
+                  <tr><td>Late benchmark reveals a structural cost.</td><td>Post-implementation traces show a bottleneck that needs architecture change, not tuning.</td><td>Build trace points from the session stage on, keep full-parse mode selectable, and keep renderer, session, and parser behind the proposed boundaries so one can change without the others. The correctness suite makes the refactor safe.</td></tr>
                   <tr><td>Consumer installation is brittle.</td><td>Clean Expo/bare app tests fail, package tarball omits assets, or Metro setup is required unexpectedly.</td><td>Keep default install minimal, automate clean installation smoke tests, and isolate optional modules.</td></tr>
                 </tbody>
               </table>
             </div>
-            <div class="callout risk"><strong>Open decision after Stage 1</strong><p>We have not chosen between adapting Enriched’s native renderer and implementing a new Fabric view. The baseline must show which work dominates. Adapting established native text behavior reduces feature risk; an owned renderer gives more control over session, layout, and dependencies. The benchmark and required feature matrix decide.</p></div>
+            <div class="callout risk"><strong>Renderer ownership is decided before measurement</strong><p>Without an up-front baseline, the native display stage chooses between adapting Enriched’s native renderer and implementing a new Fabric view from source review and the required feature matrix. The key question is whether Enriched can accept a session-owned render snapshot without a long-lived fork. Adapting established native text behavior reduces feature risk; an owned renderer gives more control over session, layout, and dependencies. The post-implementation benchmark checks the choice: if Downstream loses to Enriched + Streamdown on the same workload, the fallback is to render with Enriched and keep this package’s streaming session API.</p></div>
           </section>
 
           <section class="document-section" id="sources">
@@ -655,7 +659,7 @@
               <a href="https://reactnative.dev/docs/javascript-environment"><b>React Native JavaScript engines</b><span>Hermes and runtime behavior</span></a>
             </div>
           </section>
-          <footer>Downstream phased Markdown implementation plan. The design and budgets are proposals; repository implementation and physical-device measurements are future work. This HTML file is self-contained and printable.</footer>
+          <footer>Downstream phased Markdown implementation plan. The design and budgets are proposals; repository implementation comes first, and physical-device measurements follow once it is complete. This HTML file is self-contained and printable.</footer>
         </div>
       </main>
     </div>

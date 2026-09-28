@@ -30,7 +30,7 @@ The view parses with md4c and lays text out natively (TextKit on iOS, `StaticLay
 
 ## Markdown implementation plan
 
-Phase 0 defines the [API contract](docs/api.md), [streaming behavior](docs/streaming-semantics.md), and [parser fixtures](benchmarks/fixtures/README.md). The static native display path is implemented; see the [renderer ownership decision](docs/decisions/renderer-ownership.md). The stream controller is planned for the native session phase.
+Phase 0 defines the [API contract](docs/api.md), [streaming behavior](docs/streaming-semantics.md), and [parser fixtures](fixtures/README.md). The static native display path is implemented; the stream controller is planned for the native session phase.
 
 Run the shared C++ engine tests with `python3 cpp/tests/test_engine.py`.
 

@@ -2,7 +2,7 @@
 
 These files come from [md4c](https://github.com/mity/md4c) at commit
 `902b1bc9172ab45a7ea2539c9db4496ead77daa8` (0.6.0), the same revision as the
-fixture oracle in `benchmarks/fixtures/manifest.json`. They are unmodified.
+fixture oracle in `fixtures/manifest.json`. They are unmodified.
 md4c is MIT licensed; see `LICENSE.md`.
 
 | File | Used by |

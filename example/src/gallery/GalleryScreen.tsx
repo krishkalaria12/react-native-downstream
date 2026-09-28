@@ -6,7 +6,7 @@ import {
   type MarkdownLinkPressEvent,
 } from 'react-native-downstream';
 
-import { fixtures, fixtureSource } from '../bench/fixtures';
+import { fixtures, fixtureSource } from './fixtures';
 import { featureSample } from './sample';
 
 export function GalleryScreen() {

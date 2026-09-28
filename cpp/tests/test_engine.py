@@ -1,7 +1,7 @@
 """Host tests for the shared C++ Markdown engine.
 
 Builds the vendored md4c and the render-model engine with the system C/C++
-compiler, then checks final documents against benchmarks/fixtures.
+compiler, then checks final documents against fixtures/.
 
     python3 cpp/tests/test_engine.py
 """
@@ -16,7 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CPP = ROOT / "cpp"
-FIXTURES = ROOT / "benchmarks" / "fixtures"
+FIXTURES = ROOT / "fixtures"
 
 KIND = {"paragraph": 0, "heading": 1, "code": 2, "html": 3, "hr": 4, "table": 5}
 LIST_ITEM = 1
