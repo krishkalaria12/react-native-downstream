@@ -32,10 +32,11 @@ const answer = 42;
 console.log(answer);
 \`\`\`
 
-| Name | Value |
-| :--- | ----: |
-| alpha | 1 |
-| beta | 22 |
+| Name | Value | Notes |
+| :--- | ----: | :---: |
+| alpha | 1 | Short |
+| beta | 22 | A much longer cell that wraps inside its clamped column and pushes the table past the screen width |
+| [link](https://example.com/cell) | **333** | \`code\` |
 
 Raw <b>HTML</b> stays literal, $x^2$ too, and ![image alt](https://example.com/a.png) shows alt text.
 Unsafe [javascript](javascript:alert(1)) links are plain text. Autolinks: https://example.com and <mailto:hi@example.com>.

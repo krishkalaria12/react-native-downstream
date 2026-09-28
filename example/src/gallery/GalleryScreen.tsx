@@ -24,6 +24,7 @@ export function GalleryScreen() {
       </Text>
       <ScrollView contentContainerStyle={styles.content}>
         <DownstreamMarkdown
+          selectable
           markdown={featureSample}
           onLinkPress={handleLink}
           onError={handleError}
