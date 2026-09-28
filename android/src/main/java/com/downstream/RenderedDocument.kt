@@ -55,12 +55,34 @@ internal class LinkSpan(val index: Int, private val color: Int) : ClickableSpan(
 
 /** Raises text by a fraction of its size, for footnote references. */
 private class BaselineShiftSpan(private val fraction: Float) : MetricAffectingSpan() {
+  // A positive baseline shift moves text down.
   override fun updateDrawState(paint: TextPaint) {
-    paint.baselineShift += (paint.textSize * fraction).toInt()
+    paint.baselineShift -= (paint.textSize * fraction).toInt()
   }
 
   override fun updateMeasureState(paint: TextPaint) {
-    paint.baselineShift += (paint.textSize * fraction).toInt()
+    paint.baselineShift -= (paint.textSize * fraction).toInt()
+  }
+}
+
+/**
+ * Holds a line with inline code to the surrounding text's metrics. Android's
+ * monospace font has taller metrics than the body font, which would open a
+ * gap above the line. Runs before BlockSpan, which adds block spacing.
+ */
+private class InlineCodeLineSpan(private val ascent: Int, private val descent: Int) : LineHeightSpan {
+  override fun chooseHeight(
+    text: CharSequence,
+    lineStart: Int,
+    lineEnd: Int,
+    spanStartV: Int,
+    lineHeight: Int,
+    fm: Paint.FontMetricsInt,
+  ) {
+    fm.ascent = ascent
+    fm.top = ascent
+    fm.descent = descent
+    fm.bottom = descent
   }
 }
 
@@ -465,6 +487,14 @@ internal class RenderedDocument(
           text.setSpan(StrikethroughSpan(), start, end, flags)
         }
         if (styles and NativeDocument.STYLE_CODE != 0) {
+          val size = text.getSpans(start, end, AbsoluteSizeSpan::class.java).firstOrNull()?.size?.toFloat()
+          val metrics = TextPaint(paint).apply { if (size != null) textSize = size }.fontMetricsInt
+          text.setSpan(
+            InlineCodeLineSpan(metrics.ascent, metrics.descent),
+            start,
+            end,
+            flags or (1 shl Spanned.SPAN_PRIORITY_SHIFT),
+          )
           text.setSpan(TypefaceSpan("monospace"), start, end, flags)
           text.setSpan(RelativeSizeSpan(CODE_SIZE / BODY_SIZE), start, end, flags)
           text.setSpan(BackgroundColorSpan(colors.codeBackground), start, end, flags)

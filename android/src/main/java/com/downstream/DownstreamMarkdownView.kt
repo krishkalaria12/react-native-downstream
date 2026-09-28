@@ -190,26 +190,30 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     setText(segment.text, BufferType.SPANNABLE)
   }
 
+  // A touch that starts on a link belongs to the link: the TextView never
+  // sees it, so selection neither highlights the link nor clicks its span.
   @SuppressLint("ClickableViewAccessibility")
   override fun onTouchEvent(event: MotionEvent): Boolean {
-    val layout = layout
-    if (layout != null) {
-      val x = event.x - totalPaddingLeft + scrollX
-      val y = event.y - totalPaddingTop + scrollY
-      when (event.actionMasked) {
-        MotionEvent.ACTION_DOWN -> pressedLink = linkAt(layout, x, y)
-        MotionEvent.ACTION_UP -> {
-          val link = pressedLink
-          pressedLink = -1
-          if (link >= 0 && linkAt(layout, x, y) == link) {
-            findHost()?.pressLink(link)
-            return true
-          }
-        }
-        MotionEvent.ACTION_CANCEL -> pressedLink = -1
-      }
+    val layout = layout ?: return super.onTouchEvent(event)
+    val x = event.x - totalPaddingLeft + scrollX
+    val y = event.y - totalPaddingTop + scrollY
+    if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+      pressedLink = linkAt(layout, x, y)
     }
-    return super.onTouchEvent(event) || pressedLink >= 0
+    if (pressedLink < 0) {
+      return super.onTouchEvent(event)
+    }
+    when (event.actionMasked) {
+      MotionEvent.ACTION_UP -> {
+        val link = pressedLink
+        pressedLink = -1
+        if (linkAt(layout, x, y) == link) {
+          findHost()?.pressLink(link)
+        }
+      }
+      MotionEvent.ACTION_CANCEL -> pressedLink = -1
+    }
+    return true
   }
 
   private fun findHost(): DownstreamMarkdownView? {
