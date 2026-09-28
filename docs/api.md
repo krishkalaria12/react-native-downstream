@@ -1,6 +1,6 @@
 # Markdown display API contract
 
-This is the Phase 0 contract for the native Markdown component. `src/types.ts` holds the public types. `DownstreamMarkdown` with the controlled `markdown` prop is implemented; the stream factory is not a runtime export yet. See [implementation status](#implementation-status) for what the current build covers. Both iOS and Android follow this contract. The first supported app target is the repository's React Native 0.83.2 and Expo 55 example, using a development build.
+This is the Phase 0 contract for the native Markdown component. `src/types.ts` holds the public types. `DownstreamMarkdown` accepts a controlled `markdown` prop or a controller from `createMarkdownStream`. See [implementation status](#implementation-status) for what the current build covers. Both iOS and Android follow this contract. The first supported app target is the repository's React Native 0.83.2 and Expo 55 example, using a development build.
 
 ## Feature scope
 
@@ -32,7 +32,7 @@ stream.append('**world**');
 stream.finish();
 ```
 
-The examples describe the future runtime API. A view receives exactly one of `markdown` or `stream`. TypeScript rejects both or neither. Native code also rejects both at runtime with `invalid_input` and retains the last valid display. A controlled string replacement starts a new generation when its value changes. An unchanged value, including a React rerender, does not reset work. `stream` identity changes unbind the previous controller and bind the new one; they do not copy source between controllers.
+The examples describe the runtime API. A view receives exactly one of `markdown` or `stream`. TypeScript rejects both or neither. A controlled string replacement starts a new generation when its value changes. An unchanged value, including a React rerender, does not reset work. `stream` identity changes unbind the previous controller and bind the new one; they do not copy source between controllers.
 
 `createMarkdownStream(options?)` creates an active, empty controller. `append(chunk)` adds a nonempty chunk in call order and increments its sequence. An empty chunk is a no-op. `reset(source = '')` starts a new generation, clears pending work and preview state, and allows appends even after `finish()`. It validates the replacement before discarding the previous source. `finish()` flushes queued chunks, marks the generation complete, and requests an ordinary full-source parse with no synthetic preview. Repeated `finish()` is a no-op. `append()` after finish throws `invalid_state`; the caller must reset first. `dispose()` is idempotent and terminal. Other methods after disposal throw `invalid_state`. `getSource()` returns the canonical raw string on demand; it does not subscribe to every update. It rejects after disposal.
 
@@ -64,12 +64,12 @@ A document is a vertical stack of segments. A text segment is a run of non-table
 
 | Area | Current behavior | Planned |
 | --- | --- | --- |
-| Input | `markdown` prop only. Lone surrogates and sources over 1 MiB are rejected in JavaScript with `invalid_input` or `input_limit`, and the last valid source stays visible. | `createMarkdownStream` and the `stream` prop in the session phase |
+| Input | Controlled `markdown` and `createMarkdownStream` with a `stream` prop. The stream buffers up to 64 KiB per native append and 256 KiB of unacknowledged input. Lone surrogates and sources over 1 MiB are rejected in JavaScript. | Device traces will choose the default full or incremental parse mode. |
 | Line breaks | Soft line breaks display as line breaks, as the fixture contract requires. | None |
 | Tables | Columns take their widest cell, clamped to 56–280 points plus padding, with md4c's column alignment. Rows are as tall as their tallest cell. Wide tables scroll horizontally. Cells keep inline styles and links. | Progressive rows during streaming in the session phase |
 | Admonitions and footnotes | Admonitions render as a quote whose bar and title use the GitHub alert color. Footnote references are superscript numbers; definitions follow a rule at the end. | None |
 | Links | Tap hit-testing emits `onLinkPress` with the validated URL and the UTF-16 range of the whole Markdown occurrence, in text and table cells. VoiceOver exposes links as custom actions on each block and table row; TalkBack lists them as text links. | Long press in the feature phase |
-| Selection | `selectable` enables native selection and copy in text segments: `UITextView` on iOS, `TextView` on Android. Copy is plain visible text. A selection cannot span a table. | Copying the canonical source through `getSource()` in the session phase |
+| Selection | `selectable` enables native selection and copy in text segments: `UITextView` on iOS, `TextView` on Android. Copy is plain visible text. A selection cannot span a table. Stream controllers expose the canonical source through `getSource()`. | Copy controls for individual blocks. |
 | Accessibility | iOS exposes one element per block, with the header trait on headings and task state in the label, and one element per table row. Android text segments read as text, and tables read row by row; headings and task states have no separate role yet. | Android heading roles and task states in the feature phase |
 | RTL | Text uses natural writing direction, but indents, quote bars, and markers are drawn on the left. | Mirrored decorations in the feature phase |
 | Colors | System colors follow light and dark mode on both platforms. There is no style prop yet. | Style customization after the feature set is fixed |

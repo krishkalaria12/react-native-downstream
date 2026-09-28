@@ -20,7 +20,21 @@ import { DownstreamMarkdown } from 'react-native-downstream';
 />;
 ```
 
-The view parses with md4c and lays text out natively (TextKit on iOS, `StaticLayout` on Android). It needs the New Architecture and a development build; Expo Go cannot load it. The library never opens links itself.
+For an append-only response, keep one controller for the message and dispose it when the message is removed:
+
+```tsx
+import { createMarkdownStream, DownstreamMarkdown } from 'react-native-downstream';
+
+const stream = createMarkdownStream();
+stream.append('Hello ');
+stream.append('**world**');
+stream.finish();
+
+<DownstreamMarkdown stream={stream} />;
+// Later: stream.dispose();
+```
+
+The view parses with md4c and lays text out natively (TextKit on iOS, `StaticLayout` on Android). Streams use a native session and worker. It needs the New Architecture and a development build; Expo Go cannot load it. The library never opens links itself.
 
 ## Contributing
 
@@ -30,7 +44,7 @@ The view parses with md4c and lays text out natively (TextKit on iOS, `StaticLay
 
 ## Markdown implementation plan
 
-Phase 0 defines the [API contract](docs/api.md), [streaming behavior](docs/streaming-semantics.md), and [parser fixtures](fixtures/README.md). The static native display path is implemented; the stream controller is planned for the native session phase.
+Phase 0 defines the [API contract](docs/api.md), [streaming behavior](docs/streaming-semantics.md), and [parser fixtures](fixtures/README.md). The native display path, stream controller, and conservative incremental-tail parser are implemented. Full parsing remains the default mode while the two modes await device measurements.
 
 Run the shared C++ engine tests with `python3 cpp/tests/test_engine.py`.
 
