@@ -86,6 +86,13 @@ private class InlineCodeLineSpan(private val ascent: Int, private val descent: I
   }
 }
 
+/**
+ * Inline code in a text segment, whose background TextSegmentView draws
+ * between the code's ascent and descent. BackgroundColorSpan fills the whole
+ * line, which on a block's first line includes the block spacing above it.
+ */
+internal class InlineCodeBackgroundSpan(val color: Int, val ascent: Int, val descent: Int)
+
 internal class ContainerDecoration(
   val leading: Float,
   val width: Float,
@@ -404,6 +411,7 @@ internal class RenderedDocument(
       fun px(dp: Float) = style.px(dp)
 
       val text = SpannableStringBuilder(document.text)
+      val isTable = document.blockKind(0) == NativeDocument.KIND_TABLE_ROW
       val flags = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
 
       fun baseGap(block: Int) = when (document.spacingBefore(block)) {
@@ -528,7 +536,17 @@ internal class RenderedDocument(
           )
           text.setSpan(TypefaceSpan("monospace"), start, end, flags)
           text.setSpan(RelativeSizeSpan(CODE_SIZE / BODY_SIZE), start, end, flags)
-          text.setSpan(BackgroundColorSpan(colors.codeBackground), start, end, flags)
+          // Table cells have no block spacing, and their layouts draw spans.
+          text.setSpan(
+            if (isTable) {
+              BackgroundColorSpan(colors.codeBackground)
+            } else {
+              InlineCodeBackgroundSpan(colors.codeBackground, metrics.ascent, metrics.descent)
+            },
+            start,
+            end,
+            flags,
+          )
         }
         if (styles and NativeDocument.STYLE_IMAGE_ALT != 0) {
           text.setSpan(ForegroundColorSpan(colors.secondary), start, end, flags)
@@ -544,7 +562,6 @@ internal class RenderedDocument(
         }
       }
 
-      val isTable = document.blockKind(0) == NativeDocument.KIND_TABLE_ROW
       // A text segment that a committed chunk split off gets the gap it
       // would have inside one segment, so both stack to the same height.
       val gapBefore = when {

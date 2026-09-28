@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
 import android.os.Build
 import android.text.Layout
 import android.text.Spanned
@@ -155,6 +157,9 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
 internal class TextSegmentView(context: Context) : TextView(context) {
   private var segment: TextSegment? = null
   private var pressedLink = -1
+  private val codePaint = Paint()
+  private val codePath = Path()
+  private val codeBounds = RectF()
 
   init {
     includeFontPadding = false
@@ -186,6 +191,42 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     setTextSize(TypedValue.COMPLEX_UNIT_PX, rendered.paint.textSize)
     setTextColor(rendered.paint.color)
     setText(segment.text, BufferType.SPANNABLE)
+  }
+
+  override fun onDraw(canvas: Canvas) {
+    drawInlineCodeBackgrounds(canvas)
+    super.onDraw(canvas)
+  }
+
+  // Each line of a code span gets a rectangle from the selection path's
+  // horizontal extent, which follows wrapping and bidirectional text, and the
+  // code's own ascent and descent.
+  private fun drawInlineCodeBackgrounds(canvas: Canvas) {
+    val layout = layout ?: return
+    val text = layout.text as? Spanned ?: return
+    val spans = text.getSpans(0, text.length, InlineCodeBackgroundSpan::class.java)
+    if (spans.isEmpty()) {
+      return
+    }
+    canvas.save()
+    canvas.translate(totalPaddingLeft.toFloat(), totalPaddingTop.toFloat())
+    for (span in spans) {
+      val start = text.getSpanStart(span)
+      val end = text.getSpanEnd(span)
+      if (start >= end) continue
+      codePaint.color = span.color
+      for (line in layout.getLineForOffset(start)..layout.getLineForOffset(end - 1)) {
+        val from = maxOf(start, layout.getLineStart(line))
+        val to = minOf(end, layout.getLineEnd(line))
+        if (from >= to) continue
+        codePath.reset()
+        layout.getSelectionPath(from, to, codePath)
+        codePath.computeBounds(codeBounds, true)
+        val baseline = layout.getLineBaseline(line).toFloat()
+        canvas.drawRect(codeBounds.left, baseline + span.ascent, codeBounds.right, baseline + span.descent, codePaint)
+      }
+    }
+    canvas.restore()
   }
 
   // A touch that starts on a link belongs to the link: the TextView never
