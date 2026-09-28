@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import type { NativeSyntheticEvent } from 'react-native';
 
 import {
@@ -6,6 +12,7 @@ import {
   initialControlledSource,
 } from './controlledSource';
 import NativeDownstreamMarkdownView from './DownstreamMarkdownViewNativeComponent';
+import { getStreamState } from './createMarkdownStream';
 import type {
   MarkdownErrorCode,
   MarkdownErrorEvent,
@@ -13,11 +20,7 @@ import type {
   MarkdownViewProps,
 } from './types';
 
-/** The controlled-string input mode. The stream mode arrives with the session. */
-export type DownstreamMarkdownProps = Extract<
-  MarkdownViewProps,
-  { markdown: string }
->;
+export type DownstreamMarkdownProps = MarkdownViewProps;
 
 type NativeLinkPress = Readonly<{ url: string; start: number; end: number }>;
 type NativeMarkdownError = Readonly<{
@@ -41,13 +44,23 @@ const ERROR_CODES: ReadonlySet<string> = new Set<MarkdownErrorCode>([
  * Renders Markdown with native text layout. Parsing and measurement happen in
  * native code; no parse tree crosses into JavaScript.
  */
-export function DownstreamMarkdown({
+export function DownstreamMarkdown(props: DownstreamMarkdownProps) {
+  if (props.stream !== undefined)
+    return <StreamMarkdown {...props} stream={props.stream} />;
+  if (typeof props.markdown === 'string')
+    return <ControlledMarkdown {...props} markdown={props.markdown} />;
+  throw new Error(
+    'DownstreamMarkdown requires exactly one of markdown or stream.'
+  );
+}
+
+function ControlledMarkdown({
   markdown,
   style,
   selectable = false,
   onLinkPress,
   onError,
-}: DownstreamMarkdownProps) {
+}: Extract<MarkdownViewProps, { markdown: string }>) {
   const [controlled, setControlled] = useState(() =>
     initialControlledSource(markdown)
   );
@@ -99,6 +112,64 @@ export function DownstreamMarkdown({
       style={style}
       markdown={current.source}
       generation={generation}
+      selectable={selectable}
+      onLinkPress={onLinkPress ? handleLinkPress : undefined}
+      onMarkdownError={handleError}
+    />
+  );
+}
+
+function StreamMarkdown({
+  stream,
+  style,
+  selectable = false,
+  onLinkPress,
+  onError,
+}: Extract<
+  MarkdownViewProps,
+  { stream: NonNullable<MarkdownViewProps['stream']> }
+>) {
+  const state = getStreamState(stream);
+  const subscribe = useCallback(
+    (callback: () => void) => state.subscribe(callback),
+    [state]
+  );
+  const getRevision = useCallback(() => state.binding().revision, [state]);
+  const revision = useSyncExternalStore(subscribe, getRevision, getRevision);
+  const binding = state.binding();
+
+  useLayoutEffect(() => state.bind(), [state]);
+
+  const handleLinkPress = useCallback(
+    (event: NativeSyntheticEvent<NativeLinkPress>) => {
+      const { url, start, end } = event.nativeEvent;
+      onLinkPress?.({ url, range: { start, end } });
+    },
+    [onLinkPress]
+  );
+  const handleError = useCallback(
+    (event: NativeSyntheticEvent<NativeMarkdownError>) => {
+      const nativeError = event.nativeEvent;
+      if (nativeError.generation !== state.binding().generation) return;
+      onError?.({
+        ...nativeError,
+        code: ERROR_CODES.has(nativeError.code)
+          ? (nativeError.code as MarkdownErrorCode)
+          : 'render_failed',
+      });
+    },
+    [state, onError]
+  );
+
+  return (
+    <NativeDownstreamMarkdownView
+      style={style}
+      markdown=""
+      generation={binding.generation}
+      sessionId={binding.sessionId}
+      sessionMode={binding.mode}
+      sessionSequence={binding.readySequence}
+      sessionRevision={revision}
       selectable={selectable}
       onLinkPress={onLinkPress ? handleLinkPress : undefined}
       onMarkdownError={handleError}
