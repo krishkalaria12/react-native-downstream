@@ -2,13 +2,16 @@
 
 #import <DownstreamSpec/DownstreamSpec.h>
 #import <React/RCTBridgeModule.h>
+#import <React/RCTInvalidating.h>
 
 #include "SessionRegistry.h"
 
 #include <cmath>
 #include <cstdint>
 #include <exception>
+#include <mutex>
 #include <string>
+#include <unordered_set>
 
 using namespace facebook::react;
 
@@ -28,12 +31,23 @@ bool validCounter(double value) {
 
 } // namespace
 
-@interface DownstreamSession : NativeDownstreamSessionSpecBase <NativeDownstreamSessionSpec>
+@interface DownstreamSession : NativeDownstreamSessionSpecBase <NativeDownstreamSessionSpec, RCTInvalidating>
 @end
 
-@implementation DownstreamSession
+@implementation DownstreamSession {
+  std::mutex _sessionsMutex;
+  std::unordered_set<std::string> _sessions;
+  bool _invalidated;
+}
 
 RCT_EXPORT_MODULE(DownstreamSession)
+
+- (instancetype)init {
+  if (self = [super init]) {
+    _invalidated = false;
+  }
+  return self;
+}
 
 + (BOOL)requiresMainQueueSetup {
   return NO;
@@ -73,25 +87,52 @@ RCT_EXPORT_MODULE(DownstreamSession)
 
   const auto parseMode = [mode isEqualToString:@"incremental"] ? downstream::ParseMode::IncrementalTail
                                                               : downstream::ParseMode::FullParse;
+  const std::string id = utf8(sessionId);
   __weak DownstreamSession *weakSelf = self;
   try {
-    const bool created = downstream::SessionRegistry::create(
-        utf8(sessionId), parseMode, [weakSelf](const std::string &id, uint64_t generation, uint64_t sequence) {
-          NSString *readyId = [[NSString alloc] initWithBytes:id.data() length:id.size() encoding:NSUTF8StringEncoding];
-          if (!readyId) {
-            return;
-          }
-          dispatch_async(dispatch_get_main_queue(), ^{
-            DownstreamSession *strongSelf = weakSelf;
-            if (strongSelf && downstream::SessionRegistry::snapshot(utf8(readyId), generation, sequence)) {
-              [strongSelf emitOnSnapshotReady:@{
-                @"sessionId" : readyId,
-                @"generation" : @(generation),
-                @"sequence" : @(sequence),
-              }];
-            }
-          });
-        });
+    bool created = false;
+    {
+      std::lock_guard<std::mutex> lock(_sessionsMutex);
+      if (!_invalidated && _sessions.insert(id).second) {
+        try {
+          created = downstream::SessionRegistry::create(
+              id, parseMode, [weakSelf](const std::string &readySessionId, uint64_t generation, uint64_t sequence) {
+                NSString *readyId = [[NSString alloc] initWithBytes:readySessionId.data()
+                                                             length:readySessionId.size()
+                                                           encoding:NSUTF8StringEncoding];
+                if (!readyId) {
+                  return;
+                }
+                dispatch_async(dispatch_get_main_queue(), ^{
+                  DownstreamSession *strongSelf = weakSelf;
+                  if (!strongSelf) {
+                    return;
+                  }
+                  const std::string id = utf8(readyId);
+                  bool current = false;
+                  {
+                    std::lock_guard<std::mutex> readyLock(strongSelf->_sessionsMutex);
+                    current = !strongSelf->_invalidated && strongSelf->_sessions.count(id) != 0 &&
+                        downstream::SessionRegistry::snapshot(id, generation, sequence) != nullptr;
+                  }
+                  if (current) {
+                    [strongSelf emitOnSnapshotReady:@{
+                      @"sessionId" : readyId,
+                      @"generation" : @(generation),
+                      @"sequence" : @(sequence),
+                    }];
+                  }
+                });
+              });
+        } catch (...) {
+          _sessions.erase(id);
+          throw;
+        }
+        if (!created) {
+          _sessions.erase(id);
+        }
+      }
+    }
     if (!created) {
       [self emitErrorForSession:sessionId
                           code:@"create_failed"
@@ -117,9 +158,17 @@ RCT_EXPORT_MODULE(DownstreamSession)
                     sequence:sequence];
     return;
   }
+  const std::string id = utf8(sessionId);
   try {
-    if (!downstream::SessionRegistry::append(utf8(sessionId), utf8(chunk), static_cast<uint64_t>(generation),
-                                             static_cast<uint64_t>(sequence))) {
+    bool appended = false;
+    {
+      std::lock_guard<std::mutex> lock(_sessionsMutex);
+      if (!_invalidated && _sessions.count(id) != 0) {
+        appended = downstream::SessionRegistry::append(id, utf8(chunk), static_cast<uint64_t>(generation),
+                                                       static_cast<uint64_t>(sequence));
+      }
+    }
+    if (!appended) {
       [self emitErrorForSession:sessionId
                           code:@"append_failed"
                        message:@"Session is unavailable or append is out of order"
@@ -144,8 +193,16 @@ RCT_EXPORT_MODULE(DownstreamSession)
                     sequence:0];
     return;
   }
+  const std::string id = utf8(sessionId);
   try {
-    if (!downstream::SessionRegistry::reset(utf8(sessionId), utf8(source), static_cast<uint64_t>(generation))) {
+    bool reset = false;
+    {
+      std::lock_guard<std::mutex> lock(_sessionsMutex);
+      if (!_invalidated && _sessions.count(id) != 0) {
+        reset = downstream::SessionRegistry::reset(id, utf8(source), static_cast<uint64_t>(generation));
+      }
+    }
+    if (!reset) {
       [self emitErrorForSession:sessionId
                           code:@"reset_failed"
                        message:@"Session is unavailable or generation is stale"
@@ -170,9 +227,17 @@ RCT_EXPORT_MODULE(DownstreamSession)
                     sequence:sequence];
     return;
   }
+  const std::string id = utf8(sessionId);
   try {
-    if (!downstream::SessionRegistry::finish(utf8(sessionId), static_cast<uint64_t>(generation),
-                                             static_cast<uint64_t>(sequence))) {
+    bool finished = false;
+    {
+      std::lock_guard<std::mutex> lock(_sessionsMutex);
+      if (!_invalidated && _sessions.count(id) != 0) {
+        finished = downstream::SessionRegistry::finish(id, static_cast<uint64_t>(generation),
+                                                       static_cast<uint64_t>(sequence));
+      }
+    }
+    if (!finished) {
       [self emitErrorForSession:sessionId
                           code:@"finish_failed"
                        message:@"Session is unavailable or finish is out of order"
@@ -190,7 +255,12 @@ RCT_EXPORT_MODULE(DownstreamSession)
 
 - (void)dispose:(NSString *)sessionId {
   try {
-    downstream::SessionRegistry::dispose(utf8(sessionId));
+    const std::string id = utf8(sessionId);
+    std::lock_guard<std::mutex> lock(_sessionsMutex);
+    if (_sessions.count(id) != 0) {
+      downstream::SessionRegistry::dispose(id);
+      _sessions.erase(id);
+    }
   } catch (const std::exception &error) {
     [self emitErrorForSession:sessionId
                         code:@"dispose_failed"
@@ -198,6 +268,19 @@ RCT_EXPORT_MODULE(DownstreamSession)
                   generation:0
                     sequence:0];
   }
+}
+
+- (void)invalidate {
+  std::lock_guard<std::mutex> lock(_sessionsMutex);
+  _invalidated = true;
+  for (const std::string &id : _sessions) {
+    downstream::SessionRegistry::dispose(id);
+  }
+  _sessions.clear();
+}
+
+- (void)dealloc {
+  [self invalidate];
 }
 
 @end
