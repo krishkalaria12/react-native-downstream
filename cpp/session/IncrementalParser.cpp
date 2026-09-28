@@ -81,10 +81,12 @@ ParseResult IncrementalParser::fullParse(std::string_view source, ParseFallback 
     counters_.fallback[static_cast<size_t>(reason)]++;
   }
   if (result.status == ParseStatus::Ok) {
+    bool confirmedPrefix = false;
     // A fallback may reparse the whole source, but proven paragraph spans
     // retain their identity if both the source prefix and render model agree.
     if (!committed_.empty() && source.size() >= committedBytes_ &&
-        source.substr(0, committedBytes_) == std::string_view(source_).substr(0, committedBytes_) &&
+        (reason == ParseFallback::TailLimit ||
+         source.substr(0, committedBytes_) == std::string_view(source_).substr(0, committedBytes_)) &&
         result.document->blocks.size() >= committed_.size()) {
       bool samePrefix = true;
       for (size_t i = 0; i < committed_.size(); i++) {
@@ -98,6 +100,7 @@ ParseResult IncrementalParser::fullParse(std::string_view source, ParseFallback 
         }
       }
       if (samePrefix) {
+        confirmedPrefix = true;
         auto identified = std::make_shared<Document>(*result.document);
         for (size_t i = 0; i < committed_.size(); i++) {
           identified->blocks[i].identity = committed_[i].identity;
@@ -121,9 +124,13 @@ ParseResult IncrementalParser::fullParse(std::string_view source, ParseFallback 
       openFenceFast_ = projected == result.document->blocks[0].text;
       if (!openFenceFast_) rawCodeText_.clear();
     }
-    committed_.clear();
-    committedBytes_ = 0;
-    committedUtf16_ = 0;
+    // Tail-limit fallback can recur on every append. Keep the proven index
+    // so the same completed blocks retain their identities across updates.
+    if (reason != ParseFallback::TailLimit || !confirmedPrefix) {
+      committed_.clear();
+      committedBytes_ = 0;
+      committedUtf16_ = 0;
+    }
   }
   return result;
 }

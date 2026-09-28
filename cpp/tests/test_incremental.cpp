@@ -128,6 +128,26 @@ bool identityRangesAndSnapshots() {
       finished.document->blocks.front().identity == committed.identity;
 }
 
+bool tailLimitPreservesIdentity() {
+  IncrementalParser parser(ParseMode::IncrementalTail);
+  std::string source = "first paragraph\n\n";
+  const auto first = parser.update(source, true, false);
+  if (first.status != ParseStatus::Ok || first.document->blocks.size() != 1) return false;
+  const auto identity = first.document->blocks[0].identity;
+  const auto range = first.document->blocks[0].sourceRange;
+  if (identity == 0) return false;
+  source += std::string(70 * 1024, 'x');
+  const auto fallback = parser.update(source, true, false);
+  if (fallback.status != ParseStatus::Ok || fallback.document->blocks[0].identity != identity ||
+      parser.counters().fallbackCount(ParseFallback::TailLimit) != 1) return false;
+  source += "y";
+  const auto repeated = parser.update(source, true, false);
+  return repeated.status == ParseStatus::Ok && repeated.document->blocks[0].identity == identity &&
+      repeated.document->blocks[0].sourceRange == range &&
+      parser.counters().fallbackCount(ParseFallback::TailLimit) == 2 &&
+      equal(*repeated.document, *parseMarkdown(source).document);
+}
+
 bool openFencePath() {
   const std::vector<std::string> chunks = {"```\n", "one", "\n", "two", "\n", "```", "\n\n", "after"};
   if (!check(chunks, "open fence")) return false;
@@ -162,5 +182,5 @@ int main() {
     chunks.push_back(std::move(chunk));
   }
   return check(chunks, "fixture") && seededCases() && fastPathAndFallbacks() &&
-      identityRangesAndSnapshots() && openFencePath() ? 0 : 1;
+      identityRangesAndSnapshots() && tailLimitPreservesIdentity() && openFencePath() ? 0 : 1;
 }
