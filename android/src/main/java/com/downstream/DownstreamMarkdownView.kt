@@ -362,6 +362,7 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
   private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
   private var segment: TableSegment? = null
   private var sourceEpoch = -1
+  private var pendingLeadingDistance: Int? = 0
 
   init {
     setWillNotDraw(false)
@@ -375,19 +376,26 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     }
     val previous = this.segment
     val sameTable = this.sourceEpoch == sourceEpoch && previous != null &&
+      previous.rtl == segment.rtl &&
       previous.accessibilityRows.firstOrNull() == segment.accessibilityRows.firstOrNull() &&
       (previous.identity == segment.identity || previous.identity == 0L || segment.identity == 0L)
+    val previousRange = (previous?.tableWidth ?: 0).minus(scroll.width).coerceAtLeast(0)
+    pendingLeadingDistance = if (sameTable) {
+      pendingLeadingDistance ?: if (segment.rtl) (previousRange - scroll.scrollX).coerceAtLeast(0) else scroll.scrollX
+    } else {
+      0
+    }
     this.segment = segment
     this.sourceEpoch = sourceEpoch
     grid.updateSegment(segment, resetFocus = !sameTable)
-    if (!sameTable) scroll.scrollTo(0, 0)
     requestLayout()
     invalidate()
   }
 
   fun resetScroll() {
     sourceEpoch = -1
-    scroll.scrollTo(0, 0)
+    pendingLeadingDistance = 0
+    requestLayout()
   }
 
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -395,6 +403,12 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     val leading = segment.contentLeading.toInt()
     val width = (right - left - leading).coerceAtLeast(0)
     val height = bottom - top
+    val oldRange = (segment.tableWidth - scroll.width).coerceAtLeast(0)
+    val distance = pendingLeadingDistance ?: if (segment.rtl) {
+      (oldRange - scroll.scrollX).coerceAtLeast(0)
+    } else {
+      scroll.scrollX
+    }
     scroll.measure(
       MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
       MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY),
@@ -406,6 +420,9 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
       MeasureSpec.makeMeasureSpec(segment.tableHeight, MeasureSpec.EXACTLY),
     )
     grid.layout(0, 0, segment.tableWidth, segment.tableHeight)
+    val newRange = (segment.tableWidth - width).coerceAtLeast(0)
+    scroll.scrollTo((if (segment.rtl) newRange - distance else distance).coerceIn(0, newRange), 0)
+    pendingLeadingDistance = null
   }
 
   override fun onDraw(canvas: Canvas) {
@@ -468,6 +485,7 @@ private class TableGridView(context: Context) : View(context) {
   private fun cellOrigin(segment: TableSegment, row: Int, column: Int): Pair<Int, Int> {
     var x = 0
     for (i in 0 until column) x += segment.columnWidths[i]
+    if (segment.rtl) x = segment.tableWidth - 1 - x - segment.columnWidths[column]
     return Pair(x + segment.paddingHorizontal, segment.rowTops[row] + segment.paddingVertical)
   }
 
@@ -494,10 +512,10 @@ private class TableGridView(context: Context) : View(context) {
       y += height
       canvas.drawRect(0f, y, width, y + 1f, paint)
     }
-    var x = 0f
-    canvas.drawRect(0f, 0f, 1f, y, paint)
+    var x = if (segment.rtl) width else 0f
+    canvas.drawRect(x, 0f, x + 1f, y, paint)
     for (columnWidth in segment.columnWidths) {
-      x += columnWidth
+      x += if (segment.rtl) -columnWidth else columnWidth
       canvas.drawRect(x, 0f, x + 1f, y, paint)
     }
   }
