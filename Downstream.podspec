@@ -2,6 +2,8 @@ require "json"
 
 package = JSON.parse(File.read(File.join(__dir__, "package.json")))
 
+MD4C_SYMBOL_PREFIXES = "md_parse=downstream_md_parse entity_lookup=downstream_entity_lookup"
+
 Pod::Spec.new do |s|
   s.name         = "Downstream"
   s.version      = package["version"]
@@ -30,7 +32,9 @@ Pod::Spec.new do |s|
       "\"$(PODS_TARGET_SRCROOT)/cpp/fabric\"",
       "\"$(PODS_TARGET_SRCROOT)/cpp/md4c\"",
     ].join(" "),
-    "GCC_PREPROCESSOR_DEFINITIONS" => "$(inherited) MD4C_USE_UTF8=1",
+    # Other libraries, such as Enriched Markdown, link their own md4c. Prefixing
+    # ours keeps the linker from binding our calls to theirs.
+    "GCC_PREPROCESSOR_DEFINITIONS" => "$(inherited) MD4C_USE_UTF8=1 #{MD4C_SYMBOL_PREFIXES}",
     "CLANG_CXX_LANGUAGE_STANDARD" => "c++20",
   }
 

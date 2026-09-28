@@ -5,6 +5,12 @@
 
 #include <md4c.h>
 
+// Apps can link other md4c copies (Enriched Markdown vendors one). Unprefixed
+// symbols would let the linker bind md_parse to a different md4c version.
+#ifndef md_parse
+#error "Build md4c with md_parse=downstream_md_parse; see Downstream.podspec and CMakeLists.txt."
+#endif
+
 extern "C" {
 #include <entity.h>
 }

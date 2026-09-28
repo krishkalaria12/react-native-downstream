@@ -24,6 +24,12 @@ TASK = {0: None, 1: "unchecked", 2: "checked"}
 STRONG, EMPHASIS, STRIKE, CODE, LINK, IMAGE_ALT, FOOTNOTE = (1 << i for i in range(7))
 
 BUILD_DIR = None
+# Mirrors the prefixes in Downstream.podspec and android/src/main/jni/CMakeLists.txt.
+SYMBOL_PREFIXES = [
+    "-Dmd_parse=downstream_md_parse",
+    "-Dentity_lookup=downstream_entity_lookup",
+    "-Dmd_html=downstream_md_html",
+]
 
 
 def setUpModule():
@@ -36,19 +42,19 @@ def setUpModule():
     for source in ("md4c.c", "entity.c", "md4c-html.c"):
         target = BUILD_DIR / (source + ".o")
         subprocess.run(
-            [cc, "-std=c11", "-O1", "-DMD4C_USE_UTF8", "-c", md4c / source, "-o", target],
+            [cc, "-std=c11", "-O1", "-DMD4C_USE_UTF8", *SYMBOL_PREFIXES, "-c", md4c / source, "-o", target],
             check=True,
         )
         objects.append(target)
     engine = [CPP / "downstream" / name for name in ("MarkdownParser.cpp", "Unicode.cpp", "LinkPolicy.cpp")]
     subprocess.run(
-        [cxx, "-std=c++20", "-O1", "-Wall", "-Wextra", "-Werror", "-DMD4C_USE_UTF8",
+        [cxx, "-std=c++20", "-O1", "-Wall", "-Wextra", "-Werror", "-DMD4C_USE_UTF8", *SYMBOL_PREFIXES,
          f"-I{md4c}", f"-I{CPP / 'downstream'}", CPP / "tests" / "dump_document.cpp", *engine,
          objects[0], objects[1], "-o", BUILD_DIR / "dump_document"],
         check=True,
     )
     subprocess.run(
-        [cc, "-std=c11", "-O1", "-DMD4C_USE_UTF8", f"-I{md4c}", CPP / "tests" / "oracle_html.c",
+        [cc, "-std=c11", "-O1", "-DMD4C_USE_UTF8", *SYMBOL_PREFIXES, f"-I{md4c}", CPP / "tests" / "oracle_html.c",
          *objects, "-o", BUILD_DIR / "oracle_html"],
         check=True,
     )
