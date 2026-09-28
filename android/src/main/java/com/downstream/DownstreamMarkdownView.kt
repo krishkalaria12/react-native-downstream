@@ -11,7 +11,6 @@ import android.graphics.RectF
 import android.os.Build
 import android.text.Layout
 import android.text.Spanned
-import android.text.SpannableStringBuilder
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -195,6 +194,8 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
  * A text segment in a TextView configured like the measuring StaticLayout
  * (RenderedDocument.buildLayout), which gives selection and text navigation.
  */
+private class TextReadingPart(val piece: AccessibleTextPiece, val heading: Boolean, val taskState: Int)
+
 @SuppressLint("ViewConstructor")
 internal class TextSegmentView(context: Context) : TextView(context) {
   private var segment: TextSegment? = null
@@ -202,7 +203,8 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   private val codePaint = Paint()
   private val codePath = Path()
   private val codeBounds = RectF()
-  private val accessibility = MarkdownAccessibility(this, { segment?.accessibleBlocks?.size ?: 0 }) { accessibleBlock(it) }
+  private var readingParts = emptyList<TextReadingPart>()
+  private val accessibility = MarkdownAccessibility(this, { readingParts.size }) { accessiblePart(it) }
 
   init {
     includeFontPadding = false
@@ -234,6 +236,7 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     setTextSize(TypedValue.COMPLEX_UNIT_PX, rendered.paint.textSize)
     setTextColor(rendered.paint.color)
     setText(segment.text, BufferType.SPANNABLE)
+    readingParts = buildReadingParts(segment)
     accessibility.contentChanged()
   }
 
@@ -241,39 +244,52 @@ internal class TextSegmentView(context: Context) : TextView(context) {
 
   override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
     super.onInitializeAccessibilityNodeInfo(info)
-    // The provider exposes one reading stop per Markdown block.
+    // The provider exposes text and links in source order.
     info.text = null
     info.contentDescription = null
     info.isFocusable = false
   }
 
-  private fun accessibleBlock(index: Int): MarkdownAccessibility.Entry? {
+  private fun buildReadingParts(segment: TextSegment): List<TextReadingPart> = buildList {
+    for (block in segment.accessibleBlocks) {
+      val start = block.start.coerceIn(0, segment.text.length)
+      val end = block.end.coerceIn(start, segment.text.length)
+      linkPieces(segment.text, start, end).forEachIndexed { index, piece ->
+        add(TextReadingPart(piece, index == 0 && block.heading,
+          if (index == 0) block.taskState else 0))
+      }
+    }
+  }
+
+  private fun accessiblePart(index: Int): MarkdownAccessibility.Entry? {
     val segment = segment ?: return null
     val layout = layout ?: return null
-    val block = segment.accessibleBlocks.getOrNull(index) ?: return null
-    val start = block.start.coerceIn(0, segment.text.length)
-    val end = block.end.coerceIn(start, segment.text.length)
-    val visible = SpannableStringBuilder(segment.text, start, end)
-    val label = when (block.taskState) {
-      NativeDocument.TASK_CHECKED -> SpannableStringBuilder("Checked, ").append(visible)
-      NativeDocument.TASK_UNCHECKED -> SpannableStringBuilder("Unchecked, ").append(visible)
+    val part = readingParts.getOrNull(index) ?: return null
+    val start = part.piece.start
+    val end = part.piece.end
+    val visible = segment.text.subSequence(start, end).toString()
+    val label = when (part.taskState) {
+      NativeDocument.TASK_CHECKED -> "Checked, $visible"
+      NativeDocument.TASK_UNCHECKED -> "Unchecked, $visible"
       else -> visible
     }
     val firstLine = layout.getLineForOffset(start)
     val lastLine = layout.getLineForOffset(if (end > start) end - 1 else start)
-    val links = segment.text.getSpans(start, end, LinkSpan::class.java)
+    val selectionPath = Path()
+    layout.getSelectionPath(start, end, selectionPath)
+    val selectedBounds = RectF()
+    selectionPath.computeBounds(selectedBounds, true)
+    val bounds = Rect().also { selectedBounds.roundOut(it) }
+    if (bounds.isEmpty) {
+      bounds.set(0, layout.getLineTop(firstLine), width, layout.getLineBottom(lastLine))
+    }
+    bounds.offset(0, -scrollY)
+    val link = part.piece.linkIndex
     return MarkdownAccessibility.Entry(
       text = label,
-      bounds = Rect(0, layout.getLineTop(firstLine) - scrollY, width,
-        layout.getLineBottom(lastLine) - scrollY),
-      heading = block.heading,
-      actions = links.map { link ->
-        val labelStart = segment.text.getSpanStart(link).coerceAtLeast(start)
-        val labelEnd = segment.text.getSpanEnd(link).coerceAtMost(end)
-        MarkdownAccessibility.Action("Open link: ${segment.text.subSequence(labelStart, labelEnd)}") {
-          findHost()?.pressLink(link.index)
-        }
-      },
+      bounds = bounds,
+      heading = part.heading,
+      linkPress = if (link == null) null else ({ findHost()?.pressLink(link) }),
     )
   }
 
@@ -449,37 +465,98 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
   }
 }
 
+private class TableReadingPart(
+  val text: String,
+  val row: Int,
+  val column: Int?,
+  val piece: AccessibleTextPiece?,
+  val heading: Boolean,
+)
+
 private class TableGridView(context: Context) : View(context) {
-  private val accessibility = MarkdownAccessibility(this, { segment?.accessibilityRows?.size ?: 0 }) { accessibleRow(it) }
+  private var readingParts = emptyList<TableReadingPart>()
+  private val accessibility = MarkdownAccessibility(this, { readingParts.size }) { accessiblePart(it) }
   private var segment: TableSegment? = null
   private val paint = Paint()
   private var pressedLink = -1
 
   fun updateSegment(segment: TableSegment, resetFocus: Boolean) {
     this.segment = segment
+    readingParts = buildReadingParts(segment)
     invalidate()
     accessibility.contentChanged(resetFocus)
   }
 
   override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = accessibility
 
-  private fun accessibleRow(index: Int): MarkdownAccessibility.Entry? {
-    val segment = segment ?: return null
-    val label = segment.accessibilityRows.getOrNull(index) ?: return null
-    val top = segment.rowTops[index]
-    val bottom = segment.rowTops[index + 1]
-    val actions = segment.cells[index].flatMap { cell ->
-      val text = cell.text as? Spanned ?: return@flatMap emptyList()
-      text.getSpans(0, text.length, LinkSpan::class.java).map { link ->
-        val linkedText = text.subSequence(text.getSpanStart(link), text.getSpanEnd(link))
-        MarkdownAccessibility.Action("Open link: $linkedText") {
-          var parent = parent
-          while (parent != null && parent !is DownstreamMarkdownView) parent = parent.parent
-          (parent as? DownstreamMarkdownView)?.pressLink(link.index)
+  private fun buildReadingParts(segment: TableSegment): List<TableReadingPart> = buildList {
+    segment.cells.forEachIndexed { row, cells ->
+      val plain = StringBuilder()
+      var first = true
+      fun appendPart(value: String, column: Int?, piece: AccessibleTextPiece?) {
+        val heading = first && segment.hasHeader && row == 0
+        add(TableReadingPart(if (heading) "Header: $value" else value, row, column, piece, heading))
+        first = false
+      }
+      fun flushPlain() {
+        if (plain.isNotEmpty()) {
+          appendPart(plain.toString(), null, null)
+          plain.clear()
         }
       }
+      cells.forEachIndexed { column, cell ->
+        if (column > 0) plain.append(", ")
+        val text = cell.text
+        if (text is Spanned) {
+          for (piece in linkPieces(text, 0, text.length)) {
+            val value = text.subSequence(piece.start, piece.end).toString()
+            if (piece.linkIndex == null) {
+              plain.append(value)
+            } else {
+              flushPlain()
+              appendPart(value, column, piece)
+            }
+          }
+        } else {
+          plain.append(text)
+        }
+      }
+      flushPlain()
+      if (first) appendPart("", null, null)
     }
-    return MarkdownAccessibility.Entry(label, Rect(0, top, segment.tableWidth, bottom), actions = actions)
+  }
+
+  private fun accessiblePart(index: Int): MarkdownAccessibility.Entry? {
+    val segment = segment ?: return null
+    val part = readingParts.getOrNull(index) ?: return null
+    val top = segment.rowTops[part.row]
+    val bottom = segment.rowTops[part.row + 1]
+    val bounds = Rect(0, top, segment.tableWidth, bottom)
+    val column = part.column
+    val piece = part.piece
+    if (column != null && piece != null) {
+      val cell = segment.cells[part.row][column]
+      val selectionPath = Path()
+      cell.getSelectionPath(piece.start, piece.end, selectionPath)
+      val selectedBounds = RectF()
+      selectionPath.computeBounds(selectedBounds, true)
+      if (!selectedBounds.isEmpty) {
+        selectedBounds.roundOut(bounds)
+        val (x, y) = cellOrigin(segment, part.row, column)
+        bounds.offset(x, y)
+      }
+    }
+    val link = piece?.linkIndex
+    return MarkdownAccessibility.Entry(
+      text = part.text,
+      bounds = bounds,
+      heading = part.heading,
+      linkPress = if (link == null) null else ({
+        var parent = parent
+        while (parent != null && parent !is DownstreamMarkdownView) parent = parent.parent
+        (parent as? DownstreamMarkdownView)?.pressLink(link)
+      }),
+    )
   }
 
   private fun cellOrigin(segment: TableSegment, row: Int, column: Int): Pair<Int, Int> {

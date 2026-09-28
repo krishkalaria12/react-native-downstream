@@ -7,8 +7,27 @@ import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeProvider
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 
-/** Virtual reading stops for blocks and table rows inside one native view. */
+internal class AccessibleTextPiece(val start: Int, val end: Int, val linkIndex: Int? = null)
+
+/** Split visible text around links without repeating link labels in TalkBack. */
+internal fun linkPieces(text: android.text.Spanned, start: Int, end: Int): List<AccessibleTextPiece> {
+  val pieces = ArrayList<AccessibleTextPiece>()
+  var cursor = start
+  val links = text.getSpans(start, end, LinkSpan::class.java).sortedBy { text.getSpanStart(it) }
+  for (link in links) {
+    val linkStart = text.getSpanStart(link).coerceIn(cursor, end)
+    val linkEnd = text.getSpanEnd(link).coerceIn(linkStart, end)
+    if (cursor < linkStart) pieces.add(AccessibleTextPiece(cursor, linkStart))
+    if (linkStart < linkEnd) pieces.add(AccessibleTextPiece(linkStart, linkEnd, link.index))
+    cursor = linkEnd
+  }
+  if (cursor < end || pieces.isEmpty()) pieces.add(AccessibleTextPiece(cursor, end))
+  return pieces
+}
+
+/** Virtual reading stops for text and links inside one native view. */
 internal class MarkdownAccessibility(
   private val host: View,
   private val entryCount: () -> Int,
@@ -18,10 +37,8 @@ internal class MarkdownAccessibility(
     val text: CharSequence,
     val bounds: Rect,
     val heading: Boolean = false,
-    val actions: List<Action> = emptyList(),
+    val linkPress: (() -> Unit)? = null,
   )
-
-  internal class Action(val label: String, val perform: () -> Unit)
 
   private var focused = -1
 
@@ -47,6 +64,12 @@ internal class MarkdownAccessibility(
         collectionItemInfo = AccessibilityNodeInfo.CollectionItemInfo.obtain(0, 1, 0, 1, true)
       }
       isFocusable = true
+      if (entry.linkPress != null) {
+        isClickable = true
+        addAction(AccessibilityNodeInfo.ACTION_CLICK)
+        AccessibilityNodeInfoCompat.wrap(this).roleDescription =
+          host.context.getString(com.facebook.react.R.string.link_description)
+      }
       isVisibleToUser = Rect.intersects(bounds, Rect(0, 0, host.width, host.height))
       isAccessibilityFocused = focused == virtualViewId
       setParent(host)
@@ -54,9 +77,6 @@ internal class MarkdownAccessibility(
       setBoundsInScreen(screenBounds)
       addAction(if (focused == virtualViewId) AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS
         else AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
-      entry.actions.forEachIndexed { index, action ->
-        addAction(AccessibilityNodeInfo.AccessibilityAction(CUSTOM_ACTION_BASE + index, action.label))
-      }
     }
   }
 
@@ -78,11 +98,13 @@ internal class MarkdownAccessibility(
         sendEvent(virtualViewId, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED, entry.text)
         return true
       }
+      AccessibilityNodeInfo.ACTION_CLICK -> {
+        val press = entry.linkPress ?: return false
+        press()
+        return true
+      }
     }
-    val custom = action - CUSTOM_ACTION_BASE
-    val callback = entry.actions.getOrNull(custom) ?: return false
-    callback.perform()
-    return true
+    return false
   }
 
   fun contentChanged(resetFocus: Boolean = false) {
@@ -97,9 +119,5 @@ internal class MarkdownAccessibility(
     event.text.add(text)
     event.setSource(host, id)
     host.parent?.requestSendAccessibilityEvent(host, event)
-  }
-
-  companion object {
-    private const val CUSTOM_ACTION_BASE = 0x01000000
   }
 }
