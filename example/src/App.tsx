@@ -1,5 +1,12 @@
 import { useState } from 'react';
-import { Button, SafeAreaView, StyleSheet, View } from 'react-native';
+import {
+  Button,
+  Platform,
+  SafeAreaView,
+  StatusBar,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import { GalleryScreen } from './gallery/GalleryScreen';
 import { StreamingChat } from './StreamingChat';
@@ -18,6 +25,11 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#fff' },
+  // SafeAreaView pads only on iOS; Android draws under the status bar.
+  root: {
+    flex: 1,
+    backgroundColor: '#fff',
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
+  },
   navigation: { flexDirection: 'row', justifyContent: 'space-around' },
 });
