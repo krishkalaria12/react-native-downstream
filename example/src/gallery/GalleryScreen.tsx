@@ -7,6 +7,7 @@ import {
 } from 'react-native-downstream';
 
 import { fixtures, fixtureSource } from './fixtures';
+import { featureCases } from './featureCases';
 import { featureSample } from './sample';
 
 export function GalleryScreen() {
@@ -29,6 +30,17 @@ export function GalleryScreen() {
           onLinkPress={handleLink}
           onError={handleError}
         />
+        {featureCases.map((feature) => (
+          <View key={feature.id} style={styles.card} testID={feature.id}>
+            <Text style={styles.label}>{feature.title}</Text>
+            <DownstreamMarkdown
+              selectable
+              markdown={feature.markdown}
+              onLinkPress={handleLink}
+              onError={handleError}
+            />
+          </View>
+        ))}
         {fixtures.map((fixture) => (
           <View key={fixture.id} style={styles.card}>
             <Text style={styles.label}>{fixture.id}</Text>
