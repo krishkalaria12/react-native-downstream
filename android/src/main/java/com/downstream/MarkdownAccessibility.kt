@@ -80,6 +80,7 @@ internal class MarkdownAccessibility(
         collectionItemInfo = AccessibilityNodeInfo.CollectionItemInfo.obtain(0, 1, 0, 1, true)
       }
       isFocusable = true
+      isEnabled = host.isEnabled
       if (entry.linkPress != null) {
         isClickable = true
         addAction(AccessibilityNodeInfo.ACTION_CLICK)
