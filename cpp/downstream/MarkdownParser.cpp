@@ -82,7 +82,7 @@ class DocumentBuilder {
 public:
   explicit DocumentBuilder(std::string_view source)
       : source_(source), offsets_(source), document_(std::make_shared<Document>()) {
-    document_->id = nextDocumentId.fetch_add(1, std::memory_order_relaxed);
+    document_->id = allocateDocumentId();
   }
 
   int enterBlock(MD_BLOCKTYPE type, void *detail) {
@@ -696,6 +696,10 @@ private:
 };
 
 } // namespace
+
+uint64_t allocateDocumentId() {
+  return nextDocumentId.fetch_add(1, std::memory_order_relaxed);
+}
 
 ParseResult parseMarkdown(std::string_view source) {
   ParseResult result;

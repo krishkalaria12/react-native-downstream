@@ -97,6 +97,11 @@ struct TableCell {
 /// A leaf block: the unit of text layout. Container blocks (quotes, lists)
 /// are flattened into each leaf's container path.
 struct Block {
+  /// Nonzero only for a completed block whose source boundary is proven
+  /// stable. The same identity survives later append-only snapshots.
+  uint64_t identity{0};
+  /// UTF-16 range in canonical source when identity is nonzero.
+  SourceRange sourceRange;
   BlockKind kind{BlockKind::Paragraph};
   uint8_t headingLevel{0};
   bool tableHeader{false};

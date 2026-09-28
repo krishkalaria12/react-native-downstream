@@ -9,6 +9,7 @@ compiler, then checks final documents against fixtures/.
 import json
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -58,6 +59,13 @@ def setUpModule():
          *objects, "-o", BUILD_DIR / "oracle_html"],
         check=True,
     )
+    subprocess.run(
+        [cxx, "-std=c++20", "-O1", "-Wall", "-Wextra", "-Werror", "-DMD4C_USE_UTF8", *SYMBOL_PREFIXES,
+         f"-I{md4c}", f"-I{CPP / 'downstream'}", f"-I{CPP / 'session'}",
+         CPP / "tests" / "test_incremental.cpp", CPP / "session" / "IncrementalParser.cpp", *engine,
+         objects[0], objects[1], "-o", BUILD_DIR / "test_incremental"],
+        check=True,
+    )
 
 
 def tearDownModule():
@@ -93,6 +101,14 @@ class FixtureTests(unittest.TestCase):
                     [BUILD_DIR / "oracle_html"], input=source, capture_output=True, check=True
                 ).stdout
                 self.assertEqual(html, (FIXTURES / fixture["expectedHtml"]).read_bytes())
+
+    def test_incremental_matches_full_parse_at_every_prefix(self):
+        for fixture in self.manifest["fixtures"]:
+            with self.subTest(fixture=fixture["id"]):
+                chunks = [chunk.encode("utf-8") for chunk in fixture["chunks"]]
+                for sequence in (chunks, [b"plain prefix\n\n", *chunks]):
+                    framed = b"".join(struct.pack("<I", len(chunk)) + chunk for chunk in sequence)
+                    subprocess.run([BUILD_DIR / "test_incremental"], input=framed, check=True, capture_output=True)
 
     def test_final_checkpoints(self):
         for fixture in self.manifest["fixtures"]:

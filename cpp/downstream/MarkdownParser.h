@@ -30,6 +30,9 @@ struct ParseResult {
 /// Thread-safe; each call is independent.
 ParseResult parseMarkdown(std::string_view source);
 
+/// Allocates an ID for a derived immutable snapshot without reparsing it.
+uint64_t allocateDocumentId();
+
 /// Stable machine-readable code for the public error contract.
 const char *errorCode(ParseStatus status);
 
