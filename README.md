@@ -26,7 +26,7 @@ const result = await multiply(3, 7);
 
 ## Markdown implementation plan
 
-Phase 0 defines the proposed [API contract](docs/api.md), [streaming behavior](docs/streaming-semantics.md), and [parser fixtures](benchmarks/fixtures/README.md). The Markdown view and stream controller are planned runtime APIs; this package still exports only `multiply`.
+Phase 0 defines the proposed [API contract](docs/api.md), [streaming behavior](docs/streaming-semantics.md), and [parser fixtures](fixtures/README.md). The Markdown view and stream controller are planned runtime APIs; this package still exports only `multiply`.
 
 ## License
 

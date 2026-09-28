@@ -32,7 +32,7 @@ cc -O2 -DMD_VERSION_MAJOR=0 -DMD_VERSION_MINOR=6 -DMD_VERSION_RELEASE=0 -Isrc \
   src/md4c.c src/md4c-html.c src/entity.c md2html/md2html.c md2html/cmdline.c \
   -o /tmp/md2html-fixtures
 cd -
-python3 benchmarks/fixtures/validate.py --md2html /tmp/md2html-fixtures
+python3 fixtures/validate.py --md2html /tmp/md2html-fixtures
 ```
 
 The validator checks every chunk and checkpoint against the source, then

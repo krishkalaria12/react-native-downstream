@@ -52,6 +52,7 @@ Inputs must be well-formed Unicode. An isolated surrogate in a chunk or `reset` 
 
 The initial limits are 1 MiB UTF-8 per source, 64 KiB UTF-8 per append, 256 KiB queued before native acknowledgement, and 128 KiB of speculative preview input. Limit violations report `input_limit` and preserve the last accepted source. If the uncertain tail exceeds 128 KiB, parse the full source without speculative repair; it is not a reason to discard accepted input. Parser nesting and output allocation require measured limits during native implementation. The renderer will cap concurrent image requests at four and skip highlighting above 64 KiB of code when those later features exist. These are contract defaults, not measured device results.
 
-## Platform and baseline target
+## Platform target
 
-The first release targets iOS and Android with the New Architecture enabled. Phase 1's fixed baseline device targets are a physical iPhone 13 and Pixel 6a, both measured in release builds at their native refresh rates. Record exact OS versions, thermal state, and hardware identifiers with each trace. Device availability and any substitutions must be recorded before comparison; no physical device or runtime compatibility has been verified in Phase 0.
+The first release targets iOS and Android with the New Architecture enabled. The first supported app is the repository's React Native 0.83.2 and Expo 55 example, using a development build.
+

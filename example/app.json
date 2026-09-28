@@ -6,12 +6,6 @@
     "orientation": "default",
     "newArchEnabled": true,
     "plugins": [
-      [
-        "react-native-enriched-markdown",
-        {
-          "enableMath": false
-        }
-      ],
       "./plugins/withIosSceneLifecycle"
     ],
     "icon": "./assets/icon.png",
