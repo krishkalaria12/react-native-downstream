@@ -26,7 +26,6 @@ export interface NativeProps extends ViewProps {
   generation?: CodegenTypes.WithDefault<CodegenTypes.Int32, 0>;
   /** A session ID replaces markdown as the view's input. */
   sessionId?: string;
-  sessionMode?: string;
   sessionSequence?: CodegenTypes.WithDefault<CodegenTypes.Int32, 0>;
   /** Changes even when finish produces a second snapshot at the same sequence. */
   sessionRevision?: CodegenTypes.WithDefault<CodegenTypes.Int32, 0>;

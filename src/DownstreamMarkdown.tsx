@@ -167,7 +167,6 @@ function StreamMarkdown({
       markdown=""
       generation={binding.generation}
       sessionId={binding.sessionId}
-      sessionMode={binding.mode}
       sessionSequence={binding.readySequence}
       sessionRevision={revision}
       selectable={selectable}
