@@ -13,15 +13,29 @@ internal class AccessibleTextPiece(val start: Int, val end: Int, val linkIndex: 
 
 /** Split visible text around links without repeating link labels in TalkBack. */
 internal fun linkPieces(text: android.text.Spanned, start: Int, end: Int): List<AccessibleTextPiece> {
+  val linkRanges = ArrayList<AccessibleTextPiece>()
+  val spans = text.getSpans(start, end, LinkSpan::class.java).sortedWith(
+    compareBy<LinkSpan> { text.getSpanStart(it) }.thenByDescending { text.getSpanEnd(it) },
+  )
+  for (span in spans) {
+    val spanStart = text.getSpanStart(span).coerceIn(start, end)
+    val spanEnd = text.getSpanEnd(span).coerceIn(spanStart, end)
+    val previous = linkRanges.lastOrNull()
+    if (previous != null && previous.linkIndex == span.index && spanStart <= previous.end) {
+      linkRanges[linkRanges.lastIndex] = AccessibleTextPiece(previous.start, maxOf(previous.end, spanEnd), span.index)
+    } else {
+      // Link spans cannot overlap in Markdown. If one does, keep the earlier
+      // occurrence's text and expose only the still-uncovered suffix.
+      val uncoveredStart = maxOf(spanStart, previous?.end ?: start)
+      if (uncoveredStart < spanEnd) linkRanges.add(AccessibleTextPiece(uncoveredStart, spanEnd, span.index))
+    }
+  }
   val pieces = ArrayList<AccessibleTextPiece>()
   var cursor = start
-  val links = text.getSpans(start, end, LinkSpan::class.java).sortedBy { text.getSpanStart(it) }
-  for (link in links) {
-    val linkStart = text.getSpanStart(link).coerceIn(cursor, end)
-    val linkEnd = text.getSpanEnd(link).coerceIn(linkStart, end)
-    if (cursor < linkStart) pieces.add(AccessibleTextPiece(cursor, linkStart))
-    if (linkStart < linkEnd) pieces.add(AccessibleTextPiece(linkStart, linkEnd, link.index))
-    cursor = linkEnd
+  for (link in linkRanges) {
+    if (cursor < link.start) pieces.add(AccessibleTextPiece(cursor, link.start))
+    pieces.add(link)
+    cursor = link.end
   }
   if (cursor < end || pieces.isEmpty()) pieces.add(AccessibleTextPiece(cursor, end))
   return pieces
@@ -54,6 +68,8 @@ internal class MarkdownAccessibility(
     val location = IntArray(2)
     host.getLocationOnScreen(location)
     val screenBounds = Rect(bounds).apply { offset(location[0], location[1]) }
+    val visibleBounds = Rect()
+    val visible = host.getLocalVisibleRect(visibleBounds) && Rect.intersects(bounds, visibleBounds)
     return AccessibilityNodeInfo.obtain(host, virtualViewId).apply {
       packageName = host.context.packageName
       className = "android.widget.TextView"
@@ -70,7 +86,7 @@ internal class MarkdownAccessibility(
         AccessibilityNodeInfoCompat.wrap(this).roleDescription =
           host.context.getString(com.facebook.react.R.string.link_description)
       }
-      isVisibleToUser = Rect.intersects(bounds, Rect(0, 0, host.width, host.height))
+      isVisibleToUser = visible
       isAccessibilityFocused = focused == virtualViewId
       setParent(host)
       setBoundsInParent(bounds)
