@@ -160,6 +160,6 @@ export function traceEnvironment() {
     rendererUpdateMethod:
       'React commit or native session append; visible frame is a JS estimate',
     durationMethod:
-      'runDurationMs excludes pauses; wallDurationMs includes pauses',
+      'runDurationMs ends at the second JS animation frame callback after final readiness and excludes pauses; wallDurationMs includes pauses',
   };
 }

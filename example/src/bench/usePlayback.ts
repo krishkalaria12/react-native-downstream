@@ -6,6 +6,7 @@ import {
 } from '../../../src/createMarkdownStream';
 import type { Fixture } from './fixtures';
 import {
+  afterTwoAnimationFrames,
   allFinalSnapshotsReady,
   resetSessionControllers,
 } from './sessionLifecycle';
@@ -91,6 +92,7 @@ interface ActiveRun {
   completionRequested: boolean;
   controllers: MarkdownStreamController[];
   unsubscribeSnapshots: (() => void)[];
+  cancelCompletionFrame?: () => void;
   elapsedMs: number;
   resumedAt: number;
   timer?: ReturnType<typeof setTimeout>;
@@ -143,6 +145,8 @@ export function usePlayback() {
     (run: ActiveRun) => {
       stopTimer(run);
       run.trace.stopFrames();
+      run.cancelCompletionFrame?.();
+      run.cancelCompletionFrame = undefined;
       run.unsubscribeSnapshots.forEach((unsubscribe) => unsubscribe());
       run.unsubscribeSnapshots = [];
     },
@@ -180,7 +184,15 @@ export function usePlayback() {
         )
       )
         return;
-      completeRun(run);
+      if (run.cancelCompletionFrame) return;
+      run.cancelCompletionFrame = afterTwoAnimationFrames(() => {
+        run.cancelCompletionFrame = undefined;
+        if (active.current !== run || run.status !== 'finishing') return;
+        run.trace.mark('completion-frame-estimate', {
+          sequence: run.cursor,
+        });
+        completeRun(run);
+      });
     },
     [completeRun]
   );

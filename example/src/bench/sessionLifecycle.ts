@@ -12,3 +12,17 @@ export function allFinalSnapshotsReady(
 ): boolean {
   return readySequences.every((sequence) => sequence >= finalSequence);
 }
+
+export function afterTwoAnimationFrames(callback: () => void): () => void {
+  let cancelled = false;
+  let frame = requestAnimationFrame(() => {
+    if (cancelled) return;
+    frame = requestAnimationFrame(() => {
+      if (!cancelled) callback();
+    });
+  });
+  return () => {
+    cancelled = true;
+    cancelAnimationFrame(frame);
+  };
+}
