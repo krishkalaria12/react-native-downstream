@@ -3,9 +3,9 @@ import { TraceRun } from './trace';
 test('trace-off runs still report completion and active duration', () => {
   const trace = new TraceRun({
     run: 1,
-    renderer: 'baseline',
-    parseMode: null,
-    sessionIds: [],
+    renderer: 'downstream-full',
+    parseMode: 'full',
+    sessionIds: ['session-a'],
     deviceId: 'simulator-a',
     runCondition: 'warm',
     sampleOrder: 1,

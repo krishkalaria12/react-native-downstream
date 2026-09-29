@@ -13,7 +13,6 @@ import { StatusBar } from 'expo-status-bar';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { DownstreamMarkdown } from 'react-native-downstream';
-import { BaselineMarkdown } from './BaselineMarkdown';
 import { fixtures } from '../shared/fixtures';
 import type { CompletedMessage, LiveMessage } from './usePlayback';
 import { usePlayback } from './usePlayback';
@@ -31,9 +30,8 @@ const SCHEDULES: { id: ScheduleKind; label: string }[] = [
   { id: 'bursty', label: 'Bursty network' },
 ];
 const RENDERERS: { id: RendererCandidate; label: string }[] = [
-  { id: 'baseline', label: 'Streamdown + Enriched' },
-  { id: 'downstream-full', label: 'Downstream full' },
-  { id: 'downstream-incremental', label: 'Downstream incremental' },
+  { id: 'downstream-full', label: 'Full parse' },
+  { id: 'downstream-incremental', label: 'Incremental tail' },
 ];
 
 function Choice<T extends string | number>({
@@ -95,12 +93,10 @@ const TracedMarkdown = memo(function TracedMarkdownInner({
   message,
   stream,
   trace,
-  renderer,
 }: {
   message: LiveMessage;
   stream: number;
   trace?: TraceRun;
-  renderer: RendererCandidate;
 }) {
   useLayoutEffect(() => {
     if (
@@ -146,11 +142,7 @@ const TracedMarkdown = memo(function TracedMarkdownInner({
         }
       }}
     >
-      {renderer === 'baseline' ? (
-        <BaselineMarkdown markdown={message.markdown} />
-      ) : (
-        <DownstreamMarkdown stream={message.controllers[stream]!} />
-      )}
+      <DownstreamMarkdown stream={message.controllers[stream]!} />
     </View>
   );
 });
@@ -165,19 +157,16 @@ const CompletedRow = memo(function CompletedRowInner({
       <Text style={styles.messageLabel}>
         {message.fixture} / stream {message.stream + 1}
       </Text>
-      {message.renderer === 'baseline' ? (
-        <BaselineMarkdown markdown={message.markdown} />
-      ) : (
-        <DownstreamMarkdown markdown={message.markdown} />
-      )}
+      <DownstreamMarkdown markdown={message.markdown} />
     </View>
   );
 });
 
 const completedKey = (message: CompletedMessage) => message.id;
 
-export function PlaybackScreen() {
-  const [renderer, setRenderer] = useState<RendererCandidate>('baseline');
+export function BenchScreen() {
+  const [renderer, setRenderer] =
+    useState<RendererCandidate>('downstream-full');
   const [deviceId, setDeviceId] = useState('');
   const [runCondition, setRunCondition] = useState<'cold' | 'warm'>('warm');
   const [fixtureId, setFixtureId] = useState(fixtures[0]?.id ?? '');
@@ -272,7 +261,7 @@ export function PlaybackScreen() {
               {SEED}.
             </Text>
 
-            <Text style={styles.sectionTitle}>Renderer</Text>
+            <Text style={styles.sectionTitle}>Parse mode</Text>
             <View style={styles.choices}>
               {RENDERERS.map((item) => (
                 <Choice
@@ -465,7 +454,6 @@ export function PlaybackScreen() {
                       message={view.live!}
                       stream={stream}
                       trace={activeTrace}
-                      renderer={activeTrace?.data.renderer ?? renderer}
                     />
                   </View>
                 ))}

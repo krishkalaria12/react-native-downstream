@@ -4,6 +4,7 @@ import {
   createMarkdownStreamWithMode,
   getStreamState,
 } from '../../../src/createMarkdownStream';
+import type { ParseMode } from '../../../src/createMarkdownStream';
 import {
   setStreamTracing,
   subscribeStreamTrace,
@@ -133,6 +134,11 @@ function sameScenario(a: PlaybackConfig, b: PlaybackConfig): boolean {
     a.workloadShape === b.workloadShape
   );
 }
+
+const PARSE_MODES: Record<RendererCandidate, ParseMode> = {
+  'downstream-full': 'full',
+  'downstream-incremental': 'incremental',
+};
 
 export function usePlayback() {
   const [view, setView] = useState(initialView);
@@ -370,17 +376,11 @@ export function usePlayback() {
       );
       const schedule = createSchedule(config.schedule, config.seed, workload);
       const id = nextRunId.current++;
-      const mode =
-        config.renderer === 'baseline'
-          ? null
-          : config.renderer === 'downstream-full'
-          ? 'full'
-          : 'incremental';
-      const controllers: MarkdownStreamController[] = mode
-        ? Array.from({ length: config.streams }, () =>
-            createMarkdownStreamWithMode({}, mode)
-          )
-        : [];
+      const mode = PARSE_MODES[config.renderer];
+      const controllers: MarkdownStreamController[] = Array.from(
+        { length: config.streams },
+        () => createMarkdownStreamWithMode({}, mode)
+      );
       const trace = new TraceRun({
         run: id,
         renderer: config.renderer,
@@ -438,7 +438,7 @@ export function usePlayback() {
       run.unsubscribeSnapshots = controllers.map((controller) =>
         getStreamState(controller).subscribe(() => maybeComplete(run))
       );
-      if (config.traceEnabled && controllers.length > 0) {
+      if (config.traceEnabled) {
         run.unsubscribeStreamTrace = subscribeStreamTrace((event) =>
           trace.recordStreamEvent(event)
         );

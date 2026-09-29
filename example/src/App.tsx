@@ -1,31 +1,39 @@
 import { useEffect, useState } from 'react';
 import {
-  Button,
   Linking,
   Platform,
-  Settings,
+  Pressable,
   SafeAreaView,
+  Settings,
   StatusBar,
   StyleSheet,
+  Text,
   useColorScheme,
   View,
 } from 'react-native';
 
-import { GalleryScreen } from './gallery/GalleryScreen';
-import { PlaybackScreen } from './bench/PlaybackScreen';
+import { BenchScreen } from './bench/BenchScreen';
 import { StressScreen } from './bench/StressScreen';
-import { StreamingChat } from './StreamingChat';
+import { ChatScreen } from './example/ChatScreen';
+import { CompareScreen } from './testing/CompareScreen';
+
+const TABS = [
+  { id: 'example', label: 'Example' },
+  { id: 'testing', label: 'Testing' },
+  { id: 'bench', label: 'Bench' },
+  { id: 'stress', label: 'Stress' },
+] as const;
+
+type Tab = (typeof TABS)[number]['id'];
 
 export default function App() {
-  const [screen, setScreen] = useState<
-    'gallery' | 'stream' | 'bench' | 'stress'
-  >('gallery');
+  const [tab, setTab] = useState<Tab>('example');
   const [autoStress, setAutoStress] = useState(false);
   // Launch with `-downstreamStress 1` (iOS) or a downstream://stress VIEW
   // intent (Android) to run the stress screen without interaction.
   useEffect(() => {
     const start = () => {
-      setScreen('stress');
+      setTab('stress');
       setAutoStress(true);
     };
     if (Platform.OS === 'ios' && Settings.get('downstreamStress')) start();
@@ -37,23 +45,44 @@ export default function App() {
   return (
     <SafeAreaView style={[styles.root, dark ? styles.dark : styles.light]}>
       <View style={styles.navigation}>
-        <Button title="Gallery" onPress={() => setScreen('gallery')} />
-        <Button title="Stream" onPress={() => setScreen('stream')} />
-        <Button title="Benchmark" onPress={() => setScreen('bench')} />
-        <Button title="Stress" onPress={() => setScreen('stress')} />
+        {TABS.map((item) => (
+          <Pressable
+            key={item.id}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: tab === item.id }}
+            onPress={() => setTab(item.id)}
+            style={[styles.tab, tab === item.id && styles.tabSelected]}
+          >
+            <Text
+              style={[
+                styles.tabText,
+                tab === item.id && styles.tabTextSelected,
+              ]}
+            >
+              {item.label}
+            </Text>
+          </Pressable>
+        ))}
       </View>
-      {screen === 'gallery' ? (
-        <GalleryScreen />
-      ) : screen === 'stream' ? (
-        <StreamingChat />
-      ) : screen === 'stress' ? (
+      {tab === 'example' ? (
+        <ChatScreen />
+      ) : tab === 'testing' ? (
+        <CompareScreen />
+      ) : tab === 'stress' ? (
         <StressScreen autoStart={autoStress} />
       ) : (
-        <PlaybackScreen />
+        <BenchScreen />
       )}
     </SafeAreaView>
   );
 }
+
+const colors = {
+  ink: '#172D2A',
+  teal: '#14695E',
+  line: '#CBD4CB',
+  white: '#FFFFFF',
+};
 
 const styles = StyleSheet.create({
   // SafeAreaView pads only on iOS; Android draws under the status bar.
@@ -61,7 +90,23 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
   },
-  light: { backgroundColor: '#fff' },
+  light: { backgroundColor: colors.white },
   dark: { backgroundColor: '#000' },
-  navigation: { flexDirection: 'row', justifyContent: 'space-around' },
+  navigation: {
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
+  },
+  tab: {
+    flex: 1,
+    borderRadius: 8,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  tabSelected: { backgroundColor: colors.teal },
+  tabText: { color: colors.ink, fontSize: 14, fontWeight: '600' },
+  tabTextSelected: { color: colors.white },
 });

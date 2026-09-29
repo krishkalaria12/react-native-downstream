@@ -16,15 +16,13 @@ export interface TraceEvent {
   sequence?: number;
 }
 
-export type RendererCandidate =
-  | 'baseline'
-  | 'downstream-full'
-  | 'downstream-incremental';
+/** Bench measures Downstream only; the Streamdown comparison lives in testing. */
+export type RendererCandidate = 'downstream-full' | 'downstream-incremental';
 
 export interface TraceRunData {
   run: number;
   renderer: RendererCandidate;
-  parseMode: 'full' | 'incremental' | null;
+  parseMode: 'full' | 'incremental';
   sessionIds: string[];
   deviceId: string;
   runCondition: 'cold' | 'warm';
