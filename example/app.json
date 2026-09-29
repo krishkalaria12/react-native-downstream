@@ -6,7 +6,8 @@
     "orientation": "default",
     "newArchEnabled": true,
     "plugins": [
-      "./plugins/withIosSceneLifecycle"
+      "./plugins/withIosSceneLifecycle",
+      "./plugins/withIosPodDeploymentTarget"
     ],
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
