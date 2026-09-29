@@ -51,7 +51,6 @@ example/vendor/
 # node.js
 #
 node_modules/
-__pycache__/
 npm-debug.log
 pnpm-debug.log
 

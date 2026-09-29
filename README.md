@@ -46,7 +46,7 @@ The view parses with md4c and lays text out natively (TextKit on iOS, `StaticLay
 
 Phase 0 defines the [API contract](docs/api.md), [streaming behavior](docs/streaming-semantics.md), and [parser fixtures](fixtures/README.md). The native display path, stream controller, and conservative incremental-tail parser are implemented. Full parsing remains the default mode while the two modes await device measurements.
 
-Run the shared C++ engine tests with `python3 cpp/tests/test_engine.py`.
+Run the shared C++ engine tests with `pnpm test:native`.
 
 ## License
 

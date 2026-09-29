@@ -48,6 +48,7 @@
     "typecheck": "tsc",
     "lint": "eslint \"**/*.{js,ts,tsx}\"",
     "test": "jest",
+    "test:native": "node --test cpp/tests/engine.test.mjs",
     "release": "release-it --only-version"
   },
   "keywords": [

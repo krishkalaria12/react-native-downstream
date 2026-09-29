@@ -45,7 +45,7 @@ jobs:
         run: pnpm test --maxWorkers=2 --coverage
 
       - name: Run native engine tests
-        run: python3 cpp/tests/test_engine.py
+        run: pnpm test:native
 
   build-library:
     runs-on: ubuntu-latest

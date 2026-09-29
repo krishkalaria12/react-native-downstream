@@ -11,7 +11,7 @@ md4c is MIT licensed; see `LICENSE.md`.
 | `entity.c`, `entity.h` | HTML entity decoding in text and link targets |
 | `md4c-html.c`, `md4c-html.h` | Host tests only (`cpp/tests`), to check the vendored parser against the oracle HTML |
 
-Builds rename the public symbols at compile time: `md_parse` becomes `downstream_md_parse` and `entity_lookup` becomes `downstream_entity_lookup`; the tests also rename `md_html`. Apps can link another md4c. Enriched Markdown vendors an older one, and without the prefix the linker can bind our calls to that copy. `MarkdownParser.cpp` fails to compile if the prefix is missing. The definitions live in `Downstream.podspec`, `android/src/main/jni/CMakeLists.txt`, and `cpp/tests/test_engine.py`.
+Builds rename the public symbols at compile time: `md_parse` becomes `downstream_md_parse` and `entity_lookup` becomes `downstream_entity_lookup`; the tests also rename `md_html`. Apps can link another md4c. Enriched Markdown vendors an older one, and without the prefix the linker can bind our calls to that copy. `MarkdownParser.cpp` fails to compile if the prefix is missing. The definitions live in `Downstream.podspec`, `android/src/main/jni/CMakeLists.txt`, and `cpp/tests/engine.test.mjs`.
 
 Known issue: the check that a list item cannot begin with two blank lines reads
 the last line record in md4c's block buffer as a block record, so whether a
@@ -20,4 +20,4 @@ list ends after two blank lines depends on a line's byte offset modulo 256.
 so incremental output still matches a full parse.
 
 To update, copy the same files from the new revision, update the oracle
-revision in the fixture manifest, and run `python3 cpp/tests/test_engine.py`.
+revision in the fixture manifest, and run `pnpm test:native`.
