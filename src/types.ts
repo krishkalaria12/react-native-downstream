@@ -42,8 +42,9 @@ export type MarkdownLinkPressEvent = Readonly<{
  */
 export type MarkdownPreviewOptions = Readonly<{
   /**
-   * Close a `*`, `_`, `~~` or `` ` `` run the writer left open, so its content
-   * shows styled. A bare marker with no content after it is never closed.
+   * Close a `*`, `_` or `~~` run the writer left open, so its content shows
+   * styled. A bare marker with no content after it is never closed, and
+   * neither is one in a block that has already ended.
    */
   emphasis?: boolean;
   /**
