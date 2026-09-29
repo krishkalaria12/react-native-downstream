@@ -81,6 +81,31 @@ bool stableIdentities(const Document &document, std::map<uint64_t, std::pair<siz
   return true;
 }
 
+/// Full mode carries identities for unchanged leading blocks. A block that
+/// later changes loses its identity, but an identity still names one content,
+/// source range, and position, and identified blocks form a prefix that ends
+/// after a top-level block outside a continuing table.
+bool carriedIdentities(const Document &document, std::map<uint64_t, std::pair<size_t, Block>> &seen) {
+  size_t prefix = 0;
+  while (prefix < document.blocks.size() && document.blocks[prefix].identity != 0) prefix++;
+  for (size_t i = prefix; i < document.blocks.size(); i++) {
+    if (document.blocks[i].identity != 0) return false;
+  }
+  if (prefix > 0) {
+    const Block &last = document.blocks[prefix - 1];
+    if (!last.containers.empty() || prefix == document.blocks.size()) return false;
+    if (last.kind == BlockKind::TableRow && document.blocks[prefix].kind == BlockKind::TableRow &&
+        document.blocks[prefix].table == last.table) return false;
+  }
+  for (size_t i = 0; i < prefix; i++) {
+    const Block &block = document.blocks[i];
+    const auto [entry, added] = seen.try_emplace(block.identity, i, block);
+    if (!added && (entry->second.first != i || !equalBlock(entry->second.second, block) ||
+                   !(entry->second.second.sourceRange == block.sourceRange))) return false;
+  }
+  return true;
+}
+
 std::vector<std::string> splitChunks(const std::string &text, uint32_t seed) {
   std::mt19937 random(seed);
   std::vector<std::string> chunks;
@@ -99,6 +124,7 @@ bool check(const std::vector<std::string> &chunks, const char *label) {
   IncrementalParser full(ParseMode::FullParse);
   std::string source;
   std::map<uint64_t, std::pair<size_t, Block>> identities;
+  std::map<uint64_t, std::pair<size_t, Block>> fullIdentities;
   for (const auto &chunk : chunks) {
     source += chunk;
     const ParseResult actual = feed(incremental, source, false);
@@ -111,6 +137,14 @@ bool check(const std::vector<std::string> &chunks, const char *label) {
     if (actual.status == ParseStatus::Ok && !stableIdentities(*actual.document, identities)) {
       std::cerr << "Committed identity changed in " << label << "\n";
       return false;
+    }
+    if (expected.status == ParseStatus::Ok) {
+      const auto oracle = parseMarkdown(source);
+      if (!equal(*expected.document, *oracle.document) ||
+          !carriedIdentities(*expected.document, fullIdentities)) {
+        std::cerr << "Full-mode identity broke in " << label << " at " << source.size() << " bytes\n";
+        return false;
+      }
     }
   }
   const auto actual = feed(incremental, source, true);
@@ -288,13 +322,13 @@ bool snapshotsShareCommittedBlocks() {
 // Renderers reuse committed segments by first identity and block count, so a
 // committed segment that is followed by another must keep its boundaries in
 // every later snapshot, and a text chunk must not split a quote or list.
-bool committedSegmentsAreStable() {
+bool committedSegmentsAreStable(ParseMode mode) {
   std::string text;
   for (int i = 0; i < 40; i++) {
     text += "Paragraph " + std::to_string(i) + " has enough words to be worth committing on its own line.\n\n";
     if (i % 7 == 3) text += "> quoted\n> lines\n\n- one\n- two\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n";
   }
-  IncrementalParser parser(ParseMode::IncrementalTail);
+  IncrementalParser parser(mode);
   std::map<std::pair<uint64_t, size_t>, size_t> sealed;
   std::string source;
   size_t committedSegments = 0;
@@ -407,6 +441,47 @@ That's it -- you now have a streaming renderer that stays responsive even for lo
   return true;
 }
 
+// Full mode reparses everything, but a platform should lay out only the
+// changed tail: nearly every finished block keeps the identity it first got.
+bool fullModeKeepsIdentities() {
+  std::string text;
+  for (int i = 0; i < 30; i++) {
+    text += "## Section " + std::to_string(i) + "\n\nSome prose with **bold** and a [link](https://x.dev/" +
+        std::to_string(i) + ").\n\n- one\n- two\n\n```js\nconst a = " + std::to_string(i) + ";\n```\n\n";
+  }
+  IncrementalParser parser(ParseMode::FullParse);
+  std::string source;
+  size_t assigned = 0;
+  std::map<uint64_t, bool> identities;
+  DocumentHandle last;
+  for (const auto &chunk : splitChunks(text, 11)) {
+    source += chunk;
+    const auto result = feed(parser, source, false);
+    if (result.status != ParseStatus::Ok) return false;
+    for (const Block &block : result.document->blocks) {
+      if (block.identity != 0 && identities.emplace(block.identity, true).second) assigned++;
+    }
+    last = result.document;
+  }
+  const auto finished = feed(parser, source, true);
+  if (finished.status != ParseStatus::Ok) return false;
+  const size_t blocks = finished.document->blocks.size();
+  size_t kept = 0;
+  for (size_t i = 0; i < blocks; i++) {
+    kept += finished.document->blocks[i].identity != 0 &&
+        finished.document->blocks[i].identity == last->blocks[i].identity;
+  }
+  // Each block is identified about once, and the finish parse keeps the
+  // streamed identities. Only the trailing list and the last block, which
+  // no top-level block has closed yet, stay unidentified.
+  if (assigned > blocks + blocks / 10 || kept + 3 < blocks) {
+    std::cerr << "Full mode assigned " << assigned << " identities to " << blocks << " blocks and kept " << kept
+              << " at finish\n";
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 int main() {
@@ -420,7 +495,7 @@ int main() {
   }
   return check(chunks, "fixture") && seededCases() && fastPathAndFallbacks() &&
       identityRangesAndSnapshots() && tailLimitPreservesIdentity() && openFencePath() &&
-      md4cOffsetQuirk() && fenceEdgeCases() && blockLimitKeepsTail() && snapshotsShareCommittedBlocks() && committedSegmentsAreStable() &&
-      identitiesAreGlobal() &&
-      realisticAnswer() ? 0 : 1;
+      md4cOffsetQuirk() && fenceEdgeCases() && blockLimitKeepsTail() && snapshotsShareCommittedBlocks() &&
+      committedSegmentsAreStable(ParseMode::IncrementalTail) && committedSegmentsAreStable(ParseMode::FullParse) &&
+      identitiesAreGlobal() && realisticAnswer() && fullModeKeepsIdentities() ? 0 : 1;
 }

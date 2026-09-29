@@ -347,6 +347,11 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason) {
   if (result.status != ParseStatus::Ok) {
     return result;
   }
+  if (mode_ == ParseMode::FullParse) {
+    carryIdentities(result);
+    publish(result.document);
+    return result;
+  }
 
   // A fallback reparses everything, but committed blocks keep their shared
   // storage and identity when md4c still produces them unchanged.
@@ -381,6 +386,46 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason) {
   publish(result.document);
   watchOpenFence(source, committedBytes_, committedCount());
   return result;
+}
+
+void IncrementalParser::carryIdentities(ParseResult &result) {
+  // Identities describe append-only history; a replaced source starts over.
+  const DocumentHandle previous = replaced_ ? nullptr : document_;
+  const auto &blocks = result.document->blocks;
+  if (!previous || blocks.size() < 2 || result.blockSource.size() != blocks.size()) {
+    return;
+  }
+  // The last block may still grow, so it is never stable.
+  const size_t limit = std::min(previous->blocks.size(), blocks.size() - 1);
+  size_t stable = 0;
+  while (stable < limit && sameBlock(previous->blocks[stable], blocks[stable])) {
+    stable++;
+  }
+  // Like a proven commit, the stable prefix ends after a top-level block that
+  // closes any table, so no quote, list, or table continues past it.
+  while (stable > 0 &&
+         (!blocks[stable - 1].containers.empty() ||
+          (blocks[stable - 1].kind == BlockKind::TableRow && blocks[stable].kind == BlockKind::TableRow &&
+           blocks[stable].table == blocks[stable - 1].table))) {
+    stable--;
+  }
+  if (stable == 0) {
+    return;
+  }
+
+  auto document = std::make_shared<Document>(*result.document);
+  auto &carried = document->blocks.tail();
+  Utf16OffsetMap offsets(source_);
+  for (size_t i = 0; i < stable; i++) {
+    // A block that stayed unchanged for one update is unlikely to change
+    // again. If it does, the next parse gives it a new identity, so an
+    // identity always names the same content.
+    const uint64_t identity = previous->blocks[i].identity;
+    carried[i].identity = identity != 0 ? identity : nextBlockIdentity.fetch_add(1, std::memory_order_relaxed);
+    const ByteRange bytes = result.blockSource[i];
+    carried[i].sourceRange = {offsets.toUtf16(bytes.start), offsets.toUtf16(bytes.end)};
+  }
+  result.document = document;
 }
 
 ParseResult IncrementalParser::parseTail() {

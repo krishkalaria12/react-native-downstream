@@ -42,6 +42,10 @@ struct IncrementalCounters {
 /// One session's parser state and canonical source. Calls are serialized by
 /// the owning session. Returned documents are immutable.
 ///
+/// Full mode parses the whole source every time. Leading blocks that equal
+/// the previous snapshot's keep a stable identity, so platforms reuse their
+/// rendering and lay out only the changed tail.
+///
 /// Incremental mode commits a source prefix once md4c shows that no later
 /// input can change it, and then parses only the remaining tail. Committed
 /// blocks live in storage shared by every later snapshot, so an update copies
@@ -69,6 +73,9 @@ public:
 
 private:
   ParseResult fullParse(ParseFallback reason);
+  /// Full mode: gives leading blocks that are unchanged since the previous
+  /// snapshot a stable identity, so platforms reuse their rendering.
+  void carryIdentities(ParseResult &result);
   ParseResult parseTail();
   void publish(DocumentHandle document);
   void tryCommit();
