@@ -1,7 +1,7 @@
 # Phase 5 benchmark results
 
 No physical-device release traces have been collected yet. The benchmark screen and
-summary script can be exercised with simulated playback, but simulated timestamps
+Node summary script can be exercised with simulated playback, but simulated timestamps
 are not performance results. The default parse mode remains `full`, its current
 implementation setting, until the three candidates have comparable device runs.
 

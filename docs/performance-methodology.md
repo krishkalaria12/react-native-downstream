@@ -53,7 +53,7 @@ them reliably. Mark any unavailable measurement as unavailable.
 
 ## Analysis and decision
 
-Run `python3 benchmarks/summarize.py <export-1.json> <export-2.json> ...` on raw
+Run `node benchmarks/summarize.mjs <export-1.json> <export-2.json> ...` on raw
 exports. Keep one device, build revision, and cold/warm cohort together. The tool
 prints per-run p50/p95/p99 and repeat-run variation for sampled JS estimates,
 counts superseded frame samples, and compares trace-on/off run duration. Add
