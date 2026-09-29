@@ -65,6 +65,11 @@ android/keystores/debug.keystore
 example/dist/
 example/ios/
 example/android/
+# Local secrets for the example chat screen
+.env
+.env.local
+example/.env
+example/.env.local
 
 # Turborepo
 .turbo/

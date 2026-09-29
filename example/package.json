@@ -9,7 +9,9 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@ai-sdk/openai": "4.0.80",
     "@expo/metro-runtime": "~55.0.6",
+    "ai": "7.0.122",
     "expo": "~55.0.4",
     "expo-dev-client": "55.0.40",
     "expo-file-system": "55.0.26",
