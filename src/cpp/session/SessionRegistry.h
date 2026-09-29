@@ -40,6 +40,11 @@ public:
   /// Records the width and font scale the session's view was measured at, so
   /// later snapshots are prepared for that layout.
   static void noteLayout(const std::string &id, LayoutHint hint);
+  /// Replaces the session's provisional-styling policy. An empty option set
+  /// turns the pass off, which leaves every open span literal. Takes effect on
+  /// the next pass, which this queues, so it applies even when no new input has
+  /// arrived. Returns false when the session does not exist.
+  static bool setPreview(const std::string &id, remend::PreviewOptions options);
 };
 
 } // namespace downstream

@@ -621,7 +621,11 @@ ParseResult IncrementalParser::parse(bool finished) {
     return fullParse(ParseFallback::Finished);
   }
   ParseResult current;
-  if (document_ && (source_.size() == parsedBytes_ || appendOpenFence())) {
+  // A pending policy change has to be applied to what the reader is looking at,
+  // so it skips the "nothing new arrived" shortcut below and reparses the tail.
+  const bool repaint = previewDirty_;
+  previewDirty_ = false;
+  if (!repaint && document_ && (source_.size() == parsedBytes_ || appendOpenFence())) {
     current.document = document_;
     return current;
   }

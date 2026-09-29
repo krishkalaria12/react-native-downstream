@@ -11,7 +11,7 @@
  */
 import { vi } from 'vitest';
 
-import { parse, type RenderModel } from './engine';
+import { parse, preview, type RenderModel } from './engine';
 
 type SnapshotListener = (event: object) => void;
 type ErrorListener = (event: object) => void;
@@ -23,6 +23,8 @@ interface Session {
   sequence: number;
   finished: boolean;
   model: RenderModel | undefined;
+  /** Provisional-styling features, as the native bitmask. */
+  preview: number;
 }
 
 const sessions = new Map<string, Session>();
@@ -43,6 +45,11 @@ export function sourceForSession(sessionId: string): string {
 
 /** How many times native was handed work, for asserting a batch count. */
 export const nativeWork = { appends: 0, parses: 0 };
+
+/** The provisional-styling features a session is configured with. */
+export function previewFeaturesOf(sessionId: string): number {
+  return sessions.get(sessionId)?.preview ?? 0;
+}
 
 function nowNs(): string {
   return String(Math.round(performance.now() * 1e6));
@@ -71,7 +78,12 @@ function emitTrace(
 function publish(session: Session, sessionId: string): void {
   emitTrace(sessionId, session.generation, session.sequence, 'append_received');
   nativeWork.parses += 1;
-  const model = parse(session.source);
+  // A finished stream never previews, and neither does a session with no
+  // features, which is the same rule the native session applies.
+  const model =
+    session.preview !== 0 && !session.finished
+      ? preview(session.source, session.preview)
+      : parse(session.source);
   session.model = model;
   emitTrace(sessionId, session.generation, session.sequence, 'parse_start');
   emitTrace(sessionId, session.generation, session.sequence, 'parse_end');
@@ -107,6 +119,7 @@ export const realEngineModule = {
         sequence: 0,
         finished: false,
         model: undefined,
+        preview: 0,
       });
       // The mode selects a parse strategy inside the real engine.
       mode;
@@ -152,6 +165,15 @@ export const realEngineModule = {
     setTracing(sessionId: string, enabled: boolean) {
       if (enabled) nativeTraceEnabled.add(sessionId);
       else nativeTraceEnabled.delete(sessionId);
+    },
+
+    setPreview(sessionId: string, features: number) {
+      const session = sessions.get(sessionId);
+      if (!session) return;
+      session.preview = features;
+      // The native side queues a pass so a policy change reaches the reader
+      // without new input, so the double republishes too.
+      publish(session, sessionId);
     },
 
     onSnapshotReady(callback: SnapshotListener) {

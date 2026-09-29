@@ -92,6 +92,20 @@ public:
                : nullptr;
   }
 
+  /// Queues a new provisional-styling policy for the worker. It is applied on
+  /// the worker thread, which is the only thread that touches the parser, and
+  /// it queues a pass so the new policy reaches the reader without waiting for
+  /// the next chunk.
+  void setPreview(remend::PreviewOptions options) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopped_) {
+      return;
+    }
+    preview_ = options;
+    SessionTrace::record(id_, generation_, sequence_, "preview_set");
+    markDirty();
+  }
+
   void noteLayout(LayoutHint hint) {
     std::lock_guard<std::mutex> lock(mutex_);
     layout_ = hint;
@@ -119,6 +133,7 @@ private:
     uint64_t sequence;
     bool finished;
     std::vector<LayoutHint> hints;
+    std::optional<remend::PreviewOptions> preview;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (stopped_ || !dirty_) {
@@ -127,6 +142,7 @@ private:
       }
       replacement.swap(replacement_);
       pending.swap(pending_);
+      preview.swap(preview_);
       generation = generation_;
       sequence = sequence_;
       finished = finished_;
@@ -136,6 +152,9 @@ private:
       }
     }
 
+    if (preview) {
+      parser_.setPreview(*preview);
+    }
     SessionTrace::record(id_, generation, sequence, "parse_start");
     if (replacement) {
       parser_.replace(*replacement);
@@ -197,6 +216,7 @@ private:
   uint64_t readySequence_{0};
   DocumentHandle snapshot_;
   std::optional<LayoutHint> layout_;
+  std::optional<remend::PreviewOptions> preview_;
   bool dirty_{false};
   bool scheduled_{false};
   bool finished_{false};
@@ -267,6 +287,15 @@ void SessionRegistry::noteLayout(const std::string &id, LayoutHint hint) {
   if (const auto session = findSession(id)) {
     session->noteLayout(hint);
   }
+}
+
+bool SessionRegistry::setPreview(const std::string &id, remend::PreviewOptions options) {
+  const auto session = findSession(id);
+  if (!session) {
+    return false;
+  }
+  session->setPreview(options);
+  return true;
 }
 
 } // namespace downstream

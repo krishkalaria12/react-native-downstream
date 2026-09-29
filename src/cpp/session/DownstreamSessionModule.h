@@ -37,6 +37,7 @@ public:
   void finish(jsi::Runtime &rt, std::string sessionId, double generation, double sequence);
   void dispose(jsi::Runtime &rt, std::string sessionId);
   void setTracing(jsi::Runtime &rt, std::string sessionId, bool enabled);
+  void setPreview(jsi::Runtime &rt, std::string sessionId, double features);
 
 private:
   /// Lets session workers reach the module only while it is alive.

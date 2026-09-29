@@ -34,6 +34,7 @@ vi.mock('../src/NativeDownstreamSession', () => {
       finish: vi.fn(),
       dispose: vi.fn(),
       setTracing: vi.fn(),
+      setPreview: vi.fn(),
       onSnapshotReady: vi.fn((callback: (event: object) => void) => {
         listeners.snapshot.add(callback);
         return { remove: () => listeners.snapshot.delete(callback) };

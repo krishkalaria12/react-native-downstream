@@ -36,6 +36,12 @@ export interface Spec extends TurboModule {
   finish(sessionId: string, generation: number, sequence: number): void;
   dispose(sessionId: string): void;
   setTracing(sessionId: string, enabled: boolean): void;
+  /**
+   * Replaces the session's provisional-styling policy. `features` is a bitmask
+   * of the pass's features; zero turns it off, which leaves every open span
+   * literal. Takes effect on the next parse, which this queues.
+   */
+  setPreview(sessionId: string, features: number): void;
   readonly onSnapshotReady: CodegenTypes.EventEmitter<SnapshotReadyEvent>;
   readonly onSessionError: CodegenTypes.EventEmitter<SessionErrorEvent>;
   readonly onTrace: CodegenTypes.EventEmitter<NativeTraceEvent>;

@@ -105,6 +105,15 @@ before(async () => {
     ]),
     execFileAsync(cxx, [
       ...cxxFlags,
+      testSource('dump_preview.cpp'),
+      ...engine,
+      md4c,
+      entity,
+      '-o',
+      binary('dump_preview'),
+    ]),
+    execFileAsync(cxx, [
+      ...cxxFlags,
       remend('tests', 'test_preview.cpp'),
       session('IncrementalParser.cpp'),
       ...engine,

@@ -80,7 +80,14 @@ public:
   /// blocks and the canonical source are never touched, and `finished` ignores
   /// the policy entirely, so the settled document is always a parse of the
   /// bytes the writer actually sent.
-  void setPreview(remend::PreviewOptions options) { preview_ = remend::Preview(options); }
+  ///
+  /// Safe to call at any time, including while a stream is open. It forces one
+  /// more parse, because otherwise a session with no pending input would
+  /// publish the snapshot it already has and the new policy would not appear.
+  void setPreview(remend::PreviewOptions options) {
+    preview_ = remend::Preview(options);
+    previewDirty_ = true;
+  }
   bool previewEnabled() const { return preview_.enabled(); }
   /// Cumulative across every parse since the last reset, so a caller can see
   /// how often the pass fired without instrumenting each snapshot.
@@ -131,6 +138,8 @@ private:
   // Provisional styling for the tail. Inert until a caller sets it.
   remend::Preview preview_;
   remend::PreviewStats previewStats_{};
+  // A new policy has to reach the reader even if no new input arrived.
+  bool previewDirty_{false};
 
   IncrementalCounters counters_;
 };

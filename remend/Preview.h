@@ -40,17 +40,25 @@ enum class PreviewFeature : uint32_t {
 };
 
 struct PreviewOptions {
-  uint32_t features{0};
+  using features_t = uint32_t;
+
+  features_t features{0};
 
   bool enabled() const { return features != 0; }
-  bool has(PreviewFeature feature) const { return (features & static_cast<uint32_t>(feature)) != 0; }
+  bool has(PreviewFeature feature) const { return (features & static_cast<features_t>(feature)) != 0; }
 
   /// Both features, which is what the example app and the tests use.
   static PreviewOptions all() {
     PreviewOptions options;
-    options.features = static_cast<uint32_t>(PreviewFeature::Emphasis) |
-        static_cast<uint32_t>(PreviewFeature::InlineCode);
+    options.features = static_cast<features_t>(PreviewFeature::Emphasis) |
+        static_cast<features_t>(PreviewFeature::InlineCode);
     return options;
+  }
+
+  /// Every bit this build defines. A caller that passes anything else gets the
+  /// bits it meant, not a silently inert policy.
+  static constexpr features_t allFeatures() {
+    return static_cast<features_t>(PreviewFeature::Emphasis) | static_cast<features_t>(PreviewFeature::InlineCode);
   }
 };
 

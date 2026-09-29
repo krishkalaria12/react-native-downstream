@@ -36,6 +36,7 @@ const CXXFLAGS = [
   '-DMD4C_USE_UTF8',
   ...SYMBOL_PREFIXES,
   `-I${MD4C}`,
+  `-I${CPP}`,
   `-I${join(CPP, 'downstream')}`,
   `-I${join(CPP, 'session')}`,
   `-I${join(ROOT, 'remend')}`,
@@ -208,6 +209,41 @@ function engineBinary(): string {
     'downstream-dump',
     CXXFLAGS,
     objects
+  );
+}
+
+/** Feature bitmask for the real provisional-styling pass. */
+export const PREVIEW_EMPHASIS = 1 << 0;
+export const PREVIEW_INLINE_CODE = 1 << 1;
+export const PREVIEW_ALL = PREVIEW_EMPHASIS | PREVIEW_INLINE_CODE;
+
+function previewBinary(): string {
+  const objects = compileObjects();
+  return compile(
+    [join(CPP, 'tests', 'dump_preview.cpp'), ...ENGINE],
+    'downstream-preview',
+    CXXFLAGS,
+    objects
+  );
+}
+
+/**
+ * Parses a complete document through the real provisional-styling pass.
+ *
+ * This is the pass a session runs on its unstable tail. The whole document is
+ * the tail here, because nothing has committed, so it is the same path.
+ */
+export function preview(
+  source: string | Buffer,
+  features: number
+): RenderModel {
+  const input =
+    typeof source === 'string' ? Buffer.from(source, 'utf8') : source;
+  return JSON.parse(
+    execFileSync(previewBinary(), [String(features)], {
+      input,
+      maxBuffer: 256 << 20,
+    }).toString('utf8')
   );
 }
 

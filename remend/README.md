@@ -57,15 +57,31 @@ error event.
 
 ## It is off by default
 
-```cpp
-IncrementalParser parser{ParseMode::IncrementalTail};
-parser.setPreview(remend::PreviewOptions::all());   // opt in
+```ts
+// At construction.
+const stream = createMarkdownStream({ preview: true });
+// Or one feature at a time.
+const emphasisOnly = createMarkdownStream({ preview: { emphasis: true } });
+// Or mid-stream, which restyles the current tail without new input.
+stream.setPreview({ inlineCode: true });
 ```
 
 `PreviewOptions{}` has no features, which makes the pass inert: every open span
 renders literally, exactly as the engine did before this existed. That default
 is what `__tests__/streaming-preview.test.ts` pins, so this module could be
 merged without changing a single currently-passing test.
+
+`preview` accepts `true` for every feature, `false` for none, or an object
+naming the ones to enable. Anything else throws rather than falling back to a
+default, because a typo would otherwise silently change what a reader sees
+mid-stream. The object mirrors remend's option-per-feature shape, so a caller
+moving from Streamdown finds the same granularity; only the features listed
+above exist.
+
+Crossing the bridge is a bitmask, so the feature list has to be kept in step
+with `PreviewFeature` in `Preview.h`. Adding a bit is a change on both sides,
+and the native side masks off anything it does not define, so a stale caller
+cannot ask for a feature that no longer exists and appear to succeed.
 
 ## What was not ported
 
@@ -118,7 +134,8 @@ the part that is remend's.
 
 ## Tests
 
-`remend/tests/test_preview.cpp`, built and run by `pnpm test:native`.
+`remend/tests/test_preview.cpp` and `__tests__/preview.test.ts`, built and run
+by `pnpm test:native` and `pnpm test`.
 
 The inputs are ported from remend's own suite — several hundred shapes of
 markdown a model can stop emitting mid-token. The expectations are not, for the
@@ -127,8 +144,18 @@ the open span is styled, or nothing happened. Losing a block, inventing one, or
 rewriting a block the reader has already seen is never an outcome, and
 `corpusInvariants` asserts that over the whole ported corpus.
 
-The file also carries a suite for the shared scanner, since those primitives
-replaced code that had tests and the replacement has to earn them back.
+The C++ file also carries a suite for the shared scanner, since those primitives
+replaced code that had tests and the replacement has to earn them back, and a
+`sessionIntegration` case that drives a real `IncrementalParser`.
+
+The TypeScript file covers the other half: the option a caller passes, the
+bitmask that reaches the session, and the mid-stream change. It runs against
+the real pass through `dump_preview`, so it asserts on the document a reader
+would see rather than on a mock's call log.
+
+`src/cpp/tests/dump_model.h` is the shared JSON emitter, so `dump_document` and
+`dump_preview` describe a document identically and a test can compare them
+directly.
 
 ## Provenance
 
