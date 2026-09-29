@@ -18,6 +18,7 @@ import com.facebook.react.viewmanagers.DownstreamMarkdownViewManagerDelegate
 import com.facebook.react.viewmanagers.DownstreamMarkdownViewManagerInterface
 import com.facebook.yoga.YogaMeasureMode
 import com.facebook.yoga.YogaMeasureOutput
+import java.lang.ref.WeakReference
 
 @ReactModule(name = DownstreamMarkdownViewManager.NAME)
 class DownstreamMarkdownViewManager :
@@ -29,8 +30,10 @@ class DownstreamMarkdownViewManager :
 
   override fun getName() = NAME
 
-  override fun createViewInstance(context: ThemedReactContext): DownstreamMarkdownView =
-    DownstreamMarkdownView(context).apply { onLinkPress = ::dispatchLinkPress }
+  override fun createViewInstance(context: ThemedReactContext): DownstreamMarkdownView {
+    DownstreamNative.preparationContext = WeakReference(context)
+    return DownstreamMarkdownView(context).apply { onLinkPress = ::dispatchLinkPress }
+  }
 
   // The shadow node parses these props; the view reads the result from state.
   override fun setMarkdown(view: DownstreamMarkdownView, value: String?) = Unit
@@ -80,6 +83,9 @@ class DownstreamMarkdownViewManager :
   ): Long {
     val documentId = localData?.getDouble("documentId")?.toLong() ?: 0L
     val fontScale = localData?.getDouble("fontScale")?.toFloat() ?: 1f
+    if (DownstreamNative.preparationContext?.get() !== context) {
+      DownstreamNative.preparationContext = WeakReference(context)
+    }
     val rendered = RenderedDocument.obtain(context, documentId, fontScale)
       ?: return YogaMeasureOutput.make(0f, 0f)
     val layoutWidth = if (widthMode == YogaMeasureMode.UNDEFINED || !width.isFinite()) {

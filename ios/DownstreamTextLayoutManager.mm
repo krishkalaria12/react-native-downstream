@@ -16,4 +16,14 @@ Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHand
   }
 }
 
+void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &document,
+                                          const std::vector<downstream::LayoutHint> &hints) {
+  @autoreleasepool {
+    for (const auto &hint : hints) {
+      DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:document fontScale:hint.fontScale];
+      [rendered sizeForWidth:hint.width];
+    }
+  }
+}
+
 } // namespace facebook::react

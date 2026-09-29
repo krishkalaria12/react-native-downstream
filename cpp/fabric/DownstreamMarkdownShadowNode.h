@@ -2,11 +2,14 @@
 
 #include "DownstreamMarkdownState.h"
 #include "DownstreamTextLayoutManager.h"
+#include "PreparedDocument.h"
 
 #include <react/renderer/components/DownstreamSpec/EventEmitters.h>
 #include <react/renderer/components/DownstreamSpec/Props.h>
 #include <react/renderer/components/view/ConcreteViewShadowNode.h>
 
+#include <atomic>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -14,15 +17,20 @@ namespace facebook::react {
 
 JSI_EXPORT extern const char DownstreamMarkdownViewComponentName[];
 
-/// Parses the controlled `markdown` prop once per value and measures the
-/// result with the platform text system. The parsed document reaches the view
-/// through state, so the view never parses.
+/// Measures a document with the platform text system. The parsed document
+/// reaches the view through state, so the view never parses.
+///
+/// A controlled `markdown` value is parsed and prepared on the worker pool as
+/// soon as the node receives it, so every Markdown view in a commit is
+/// prepared in parallel while React finishes the commit. Layout collects the
+/// result. A large source is not waited for: the view keeps its previous
+/// document until the preparation finishes and a state update relayouts it.
 class DownstreamMarkdownShadowNode final
     : public ConcreteViewShadowNode<DownstreamMarkdownViewComponentName, DownstreamMarkdownViewProps,
                                     DownstreamMarkdownViewEventEmitter, DownstreamMarkdownState> {
 public:
-  using ConcreteViewShadowNode::ConcreteViewShadowNode;
-
+  DownstreamMarkdownShadowNode(const ShadowNodeFragment &fragment, const ShadowNodeFamily::Shared &family,
+                               ShadowNodeTraits traits);
   DownstreamMarkdownShadowNode(const ShadowNode &sourceShadowNode, const ShadowNodeFragment &fragment);
 
   static ShadowNodeTraits BaseTraits() {
@@ -44,12 +52,30 @@ private:
     std::string message;
   };
 
-  /// Parses on first use. A failed parse keeps the last valid document.
+  /// One controlled source's preparation, shared by every clone of the node
+  /// that shows that source.
+  struct ControlledSource {
+    std::shared_ptr<downstream::PreparedDocument> prepared;
+    /// Set once a relayout has been requested for when the preparation ends.
+    std::atomic<bool> relayoutRequested{false};
+  };
+
+  void requestControlledSource();
+  /// Returns the document to measure and mount. A failed parse keeps the last
+  /// valid document.
   const downstream::DocumentHandle &getDocument() const;
+  /// Asks for a relayout once a preparation that layout did not wait for ends.
+  void relayoutWhenPrepared() const;
 
   std::shared_ptr<const DownstreamTextLayoutManager> layoutManager_;
+  std::shared_ptr<ControlledSource> controlled_;
   mutable downstream::DocumentHandle document_;
-  mutable bool needsParse_{true};
+  /// The revision has not chosen its document yet. Once chosen, measurement
+  /// and mounting use the same one.
+  mutable bool needsDocument_{true};
+  /// The revision chose a fallback because its source was still being
+  /// prepared; the next revision collects the result.
+  mutable bool awaitingPrepared_{false};
   mutable std::optional<PendingError> pendingError_;
 };
 

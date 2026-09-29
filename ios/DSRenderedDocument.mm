@@ -566,7 +566,9 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   static dispatch_once_t once;
   dispatch_once(&once, ^{
     cache = [NSCache new];
-    cache.countLimit = 32;
+    // Worker threads prepare every document in a commit before Fabric
+    // measures them, so this holds at least a screenful of messages.
+    cache.countLimit = 128;
   });
   return cache;
 }

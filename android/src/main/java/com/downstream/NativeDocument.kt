@@ -1,5 +1,10 @@
 package com.downstream
 
+import android.content.Context
+import com.facebook.proguard.annotations.DoNotStrip
+import com.facebook.react.uimanager.PixelUtil
+import java.lang.ref.WeakReference
+
 /**
  * A range of a parsed document's blocks, flattened by the native engine
  * (DownstreamJni.cpp). Block indices and text offsets are relative to the
@@ -97,6 +102,37 @@ internal class PlannedSegment(
 internal class NativeLink(val url: String, val start: Int, val end: Int)
 
 internal object DownstreamNative {
+  init {
+    nativeInstallPreparer()
+  }
+
+  /**
+   * The context worker threads build renderings with: the latest one Fabric
+   * measured with, so prepared renderings use the same cache key.
+   */
+  @Volatile
+  var preparationContext: WeakReference<Context>? = null
+
+  /**
+   * Builds and measures a document's rendering on a worker thread after it is
+   * parsed (DownstreamTextLayoutManager.cpp), so Fabric's measurement on the
+   * JavaScript thread and the view's mount find it in the cache. [width] is
+   * in points, as Fabric passes it to measure.
+   */
+  @JvmStatic
+  @DoNotStrip
+  fun prepare(documentId: Long, fontScale: Float, width: Float) {
+    val context = preparationContext?.get() ?: return
+    try {
+      val rendered = RenderedDocument.obtain(context, documentId, fontScale) ?: return
+      if (width.isFinite() && width > 0) {
+        rendered.height(PixelUtil.toPixelFromDIP(width).toInt())
+      }
+    } catch (error: RuntimeException) {
+      // Measurement builds the rendering again on its own thread.
+    }
+  }
+
   /** Returns null when the document is no longer alive. */
   fun readDocument(id: Long, from: Int, to: Int): NativeDocument? {
     val parts = nativeReadDocument(id, from, to) ?: return null
@@ -154,4 +190,8 @@ internal object DownstreamNative {
 
   @JvmStatic
   private external fun nativeIsTracingDocument(id: Long): Boolean
+
+  // Implemented in DownstreamTextLayoutManager.cpp.
+  @JvmStatic
+  private external fun nativeInstallPreparer()
 }

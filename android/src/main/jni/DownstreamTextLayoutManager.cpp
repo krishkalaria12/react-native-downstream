@@ -3,10 +3,61 @@
 #include "DocumentRegistry.h"
 
 #include <fbjni/fbjni.h>
+#include <jni.h>
 #include <react/jni/ReadableNativeMap.h>
 #include <react/renderer/core/conversions.h>
 
+#include <atomic>
+#include <mutex>
+
 using namespace facebook::jni;
+
+namespace {
+
+// DownstreamNative.prepare, resolved on a Java thread by nativeInstallPreparer.
+// Worker threads are attached by the pool, so FindClass would use the system
+// class loader there and miss the app's classes.
+std::mutex installMutex;
+JavaVM *javaVm = nullptr;
+jclass nativeClass = nullptr;
+jmethodID prepareMethod = nullptr;
+std::atomic<bool> javaReady{false};
+
+/// The JNIEnv for a pool thread, attaching it for the rest of its life.
+JNIEnv *attachedEnv() {
+  JNIEnv *env = nullptr;
+  if (javaVm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) == JNI_OK) {
+    return env;
+  }
+  JavaVMAttachArgs args{JNI_VERSION_1_6, const_cast<char *>("ds-worker"), nullptr};
+  if (javaVm->AttachCurrentThreadAsDaemon(&env, &args) != JNI_OK) {
+    return nullptr;
+  }
+  // Pool threads live as long as the process; detach one that ever exits.
+  thread_local struct Detach {
+    ~Detach() { javaVm->DetachCurrentThread(); }
+  } detach;
+  (void)detach;
+  return env;
+}
+
+} // namespace
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_downstream_DownstreamNative_nativeInstallPreparer(JNIEnv *env, jclass clazz) {
+  std::lock_guard<std::mutex> lock(installMutex);
+  if (javaReady.load(std::memory_order_relaxed)) {
+    return;
+  }
+  const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JFF)V");
+  if (method == nullptr || env->GetJavaVM(&javaVm) != JNI_OK) {
+    env->ExceptionClear();
+    return;
+  }
+  nativeClass = static_cast<jclass>(env->NewGlobalRef(clazz));
+  prepareMethod = method;
+  javaReady.store(true, std::memory_order_release);
+}
 
 namespace facebook::react {
 
@@ -36,6 +87,29 @@ Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHand
                                reinterpret_cast<ReadableMap::javaobject>(propsMap.get()), nullptr, 0.0f,
                                maximumWidth, 0.0f, std::numeric_limits<Float>::infinity());
   return yogaMeassureToSize(packed);
+}
+
+// Builds the spans and precomputed text on the worker through
+// DownstreamNative.prepare, which fills the same RenderedDocument cache that
+// measure and the view read.
+void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &document,
+                                          const std::vector<downstream::LayoutHint> &hints) {
+  if (!javaReady.load(std::memory_order_acquire)) {
+    return;
+  }
+  JNIEnv *env = attachedEnv();
+  if (env == nullptr) {
+    return;
+  }
+  downstream::DocumentRegistry::add(document);
+  for (const auto &hint : hints) {
+    env->CallStaticVoidMethod(nativeClass, prepareMethod, static_cast<jlong>(document->id),
+                              static_cast<jfloat>(hint.fontScale), static_cast<jfloat>(hint.width));
+    if (env->ExceptionCheck()) {
+      env->ExceptionClear();
+      return;
+    }
+  }
 }
 
 } // namespace facebook::react

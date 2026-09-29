@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Document.h"
+#include "RenderPreparer.h"
 
 #include <react/renderer/core/LayoutConstraints.h>
 #include <react/renderer/core/ReactPrimitives.h>
@@ -19,7 +20,14 @@ namespace facebook::react {
 class DownstreamTextLayoutManager final {
 public:
   explicit DownstreamTextLayoutManager(std::shared_ptr<const ContextContainer> contextContainer)
-      : contextContainer_(std::move(contextContainer)) {}
+      : contextContainer_(std::move(contextContainer)) {
+    downstream::RenderPreparer::install(&DownstreamTextLayoutManager::prepare);
+  }
+
+  /// Builds a document's platform rendering and measures it at each hint on
+  /// the calling worker thread, filling the caches measurePlatform and the
+  /// view read. Implemented per platform next to measurePlatform.
+  static void prepare(const downstream::DocumentHandle &document, const std::vector<downstream::LayoutHint> &hints);
 
   /// Returns the content size for the document at the given width. Results
   /// are cached by document id, font scale, and width; a new source, font
