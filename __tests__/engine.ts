@@ -61,8 +61,8 @@ export const STYLE = {
   footnote: 1 << 6,
 } as const;
 
-/** List container kinds, matching `Container::Kind`. */
-export const CONTAINER = { listItem: 1 } as const;
+/** Container kinds, matching `Container::Kind`. */
+export const CONTAINER = { quote: 0, listItem: 1 } as const;
 
 /** Task states, matching `TaskState`. */
 export const TASK = ['none', 'unchecked', 'checked'] as const;
@@ -240,6 +240,43 @@ export function assertStreamingMatchesFullParse(
     input: Buffer.concat(frames),
     stdio: ['pipe', 'pipe', 'inherit'],
   });
+}
+
+/** Closes a document in the `--batch` wire format. */
+const END_OF_DOCUMENT = 0xffffffff;
+
+/**
+ * Runs {@link assertStreamingMatchesFullParse} over many documents in one
+ * process. Spawning a process per document would dominate a large corpus, so
+ * the binary reads a separator-delimited stream when given `--batch`. Throws
+ * on the first document that diverges, naming its index.
+ */
+export function assertStreamingBatchMatchesFullParse(
+  documents: readonly (readonly string[])[]
+): void {
+  const frames: Buffer[] = [];
+  for (const chunks of documents) {
+    for (const chunk of chunks) {
+      const length = Buffer.alloc(4);
+      length.writeUInt32LE(Buffer.byteLength(chunk, 'utf8'));
+      frames.push(length, Buffer.from(chunk, 'utf8'));
+    }
+    const end = Buffer.alloc(4);
+    end.writeUInt32LE(END_OF_DOCUMENT);
+    frames.push(end);
+  }
+  try {
+    execFileSync(incrementalBinary(), ['--batch'], {
+      input: Buffer.concat(frames),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      maxBuffer: 256 << 20,
+    });
+  } catch (error) {
+    // The binary names the failing document, so surface stderr rather than the
+    // opaque non-zero exit.
+    const stderr = (error as { stderr?: Buffer }).stderr?.toString('utf8');
+    throw new Error(stderr || String(error));
+  }
 }
 
 /** Joins the non-table block text, which is what a reader sees. */

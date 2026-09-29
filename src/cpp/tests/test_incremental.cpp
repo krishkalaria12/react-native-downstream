@@ -483,17 +483,60 @@ bool fullModeKeepsIdentities() {
   return true;
 }
 
-} // namespace
+/* A frame length of kEndOfDocument closes the current document. Lengths are
+   otherwise byte counts, so no chunk can collide with the sentinel. */
+static constexpr uint32_t kEndOfDocument = 0xffffffffu;
 
-int main() {
-  std::vector<std::string> chunks;
+/* Reads one length-prefixed document. Returns false at end of input. A short
+   read means the stream was truncated, which the caller reports. */
+static bool readDocument(std::vector<std::string> &chunks, bool *truncated) {
+  *truncated = false;
+  chunks.clear();
   while (true) {
     uint32_t length = 0;
-    if (!std::cin.read(reinterpret_cast<char *>(&length), sizeof(length))) break;
+    if (!std::cin.read(reinterpret_cast<char *>(&length), sizeof(length))) return !chunks.empty();
+    if (length == kEndOfDocument) return true;
     std::string chunk(length, '\0');
-    if (!std::cin.read(chunk.data(), length)) return 2;
+    if (length > 0 && !std::cin.read(chunk.data(), length)) {
+      *truncated = true;
+      return true;
+    }
     chunks.push_back(std::move(chunk));
   }
+}
+
+/* Sweeps many documents in one process. The corpus in __tests__ is far larger
+   than the per-run budget of a single document, and spawning a process per
+   case would dominate the suite. Every document is checked, so one run reports
+   every regression rather than only the first. */
+static int batchedCorpus() {
+  std::vector<std::string> chunks;
+  bool truncated = false;
+  size_t documents = 0;
+  while (readDocument(chunks, &truncated)) {
+    if (truncated) {
+      std::cerr << "Truncated frame in batched corpus\n";
+      return 2;
+    }
+    const size_t index = documents++;
+    // check() reports the offset where a document diverged, so the index
+    // identifies which corpus entry needs fixing.
+    char label[64];
+    snprintf(label, sizeof(label), "corpus[%zu]", index);
+    CHECK(check(chunks, label), "batched corpus streams match a full parse");
+    if (ds_check_failures > 0) return ds_check_result();
+  }
+  return ds_check_result();
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+  if (argc > 1 && std::string(argv[1]) == "--batch") return batchedCorpus();
+  std::vector<std::string> chunks;
+  bool truncated = false;
+  readDocument(chunks, &truncated);
+  if (truncated) return 2;
   // Every case runs even when an earlier one fails, so one run reports every
   // regression rather than only the first.
   CHECK(check(chunks, "fixture"), "fixture streams match a full parse");
