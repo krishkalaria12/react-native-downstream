@@ -18,8 +18,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const CPP = join(ROOT, 'src/cpp');
+const CPP = resolve(dirname(fileURLToPath(import.meta.url)), '../src/cpp');
 const MD4C = join(CPP, 'md4c');
 
 /** Symbol renames, matching Downstream.podspec and the Android CMakeLists. */
@@ -39,16 +38,18 @@ const CXXFLAGS = [
   `-I${CPP}`,
   `-I${join(CPP, 'downstream')}`,
   `-I${join(CPP, 'session')}`,
-  `-I${join(ROOT, 'remend')}`,
+  `-I${join(CPP, 'remend')}`,
 ];
 
 const ENGINE = [
-  ...['MarkdownParser.cpp', 'Unicode.cpp', 'LinkPolicy.cpp'].map((name) =>
-    join(CPP, 'downstream', name)
-  ),
-  ...['Scan.cpp', 'Compare.cpp', 'Preview.cpp'].map((name) =>
-    join(ROOT, 'remend', name)
-  ),
+  ...[
+    'MarkdownParser.cpp',
+    'Unicode.cpp',
+    'LinkPolicy.cpp',
+    'Scan.cpp',
+    'Compare.cpp',
+  ].map((name) => join(CPP, 'downstream', name)),
+  join(CPP, 'remend', 'Preview.cpp'),
 ];
 
 /** Block kinds, matching `Block::Kind` in the engine. */

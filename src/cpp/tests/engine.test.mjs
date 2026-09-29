@@ -57,7 +57,7 @@ before(async () => {
     `-I${CPP}`,
     `-I${join(CPP, 'downstream')}`,
     `-I${join(CPP, 'session')}`,
-    `-I${join(ROOT, 'remend')}`,
+    `-I${join(CPP, 'remend')}`,
   ];
   const [md4c, entity] = await Promise.all(
     ['md4c.c', 'entity.c'].map(async (source) => {
@@ -74,12 +74,12 @@ before(async () => {
   );
   const downstream = (name) => join(CPP, 'downstream', name);
   const session = (name) => join(CPP, 'session', name);
-  const remend = (...parts) => join(ROOT, 'remend', ...parts);
   const testSource = (name) => join(CPP, 'tests', name);
   const engine = [
     ...['MarkdownParser.cpp', 'Unicode.cpp', 'LinkPolicy.cpp'].map(downstream),
-    // The preview pass and the shared scanners it and the parser both use.
-    ...['Scan.cpp', 'Compare.cpp', 'Preview.cpp'].map((name) => remend(name)),
+    ...['Scan.cpp', 'Compare.cpp'].map(downstream),
+    // The preview pass the session runs on its unstable tail.
+    join(CPP, 'remend', 'Preview.cpp'),
   ];
   const pool = ['WorkerPool.cpp', 'RenderPreparer.cpp'].map(downstream);
   await Promise.all([
@@ -114,7 +114,7 @@ before(async () => {
     ]),
     execFileAsync(cxx, [
       ...cxxFlags,
-      remend('tests', 'test_preview.cpp'),
+      testSource('test_preview.cpp'),
       session('IncrementalParser.cpp'),
       ...engine,
       md4c,

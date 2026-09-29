@@ -1,4 +1,4 @@
-// Tests for remend/Preview.h.
+// Tests for src/cpp/remend/Preview.h.
 //
 // The inputs are ported from the test suite of Vercel's `remend`
 // (github.com/vercel/streamdown, packages/remend/__tests__). The expectations

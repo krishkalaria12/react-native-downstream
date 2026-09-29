@@ -24,8 +24,6 @@
   "files": [
     "src",
     "lib",
-    "remend/*.h",
-    "remend/*.cpp",
     "*.podspec",
     "react-native.config.js",
     "!src/ios/build",
@@ -39,7 +37,6 @@
     "!**/__mocks__",
     "!__tests__",
     "!__benchmarks__",
-    "!remend/tests",
     "!**/.*"
   ],
   "scripts": {
@@ -120,7 +117,7 @@
         }
       ]
     ],
-    "exclude": "**/{__tests__,__fixtures__,__mocks__,cpp,ios,android,fixtures,tests}/**"
+    "exclude": "**/{__tests__,__fixtures__,__mocks__,cpp,ios,android,fixtures}/**"
   },
   "prettier": {
     "quoteProps": "consistent",

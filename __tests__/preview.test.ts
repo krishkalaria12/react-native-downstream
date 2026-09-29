@@ -5,7 +5,7 @@
  *
  * `__tests__/real-engine-module.ts` runs the real pass, so these assert on the
  * document the engine would publish rather than on a mock's call log. The pass
- * itself is covered in C++ by remend/tests/test_preview.cpp; what matters here
+ * itself is covered in C++ by src/cpp/tests/test_preview.cpp; what matters here
  * is that the option reaches it and that the default stays off.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

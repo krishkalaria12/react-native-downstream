@@ -18,7 +18,7 @@ Temporary closing markers, when used for emphasis or other preview syntax, exist
 
 ## Provisional styling
 
-The prefix policy above allows a provisional style when an opener is unambiguous. The engine implements that branch in `remend/`, ported from Vercel's `remend`, and **leaves it off by default**: with no options set, every open span renders literally.
+The prefix policy above allows a provisional style when an opener is unambiguous. The engine implements that branch in `src/cpp/remend/`, ported from Vercel's `remend`, and **leaves it off by default**: with no options set, every open span renders literally.
 
 When enabled, the pass sees only the unstable tail. In incremental mode that is `source[committedBytes_ .. end]`, and committed blocks live in shared immutable storage the pass cannot reach, so no repair can restyle a block a reader has already seen. Before any commit boundary exists the whole document is the tail, and in full mode the whole document is the tail on every update. `finish()` never repairs.
 

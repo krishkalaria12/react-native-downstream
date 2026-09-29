@@ -48,7 +48,7 @@ Only on the tail, and only while the stream is unfinished.
   tail on every update.
 - **`finished`.** Never. `docs/streaming-semantics.md` requires the settled
   document to be a parse of the bytes the writer sent, and
-  `remend/tests/test_preview.cpp` asserts that a previewed session and a plain
+  `src/cpp/tests/test_preview.cpp` asserts that a previewed session and a plain
   one produce the same document once the stream finishes.
 
 The canonical source, `getSource()`, and source ranges are never repaired. A
@@ -110,8 +110,8 @@ remend produces for `**bold *italic`.
 
 ## What lives alongside the policy
 
-`remend/Scan.h` and `remend/Compare.h` are the shared primitives the policy
-depends on. They are not remend's; they are answers the engine already gave
+`src/cpp/downstream/Scan.h` and `src/cpp/downstream/Compare.h` are the shared
+primitives the policy depends on. They are not remend's; they are answers the engine already gave
 three times in three languages, consolidated into one place.
 
 - `isEscaped`, `findUnescaped`, `skipInlineDestination`, and
@@ -127,14 +127,14 @@ three times in three languages, consolidated into one place.
 - `parseAt` became `parseMarkdownAt` in `src/cpp/downstream/MarkdownParser.h`,
   since the preview pass parses at a source offset too.
 
-`remend/` is on the include path for every build that compiles the engine, so
-the `#include` lines in `src/cpp` are unchanged by the move. The namespace stays
-`downstream::scan`: these are the engine's scanners, and `downstream::remend` is
-the part that is remend's.
+They live in `src/cpp/downstream` because the parser and the incremental parser
+use them whether or not a session previews, so the engine core never depends on
+the preview pass. The namespace is `downstream::scan`: these are the engine's
+scanners, and `downstream::remend` is the part that is remend's.
 
 ## Tests
 
-`remend/tests/test_preview.cpp` and `__tests__/preview.test.ts`, built and run
+`src/cpp/tests/test_preview.cpp` and `__tests__/preview.test.ts`, built and run
 by `pnpm test:native` and `pnpm test`.
 
 The inputs are ported from remend's own suite — several hundred shapes of

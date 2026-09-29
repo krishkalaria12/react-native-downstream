@@ -19,9 +19,9 @@ const MAX_QUEUED_BYTES = 256 * 1024;
 
 /**
  * Bits for the native provisional-styling pass, mirroring
- * `remend::PreviewFeature`. Keep in step with `remend/Preview.h`: a bit that
- * the native side does not define is masked off and does nothing, so adding one
- * is a change on both sides rather than a silent no-op here.
+ * `remend::PreviewFeature`. Keep in step with `src/cpp/remend/Preview.h`: a
+ * bit that the native side does not define is masked off and does nothing, so
+ * adding one is a change on both sides rather than a silent no-op here.
  */
 const PREVIEW_EMPHASIS = 1 << 0;
 const PREVIEW_INLINE_CODE = 1 << 1;
