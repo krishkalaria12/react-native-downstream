@@ -1,38 +1,34 @@
 #include "SessionRegistry.h"
 
 #include "MarkdownParser.h"
+#include "RenderPreparer.h"
 #include "SessionTrace.h"
 #include "Unicode.h"
+#include "WorkerPool.h"
 
-#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <thread>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace downstream {
 namespace {
 
+// A session has no thread of its own. While it has unparsed input, one job for
+// it is queued on the shared pool; the job parses once, prepares the platform
+// rendering, publishes, and queues itself again if more input arrived. Many
+// streams therefore share a few cores fairly, and a quiet stream costs nothing.
 class Session : public std::enable_shared_from_this<Session> {
 public:
   Session(std::string id, ParseMode mode, SessionCallback callback)
       : id_(std::move(id)), parser_(mode), callback_(std::move(callback)) {}
 
-  /// The worker holds its own reference, so a disposed session lives until
-  /// the parse in progress finishes and nobody has to wait for it.
-  void start() {
-    std::thread([self = shared_from_this()] { self->run(); }).detach();
-  }
-
   void stop() {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      stopped_ = true;
-      dirty_ = false;
-    }
-    changed_.notify_one();
+    std::lock_guard<std::mutex> lock(mutex_);
+    stopped_ = true;
+    dirty_ = false;
   }
 
   bool append(const std::string &chunk, uint64_t generation, uint64_t sequence) {
@@ -50,9 +46,8 @@ public:
     pending_.append(chunk);
     sourceBytes_ += chunk.size();
     sequence_ = sequence;
-    dirty_ = true;
     SessionTrace::record(id_, generation, sequence, "append_received");
-    changed_.notify_one();
+    markDirty();
     return true;
   }
 
@@ -70,12 +65,11 @@ public:
     generation_ = generation;
     sequence_ = 0;
     finished_ = false;
-    dirty_ = true;
     SessionTrace::record(id_, generation, 0, "reset_received");
     snapshot_.reset();
     readyGeneration_ = 0;
     readySequence_ = 0;
-    changed_.notify_one();
+    markDirty();
     return true;
   }
 
@@ -86,8 +80,7 @@ public:
     }
     if (!finished_) {
       finished_ = true;
-      dirty_ = true;
-      changed_.notify_one();
+      markDirty();
     }
     return true;
   }
@@ -99,46 +92,76 @@ public:
                : nullptr;
   }
 
+  void noteLayout(LayoutHint hint) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    layout_ = hint;
+  }
+
 private:
-  void run() {
-    for (;;) {
-      // Only the bytes accepted since the last pass cross the lock; the
-      // parser owns the canonical source.
-      std::optional<std::string> replacement;
-      std::string pending;
-      uint64_t generation;
-      uint64_t sequence;
-      bool finished;
-      {
-        std::unique_lock<std::mutex> lock(mutex_);
-        changed_.wait(lock, [this] { return stopped_ || dirty_; });
-        if (stopped_) {
-          return;
-        }
-        replacement.swap(replacement_);
-        pending.swap(pending_);
-        generation = generation_;
-        sequence = sequence_;
-        finished = finished_;
-        dirty_ = false;
-      }
+  /// Requires mutex_. Queues one job unless one is already queued or running;
+  /// a running job sees dirty_ and queues the next pass itself.
+  void markDirty() {
+    dirty_ = true;
+    if (!scheduled_) {
+      scheduled_ = true;
+      WorkerPool::shared().post([self = shared_from_this()] { self->step(); });
+    }
+  }
 
-      SessionTrace::record(id_, generation, sequence, "parse_start");
-      if (replacement) {
-        parser_.replace(*replacement);
-      }
-      parser_.append(pending);
-      auto result = parser_.parse(finished);
-      SessionTrace::record(id_, generation, sequence, "parse_end");
-      const bool parsed = result.status == ParseStatus::Ok && result.document;
-
-      // The callback runs under the lock so that no event follows stop().
-      // It must not call back into this session.
+  /// One parse pass. The job holds a reference, so a disposed session lives
+  /// until the pass in progress finishes and nobody has to wait for it.
+  void step() {
+    // Only the bytes accepted since the last pass cross the lock; the parser
+    // owns the canonical source.
+    std::optional<std::string> replacement;
+    std::string pending;
+    uint64_t generation;
+    uint64_t sequence;
+    bool finished;
+    std::vector<LayoutHint> hints;
+    {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (stopped_ || generation != generation_ || sequence != sequence_ || finished != finished_) {
-        SessionTrace::record(id_, generation, sequence, "dropped");
-        continue;
+      if (stopped_ || !dirty_) {
+        scheduled_ = false;
+        return;
       }
+      replacement.swap(replacement_);
+      pending.swap(pending_);
+      generation = generation_;
+      sequence = sequence_;
+      finished = finished_;
+      dirty_ = false;
+      if (layout_) {
+        hints.push_back(*layout_);
+      }
+    }
+
+    SessionTrace::record(id_, generation, sequence, "parse_start");
+    if (replacement) {
+      parser_.replace(*replacement);
+    }
+    parser_.append(pending);
+    auto result = parser_.parse(finished);
+    SessionTrace::record(id_, generation, sequence, "parse_end");
+    const bool parsed = result.status == ParseStatus::Ok && result.document;
+
+    if (parsed && isCurrentGeneration(generation)) {
+      // The view has not measured yet, so the widths other views use are the
+      // best guess for this one.
+      SessionTrace::record(id_, generation, sequence, "prepare_start");
+      RenderPreparer::prepare(result.document, hints.empty() ? RenderPreparer::recentLayouts() : hints);
+      SessionTrace::record(id_, generation, sequence, "prepare_end");
+    }
+
+    // The callback runs under the lock so that no event follows stop().
+    // It must not call back into this session.
+    std::lock_guard<std::mutex> lock(mutex_);
+    // A pass publishes even when newer input arrived meanwhile. Waiting for
+    // input to pause would show nothing while a stream outpaces parsing; the
+    // newer input is parsed by the next pass. Only a reset discards it.
+    if (stopped_ || generation != generation_) {
+      SessionTrace::record(id_, generation, sequence, "dropped");
+    } else {
       if (parsed) {
         snapshot_ = std::move(result.document);
         SessionTrace::bindDocument(snapshot_, id_, generation, sequence);
@@ -148,13 +171,23 @@ private:
       }
       callback_({id_, generation, sequence, parsed ? ParseStatus::Ok : result.status, std::move(result.message)});
     }
+    if (dirty_ && !stopped_) {
+      WorkerPool::shared().post([self = shared_from_this()] { self->step(); });
+    } else {
+      scheduled_ = false;
+    }
+  }
+
+  bool isCurrentGeneration(uint64_t generation) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return !stopped_ && generation == generation_;
   }
 
   const std::string id_;
+  // Used only by the job in progress; jobs for one session never overlap.
   IncrementalParser parser_;
   const SessionCallback callback_;
   mutable std::mutex mutex_;
-  std::condition_variable changed_;
   std::optional<std::string> replacement_;
   std::string pending_;
   size_t sourceBytes_{0};
@@ -163,7 +196,9 @@ private:
   uint64_t readyGeneration_{0};
   uint64_t readySequence_{0};
   DocumentHandle snapshot_;
+  std::optional<LayoutHint> layout_;
   bool dirty_{false};
+  bool scheduled_{false};
   bool finished_{false};
   bool stopped_{false};
 };
@@ -187,9 +222,7 @@ bool SessionRegistry::create(const std::string &id, ParseMode mode, SessionCallb
   if (sessions.count(id) != 0) {
     return false;
   }
-  auto session = std::make_shared<Session>(id, mode, std::move(callback));
-  session->start();
-  sessions.emplace(id, std::move(session));
+  sessions.emplace(id, std::make_shared<Session>(id, mode, std::move(callback)));
   return true;
 }
 
@@ -228,6 +261,12 @@ void SessionRegistry::dispose(const std::string &id) {
 DocumentHandle SessionRegistry::snapshot(const std::string &id, uint64_t generation, uint64_t sequence) {
   const auto session = findSession(id);
   return session ? session->snapshot(generation, sequence) : nullptr;
+}
+
+void SessionRegistry::noteLayout(const std::string &id, LayoutHint hint) {
+  if (const auto session = findSession(id)) {
+    session->noteLayout(hint);
+  }
 }
 
 } // namespace downstream

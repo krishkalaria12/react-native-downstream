@@ -49,6 +49,7 @@ def setUpModule():
         )
         objects.append(target)
     engine = [CPP / "downstream" / name for name in ("MarkdownParser.cpp", "Unicode.cpp", "LinkPolicy.cpp")]
+    pool = [CPP / "downstream" / name for name in ("WorkerPool.cpp", "RenderPreparer.cpp")]
     subprocess.run(
         [cxx, "-std=c++20", "-O1", "-Wall", "-Wextra", "-Werror", "-DMD4C_USE_UTF8", *SYMBOL_PREFIXES,
          f"-I{md4c}", f"-I{CPP / 'downstream'}", CPP / "tests" / "dump_document.cpp", *engine,
@@ -72,8 +73,16 @@ def setUpModule():
         [cxx, "-std=c++20", "-O1", "-Wall", "-Wextra", "-Werror", "-pthread", "-DMD4C_USE_UTF8",
          *SYMBOL_PREFIXES, f"-I{md4c}", f"-I{CPP / 'downstream'}", f"-I{CPP / 'session'}",
          CPP / "tests" / "test_session_registry.cpp", CPP / "session" / "SessionRegistry.cpp",
-         CPP / "session" / "IncrementalParser.cpp", *engine, objects[0], objects[1],
+         CPP / "session" / "IncrementalParser.cpp", *pool, *engine, objects[0], objects[1],
          "-o", BUILD_DIR / "test_session_registry"],
+        check=True,
+    )
+    subprocess.run(
+        [cxx, "-std=c++20", "-O1", "-Wall", "-Wextra", "-Werror", "-pthread", "-DMD4C_USE_UTF8",
+         *SYMBOL_PREFIXES, f"-I{md4c}", f"-I{CPP / 'downstream'}", f"-I{CPP / 'session'}",
+         CPP / "tests" / "test_worker_pool.cpp", CPP / "session" / "SessionRegistry.cpp",
+         CPP / "session" / "IncrementalParser.cpp", CPP / "downstream" / "PreparedDocument.cpp", *pool, *engine,
+         objects[0], objects[1], "-o", BUILD_DIR / "test_worker_pool"],
         check=True,
     )
 
@@ -364,6 +373,9 @@ class LinkTests(unittest.TestCase):
 class InputTests(unittest.TestCase):
     def test_native_session_versions_and_lifecycle(self):
         subprocess.run([BUILD_DIR / "test_session_registry"], check=True, timeout=15)
+
+    def test_worker_pool_prepares_and_shares_sessions(self):
+        subprocess.run([BUILD_DIR / "test_worker_pool"], check=True, timeout=30)
 
     def test_rejects_malformed_utf8(self):
         self.assertEqual(parse(b"a\xff")["error"], "invalid_input")

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IncrementalParser.h"
+#include "RenderPreparer.h"
 
 #include <cstdint>
 #include <functional>
@@ -19,11 +20,12 @@ struct SessionEvent {
   std::string message;
 };
 
-/// Called on the session's worker thread.
+/// Called on a worker pool thread, one event at a time per session.
 using SessionCallback = std::function<void(const SessionEvent &)>;
 
-// Native sessions survive view unmounts. A worker publishes immutable documents
-// only for the current generation and sequence.
+// Native sessions survive view unmounts. Sessions share the WorkerPool: each
+// parse pass publishes an immutable document for the current generation, and
+// prepares its platform rendering first so Fabric finds it ready.
 class SessionRegistry {
 public:
   static bool create(const std::string &id, ParseMode mode, SessionCallback callback);
@@ -35,6 +37,9 @@ public:
   /// further events.
   static void dispose(const std::string &id);
   static DocumentHandle snapshot(const std::string &id, uint64_t generation, uint64_t sequence);
+  /// Records the width and font scale the session's view was measured at, so
+  /// later snapshots are prepared for that layout.
+  static void noteLayout(const std::string &id, LayoutHint hint);
 };
 
 } // namespace downstream
