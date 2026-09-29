@@ -1,12 +1,5 @@
-import { useState } from 'react';
-import {
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { useMemo, useState } from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { DownstreamMarkdown } from 'react-native-downstream';
 import type { MarkdownStreamController } from 'react-native-downstream';
 
@@ -16,79 +9,83 @@ import type { WorkloadShape, WorkloadSize } from '../shared/workload';
 import {
   buildComparison,
   formatValue,
+  type Comparison,
   type ComparisonCandidate,
 } from './comparison';
 import {
   CANDIDATE_LABELS,
   CANDIDATES,
   type ComparisonRun,
+  type ComparisonStatus,
   type ParseMode,
 } from './comparisonRunner';
 import { StreamdownMarkdown } from './StreamdownMarkdown';
 import { useComparison } from './useComparison';
+import {
+  Button,
+  ButtonRow,
+  ChipRow,
+  Divider,
+  Group,
+  Notice,
+  type ChipOption,
+} from '../ui/kit';
+import { DocumentPane, RunReadout } from '../ui/readout';
+import {
+  Hero,
+  Screen,
+  SectionLabel,
+  useBottomInset,
+  useScreenScroll,
+} from '../ui/screen';
+import { space, useTheme } from '../ui/theme';
+import type { Tone } from '../ui/theme';
 
 const SEED = 20260928;
-const SCHEDULES: { id: ScheduleKind; label: string }[] = [
-  { id: 'manifest', label: 'Exact chunks' },
-  { id: 'character', label: '1 character' },
-  { id: 'range', label: '1–20 characters' },
-  { id: 'bursty', label: 'Bursty network' },
+
+const SHAPES: ChipOption<WorkloadShape>[] = [
+  { value: 'repeat', label: 'Repeat fixture' },
+  { value: 'open-fence', label: 'Open code fence' },
 ];
 
-function Choice<T extends string | number>({
-  label,
-  value,
-  selected,
-  onPress,
-}: {
-  label: string;
-  value: T;
-  selected: boolean;
-  onPress: (value: T) => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      onPress={() => onPress(value)}
-      style={[styles.choice, selected && styles.choiceSelected]}
-    >
-      <Text style={[styles.choiceText, selected && styles.choiceTextSelected]}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
+const SCHEDULES: ChipOption<ScheduleKind>[] = [
+  { value: 'manifest', label: 'Exact chunks' },
+  { value: 'character', label: '1 character' },
+  { value: 'range', label: '1 to 20 characters' },
+  { value: 'bursty', label: 'Bursty network' },
+];
 
-function Action({
-  label,
-  onPress,
-  disabled = false,
-  primary = false,
-}: {
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-  primary?: boolean;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ disabled }}
-      disabled={disabled}
-      onPress={onPress}
-      style={[
-        styles.action,
-        primary && styles.actionPrimary,
-        disabled && styles.actionDisabled,
-      ]}
-    >
-      <Text style={[styles.actionText, primary && styles.actionTextPrimary]}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
+const PARSE_MODES: ChipOption<ParseMode>[] = [
+  { value: 'full', label: 'Full parse' },
+  { value: 'incremental', label: 'Incremental tail' },
+];
+
+const SIZES: ChipOption<WorkloadSize>[] = [
+  { value: 'fixture', label: 'Fixture' },
+  { value: 10, label: '10 KiB' },
+  { value: 50, label: '50 KiB' },
+  { value: 100, label: '100 KiB' },
+];
+
+const STATUS_TONE: Record<ComparisonStatus, Tone> = {
+  idle: 'neutral',
+  running: 'live',
+  complete: 'accent',
+  failed: 'danger',
+};
+
+const VERDICT: Record<Comparison['verdict'], { title: string; tone: Tone }> = {
+  downstream: {
+    title: 'Downstream reached the final frame first',
+    tone: 'win',
+  },
+  streamdown: {
+    title: 'Streamdown reached the final frame first',
+    tone: 'neutral',
+  },
+  tie: { title: 'Both reached the final frame together', tone: 'neutral' },
+  unavailable: { title: 'The run did not finish', tone: 'danger' },
+};
 
 function Pane({
   candidate,
@@ -96,31 +93,31 @@ function Pane({
   liveSource,
   liveStream,
   running,
-  error,
 }: {
   candidate: ComparisonCandidate;
   run: ComparisonRun | null;
   liveSource: string;
   liveStream: MarkdownStreamController | null;
   running: boolean;
-  error: string | null;
 }) {
+  const t = useTheme();
   const source = run ? run.metrics.source : liveSource;
   const stream = run ? run.stream : liveStream;
+  const state = run
+    ? run.error
+      ? 'failed'
+      : `${run.metrics.totalMs.toFixed(1)} ms`
+    : running
+    ? 'running'
+    : 'waiting';
   return (
-    <View style={styles.pane}>
-      <View style={styles.paneHeader}>
-        <Text style={styles.paneLabel}>{CANDIDATE_LABELS[candidate]}</Text>
-        <Text style={styles.paneState}>
-          {run
-            ? error
-              ? 'failed'
-              : `${run.metrics.totalMs.toFixed(1)} ms`
-            : running
-            ? 'running'
-            : 'waiting'}
-        </Text>
-      </View>
+    <DocumentPane
+      label={CANDIDATE_LABELS[candidate]}
+      state={state}
+      tone={run?.error ? 'danger' : running ? 'live' : run ? 'win' : 'neutral'}
+      pulse={running}
+      style={styles.pane}
+    >
       {candidate === 'streamdown' ? (
         <StreamdownMarkdown markdown={source} />
       ) : stream ? (
@@ -130,7 +127,76 @@ function Pane({
         // place in the tree, while Streamdown is the candidate under test.
         <DownstreamMarkdown markdown="" />
       )}
-      {error && <Text style={styles.paneError}>{error}</Text>}
+      {run?.error != null && (
+        <Text style={[t.s.caption, styles.paneError, { color: t.c.danger }]}>
+          {run.error}
+        </Text>
+      )}
+    </DocumentPane>
+  );
+}
+
+/** One candidate's time to the final frame, or why it has none. */
+function candidateFigure(label: string, run: ComparisonRun | null) {
+  if (run === null) return { label, value: 'waiting' };
+  if (run.error !== null) return { label, value: 'failed' };
+  return {
+    label,
+    value: run.metrics.totalMs.toFixed(1),
+    unit: 'ms',
+    tone: label === 'downstream' ? ('accent' as const) : undefined,
+  };
+}
+
+function ComparisonTable({ comparison }: { comparison: Comparison }) {
+  const t = useTheme();
+  return (
+    <View style={[t.s.well, styles.table]}>
+      <View style={styles.row}>
+        <Text style={[t.s.caption, styles.cellName, styles.headerCell]}>
+          Metric
+        </Text>
+        <Text style={[t.s.caption, styles.cellValue, styles.headerCell]}>
+          Downstream
+        </Text>
+        <Text style={[t.s.caption, styles.cellValue, styles.headerCell]}>
+          Streamdown
+        </Text>
+      </View>
+      <Divider inset={false} />
+      {comparison.rows.map((row) => (
+        <View key={row.id}>
+          <Divider inset={false} />
+          <View
+            style={[
+              styles.row,
+              row.faster === 'downstream' && { backgroundColor: t.c.win },
+            ]}
+          >
+            <Text style={[t.s.body, styles.cellName, styles.cellLabel]}>
+              {row.label}
+            </Text>
+            <Text
+              style={[
+                t.s.meta,
+                styles.cellValue,
+                row.faster === 'downstream' && { color: t.c.accent },
+              ]}
+            >
+              {formatValue(row.downstream, row.unit)}
+            </Text>
+            <Text
+              style={[
+                t.s.meta,
+                styles.cellValue,
+                row.faster === 'streamdown' && { color: t.c.inkSoft },
+              ]}
+            >
+              {formatValue(row.streamdown, row.unit)}
+            </Text>
+          </View>
+        </View>
+      ))}
     </View>
   );
 }
@@ -142,319 +208,260 @@ export function CompareScreen() {
   const [workloadSize, setWorkloadSize] = useState<WorkloadSize>('fixture');
   const [schedule, setSchedule] = useState<ScheduleKind>('manifest');
   const [parseMode, setParseMode] = useState<ParseMode>('full');
-  const fixture = fixtures.find((item) => item.id === fixtureId) ?? fixtures[0];
+  const scroll = useScreenScroll();
+  const bottom = useBottomInset();
+  const t = useTheme();
+
+  const fixture = useMemo(
+    () => fixtures.find((item) => item.id === fixtureId) ?? fixtures[0],
+    [fixtureId]
+  );
   const [streamdownRun, downstreamRun] = [
     view.runs[0] ?? null,
     view.runs[1] ?? null,
   ];
-  const bothDone = streamdownRun !== null && downstreamRun !== null;
   const anyFailed = !!(streamdownRun?.error || downstreamRun?.error);
   const comparison =
-    bothDone && !anyFailed && streamdownRun && downstreamRun
+    streamdownRun && downstreamRun && !anyFailed
       ? buildComparison(downstreamRun.metrics, streamdownRun.metrics)
       : null;
   const running = view.status === 'running';
+  const verdict = comparison ? VERDICT[comparison.verdict] : null;
+
+  const start = () => {
+    if (!fixture) return;
+    run({
+      fixture,
+      workloadShape,
+      workloadSize:
+        workloadShape === 'open-fence' && workloadSize === 'fixture'
+          ? 10
+          : workloadSize,
+      schedule,
+      seed: SEED,
+      parseMode,
+    });
+  };
 
   return (
-    <ScrollView contentContainerStyle={styles.content}>
-      <Text style={styles.kicker}>Downstream / testing</Text>
-      <Text style={styles.title}>Streamdown compared with Downstream</Text>
-      <Text style={styles.intro}>
-        One source, one seeded chunk schedule, two renderers. Streamdown runs
-        first, Downstream second, so the second run controls for whatever the
-        first left on screen.
-      </Text>
-
-      <Text style={styles.sectionTitle}>Workload</Text>
-      <View style={styles.choices}>
-        <Choice
-          label="Fixture"
-          value="repeat"
-          selected={workloadShape === 'repeat'}
-          onPress={() => setWorkloadShape('repeat')}
+    <Screen title="Testing" scroll={scroll}>
+      <ScrollView
+        onScroll={scroll.onScroll}
+        scrollEventThrottle={16}
+        contentContainerStyle={[styles.content, { paddingBottom: bottom }]}
+        keyboardShouldPersistTaps="handled"
+      >
+        <Hero
+          title="Streamdown vs Downstream"
+          summary="One source, one seeded chunk schedule, two renderers. Streamdown runs first, so the second run is a control for whatever the first left on screen."
+          meta={<Text style={[t.s.meta, styles.seed]}>Seed {SEED}</Text>}
         />
-        <Choice
-          label="Open code fence"
-          value="open-fence"
-          selected={workloadShape === 'open-fence'}
-          onPress={() => setWorkloadShape('open-fence')}
-        />
-      </View>
 
-      {workloadShape === 'repeat' && (
-        <>
-          <Text style={styles.sectionTitle}>Fixture</Text>
-          <View style={styles.choices}>
-            {fixtures.map((item) => (
-              <Choice
-                key={item.id}
-                label={item.id}
-                value={item.id}
-                selected={item.id === fixtureId}
-                onPress={setFixtureId}
-              />
-            ))}
-          </View>
-          <Text style={styles.helper}>{fixture?.description}</Text>
-        </>
-      )}
+        <View style={styles.controls}>
+          <Group title="Source">
+            <ChipRow
+              inset
+              options={SHAPES}
+              value={workloadShape}
+              onChange={setWorkloadShape}
+            />
+            {workloadShape === 'repeat' && (
+              <>
+                <Divider />
+                <ChipRow
+                  inset
+                  options={fixtures.map((item) => ({
+                    value: item.id,
+                    label: item.id,
+                  }))}
+                  value={fixtureId}
+                  onChange={setFixtureId}
+                />
+                {fixture !== undefined && (
+                  <Text style={[t.s.caption, styles.groupHint]}>
+                    {fixture.description}
+                  </Text>
+                )}
+              </>
+            )}
+          </Group>
 
-      <Text style={styles.sectionTitle}>Workload size</Text>
-      <View style={styles.choices}>
-        {(workloadShape === 'repeat'
-          ? (['fixture', 10, 50, 100] as const)
-          : ([10, 50, 100] as const)
-        ).map((size) => (
-          <Choice
-            key={size}
-            label={size === 'fixture' ? 'Fixture' : `${size} KiB`}
-            value={size}
-            selected={size === workloadSize}
-            onPress={setWorkloadSize}
+          <Group title="Size">
+            <ChipRow
+              inset
+              options={
+                workloadShape === 'repeat'
+                  ? SIZES
+                  : SIZES.filter((size) => size.value !== 'fixture')
+              }
+              value={workloadSize}
+              onChange={setWorkloadSize}
+            />
+          </Group>
+
+          <Group title="Chunk schedule">
+            <ChipRow
+              inset
+              options={SCHEDULES}
+              value={schedule}
+              onChange={setSchedule}
+            />
+          </Group>
+
+          <Group title="Downstream parse mode">
+            <ChipRow
+              inset
+              options={PARSE_MODES}
+              value={parseMode}
+              onChange={setParseMode}
+            />
+          </Group>
+
+          <ButtonRow>
+            <Button
+              label={running ? 'Running' : 'Run comparison'}
+              variant="primary"
+              onPress={start}
+              disabled={running || fixture === undefined}
+            />
+            <Button label="Reset" onPress={reset} />
+          </ButtonRow>
+        </View>
+
+        {view.error !== null && (
+          <Notice
+            tone="danger"
+            title="The run stopped early"
+            style={styles.notice}
+          >
+            {view.error}
+          </Notice>
+        )}
+
+        <View style={styles.results}>
+          <RunReadout
+            status={view.status}
+            statusTone={STATUS_TONE[view.status]}
+            meta={
+              running
+                ? `${
+                    CANDIDATE_LABELS[CANDIDATES[view.active] ?? 'downstream']
+                  } is running`
+                : view.status === 'idle'
+                ? 'Streamdown first, Downstream second'
+                : undefined
+            }
+            figures={
+              streamdownRun === null && downstreamRun === null
+                ? undefined
+                : [
+                    candidateFigure('streamdown', streamdownRun),
+                    candidateFigure('downstream', downstreamRun),
+                  ]
+            }
           />
-        ))}
-      </View>
 
-      <Text style={styles.sectionTitle}>Chunk schedule</Text>
-      <View style={styles.choices}>
-        {SCHEDULES.map((item) => (
-          <Choice
-            key={item.id}
-            label={item.label}
-            value={item.id}
-            selected={item.id === schedule}
-            onPress={setSchedule}
-          />
-        ))}
-      </View>
+          <SectionLabel
+            style={styles.section}
+            trailing={
+              running ? (
+                <Text style={t.s.meta}>one source, two passes</Text>
+              ) : null
+            }
+          >
+            Both renderers
+          </SectionLabel>
 
-      <Text style={styles.sectionTitle}>Downstream parse mode</Text>
-      <View style={styles.choices}>
-        {(['full', 'incremental'] as const).map((mode) => (
-          <Choice
-            key={mode}
-            label={mode === 'full' ? 'Full' : 'Incremental'}
-            value={mode}
-            selected={mode === parseMode}
-            onPress={setParseMode}
-          />
-        ))}
-      </View>
-      <Text style={styles.helper}>
-        Each run uses seed {SEED} and one stream.
-      </Text>
+          {CANDIDATES.map((candidate, index) => (
+            <Pane
+              key={candidate}
+              candidate={candidate}
+              run={view.runs[index] ?? null}
+              liveSource={view.active === index ? view.liveSource : ''}
+              liveStream={view.active === index ? view.liveStream : null}
+              running={view.active === index}
+            />
+          ))}
 
-      <View style={styles.actions}>
-        <Action
-          label={running ? 'Running' : 'Run comparison'}
-          onPress={() =>
-            fixture &&
-            run({
-              fixture,
-              workloadShape,
-              workloadSize:
-                workloadShape === 'open-fence' && workloadSize === 'fixture'
-                  ? 10
-                  : workloadSize,
-              schedule,
-              seed: SEED,
-              parseMode,
-            })
-          }
-          disabled={running || !fixture}
-          primary
-        />
-        <Action label="Reset" onPress={reset} />
-      </View>
-
-      {view.error && <Text style={styles.error}>{view.error}</Text>}
-
-      <Text style={styles.sectionTitle}>Both renderers</Text>
-      {CANDIDATES.map((candidate, index) => {
-        const finished = view.runs[index] ?? null;
-        return (
-          <Pane
-            key={candidate}
-            candidate={candidate}
-            run={finished}
-            liveSource={view.active === index ? view.liveSource : ''}
-            liveStream={view.active === index ? view.liveStream : null}
-            running={view.active === index}
-            error={finished?.error ?? null}
-          />
-        );
-      })}
-
-      {comparison && (
-        <>
-          <Text style={styles.sectionTitle}>Comparison</Text>
-          <View style={styles.table}>
-            <View style={[styles.row, styles.rowHead]}>
-              <Text style={[styles.cell, styles.cellHead, styles.cellName]}>
-                Metric
-              </Text>
-              <Text style={[styles.cell, styles.cellHead]}>Downstream</Text>
-              <Text style={[styles.cell, styles.cellHead]}>Streamdown</Text>
-            </View>
-            {comparison.rows.map((row) => (
-              <View
-                key={row.id}
-                style={[
-                  styles.row,
-                  row.faster === 'downstream' && styles.rowWin,
-                ]}
-              >
-                <Text style={[styles.cell, styles.cellName]}>{row.label}</Text>
-                <Text style={[styles.cell, styles.cellValue]}>
-                  {formatValue(row.downstream, row.unit)}
-                </Text>
-                <Text style={[styles.cell, styles.cellValue]}>
-                  {formatValue(row.streamdown, row.unit)}
-                </Text>
+          {comparison !== null && verdict !== null && (
+            <>
+              <SectionLabel style={styles.section}>Comparison</SectionLabel>
+              <View style={styles.tableBlock}>
+                <ComparisonTable comparison={comparison} />
               </View>
-            ))}
-          </View>
+              <Notice
+                tone={verdict.tone}
+                title={verdict.title}
+                style={styles.notice}
+              >
+                {comparison.parity.match
+                  ? 'Both renderers received the same source.'
+                  : `Sources differ${
+                      comparison.parity.firstDifference === null
+                        ? ''
+                        : ` at character ${comparison.parity.firstDifference}`
+                    }.`}
+              </Notice>
+            </>
+          )}
 
-          <View style={styles.verdict}>
-            <Text style={styles.verdictTitle}>
-              {comparison.verdict === 'downstream'
-                ? 'Downstream reached the final frame first'
-                : comparison.verdict === 'streamdown'
-                ? 'Streamdown reached the final frame first'
-                : comparison.verdict === 'tie'
-                ? 'Both reached the final frame together'
-                : 'The run did not finish'}
-            </Text>
-            <Text style={styles.verdictDetail}>
-              {comparison.parity.match
-                ? 'Both renderers received the same source.'
-                : `Sources differ${
-                    comparison.parity.firstDifference === null
-                      ? ''
-                      : ` at character ${comparison.parity.firstDifference}`
-                  }.`}
-            </Text>
-          </View>
-        </>
-      )}
+          {!running && comparison === null && (
+            <Notice
+              tone="neutral"
+              title="No comparison yet"
+              style={styles.notice}
+            >
+              Run a pair to see both renderers side by side. The verdict appears
+              once both passes finish.
+            </Notice>
+          )}
 
-      {!comparison && running && (
-        <Text style={styles.helper}>
-          The comparison appears once both renderers have run.
-        </Text>
-      )}
-
-      <Text style={styles.footer}>
-        Timings come from JavaScript animation frame callbacks and end two
-        frames after the last update. They bound JS-thread work; they are not
-        proof that a glyph reached the display. Run at least two pairs per
-        device and report the spread, not the best pair.
-      </Text>
-    </ScrollView>
+          <Text style={[t.s.caption, styles.footer]}>
+            Timings come from JavaScript animation frame callbacks and end two
+            frames after the last update. They bound JS-thread work; they are
+            not proof that a glyph reached the display. Run at least two pairs
+            per device and report the spread, not the best pair.
+          </Text>
+        </View>
+      </ScrollView>
+    </Screen>
   );
 }
 
-const colors = {
-  paper: '#F2F1EB',
-  ink: '#172D2A',
-  muted: '#52645F',
-  line: '#CBD4CB',
-  teal: '#14695E',
-  white: '#FFFFFF',
-  win: '#E4EFE9',
-};
-
 const styles = StyleSheet.create({
-  content: {
-    paddingTop: Platform.OS === 'ios' ? 58 : 38,
-    paddingHorizontal: 20,
-    paddingBottom: 60,
+  content: { paddingTop: space.sm },
+  seed: { marginTop: space.md },
+  controls: {
+    paddingHorizontal: space.xl,
+    paddingTop: space.xxl,
+    gap: space.md,
   },
-  kicker: {
-    color: colors.teal,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.2,
+  groupHint: {
+    paddingHorizontal: space.lg,
+    paddingTop: space.md,
+    paddingBottom: space.lg,
   },
-  title: { color: colors.ink, fontSize: 32, fontWeight: '800', marginTop: 10 },
-  intro: {
-    color: colors.muted,
-    fontSize: 15,
-    lineHeight: 22,
-    marginTop: 7,
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    color: colors.ink,
-    fontSize: 16,
-    fontWeight: '700',
-    marginTop: 18,
-    marginBottom: 9,
-  },
-  choices: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  choice: {
-    borderWidth: 1,
-    borderColor: colors.line,
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 11,
-    backgroundColor: colors.white,
-  },
-  choiceSelected: { backgroundColor: colors.ink, borderColor: colors.ink },
-  choiceText: { color: colors.ink, fontSize: 13, fontWeight: '600' },
-  choiceTextSelected: { color: colors.white },
-  helper: { color: colors.muted, fontSize: 13, lineHeight: 18, marginTop: 7 },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 26 },
-  action: {
-    borderWidth: 1,
-    borderColor: colors.ink,
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 13,
-  },
-  actionPrimary: { backgroundColor: colors.teal, borderColor: colors.teal },
-  actionDisabled: { opacity: 0.35 },
-  actionText: { color: colors.ink, fontSize: 14, fontWeight: '700' },
-  actionTextPrimary: { color: colors.white },
-  error: { color: '#9B2C2C', fontSize: 13, marginTop: 12 },
-  pane: {
-    backgroundColor: colors.white,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.line,
-    padding: 16,
-    marginTop: 10,
-  },
-  paneHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  paneLabel: { color: colors.teal, fontSize: 12, fontWeight: '700' },
-  paneState: { color: colors.muted, fontSize: 12, fontWeight: '600' },
-  paneError: { color: '#9B2C2C', fontSize: 12, marginTop: 10 },
-  table: {
-    borderWidth: 1,
-    borderColor: colors.line,
-    borderRadius: 10,
-    overflow: 'hidden',
-  },
+  notice: { marginHorizontal: space.xl, marginTop: space.lg },
+  results: { paddingTop: space.lg },
+  section: { marginTop: space.xxl },
+  tableBlock: { paddingHorizontal: space.xl, paddingTop: space.md },
+  pane: { marginHorizontal: space.xl, marginTop: space.md },
+  paneError: { marginTop: space.sm },
+  table: { overflow: 'hidden' },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.line,
-    paddingVertical: 9,
-    paddingHorizontal: 12,
+    paddingVertical: space.md,
+    paddingHorizontal: space.lg,
   },
-  rowHead: { borderTopWidth: 0, backgroundColor: colors.paper },
-  rowWin: { backgroundColor: colors.win },
-  cell: { flex: 1, color: colors.ink, fontSize: 13 },
-  cellHead: { fontWeight: '700' },
-  cellName: { flex: 2 },
-  cellValue: { fontVariant: ['tabular-nums'], textAlign: 'right' },
-  verdict: { marginTop: 14 },
-  verdictTitle: { color: colors.ink, fontSize: 15, fontWeight: '700' },
-  verdictDetail: { color: colors.muted, fontSize: 13, marginTop: 4 },
-  footer: { color: colors.muted, fontSize: 12, lineHeight: 18, marginTop: 30 },
+  cellName: { flex: 2, paddingRight: space.sm },
+  cellValue: { flex: 1, textAlign: 'right', paddingLeft: space.sm },
+  cellLabel: { fontSize: 14, lineHeight: 19 },
+  headerCell: { fontSize: 11, letterSpacing: 0.2 },
+  footer: {
+    fontSize: 12,
+    lineHeight: 18,
+    paddingHorizontal: space.xl,
+    paddingTop: space.xxl,
+  },
 });
