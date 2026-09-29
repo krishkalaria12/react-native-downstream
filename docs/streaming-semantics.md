@@ -17,11 +17,11 @@ Temporary closing markers, when used for emphasis or other preview syntax, exist
 
 ## Classification and ordering
 
-A newline alone never commits a block. A following setext underline, table separator, list continuation, reference definition, quote continuation, or fence close may change earlier classification. Until the native implementation proves a safe boundary, it reparses the full source. A later tail optimization must fall back to full parse when context is uncertain and pass all prefix fixtures.
+A newline alone never commits a block. A following setext underline, table separator, list continuation, reference definition, quote continuation, or fence close may change earlier classification. Until the native implementation proves a safe boundary, it reparses the full source. A later tail optimization must fall back to full parse when context is uncertain and pass every prefix case in the parser oracle.
 
 Chunks are applied in call order to one session. A coalesced batch preserves the same order. Each reset changes generation; each accepted nonempty append advances sequence within that generation. `finish()` makes the final state observable after all earlier appends. Results and measurements carry generation and sequence, and the view only applies the current pair. Old worker results after reset, unmount, or rebinding cannot repaint the view. Width or style changes also invalidate stale measurements.
 
-The fixtures in `src/fixtures/manifest.json` give exact chunk strings and prefix checkpoints. The `.md` files are canonical finished sources and the `.expected.html` files are md4c parse oracles. The renderer's safe projection, such as escaped raw HTML, alt text instead of images, and literal math, is governed by [the API matrix](api.md#feature-scope). Prefix checkpoints describe visual behavior that an HTML oracle alone cannot test.
+The parser oracle in `src/cpp/tests/oracle.mjs` holds each document with its exact chunk strings and the visible text, links, and block shape expected at every chunk boundary. The renderer's safe projection, such as escaped raw HTML, alt text instead of images, and literal math, is governed by [the API matrix](api.md#feature-scope). The boundaries are asserted against the visible text a reader would see, so a checkpoint describes behaviour rather than a serialised artifact. The documents themselves are in `__benchmarks__/samples.ts`, which the benchmarks and the example app replay.
 
 ## Unresolved implementation details
 

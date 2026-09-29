@@ -32,21 +32,24 @@
     "!src/android/gradlew",
     "!src/android/gradlew.bat",
     "!src/android/local.properties",
-    "!src/cpp/tests",
-    "!src/fixtures",
     "!**/__tests__",
     "!**/__fixtures__",
     "!**/__mocks__",
+    "!__tests__",
+    "!__benchmarks__",
     "!**/.*"
   ],
   "scripts": {
     "example": "pnpm --filter react-native-downstream-example",
     "clean": "del-cli lib",
     "prepare": "bob build",
-    "typecheck": "tsc",
+    "typecheck": "tsc -p tsconfig.test.json",
     "lint": "eslint \"**/*.{js,ts,tsx}\"",
-    "test": "jest",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "test:native": "node --test src/cpp/tests/engine.test.mjs",
+    "bench": "vitest bench --run",
     "release": "release-it --only-version"
   },
   "keywords": [
@@ -122,16 +125,6 @@
     "tabWidth": 2,
     "trailingComma": "es5",
     "useTabs": false
-  },
-  "jest": {
-    "preset": "react-native",
-    "transformIgnorePatterns": [
-      "node_modules/(?!\\.pnpm/|(?:jest-)?react-native/|@react-native(?:-community)?/)"
-    ],
-    "modulePathIgnorePatterns": [
-      "<rootDir>/example/node_modules",
-      "<rootDir>/lib/"
-    ]
   },
   "commitlint": {
     "extends": [

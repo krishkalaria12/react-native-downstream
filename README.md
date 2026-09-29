@@ -70,9 +70,23 @@ value. The other three screens need no key.
 
 ## Markdown implementation plan
 
-Phase 0 defines the [API contract](docs/api.md), [streaming behavior](docs/streaming-semantics.md), and [parser fixtures](src/fixtures/README.md). The native display path, stream controller, and conservative incremental-tail parser are implemented. Full parsing remains the default mode while the two modes await device measurements.
+Phase 0 defines the [API contract](docs/api.md) and [streaming behavior](docs/streaming-semantics.md). The native display path, stream controller, and conservative incremental-tail parser are implemented. Full parsing remains the default mode while the two modes await device measurements.
 
-Run the shared C++ engine tests with `pnpm test:native`.
+## Tests and benchmarks
+
+`pnpm test` runs the TypeScript suites with vitest. They run the real engine:
+`__tests__/engine.ts` compiles `src/cpp` and the session TurboModule in the
+tests is backed by that parser, so a test asserts on the text a reader sees
+rather than on a mock's call log. `__tests__/native-view.ts` stands in for the
+native view by rendering the real parse as DOM.
+
+`pnpm test:native` builds the C++ engine and runs its own suites, including the
+`vendored md4c` digest pins that keep the vendored parser unmodified.
+
+`pnpm bench` runs the vitest benchmarks, including a Downstream against
+Streamdown RN comparison. Those numbers describe the harness: the engine runs in
+a subprocess there, where it is in-process on a device. The example app's Bench
+and Testing screens measure a real device.
 
 ## License
 
