@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useRef, useState, type ComponentRef } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -6,209 +6,324 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DownstreamMarkdown } from 'react-native-downstream';
 
 import { CHAT_MODEL, CHAT_REASONING_EFFORT, chatSetupHint } from './chat';
+import type { ChatMessage } from './useChat';
 import { useChat } from './useChat';
+import { Badge, Button, Input, Notice } from '../ui/kit';
+import {
+  APP_BAR_HEIGHT,
+  Hero,
+  Screen,
+  useBottomInset,
+  useScreenScroll,
+} from '../ui/screen';
+import { radius, space, useTheme } from '../ui/theme';
+import type { Tone } from '../ui/theme';
 
-const PLACEHOLDER = 'Ask for Markdown: a table, code, or a long answer';
+const PLACEHOLDER = 'Ask for a table, some code, or a long answer';
 
-function Action({
-  label,
-  onPress,
-  disabled = false,
-  primary = false,
-}: {
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-  primary?: boolean;
-}) {
+const STARTERS = [
+  'A table comparing full parse with incremental tail, five rows',
+  'Explain the worker thread model in three short sections',
+  'A long answer with headings, lists, a table, and a code block',
+] as const;
+
+const STATUS_TONE: Record<ChatMessage['status'], Tone> = {
+  streaming: 'live',
+  complete: 'neutral',
+  stopped: 'warn',
+  error: 'danger',
+};
+
+const STATUS_LABEL: Record<ChatMessage['status'], string> = {
+  streaming: 'streaming',
+  complete: 'done',
+  stopped: 'stopped',
+  error: 'failed',
+};
+
+/** The user's own prompt, set apart from the rendered answer. */
+function Prompt({ text }: { text: string }) {
+  const t = useTheme();
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ disabled }}
-      disabled={disabled}
-      onPress={onPress}
-      style={[
-        styles.action,
-        primary && styles.actionPrimary,
-        disabled && styles.actionDisabled,
-      ]}
-    >
-      <Text style={[styles.actionText, primary && styles.actionTextPrimary]}>
-        {label}
-      </Text>
-    </Pressable>
+    <View style={[styles.prompt, { backgroundColor: t.c.accent }]}>
+      <Text style={[t.s.body, { color: t.c.onAccent }]}>{text}</Text>
+    </View>
+  );
+}
+
+function Answer({ message }: { message: ChatMessage }) {
+  const t = useTheme();
+  return (
+    <View style={t.s.card}>
+      <View style={styles.answerHead}>
+        <View style={styles.answerWho}>
+          <Ionicons name="sparkles-outline" size={15} color={t.c.accent} />
+          <Text numberOfLines={1} style={[t.s.label, styles.answerName]}>
+            {CHAT_MODEL}
+          </Text>
+        </View>
+        <Badge
+          label={STATUS_LABEL[message.status]}
+          tone={STATUS_TONE[message.status]}
+          pulse={message.status === 'streaming'}
+        />
+      </View>
+      <View style={styles.answerBody}>
+        {message.stream ? (
+          <DownstreamMarkdown
+            stream={message.stream}
+            onError={({ code, message: text }) => console.warn(code, text)}
+          />
+        ) : (
+          <Text style={t.s.body}>Nothing came back for this prompt.</Text>
+        )}
+      </View>
+      {message.error !== null && (
+        <View style={[styles.answerError, { borderTopColor: t.c.lineSoft }]}>
+          <Text style={[t.s.caption, { color: t.c.danger }]}>
+            {message.error}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function Starters({ onPick }: { onPick: (value: string) => void }) {
+  const t = useTheme();
+  return (
+    <View style={styles.starters}>
+      <Text style={[t.s.caption, styles.startersLabel]}>Try one of these</Text>
+      {STARTERS.map((starter) => (
+        <Pressable
+          key={starter}
+          accessibilityRole="button"
+          accessibilityLabel={starter}
+          accessibilityHint="Fills the composer with this prompt"
+          onPress={() => onPick(starter)}
+          style={({ pressed }) => [
+            styles.starter,
+            { backgroundColor: t.c.surface, borderColor: t.c.line },
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text style={[t.s.body, styles.starterText]}>{starter}</Text>
+          <Ionicons name="arrow-up-outline" size={15} color={t.c.inkFaint} />
+        </Pressable>
+      ))}
+    </View>
   );
 }
 
 export function ChatScreen() {
   const { messages, busy, setupError, send, stop, clear } = useChat();
   const [prompt, setPrompt] = useState('');
-  const submit = () => send(prompt);
+  const scroll = useScreenScroll();
+  const list = useRef<ComponentRef<typeof ScrollView>>(null);
+  const insets = useSafeAreaInsets();
+  const t = useTheme();
+  const bottom = useBottomInset(space.lg);
+
+  const submit = useCallback(() => {
+    if (prompt.trim().length === 0) return;
+    send(prompt);
+    setPrompt('');
+  }, [prompt, send]);
+
+  // A streaming answer grows past the fold, so the list follows it down.
+  const follow = useCallback(() => {
+    list.current?.scrollToEnd({ animated: true });
+  }, []);
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <View style={styles.header}>
-        <Text style={styles.kicker}>Downstream / example</Text>
-        <Text style={styles.title}>Streaming Markdown chat</Text>
-        <Text style={styles.meta}>
-          {CHAT_MODEL} · reasoning {CHAT_REASONING_EFFORT}
-        </Text>
-      </View>
-
-      <ScrollView
-        contentContainerStyle={styles.messages}
-        keyboardShouldPersistTaps="handled"
+    <Screen title="Example" scroll={scroll}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={insets.top + APP_BAR_HEIGHT}
       >
-        {messages.length === 0 && (
-          <Text style={styles.empty}>
-            Type a prompt to stream a Markdown answer through the native
-            session.
-          </Text>
+        <ScrollView
+          ref={list}
+          onScroll={scroll.onScroll}
+          scrollEventThrottle={16}
+          onContentSizeChange={follow}
+          contentContainerStyle={styles.thread}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+        >
+          <Hero
+            title="Example"
+            summary="Ask a question and watch a Markdown answer arrive a token at a time, parsed off the main thread."
+            meta={
+              <Text style={[t.s.meta, styles.modelMeta]}>
+                {CHAT_MODEL} · reasoning {CHAT_REASONING_EFFORT}
+              </Text>
+            }
+          />
+
+          {messages.length === 0 ? (
+            <Starters onPick={setPrompt} />
+          ) : (
+            <View
+              style={[
+                styles.thread,
+                styles.messages,
+                { paddingBottom: bottom },
+              ]}
+            >
+              {messages.map((message) =>
+                message.role === 'user' ? (
+                  <Prompt key={message.id} text={message.text} />
+                ) : (
+                  <Answer key={message.id} message={message} />
+                )
+              )}
+            </View>
+          )}
+        </ScrollView>
+
+        {setupError === 'missing-key' && (
+          <View style={styles.setup}>
+            <Notice tone="warn" title="No API key">
+              {chatSetupHint}
+            </Notice>
+          </View>
         )}
-        {messages.map((message) => (
-          <View key={message.id} style={styles.message}>
-            <Text style={styles.role}>
-              {message.role === 'user' ? 'You' : CHAT_MODEL}
-            </Text>
-            {message.stream ? (
-              <DownstreamMarkdown
-                stream={message.stream}
-                onError={({ code, message: text }) => console.warn(code, text)}
+
+        <View
+          style={[
+            styles.composer,
+            {
+              backgroundColor: t.c.canvas,
+              borderTopColor: t.c.line,
+              paddingBottom: insets.bottom + space.md,
+            },
+          ]}
+        >
+          <View style={styles.composerRow}>
+            <Input
+              accessibilityLabel="Prompt"
+              placeholder={PLACEHOLDER}
+              value={prompt}
+              onChangeText={setPrompt}
+              multiline
+              editable={!busy}
+              style={styles.composerInput}
+            />
+            {busy ? (
+              <Button
+                label="Stop"
+                variant="danger"
+                onPress={stop}
+                style={styles.send}
+                hint="Stops the reply and closes the document"
               />
             ) : (
-              <Text style={styles.promptText}>{message.text}</Text>
+              <Button
+                label="Send"
+                variant="primary"
+                onPress={submit}
+                disabled={prompt.trim().length === 0}
+                style={styles.send}
+                hint="Streams the reply through a native session"
+              />
             )}
-            {message.status === 'streaming' && (
-              <Text style={styles.status}>streaming…</Text>
-            )}
-            {message.error && <Text style={styles.error}>{message.error}</Text>}
           </View>
-        ))}
-      </ScrollView>
-
-      {setupError === 'missing-key' && (
-        <Text style={styles.setup}>{chatSetupHint}</Text>
-      )}
-
-      <View style={styles.composer}>
-        <TextInput
-          accessibilityLabel="Prompt"
-          placeholder={PLACEHOLDER}
-          value={prompt}
-          onChangeText={setPrompt}
-          onSubmitEditing={submit}
-          editable={!busy}
-          multiline
-          style={styles.input}
-        />
-        <View style={styles.actions}>
-          {busy ? (
-            <Action label="Stop" onPress={stop} primary />
-          ) : (
-            <Action
-              label="Send"
-              onPress={submit}
-              disabled={prompt.trim().length === 0}
-              primary
-            />
+          {messages.length > 0 && (
+            <View style={styles.composerFoot}>
+              <Text style={[t.s.caption, styles.composerNote]}>
+                Deltas go straight to the native session, so a long answer never
+                re-renders the list.
+              </Text>
+              <Button label="New chat" variant="ghost" onPress={clear} />
+            </View>
           )}
-          <Action
-            label="Clear"
-            onPress={clear}
-            disabled={messages.length === 0}
-          />
         </View>
-      </View>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </Screen>
   );
 }
 
-const colors = {
-  paper: '#F2F1EB',
-  ink: '#172D2A',
-  muted: '#52645F',
-  line: '#CBD4CB',
-  teal: '#14695E',
-  white: '#FFFFFF',
-};
-
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.paper },
-  header: {
-    paddingTop: Platform.OS === 'ios' ? 58 : 38,
-    paddingHorizontal: 20,
-    paddingBottom: 12,
+  flex: { flex: 1 },
+  pressed: { opacity: 0.6 },
+  thread: { paddingTop: space.sm },
+
+  modelMeta: { marginTop: space.md },
+
+  starters: {
+    paddingHorizontal: space.xl,
+    paddingTop: space.xxl,
+    gap: space.sm,
   },
-  kicker: {
-    color: colors.teal,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-  },
-  title: { color: colors.ink, fontSize: 28, fontWeight: '800', marginTop: 8 },
-  meta: { color: colors.muted, fontSize: 13, marginTop: 4 },
-  messages: { padding: 20, gap: 18, flexGrow: 1 },
-  empty: { color: colors.muted, fontSize: 14, lineHeight: 21 },
-  message: {
-    backgroundColor: colors.white,
-    borderRadius: 10,
+  startersLabel: { marginBottom: space.xs },
+  starter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    padding: space.lg,
+    borderRadius: radius.card,
     borderWidth: 1,
-    borderColor: colors.line,
-    padding: 16,
   },
-  role: {
-    color: colors.teal,
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.6,
-    marginBottom: 10,
+  starterText: { flex: 1, fontSize: 14, lineHeight: 20 },
+
+  messages: {
+    paddingHorizontal: space.xl,
+    paddingTop: space.xxl,
+    gap: space.md,
   },
-  promptText: { color: colors.ink, fontSize: 15, lineHeight: 22 },
-  status: { color: colors.muted, fontSize: 12, marginTop: 8 },
-  error: { color: '#9B2C2C', fontSize: 12, marginTop: 8 },
-  setup: {
-    color: '#9B2C2C',
-    fontSize: 12,
-    paddingHorizontal: 20,
-    paddingBottom: 8,
+  prompt: {
+    alignSelf: 'flex-end',
+    maxWidth: '88%',
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    borderRadius: radius.card,
   },
-  composer: {
+
+  answerHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.md,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+  },
+  answerWho: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 1,
+  },
+  answerName: { flexShrink: 1 },
+  answerBody: { paddingHorizontal: space.lg, paddingBottom: space.lg },
+  answerError: {
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.line,
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: Platform.OS === 'ios' ? 28 : 16,
   },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.line,
-    borderRadius: 10,
-    backgroundColor: colors.white,
-    color: colors.ink,
-    fontSize: 15,
-    lineHeight: 21,
-    maxHeight: 130,
-    padding: 12,
+
+  setup: { paddingHorizontal: space.xl, paddingBottom: space.md },
+  composer: {
+    paddingHorizontal: space.xl,
+    paddingTop: space.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: space.md,
   },
-  actions: { flexDirection: 'row', gap: 8, marginTop: 10 },
-  action: {
-    borderWidth: 1,
-    borderColor: colors.ink,
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+  composerRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  composerInput: { flex: 1, maxHeight: 120 },
+  send: { minWidth: 88 },
+  composerFoot: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.lg,
   },
-  actionPrimary: { backgroundColor: colors.teal, borderColor: colors.teal },
-  actionDisabled: { opacity: 0.35 },
-  actionText: { color: colors.ink, fontSize: 14, fontWeight: '700' },
-  actionTextPrimary: { color: colors.white },
+  composerNote: { flex: 1 },
 });
