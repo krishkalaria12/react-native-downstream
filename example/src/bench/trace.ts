@@ -1,4 +1,5 @@
 import { Dimensions, PixelRatio, Platform } from 'react-native';
+import type { StreamTraceEvent } from '../../../src/streamTrace';
 import type { ScheduleKind } from './schedule';
 import type { WorkloadShape, WorkloadSize } from './workload';
 
@@ -45,7 +46,9 @@ export interface TraceRunData {
   runDurationMs: number;
   wallDurationMs: number;
   droppedEvents: number;
+  droppedStreamEvents: number;
   events: TraceEvent[];
+  streamEvents: StreamTraceEvent[];
 }
 
 const MAX_EVENTS = 50000;
@@ -73,7 +76,9 @@ export class TraceRun {
       | 'runDurationMs'
       | 'wallDurationMs'
       | 'droppedEvents'
+      | 'droppedStreamEvents'
       | 'events'
+      | 'streamEvents'
     >
   ) {
     this.data = {
@@ -83,8 +88,24 @@ export class TraceRun {
       runDurationMs: 0,
       wallDurationMs: 0,
       droppedEvents: 0,
+      droppedStreamEvents: 0,
       events: [],
+      streamEvents: [],
     };
+  }
+
+  recordStreamEvent(event: StreamTraceEvent) {
+    if (
+      !this.data.traceEnabled ||
+      !this.data.sessionIds.includes(event.sessionId) ||
+      (event.sequence !== 0 && event.sequence % this.data.sampleStride !== 0)
+    )
+      return;
+    if (this.data.streamEvents.length >= MAX_EVENTS) {
+      this.data.droppedStreamEvents += 1;
+      return;
+    }
+    this.data.streamEvents.push(event);
   }
 
   mark(type: string, details: Omit<TraceEvent, 'atMs' | 'type'> = {}) {

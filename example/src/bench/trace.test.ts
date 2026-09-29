@@ -29,3 +29,39 @@ test('trace-off runs still report completion and active duration', () => {
   expect(trace.data.wallDurationMs).toBeGreaterThanOrEqual(0);
   expect(trace.data.events).toEqual([]);
 });
+
+test('stream trace keeps matching sampled session events', () => {
+  const trace = new TraceRun({
+    run: 2,
+    renderer: 'downstream-full',
+    parseMode: 'full',
+    sessionIds: ['session-a'],
+    deviceId: 'simulator-a',
+    runCondition: 'warm',
+    sampleOrder: 2,
+    fixture: 'emphasis',
+    source: 'emphasis.md',
+    sourceBytes: 20,
+    sourceHash: 'adler32:12345678',
+    workloadSize: 'fixture',
+    workloadShape: 'repeat',
+    schedule: 'range',
+    seed: 17,
+    streams: 1,
+    traceEnabled: true,
+    sampleStride: 2,
+    batchWindowMs: 16,
+  });
+  const native = {
+    sessionId: 'session-a',
+    generation: 0,
+    sequence: 2,
+    event: 'parse_end',
+    clockDomain: 'native-monotonic' as const,
+    timeNs: '3000000',
+  };
+  trace.recordStreamEvent({ ...native, sequence: 1 });
+  trace.recordStreamEvent({ ...native, sessionId: 'another-session' });
+  trace.recordStreamEvent(native);
+  expect(trace.data.streamEvents).toEqual([native]);
+});

@@ -4,6 +4,10 @@ import {
   createMarkdownStreamWithMode,
   getStreamState,
 } from '../../../src/createMarkdownStream';
+import {
+  setStreamTracing,
+  subscribeStreamTrace,
+} from '../../../src/streamTrace';
 import type { Fixture } from './fixtures';
 import {
   afterTwoAnimationFrames,
@@ -92,6 +96,7 @@ interface ActiveRun {
   completionRequested: boolean;
   controllers: MarkdownStreamController[];
   unsubscribeSnapshots: (() => void)[];
+  unsubscribeStreamTrace?: () => void;
   cancelCompletionFrame?: () => void;
   elapsedMs: number;
   resumedAt: number;
@@ -149,6 +154,13 @@ export function usePlayback() {
       run.cancelCompletionFrame = undefined;
       run.unsubscribeSnapshots.forEach((unsubscribe) => unsubscribe());
       run.unsubscribeSnapshots = [];
+      run.unsubscribeStreamTrace?.();
+      run.unsubscribeStreamTrace = undefined;
+      if (run.config.traceEnabled) {
+        run.controllers.forEach((controller) =>
+          setStreamTracing(controller, false)
+        );
+      }
     },
     [stopTimer]
   );
@@ -393,7 +405,10 @@ export function usePlayback() {
         seed: config.seed,
         streams: config.streams,
         traceEnabled: config.traceEnabled,
-        sampleStride: Math.max(1, Math.ceil(schedule.chunks.length / 700)),
+        sampleStride: Math.max(
+          1,
+          Math.ceil((schedule.chunks.length * config.streams) / 700)
+        ),
         batchWindowMs: BATCH_WINDOW_MS,
       });
       runs.current.push(trace);
@@ -414,6 +429,7 @@ export function usePlayback() {
         completionRequested: false,
         controllers,
         unsubscribeSnapshots: [],
+        unsubscribeStreamTrace: undefined,
         elapsedMs: 0,
         resumedAt: nowMs(),
         status: 'running',
@@ -422,6 +438,12 @@ export function usePlayback() {
       run.unsubscribeSnapshots = controllers.map((controller) =>
         getStreamState(controller).subscribe(() => maybeComplete(run))
       );
+      if (config.traceEnabled && controllers.length > 0) {
+        run.unsubscribeStreamTrace = subscribeStreamTrace((event) =>
+          trace.recordStreamEvent(event)
+        );
+        controllers.forEach((controller) => setStreamTracing(controller, true));
+      }
       trace.mark('run-start');
       trace.startFrames();
       setView((current) => {
