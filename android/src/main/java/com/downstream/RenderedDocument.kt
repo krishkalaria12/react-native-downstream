@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Build
 import android.text.Layout
+import android.text.PrecomputedText
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.StaticLayout
@@ -26,6 +27,8 @@ import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
 import android.util.LruCache
 import android.view.View
+import android.widget.TextView
+import androidx.annotation.RequiresApi
 import com.facebook.react.uimanager.PixelUtil
 import kotlin.math.ceil
 import kotlin.math.max
@@ -35,7 +38,7 @@ import kotlin.math.min
  * Marks a link's text. Taps are hit-tested by the views; accessibility
  * services activate links through ClickableSpan.onClick.
  */
-internal class LinkSpan(val index: Int, private val color: Int) : ClickableSpan() {
+internal class LinkSpan(val index: Int, val color: Int) : ClickableSpan() {
   override fun onClick(widget: View) {
     var parent: Any? = widget
     while (parent is View) {
@@ -245,7 +248,11 @@ internal class Palette(night: Boolean) {
 /** One unit of layout. [gapBefore] is the space above it in the document. */
 internal sealed class Segment(val gapBefore: Int)
 
-/** A run of non-table blocks laid out as one text layout. */
+/**
+ * A run of non-table blocks laid out as one text layout. On Android 9 and
+ * later [text] is a PrecomputedText, built off the UI thread, so a TextView
+ * showing it only breaks lines instead of measuring every glyph again.
+ */
 internal class TextSegment(val text: Spanned, val accessibleBlocks: List<AccessibleBlock>, gapBefore: Int) : Segment(gapBefore) {
   private var heightWidth = -1
   private var height = 0
@@ -368,7 +375,9 @@ internal class RenderedDocument(
     private const val CELL_PADDING_HORIZONTAL = 12f
     private const val CELL_PADDING_VERTICAL = 8f
 
-    private val cache = LruCache<String, RenderedDocument>(32)
+    // Worker threads prepare every document in a commit before Fabric
+    // measures them, so this holds at least a screenful of messages.
+    private val cache = LruCache<String, RenderedDocument>(128)
 
     /**
      * Committed segments by first block identity, block count, font scale,
@@ -377,7 +386,8 @@ internal class RenderedDocument(
      */
     private val committedSegments = object : LruCache<String, Segment>(16 * 1024 * 1024) {
       override fun sizeOf(key: String, value: Segment) = when (value) {
-        is TextSegment -> value.text.length * 16 + 256
+        // Precomputed text also keeps a width per character.
+        is TextSegment -> value.text.length * 24 + 256
         is TableSegment -> value.accessibilityText.length * 32 + 1024
       }
     }
@@ -614,7 +624,12 @@ internal class RenderedDocument(
           gapBefore, identity,
         )
       }
-      return TextSegment(text, accessibleBlocks, gapBefore)
+      val displayText = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        PrecomputedTexts.create(text, paint)
+      } else {
+        text
+      }
+      return TextSegment(displayText, accessibleBlocks, gapBefore)
     }
 
     private fun buildTable(
@@ -676,6 +691,43 @@ internal class RenderedDocument(
         identity = identity,
         gapBefore = gapBefore,
       )
+    }
+  }
+}
+
+/**
+ * Glyph measurement for text segments, done where the segment is built: on a
+ * worker thread when the document was prepared, otherwise during Fabric
+ * measurement. Parameters match [RenderedDocument.buildLayout] and
+ * TextSegmentView, so both reuse it.
+ */
+@RequiresApi(Build.VERSION_CODES.P)
+internal object PrecomputedTexts {
+  fun create(text: Spanned, paint: TextPaint): Spanned = PrecomputedText.create(
+    text,
+    PrecomputedText.Params.Builder(paint)
+      .setBreakStrategy(Layout.BREAK_STRATEGY_HIGH_QUALITY)
+      .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
+      .setTextDirection(TextDirectionHeuristics.FIRSTSTRONG_LTR)
+      .build(),
+  )
+
+  /**
+   * Shows precomputed text in a TextView that is not selectable. Returns
+   * false when the text is not precomputed or the view's text settings do not
+   * match, and the caller sets it as ordinary text.
+   */
+  fun show(view: TextView, text: CharSequence, color: Int): Boolean {
+    if (text !is PrecomputedText || view.isTextSelectable) {
+      return false
+    }
+    view.textMetricsParams = text.params
+    view.setTextColor(color)
+    return try {
+      view.text = text
+      true
+    } catch (error: IllegalArgumentException) {
+      false
     }
   }
 }

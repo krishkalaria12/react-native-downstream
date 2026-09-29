@@ -10,7 +10,12 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Build
 import android.text.Layout
+import android.text.PrecomputedText
 import android.text.Spanned
+import android.text.TextPaint
+import android.text.style.AbsoluteSizeSpan
+import android.text.style.ForegroundColorSpan
+import android.text.style.StrikethroughSpan
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -233,6 +238,7 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   private var segment: TextSegment? = null
   private var pressedLink = -1
   private val codePaint = Paint()
+  private val decorationPaint = TextPaint()
   private val codePath = Path()
   private val codeBounds = RectF()
   private var readingParts = emptyList<TextReadingPart>()
@@ -264,10 +270,16 @@ internal class TextSegmentView(context: Context) : TextView(context) {
       return
     }
     this.segment = segment
-    paint.typeface = rendered.paint.typeface
-    setTextSize(TypedValue.COMPLEX_UNIT_PX, rendered.paint.textSize)
-    setTextColor(rendered.paint.color)
-    setText(segment.text, BufferType.SPANNABLE)
+    val precomputed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+      PrecomputedTexts.show(this, segment.text, rendered.paint.color)
+    if (!precomputed) {
+      paint.typeface = rendered.paint.typeface
+      setTextSize(TypedValue.COMPLEX_UNIT_PX, rendered.paint.textSize)
+      setTextColor(rendered.paint.color)
+      // Selection needs editable spans; plain display takes the cheaper
+      // static layout.
+      setText(segment.text, if (isTextSelectable) BufferType.SPANNABLE else BufferType.NORMAL)
+    }
     readingParts = buildReadingParts(segment)
     accessibility.contentChanged()
   }
@@ -328,6 +340,64 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   override fun onDraw(canvas: Canvas) {
     drawInlineCodeBackgrounds(canvas)
     super.onDraw(canvas)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && text is PrecomputedText) {
+      drawDecorations(canvas)
+    }
+  }
+
+  // A TextView drawing PrecomputedText leaves out underline and
+  // strikethrough, so link underlines and strikethrough lines are drawn here
+  // at the font's own positions, under or through each line's run.
+  private fun drawDecorations(canvas: Canvas) {
+    val layout = layout ?: return
+    val text = layout.text as? Spanned ?: return
+    val links = text.getSpans(0, text.length, LinkSpan::class.java)
+    val strikes = text.getSpans(0, text.length, StrikethroughSpan::class.java)
+    if (links.isEmpty() && strikes.isEmpty()) {
+      return
+    }
+    canvas.save()
+    canvas.translate(totalPaddingLeft.toFloat(), totalPaddingTop.toFloat())
+    for (link in links) {
+      drawDecoration(canvas, layout, text, link, link.color, strike = false)
+    }
+    for (strike in strikes) {
+      val start = text.getSpanStart(strike)
+      val color = text.getSpans(start, start + 1, ForegroundColorSpan::class.java).lastOrNull()?.foregroundColor
+        ?: currentTextColor
+      drawDecoration(canvas, layout, text, strike, color, strike = true)
+    }
+    canvas.restore()
+  }
+
+  private fun drawDecoration(canvas: Canvas, layout: Layout, text: Spanned, span: Any, color: Int, strike: Boolean) {
+    val start = text.getSpanStart(span)
+    val end = text.getSpanEnd(span)
+    if (start >= end) return
+    decorationPaint.set(paint)
+    text.getSpans(start, end, AbsoluteSizeSpan::class.java).lastOrNull()?.let { decorationPaint.textSize = it.size.toFloat() }
+    val size = decorationPaint.textSize
+    val (position, thickness) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      if (strike) {
+        decorationPaint.strikeThruPosition to decorationPaint.strikeThruThickness
+      } else {
+        decorationPaint.underlinePosition to decorationPaint.underlineThickness
+      }
+    } else {
+      (if (strike) -size * 0.28f else size / 9f) to size / 18f
+    }
+    decorationPaint.color = color
+    decorationPaint.style = Paint.Style.FILL
+    for (line in layout.getLineForOffset(start)..layout.getLineForOffset(end - 1)) {
+      val from = maxOf(start, layout.getLineStart(line))
+      val to = minOf(end, layout.getLineEnd(line))
+      if (from >= to) continue
+      codePath.reset()
+      layout.getSelectionPath(from, to, codePath)
+      codePath.computeBounds(codeBounds, true)
+      val y = layout.getLineBaseline(line) + position
+      canvas.drawRect(codeBounds.left, y, codeBounds.right, y + maxOf(1f, thickness), decorationPaint)
+    }
   }
 
   // Each line of a code span gets a rectangle from the selection path's
