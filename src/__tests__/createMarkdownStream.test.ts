@@ -74,6 +74,12 @@ beforeEach(() => {
   jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
 });
 
+function runFrames(): void {
+  const pending = frames;
+  frames = [];
+  pending.forEach((callback) => callback(0));
+}
+
 afterEach(() => {
   jest.restoreAllMocks();
 });
@@ -218,8 +224,15 @@ describe('createMarkdownStream', () => {
     });
     expect(state.binding().revision).toBe(revision);
     expect(errors).toHaveLength(0);
+    // Snapshots render once per frame; a repeated snapshot in a later frame,
+    // as after finish, renders again.
     events.emitSnapshot({ sessionId: id, generation: 1, sequence: 0 });
     events.emitSnapshot({ sessionId: id, generation: 1, sequence: 0 });
+    expect(state.binding().revision).toBe(revision);
+    runFrames();
+    expect(state.binding().revision).toBe(revision + 1);
+    events.emitSnapshot({ sessionId: id, generation: 1, sequence: 0 });
+    runFrames();
     expect(state.binding().revision).toBe(revision + 2);
     expect(renders).toHaveBeenCalledTimes(3);
     events.emitError({

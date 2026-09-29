@@ -47,6 +47,7 @@ class StreamState implements MarkdownStreamController {
   private pending: PendingBatch[] = [];
   private inFlight: InFlight[] = [];
   private frame: number | undefined;
+  private snapshotFrame: number | undefined;
   private finished = false;
   private disposed = false;
   private bound = false;
@@ -197,6 +198,7 @@ class StreamState implements MarkdownStreamController {
     this.tracing = false;
     if (this.frame !== undefined) cancelAnimationFrame(this.frame);
     this.frame = undefined;
+    this.cancelSnapshotFrame();
     this.pending = [];
     this.inFlight = [];
     this.subscribers.clear();
@@ -269,7 +271,7 @@ class StreamState implements MarkdownStreamController {
     ) {
       this.queuedBytes -= this.inFlight.shift()!.bytes;
     }
-    this.publish();
+    this.publishOnNextFrame();
   }
 
   sessionError(event: SessionErrorEvent): void {
@@ -284,8 +286,30 @@ class StreamState implements MarkdownStreamController {
   }
 
   private publish(): void {
+    this.cancelSnapshotFrame();
     this.revision++;
     this.subscribers.forEach((callback) => callback());
+  }
+
+  /**
+   * Renders at most once per frame. A stream can publish snapshots faster
+   * than the screen refreshes, and every render is a Fabric commit on the
+   * JavaScript thread; streams that publish in the same frame also share one
+   * React batch. The render reads the newest snapshot.
+   */
+  private publishOnNextFrame(): void {
+    if (this.snapshotFrame !== undefined) return;
+    this.snapshotFrame = requestAnimationFrame(() => {
+      this.snapshotFrame = undefined;
+      if (!this.disposed) this.publish();
+    });
+  }
+
+  private cancelSnapshotFrame(): void {
+    if (this.snapshotFrame !== undefined) {
+      cancelAnimationFrame(this.snapshotFrame);
+      this.snapshotFrame = undefined;
+    }
   }
 
   private emitError(
