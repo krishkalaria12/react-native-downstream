@@ -34,7 +34,7 @@ stream.finish();
 // Later: stream.dispose();
 ```
 
-The view parses with md4c and lays text out natively (TextKit on iOS, `StaticLayout` on Android). Streams use a native session and worker. It needs the New Architecture and a development build; Expo Go cannot load it. The library never opens links itself.
+The view parses with md4c and lays text out natively (TextKit on iOS, `StaticLayout` on Android). Parsing and text preparation run on a small shared pool of worker threads below the UI and JavaScript threads, so several messages render in parallel without blocking the app; see [threading](docs/api.md#threading). It needs the New Architecture and a development build; Expo Go cannot load it. The library never opens links itself.
 
 ## Contributing
 

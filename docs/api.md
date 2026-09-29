@@ -60,7 +60,15 @@ The first release targets iOS and Android with the New Architecture enabled. The
 
 The native display path renders complete documents on iOS and Android. Parsing, measurement, and drawing are native.
 
-A document is a vertical stack of segments. A text segment is a run of non-table blocks in one platform text view. A table segment is one table in a horizontal scroll view. In a stream, completed blocks are grouped into text segments of about 16 blocks that later snapshots reuse, so only the active tail is rebuilt.
+A document is a vertical stack of segments. A text segment is a run of non-table blocks in one platform text view. A table segment is one table in a horizontal scroll view. In a stream, completed blocks are grouped into text segments of about 16 blocks that later snapshots reuse, so only the active tail is rebuilt. Incremental mode commits blocks once md4c proves them closed. Full mode reparses the whole source but gives a block that is unchanged since the previous snapshot a stable identity, so both modes rebuild and lay out only the tail.
+
+### Threading
+
+Parsing and platform text preparation run on one shared pool of worker threads: two fewer than the device's cores, between one and four. The workers run below the UI and JavaScript threads' priority (user-initiated QoS on iOS, background niceness on Android), so under load they yield to input, animation, and app code.
+
+- **Streams.** A session has no thread of its own. While it has new input, one job for it is queued on the pool. The job parses, builds the platform rendering at the width the view was last measured at, and then publishes the snapshot. Fabric's measurement on the JavaScript thread and the view's mount on the UI thread find the rendering cached. Several streams share the pool in turn. A pass publishes even if more input arrived while it parsed, so a stream that outpaces parsing still shows progress.
+- **Controlled `markdown`.** A new value starts preparing when its shadow node is created. Every Markdown view in a commit, such as a conversation's history, is therefore prepared in parallel while React finishes the commit. Layout waits for sources up to 16 KiB; if no worker has started one yet, the JavaScript thread runs it itself. A larger source shows the view's previous content until preparation finishes, then relayouts through a Fabric state update without a React render. Equal sources share one parse, so a recycled message is not parsed or laid out again.
+- **Android.** Text segments are built as `PrecomputedText` on the worker (Android 9 and later). A non-selectable text view shows it with a static layout, so the UI thread breaks lines without measuring glyphs again.
 
 | Area | Current behavior | Planned |
 | --- | --- | --- |
