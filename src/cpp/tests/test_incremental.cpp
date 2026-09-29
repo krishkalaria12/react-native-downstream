@@ -1,5 +1,6 @@
 #include "IncrementalParser.h"
 #include "SegmentPlan.h"
+#include "check.h"
 
 #include <array>
 #include <cstdlib>
@@ -20,8 +21,8 @@ namespace {
 ParseResult feed(IncrementalParser &parser, const std::string &source, bool finished) {
   const std::string_view current = parser.source();
   if (source.size() < current.size() || std::string_view(source).substr(0, current.size()) != current) {
-    std::cerr << "Test source is not an append\n";
-    std::abort();
+    std::cerr << "FAIL " << __FILE__ << ": test source is not an append\n";
+    return ParseResult{};
   }
   parser.append(std::string_view(source).substr(current.size()));
   return parser.parse(finished);
@@ -493,9 +494,24 @@ int main() {
     if (!std::cin.read(chunk.data(), length)) return 2;
     chunks.push_back(std::move(chunk));
   }
-  return check(chunks, "fixture") && seededCases() && fastPathAndFallbacks() &&
-      identityRangesAndSnapshots() && tailLimitPreservesIdentity() && openFencePath() &&
-      md4cOffsetQuirk() && fenceEdgeCases() && blockLimitKeepsTail() && snapshotsShareCommittedBlocks() &&
-      committedSegmentsAreStable(ParseMode::IncrementalTail) && committedSegmentsAreStable(ParseMode::FullParse) &&
-      identitiesAreGlobal() && realisticAnswer() && fullModeKeepsIdentities() ? 0 : 1;
+  // Every case runs even when an earlier one fails, so one run reports every
+  // regression rather than only the first.
+  CHECK(check(chunks, "fixture"), "fixture streams match a full parse");
+  CHECK(seededCases(), "seeded cases");
+  CHECK(fastPathAndFallbacks(), "fast path and fallbacks");
+  CHECK(identityRangesAndSnapshots(), "identity ranges and snapshots");
+  CHECK(tailLimitPreservesIdentity(), "tail limit preserves identity");
+  CHECK(openFencePath(), "open fence path");
+  CHECK(md4cOffsetQuirk(), "md4c offset quirk");
+  CHECK(fenceEdgeCases(), "fence edge cases");
+  CHECK(blockLimitKeepsTail(), "block limit keeps the tail");
+  CHECK(snapshotsShareCommittedBlocks(), "snapshots share committed blocks");
+  CHECK(committedSegmentsAreStable(ParseMode::IncrementalTail),
+        "committed segments are stable (incremental)");
+  CHECK(committedSegmentsAreStable(ParseMode::FullParse),
+        "committed segments are stable (full)");
+  CHECK(identitiesAreGlobal(), "identities are global");
+  CHECK(realisticAnswer(), "realistic answer");
+  CHECK(fullModeKeepsIdentities(), "full mode keeps identities");
+  return ds_check_result();
 }

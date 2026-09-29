@@ -2,6 +2,7 @@
 #include "RenderPreparer.h"
 #include "SessionRegistry.h"
 #include "WorkerPool.h"
+#include "check.h"
 
 #include <atomic>
 #include <chrono>
@@ -198,8 +199,13 @@ bool fastStreamStillPublishes() {
 } // namespace
 
 int main() {
-  return poolRunsJobsInParallel() && waiterRunsQueuedTask() && preparedDocumentsAreSharedAndPrepared() &&
-          sessionsShareThePool() && fastStreamStillPublishes()
-      ? 0
-      : 1;
+  // Every case runs even when an earlier one fails, so one run reports every
+  // regression rather than only the first.
+  CHECK(poolRunsJobsInParallel(), "the pool runs jobs in parallel");
+  CHECK(waiterRunsQueuedTask(), "a waiter runs its queued task");
+  CHECK(preparedDocumentsAreSharedAndPrepared(),
+        "prepared documents are shared and prepared");
+  CHECK(sessionsShareThePool(), "sessions share the pool");
+  CHECK(fastStreamStillPublishes(), "a fast stream still publishes");
+  return ds_check_result();
 }

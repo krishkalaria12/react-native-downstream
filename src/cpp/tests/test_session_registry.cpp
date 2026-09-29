@@ -1,5 +1,6 @@
 #include "SessionRegistry.h"
 #include "SessionTrace.h"
+#include "check.h"
 
 #include <atomic>
 #include <chrono>
@@ -152,5 +153,8 @@ int main() {
     return 1;
   }
   SessionRegistry::dispose(busy);
-  return 0;
+  // This flow returns early on a failed dispose, because continuing would race
+  // against a live worker; the earlier failures return with a message above.
+  CHECK(ds_check_failures == 0, "session registry lifecycle");
+  return ds_check_result();
 }

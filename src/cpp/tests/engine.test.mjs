@@ -1,26 +1,27 @@
 // Host tests for the shared C++ Markdown engine.
 //
 // Builds the vendored md4c and the render-model engine with the system C/C++
-// compiler, then checks final documents against src/fixtures/.
+// compiler, then checks final documents against the inline oracle.
 //
 //     node --test src/cpp/tests/engine.test.mjs
 
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import { adversarialCases, cases } from './oracle.mjs';
+
 const execFileAsync = promisify(execFile);
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const CPP = join(ROOT, 'src', 'cpp');
 const MD4C = join(CPP, 'md4c');
-const FIXTURES = join(ROOT, 'src', 'fixtures');
-const ADVERSARIAL = join(FIXTURES, 'adversarial');
 
 const KIND = { paragraph: 0, heading: 1, code: 2, html: 3, hr: 4, table: 5 };
 const LIST_ITEM = 1;
@@ -33,7 +34,6 @@ const [STRONG, EMPHASIS, STRIKE, CODE, LINK, IMAGE_ALT, FOOTNOTE] = [
 const SYMBOL_PREFIXES = [
   '-Dmd_parse=downstream_md_parse',
   '-Dentity_lookup=downstream_entity_lookup',
-  '-Dmd_html=downstream_md_html',
 ];
 
 let buildDir;
@@ -57,8 +57,8 @@ before(async () => {
     `-I${join(CPP, 'downstream')}`,
     `-I${join(CPP, 'session')}`,
   ];
-  const [md4c, entity, html] = await Promise.all(
-    ['md4c.c', 'entity.c', 'md4c-html.c'].map(async (source) => {
+  const [md4c, entity] = await Promise.all(
+    ['md4c.c', 'entity.c'].map(async (source) => {
       const object = binary(`${source}.o`);
       await execFileAsync(cc, [
         ...cFlags,
@@ -86,16 +86,6 @@ before(async () => {
       entity,
       '-o',
       binary('dump_document'),
-    ]),
-    execFileAsync(cc, [
-      ...cFlags,
-      `-I${MD4C}`,
-      testSource('oracle_html.c'),
-      md4c,
-      entity,
-      html,
-      '-o',
-      binary('oracle_html'),
     ]),
     execFileAsync(cxx, [
       ...cxxFlags,
@@ -166,14 +156,6 @@ function stylesOf(block, substring) {
   return block.runs.filter((run) => run[0] < end && run[1] > start);
 }
 
-function oracleHtml(source) {
-  return execFileSync(binary('oracle_html'), { input: source });
-}
-
-function readManifest(directory) {
-  return JSON.parse(readFileSync(join(directory, 'manifest.json'), 'utf8'));
-}
-
 // The prefix exceeds the minimum commit size, so the fixture streams as an
 // active tail after committed prose.
 const COMMITTED_PREFIX = Buffer.from(
@@ -181,12 +163,12 @@ const COMMITTED_PREFIX = Buffer.from(
     'before the fixture starts streaming, so the tail path is exercised.\n\n'
 );
 
-/** Streams each fixture's exact chunks through the incremental parser, which
+/** Streams each case's exact chunks through the incremental parser, which
  * checks every prefix against a full parse. */
-async function assertIncrementalMatches(t, manifest) {
-  for (const fixture of manifest.fixtures) {
-    await t.test(fixture.id, () => {
-      const chunks = fixture.chunks.map((chunk) => Buffer.from(chunk, 'utf8'));
+async function assertIncrementalMatches(t, allCases) {
+  for (const testCase of allCases) {
+    await t.test(testCase.id, () => {
+      const chunks = testCase.chunks.map((chunk) => Buffer.from(chunk, 'utf8'));
       for (const sequence of [chunks, [COMMITTED_PREFIX, ...chunks]]) {
         const framed = Buffer.concat(
           sequence.flatMap((chunk) => {
@@ -195,40 +177,70 @@ async function assertIncrementalMatches(t, manifest) {
             return [length, chunk];
           })
         );
+        // stderr is inherited so a failing CHECK names its case; stdin stays
+        // piped because the chunks arrive on it.
         execFileSync(binary('test_incremental'), {
           input: framed,
-          stdio: ['pipe', 'pipe', 'pipe'],
+          stdio: ['pipe', 'pipe', 'inherit'],
         });
       }
     });
   }
 }
 
-describe('fixtures', () => {
-  const manifest = readManifest(FIXTURES);
+describe('vendored md4c', () => {
+  // The renderer is only as correct as the parser it wraps, so the vendored
+  // copy is pinned by digest. A local edit to md4c is either a deliberate
+  // security or bugfix patch, which must be recorded here on purpose, or an
+  // accident. The revision and version live in src/cpp/md4c/README.md.
+  const PINS = {
+    'md4c.c':
+      'e111ee600033f11dfb31e732429741f3c1406f2a3faffc0395d5f7dbb875e086',
+    'md4c.h':
+      'd0c14762f1eac3cd9d1c08c3a287b61d93ee2382e5a22ee48f5a6f3ad2c2349d',
+    'entity.c':
+      '7ea50d695d9210958e01b12b3e4d1db78d783d03d95b040fd7d2d9cfe1f1d39c',
+    'entity.h':
+      '99a8952be6629e4114947cb61a901bf4f73b10d84d1ac5e17ad8299dfbad708e',
+  };
 
-  test('vendored parser matches oracle HTML', async (t) => {
-    for (const fixture of manifest.fixtures) {
-      await t.test(fixture.id, () => {
-        const html = oracleHtml(readFileSync(join(FIXTURES, fixture.source)));
+  for (const [name, digest] of Object.entries(PINS)) {
+    test(`${name} is unmodified`, () => {
+      assert.equal(createHash('sha256').update(readFileSync(join(MD4C, name))).digest('hex'), digest);
+    });
+  }
+
+  test('no HTML renderer is vendored', () => {
+    // md4c-html existed only to produce the deleted HTML oracle.
+    assert.equal(existsSync(join(MD4C, 'md4c-html.c')), false);
+    assert.equal(existsSync(join(MD4C, 'md4c-html.h')), false);
+  });
+});
+
+describe('parse oracle', () => {
+  test('each case is internally consistent', async (t) => {
+    for (const testCase of cases) {
+      await t.test(testCase.id, () => {
         assert.deepEqual(
-          html,
-          readFileSync(join(FIXTURES, fixture.expectedHtml))
+          Buffer.from(testCase.chunks.join(''), 'utf8'),
+          Buffer.from(testCase.source, 'utf8')
         );
       });
     }
   });
 
   test('incremental matches full parse at every prefix', (t) =>
-    assertIncrementalMatches(t, manifest));
+    assertIncrementalMatches(t, cases));
 
   test('final checkpoints', async (t) => {
-    for (const fixture of manifest.fixtures) {
-      await t.test(fixture.id, () => {
-        const expected = fixture.checkpoints.at(-1).expectedPreview;
-        const source = readFileSync(join(FIXTURES, fixture.source));
-        assert.deepEqual(Buffer.from(fixture.chunks.join(''), 'utf8'), source);
-        const document = parse(source);
+    for (const testCase of cases) {
+      await t.test(testCase.id, () => {
+        const expected = testCase.checkpoints.at(-1);
+        assert.deepEqual(
+          Buffer.from(testCase.chunks.join(''), 'utf8'),
+          Buffer.from(testCase.source, 'utf8')
+        );
+        const document = parse(testCase.source);
         const blocks = document.blocks;
 
         if ('visibleText' in expected) {
@@ -256,6 +268,9 @@ describe('fixtures', () => {
         }
         if (expected.mathKind === 'literal') {
           assert.ok(visibleText(document).includes('$x^2$'));
+        }
+        if ('unicodeValid' in expected) {
+          assert.ok(visibleText(document).includes('👩‍💻'));
         }
 
         const kind = expected.blockKind;
@@ -300,36 +315,35 @@ describe('fixtures', () => {
   });
 });
 
-describe('adversarial fixtures', () => {
+describe('adversarial cases', () => {
   // Streams whose later input changes, or seems to change, earlier blocks.
-  const manifest = readManifest(ADVERSARIAL);
-
-  test('vendored parser matches oracle HTML', async (t) => {
-    for (const fixture of manifest.fixtures) {
-      await t.test(fixture.id, () => {
-        const source = readFileSync(join(ADVERSARIAL, fixture.source));
-        assert.deepEqual(Buffer.from(fixture.chunks.join(''), 'utf8'), source);
+  test('each case is internally consistent', async (t) => {
+    for (const testCase of adversarialCases) {
+      await t.test(testCase.id, () => {
         assert.deepEqual(
-          oracleHtml(source),
-          readFileSync(join(ADVERSARIAL, fixture.expectedHtml))
+          Buffer.from(testCase.chunks.join(''), 'utf8'),
+          Buffer.from(testCase.source, 'utf8')
         );
       });
     }
   });
 
   test('every checkpoint', async (t) => {
-    for (const fixture of manifest.fixtures) {
-      for (const checkpoint of fixture.checkpoints) {
+    for (const testCase of adversarialCases) {
+      for (const checkpoint of testCase.checkpoints) {
         await t.test(
-          `${fixture.id} after chunk ${checkpoint.afterChunk}`,
+          `${testCase.id} after chunk ${checkpoint.afterChunk}`,
           () => {
             const document = parse(checkpoint.prefix);
-            const expected = checkpoint.expectedPreview;
-            assert.equal(visibleText(document), expected.visibleText);
-            assert.deepEqual(
-              document.links.map((link) => link.url),
-              expected.enabledLinks
-            );
+            if ('visibleText' in checkpoint) {
+              assert.equal(visibleText(document), checkpoint.visibleText);
+            }
+            if ('enabledLinks' in checkpoint) {
+              assert.deepEqual(
+                document.links.map((link) => link.url),
+                checkpoint.enabledLinks
+              );
+            }
           }
         );
       }
@@ -337,7 +351,7 @@ describe('adversarial fixtures', () => {
   });
 
   test('incremental matches full parse at every prefix', (t) =>
-    assertIncrementalMatches(t, manifest));
+    assertIncrementalMatches(t, adversarialCases));
 });
 
 describe('render model', () => {
@@ -578,18 +592,14 @@ describe('links', () => {
 });
 
 describe('input', () => {
+  // stderr is inherited, not piped: a failing CHECK writes its case label to
+  // stderr, and a piped child would swallow the reason a run failed.
   test('native session versions and lifecycle', () => {
-    execFileSync(binary('test_session_registry'), {
-      timeout: 15_000,
-      stdio: 'pipe',
-    });
+    execFileSync(binary('test_session_registry'), { timeout: 15_000 });
   });
 
   test('worker pool prepares and shares sessions', () => {
-    execFileSync(binary('test_worker_pool'), {
-      timeout: 30_000,
-      stdio: 'pipe',
-    });
+    execFileSync(binary('test_worker_pool'), { timeout: 30_000 });
   });
 
   test('rejects malformed UTF-8', () => {
