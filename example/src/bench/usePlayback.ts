@@ -520,14 +520,14 @@ export function usePlayback() {
       setView(initialView);
       return;
     }
-    stopRun(run);
     run.trace.mark('reset-request');
+    run.completionRequested = false;
+    resetSessionControllers(run.controllers);
+    stopRun(run);
     if (run.status !== 'complete') {
       run.trace.end('cancelled', activeElapsedMs(run));
     }
-    resetSessionControllers(run.controllers);
     run.status = 'idle';
-    run.completionRequested = false;
     run.cursor = 0;
     run.prefix = '';
     run.batch = 0;
