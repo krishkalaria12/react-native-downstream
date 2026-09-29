@@ -10,18 +10,28 @@ import {
 } from 'react-native';
 
 import { GalleryScreen } from './gallery/GalleryScreen';
+import { PlaybackScreen } from './bench/PlaybackScreen';
 import { StreamingChat } from './StreamingChat';
 
 export default function App() {
-  const [screen, setScreen] = useState<'gallery' | 'stream'>('gallery');
+  const [screen, setScreen] = useState<'gallery' | 'stream' | 'bench'>(
+    'gallery'
+  );
   const dark = useColorScheme() === 'dark';
   return (
     <SafeAreaView style={[styles.root, dark ? styles.dark : styles.light]}>
       <View style={styles.navigation}>
         <Button title="Gallery" onPress={() => setScreen('gallery')} />
         <Button title="Stream" onPress={() => setScreen('stream')} />
+        <Button title="Benchmark" onPress={() => setScreen('bench')} />
       </View>
-      {screen === 'gallery' ? <GalleryScreen /> : <StreamingChat />}
+      {screen === 'gallery' ? (
+        <GalleryScreen />
+      ) : screen === 'stream' ? (
+        <StreamingChat />
+      ) : (
+        <PlaybackScreen />
+      )}
     </SafeAreaView>
   );
 }
