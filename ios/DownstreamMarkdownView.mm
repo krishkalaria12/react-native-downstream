@@ -101,7 +101,9 @@ using namespace facebook::react;
 
 - (void)updateProps:(const Props::Shared &)props oldProps:(const Props::Shared &)oldProps {
   const auto &newProps = *std::static_pointer_cast<const DownstreamMarkdownViewProps>(props);
-  const auto &previous = *std::static_pointer_cast<const DownstreamMarkdownViewProps>(oldProps);
+  // Fabric passes no old props when it mounts a new or recycled view; the
+  // view's current props are the previous value then.
+  const auto &previous = *std::static_pointer_cast<const DownstreamMarkdownViewProps>(oldProps ? oldProps : _props);
   if (newProps.sessionId != previous.sessionId || newProps.generation != previous.generation) {
     [_documentView resetTableScrollPositions];
   }
