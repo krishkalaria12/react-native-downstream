@@ -3,91 +3,90 @@ import {
   Alert,
   FlatList,
   Platform,
-  Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
-import { StatusBar } from 'expo-status-bar';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { DownstreamMarkdown } from 'react-native-downstream';
+
 import { fixtures } from '../shared/fixtures';
-import type { CompletedMessage, LiveMessage } from './usePlayback';
-import { usePlayback } from './usePlayback';
 import type { ScheduleKind } from '../shared/schedule';
-import { nowMs, type TraceRun } from './trace';
-import type { RendererCandidate } from './trace';
 import type { WorkloadShape, WorkloadSize } from '../shared/workload';
+import type {
+  CompletedMessage,
+  LiveMessage,
+  PlaybackStatus,
+} from './usePlayback';
+import { usePlayback } from './usePlayback';
+import { nowMs, type RendererCandidate, type TraceRun } from './trace';
+import {
+  Button,
+  ButtonRow,
+  ChipRow,
+  Divider,
+  Field,
+  Group,
+  Input,
+  type ChipOption,
+} from '../ui/kit';
+import { DocumentPane, RunReadout } from '../ui/readout';
+import {
+  Hero,
+  Screen,
+  SectionLabel,
+  useBottomInset,
+  useScreenScroll,
+} from '../ui/screen';
+import { space, useTheme } from '../ui/theme';
+import type { Tone } from '../ui/theme';
 
 const SEED = 20260928;
 const STREAM_INDICES = [0, 1, 2, 3, 4, 5, 6, 7];
-const SCHEDULES: { id: ScheduleKind; label: string }[] = [
-  { id: 'manifest', label: 'Exact chunks' },
-  { id: 'character', label: '1 character' },
-  { id: 'range', label: '1–20 characters' },
-  { id: 'bursty', label: 'Bursty network' },
-];
-const RENDERERS: { id: RendererCandidate; label: string }[] = [
-  { id: 'downstream-full', label: 'Full parse' },
-  { id: 'downstream-incremental', label: 'Incremental tail' },
+
+const SCHEDULES: ChipOption<ScheduleKind>[] = [
+  { value: 'manifest', label: 'Exact chunks' },
+  { value: 'character', label: '1 character' },
+  { value: 'range', label: '1 to 20 characters' },
+  { value: 'bursty', label: 'Bursty network' },
 ];
 
-function Choice<T extends string | number>({
-  label,
-  value,
-  selected,
-  onPress,
-}: {
-  label: string;
-  value: T;
-  selected: boolean;
-  onPress: (value: T) => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      onPress={() => onPress(value)}
-      style={[styles.choice, selected && styles.choiceSelected]}
-    >
-      <Text style={[styles.choiceText, selected && styles.choiceTextSelected]}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
+const RENDERERS: ChipOption<RendererCandidate>[] = [
+  { value: 'downstream-full', label: 'Full parse' },
+  { value: 'downstream-incremental', label: 'Incremental tail' },
+];
 
-function Action({
-  label,
-  onPress,
-  disabled = false,
-  primary = false,
-}: {
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-  primary?: boolean;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ disabled }}
-      disabled={disabled}
-      onPress={onPress}
-      style={[
-        styles.action,
-        primary && styles.actionPrimary,
-        disabled && styles.actionDisabled,
-      ]}
-    >
-      <Text style={[styles.actionText, primary && styles.actionTextPrimary]}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
+const SHAPES: ChipOption<WorkloadShape>[] = [
+  { value: 'repeat', label: 'Repeat fixture' },
+  { value: 'open-fence', label: 'Open code fence' },
+];
+
+const SIZES: ChipOption<WorkloadSize>[] = [
+  { value: 'fixture', label: 'Fixture' },
+  { value: 10, label: '10 KiB' },
+  { value: 50, label: '50 KiB' },
+  { value: 100, label: '100 KiB' },
+];
+
+const CONDITIONS: ChipOption<'cold' | 'warm'>[] = [
+  { value: 'warm', label: 'Warm' },
+  { value: 'cold', label: 'Cold' },
+];
+
+const STREAM_COUNTS: ChipOption<1 | 4 | 8>[] = [
+  { value: 1, label: '1' },
+  { value: 4, label: '4' },
+  { value: 8, label: '8' },
+];
+
+const STATUS_TONE: Record<PlaybackStatus, Tone> = {
+  idle: 'neutral',
+  running: 'live',
+  paused: 'warn',
+  finishing: 'warn',
+  complete: 'accent',
+};
 
 const TracedMarkdown = memo(function TracedMarkdownInner({
   message,
@@ -152,10 +151,11 @@ const CompletedRow = memo(function CompletedRowInner({
 }: {
   message: CompletedMessage;
 }) {
+  const t = useTheme();
   return (
-    <View style={styles.message}>
-      <Text style={styles.messageLabel}>
-        {message.fixture} / stream {message.stream + 1}
+    <View style={[t.s.card, styles.completed]}>
+      <Text style={[t.s.caption, styles.completedLabel]}>
+        {message.fixture} · stream {message.stream + 1}
       </Text>
       <DownstreamMarkdown markdown={message.markdown} />
     </View>
@@ -187,12 +187,17 @@ export function BenchScreen() {
     exportTrace,
     acknowledgeCommit,
   } = usePlayback();
+  const scroll = useScreenScroll();
+  const bottom = useBottomInset();
+  const t = useTheme();
   const fixture = fixtures.find((item) => item.id === fixtureId) ?? fixtures[0];
+
   useLayoutEffect(() => {
     if (view.live && view.live.revision > 0) {
       acknowledgeCommit(view.run, view.live.batch);
     }
   }, [view.live, view.run, acknowledgeCommit]);
+
   const renderCompleted = useCallback(
     ({ item }: { item: CompletedMessage }) => <CompletedRow message={item} />,
     []
@@ -243,341 +248,288 @@ export function BenchScreen() {
     }
   };
 
+  const running = view.status === 'running' || view.status === 'paused';
+  const live = view.live;
+  const streamCount = activeTrace?.data.streams ?? streams;
+  const progress =
+    view.totalChunks > 0 ? view.receivedChunks / view.totalChunks : 0;
+
+  const header = (
+    <View>
+      <Hero
+        title="Playback bench"
+        summary="Replay one source across a fixed chunk schedule and export the trace that produced the numbers."
+        meta={<Text style={[t.s.meta, styles.seed]}>Seed {SEED}</Text>}
+      />
+
+      <View style={styles.readoutBlock}>
+        <RunReadout
+          status={view.status}
+          statusTone={STATUS_TONE[view.status]}
+          meta={`Run ${view.run || '—'}`}
+          progress={
+            view.totalChunks > 0
+              ? {
+                  value: progress,
+                  label: `${view.receivedChunks.toLocaleString()} / ${view.totalChunks.toLocaleString()} chunks`,
+                }
+              : undefined
+          }
+          figures={[
+            {
+              label: 'archived messages',
+              value: String(view.completed.length),
+            },
+            { label: 'streams', value: String(streamCount) },
+          ]}
+        />
+      </View>
+
+      <View style={styles.controls}>
+        <Group title="Parse mode">
+          <ChipRow
+            inset
+            options={RENDERERS}
+            value={renderer}
+            onChange={setRenderer}
+          />
+        </Group>
+
+        <Group title="Run metadata">
+          <Field label="Device ID">
+            <Input
+              accessibilityLabel="Device ID"
+              placeholder="Pixel 9, iPhone 16 Pro"
+              value={deviceId}
+              onChangeText={setDeviceId}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </Field>
+          <Divider />
+          <ChipRow
+            inset
+            options={CONDITIONS}
+            value={runCondition}
+            onChange={setRunCondition}
+          />
+          <Text style={[t.s.caption, styles.groupHint]}>
+            Mark cold only after restarting the app process. Set
+            EXPO_PUBLIC_DOWNSTREAM_REVISION when building to record a revision.
+          </Text>
+        </Group>
+
+        <Group title="Source">
+          <ChipRow
+            inset
+            options={SHAPES}
+            value={workloadShape}
+            onChange={setWorkloadShape}
+          />
+          {workloadShape === 'repeat' && (
+            <>
+              <Divider />
+              <ChipRow
+                inset
+                options={fixtures.map((item) => ({
+                  value: item.id,
+                  label: item.id,
+                }))}
+                value={fixtureId}
+                onChange={setFixtureId}
+              />
+              {fixture !== undefined && (
+                <Text style={[t.s.caption, styles.groupHint]}>
+                  {fixture.description}
+                </Text>
+              )}
+            </>
+          )}
+        </Group>
+
+        <Group title="Workload size">
+          <ChipRow
+            inset
+            options={
+              workloadShape === 'repeat'
+                ? SIZES
+                : SIZES.filter((size) => size.value !== 'fixture')
+            }
+            value={workloadSize}
+            onChange={setWorkloadSize}
+          />
+          <Text style={[t.s.caption, styles.groupHint]}>
+            {workloadShape === 'open-fence'
+              ? 'One code fence stays open for the entire source.'
+              : 'Larger sources repeat the selected fixture to an exact byte size.'}
+          </Text>
+        </Group>
+
+        <Group title="Chunk schedule">
+          <ChipRow
+            inset
+            options={SCHEDULES.map((item) => ({
+              value: item.value,
+              label:
+                item.value === 'manifest' && workloadSize !== 'fixture'
+                  ? 'Pattern chunks'
+                  : item.label,
+            }))}
+            value={schedule}
+            onChange={setSchedule}
+          />
+        </Group>
+
+        <Group title="Simultaneous streams">
+          <ChipRow
+            inset
+            options={STREAM_COUNTS}
+            value={streams}
+            onChange={setStreams}
+          />
+        </Group>
+
+        <Group title="Trace next run">
+          <View style={styles.traceRow}>
+            <Text style={[t.s.caption, styles.traceNote]}>
+              Receipts, batches, renderer commits, JS frames, and frame
+              estimates.
+            </Text>
+            <Button
+              label={traceEnabled ? 'Tracing on' : 'Tracing off'}
+              variant={traceEnabled ? 'primary' : 'secondary'}
+              onPress={() => setTraceEnabled((current) => !current)}
+              hint="Turns per-batch trace sampling on or off for the next run"
+            />
+          </View>
+        </Group>
+
+        <ButtonRow>
+          <Button
+            label={view.run > 0 ? 'Replay' : 'Play'}
+            variant="primary"
+            onPress={start}
+          />
+          <Button
+            label={view.status === 'paused' ? 'Resume' : 'Pause'}
+            onPress={view.status === 'paused' ? resume : pause}
+            disabled={!running}
+          />
+          <Button label="Finish" onPress={finish} disabled={!running} />
+          <Button label="Reset" onPress={reset} />
+        </ButtonRow>
+        <ButtonRow>
+          <Button
+            label={exporting ? 'Exporting' : 'Export traces'}
+            onPress={shareTrace}
+            disabled={exporting}
+            grow
+          />
+        </ButtonRow>
+      </View>
+
+      {live !== null && (
+        <View>
+          <SectionLabel
+            style={styles.section}
+            trailing={<Text style={t.s.meta}>Downstream alone</Text>}
+          >
+            {view.status === 'complete' ? 'Completed run' : 'Live streams'}
+          </SectionLabel>
+          {STREAM_INDICES.slice(0, streamCount).map((stream) => (
+            <DocumentPane
+              key={`${view.run}-${stream}`}
+              style={styles.pane}
+              label={`Run ${view.run} · stream ${stream + 1}`}
+              state={
+                view.status === 'complete'
+                  ? 'complete'
+                  : view.status === 'running'
+                  ? 'streaming'
+                  : 'paused'
+              }
+              tone={
+                view.status === 'running'
+                  ? 'live'
+                  : view.status === 'complete'
+                  ? 'accent'
+                  : 'warn'
+              }
+              pulse={view.status === 'running'}
+            >
+              <TracedMarkdown
+                message={live}
+                stream={stream}
+                trace={activeTrace}
+              />
+            </DocumentPane>
+          ))}
+        </View>
+      )}
+
+      {view.completed.length > 0 && (
+        <SectionLabel style={styles.section}>
+          Earlier completed messages
+        </SectionLabel>
+      )}
+
+      <Text style={[t.s.caption, styles.footer]}>
+        The frame timestamp is a JS callback estimate. Use native profiling for
+        parse, layout, CPU, memory, and UI frame timing.
+      </Text>
+    </View>
+  );
+
   return (
-    <View style={styles.screen}>
-      <StatusBar style="dark" />
+    <Screen title="Bench" scroll={scroll}>
       <FlatList
         data={view.completed}
         keyExtractor={completedKey}
         renderItem={renderCompleted}
-        contentContainerStyle={styles.content}
+        onScroll={scroll.onScroll}
+        scrollEventThrottle={16}
+        contentContainerStyle={[styles.content, { paddingBottom: bottom }]}
         keyboardShouldPersistTaps="handled"
-        ListHeaderComponent={
-          <View>
-            <Text style={styles.kicker}>Downstream / benchmark</Text>
-            <Text style={styles.title}>Markdown playback</Text>
-            <Text style={styles.intro}>
-              Replay one source across fixed chunk schedules. Each run uses seed{' '}
-              {SEED}.
-            </Text>
-
-            <Text style={styles.sectionTitle}>Parse mode</Text>
-            <View style={styles.choices}>
-              {RENDERERS.map((item) => (
-                <Choice
-                  key={item.id}
-                  label={item.label}
-                  value={item.id}
-                  selected={renderer === item.id}
-                  onPress={setRenderer}
-                />
-              ))}
-            </View>
-
-            <Text style={styles.sectionTitle}>Run metadata</Text>
-            <TextInput
-              accessibilityLabel="Device ID"
-              placeholder="Device ID"
-              value={deviceId}
-              onChangeText={setDeviceId}
-              style={styles.input}
-            />
-            <View style={styles.choices}>
-              {(['cold', 'warm'] as const).map((condition) => (
-                <Choice
-                  key={condition}
-                  label={condition}
-                  value={condition}
-                  selected={runCondition === condition}
-                  onPress={setRunCondition}
-                />
-              ))}
-            </View>
-            <Text style={styles.helper}>
-              Mark cold only after restarting the app process. Set
-              EXPO_PUBLIC_DOWNSTREAM_REVISION when building to record a
-              revision.
-            </Text>
-
-            <Text style={styles.sectionTitle}>Source</Text>
-            <View style={styles.choices}>
-              <Choice
-                label="Fixture"
-                value="repeat"
-                selected={workloadShape === 'repeat'}
-                onPress={() => setWorkloadShape('repeat')}
-              />
-              <Choice
-                label="Open code fence"
-                value="open-fence"
-                selected={workloadShape === 'open-fence'}
-                onPress={() => {
-                  setWorkloadShape('open-fence');
-                  if (workloadSize === 'fixture') setWorkloadSize(10);
-                }}
-              />
-            </View>
-
-            {workloadShape === 'repeat' && (
-              <>
-                <Text style={styles.sectionTitle}>Fixture</Text>
-                <View style={styles.choices}>
-                  {fixtures.map((item) => (
-                    <Choice
-                      key={item.id}
-                      label={item.id}
-                      value={item.id}
-                      selected={item.id === fixtureId}
-                      onPress={setFixtureId}
-                    />
-                  ))}
-                </View>
-                <Text style={styles.helper}>{fixture?.description}</Text>
-              </>
-            )}
-
-            <Text style={styles.sectionTitle}>Workload size</Text>
-            <View style={styles.choices}>
-              {(workloadShape === 'repeat'
-                ? (['fixture', 10, 50, 100] as const)
-                : ([10, 50, 100] as const)
-              ).map((size) => (
-                <Choice
-                  key={size}
-                  label={size === 'fixture' ? 'Fixture' : `${size} KiB`}
-                  value={size}
-                  selected={size === workloadSize}
-                  onPress={setWorkloadSize}
-                />
-              ))}
-            </View>
-            <Text style={styles.helper}>
-              {workloadShape === 'open-fence'
-                ? 'One code fence stays open for the entire exact-size source.'
-                : 'Larger sources repeat the selected fixture to an exact byte size.'}
-            </Text>
-
-            <Text style={styles.sectionTitle}>Chunk schedule</Text>
-            <View style={styles.choices}>
-              {SCHEDULES.map((item) => (
-                <Choice
-                  key={item.id}
-                  label={
-                    item.id === 'manifest' && workloadSize !== 'fixture'
-                      ? 'Pattern chunks'
-                      : item.label
-                  }
-                  value={item.id}
-                  selected={item.id === schedule}
-                  onPress={setSchedule}
-                />
-              ))}
-            </View>
-
-            <Text style={styles.sectionTitle}>Simultaneous streams</Text>
-            <View style={styles.choices}>
-              {([1, 4, 8] as const).map((count) => (
-                <Choice
-                  key={count}
-                  label={String(count)}
-                  value={count}
-                  selected={count === streams}
-                  onPress={setStreams}
-                />
-              ))}
-            </View>
-
-            <View style={styles.traceRow}>
-              <View style={styles.traceCopy}>
-                <Text style={styles.sectionTitle}>Trace next run</Text>
-                <Text style={styles.helper}>
-                  Receipts, batches, renderer commits, JS frames, and frame
-                  estimates.
-                </Text>
-              </View>
-              <Choice
-                label={traceEnabled ? 'On' : 'Off'}
-                value={traceEnabled ? 'on' : 'off'}
-                selected={traceEnabled}
-                onPress={() => setTraceEnabled((current) => !current)}
-              />
-            </View>
-
-            <View style={styles.actions}>
-              <Action
-                label={view.run ? 'Replay' : 'Play'}
-                onPress={start}
-                primary
-              />
-              <Action
-                label={view.status === 'paused' ? 'Resume' : 'Pause'}
-                onPress={view.status === 'paused' ? resume : pause}
-                disabled={view.status !== 'running' && view.status !== 'paused'}
-              />
-              <Action
-                label="Finish"
-                onPress={finish}
-                disabled={view.status !== 'running' && view.status !== 'paused'}
-              />
-              <Action label="Reset" onPress={reset} />
-              <Action
-                label={exporting ? 'Exporting…' : 'Export traces'}
-                onPress={shareTrace}
-                disabled={exporting}
-              />
-            </View>
-
-            <View style={styles.readout}>
-              <Text style={styles.readoutValue}>{view.status}</Text>
-              <Text style={styles.readoutDetail}>
-                Run {view.run || '—'} · {view.receivedChunks}/{view.totalChunks}{' '}
-                chunks · {view.completed.length} archived messages
-              </Text>
-            </View>
-
-            {view.live && (
-              <View style={styles.messageSection}>
-                <Text style={styles.sectionTitle}>
-                  {view.status === 'complete'
-                    ? 'Completed run'
-                    : 'Live streams'}
-                </Text>
-                {STREAM_INDICES.slice(
-                  0,
-                  activeTrace?.data.streams ?? streams
-                ).map((stream) => (
-                  <View style={styles.message} key={`${view.run}-${stream}`}>
-                    <Text style={styles.messageLabel}>
-                      Run {view.run} / stream {stream + 1}
-                    </Text>
-                    <TracedMarkdown
-                      message={view.live!}
-                      stream={stream}
-                      trace={activeTrace}
-                    />
-                  </View>
-                ))}
-              </View>
-            )}
-
-            {view.completed.length > 0 && (
-              <Text style={styles.sectionTitle}>
-                Earlier completed messages
-              </Text>
-            )}
-          </View>
-        }
-        ListFooterComponent={
-          <Text style={styles.footer}>
-            The frame timestamp is a JS callback estimate. Use native profiling
-            for parse, layout, CPU, memory, and UI frame timing.
-          </Text>
-        }
+        ListHeaderComponent={header}
       />
-    </View>
+    </Screen>
   );
 }
 
-const colors = {
-  paper: '#F2F1EB',
-  ink: '#172D2A',
-  muted: '#52645F',
-  line: '#CBD4CB',
-  teal: '#14695E',
-  white: '#FFFFFF',
-};
-
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.paper },
-  content: {
-    paddingTop: Platform.OS === 'ios' ? 58 : 38,
-    paddingHorizontal: 20,
-    paddingBottom: 60,
+  content: { paddingTop: space.sm },
+  seed: { marginTop: space.md },
+  readoutBlock: { paddingHorizontal: space.xl, paddingTop: space.xxl },
+  controls: {
+    paddingHorizontal: space.xl,
+    paddingTop: space.xl,
+    gap: space.md,
   },
-  kicker: {
-    color: colors.teal,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-  },
-  title: { color: colors.ink, fontSize: 32, fontWeight: '800', marginTop: 10 },
-  intro: {
-    color: colors.muted,
-    fontSize: 15,
-    lineHeight: 22,
-    marginTop: 7,
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    color: colors.ink,
-    fontSize: 16,
-    fontWeight: '700',
-    marginTop: 18,
-    marginBottom: 9,
-  },
-  choices: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  choice: {
-    borderWidth: 1,
-    borderColor: colors.line,
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 11,
-    backgroundColor: colors.white,
-  },
-  choiceSelected: { backgroundColor: colors.ink, borderColor: colors.ink },
-  choiceText: { color: colors.ink, fontSize: 13, fontWeight: '600' },
-  choiceTextSelected: { color: colors.white },
-  helper: { color: colors.muted, fontSize: 13, lineHeight: 18, marginTop: 7 },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.line,
-    borderRadius: 8,
-    backgroundColor: colors.white,
-    color: colors.ink,
-    padding: 10,
+  groupHint: {
+    paddingHorizontal: space.lg,
+    paddingTop: space.md,
+    paddingBottom: space.lg,
   },
   traceRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
-    marginTop: 7,
+    gap: space.lg,
+    paddingHorizontal: space.lg,
+    paddingBottom: space.lg,
   },
-  traceCopy: { flex: 1 },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 26 },
-  action: {
-    borderWidth: 1,
-    borderColor: colors.ink,
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 13,
+  section: { marginTop: space.xxxl },
+  pane: { marginHorizontal: space.xl, marginTop: space.md },
+  completed: {
+    marginHorizontal: space.xl,
+    marginTop: space.md,
+    padding: space.lg,
   },
-  actionPrimary: { backgroundColor: colors.teal, borderColor: colors.teal },
-  actionDisabled: { opacity: 0.35 },
-  actionText: { color: colors.ink, fontSize: 14, fontWeight: '700' },
-  actionTextPrimary: { color: colors.white },
-  readout: {
-    marginTop: 23,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: colors.line,
-    paddingVertical: 14,
-  },
-  readoutValue: { color: colors.teal, fontSize: 20, fontWeight: '700' },
-  readoutDetail: { color: colors.muted, fontSize: 13, marginTop: 3 },
-  messageSection: { marginTop: 15 },
-  message: {
-    backgroundColor: colors.white,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.line,
-    padding: 16,
-    marginTop: 10,
-  },
-  messageLabel: {
-    color: colors.teal,
+  completedLabel: { fontWeight: '700', marginBottom: space.md },
+  traceNote: { flex: 1 },
+  footer: {
     fontSize: 12,
-    fontWeight: '700',
-    marginBottom: 12,
+    lineHeight: 18,
+    paddingHorizontal: space.xl,
+    paddingTop: space.xxl,
   },
-  footer: { color: colors.muted, fontSize: 12, lineHeight: 18, marginTop: 30 },
 });

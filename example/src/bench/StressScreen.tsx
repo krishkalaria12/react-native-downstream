@@ -1,12 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import {
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  useColorScheme,
-  View,
-} from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 import {
   createMarkdownStream,
@@ -19,6 +12,10 @@ import {
   subscribeStreamTrace,
   type StreamTraceEvent,
 } from '../../../src/streamTrace';
+import { EmptyState } from '../ui/kit';
+import { RunReadout } from '../ui/readout';
+import { Hero, Screen, useBottomInset } from '../ui/screen';
+import { space, useTheme } from '../ui/theme';
 import { nowMs } from './trace';
 
 // A chat screen under load: a conversation's history mounts at once, then
@@ -145,11 +142,20 @@ function nativeSpans(events: StreamTraceEvent[]) {
   );
 }
 
+interface StressSummary {
+  history: { allLaidOutMs: number };
+  streams: { wallMs: number };
+}
+
 export function StressScreen({ autoStart = false }: { autoStart?: boolean }) {
-  const dark = useColorScheme() === 'dark';
+  const t = useTheme();
   const [history, setHistory] = useState<string[]>([]);
   const [streams, setStreams] = useState<MarkdownStreamController[]>([]);
-  const [status, setStatus] = useState('Idle');
+  const [phase, setPhase] = useState<'idle' | 'history' | 'streaming' | 'done'>(
+    'idle'
+  );
+  const [log, setLog] = useState('');
+  const [summary, setSummary] = useState<StressSummary | null>(null);
   const laidOut = useRef(new Set<number>());
   const historyDone = useRef<() => void>(() => {});
 
@@ -164,7 +170,7 @@ export function StressScreen({ autoStart = false }: { autoStart?: boolean }) {
     (async () => {
       await sleep(1500);
       // Phase 1: a conversation's history mounts in one commit.
-      setStatus('Mounting history');
+      setPhase('history');
       // One long answer is prepared without blocking layout and appears
       // when it is ready; the run waits until every message has a height.
       const messages = Array.from({ length: HISTORY_MESSAGES }, (_, index) =>
@@ -187,7 +193,7 @@ export function StressScreen({ autoStart = false }: { autoStart?: boolean }) {
       if (cancelled) return;
 
       // Phase 2: several answers stream at once.
-      setStatus('Streaming');
+      setPhase('streaming');
       const sources = Array.from({ length: STREAMS }, (_, index) =>
         answer(STREAM_BYTES, 1000 + index * 50)
       );
@@ -224,7 +230,7 @@ export function StressScreen({ autoStart = false }: { autoStart?: boolean }) {
       const streamGaps = stats(stopStreamGaps());
       if (cancelled) return;
 
-      const summary = {
+      const report = {
         platform: Platform.OS,
         history: {
           messages: HISTORY_MESSAGES,
@@ -239,12 +245,14 @@ export function StressScreen({ autoStart = false }: { autoStart?: boolean }) {
           native: nativeSpans(traces),
         },
       };
-      console.log(`DOWNSTREAM_STRESS ${JSON.stringify(summary)}`);
+      console.log(`DOWNSTREAM_STRESS ${JSON.stringify(report)}`);
       // Release builds may not log; the file is read from the app container.
       new File(Paths.cache, 'downstream-stress.json').write(
-        JSON.stringify(summary)
+        JSON.stringify(report)
       );
-      setStatus(JSON.stringify(summary, null, 1));
+      setSummary(report);
+      setPhase('done');
+      setLog(JSON.stringify(report, null, 1));
     })();
 
     return () => {
@@ -255,12 +263,77 @@ export function StressScreen({ autoStart = false }: { autoStart?: boolean }) {
     };
   }, [autoStart]);
 
+  const done = phase === 'done';
+  const bottom = useBottomInset();
+  const label =
+    phase === 'history'
+      ? 'mounting history'
+      : phase === 'streaming'
+      ? 'streaming'
+      : done
+      ? 'finished'
+      : 'idle';
+
   return (
-    <View style={styles.screen}>
-      <Text selectable style={[styles.status, dark && styles.statusDark]}>
-        {status}
-      </Text>
-      <ScrollView contentContainerStyle={styles.content}>
+    <Screen title="Stress">
+      {/* The readout stays put while the documents scroll, so the numbers can
+          be watched without losing the run that produced them. */}
+      <View style={styles.header}>
+        <Hero
+          title="Concurrent stress"
+          summary="Mounts a conversation's history in one commit, then streams four answers at once, so two builds can be compared on the same device."
+          meta={
+            <Text style={[t.s.meta, styles.meta]}>
+              {HISTORY_MESSAGES} archived · {STREAMS} live ·{' '}
+              {Math.round(STREAM_BYTES / 1024)} KiB each
+            </Text>
+          }
+        />
+
+        {phase !== 'idle' && (
+          <View style={styles.statusBlock}>
+            <RunReadout
+              status={label}
+              statusTone={done ? 'accent' : 'live'}
+              figures={
+                done && summary
+                  ? [
+                      {
+                        label: 'history laid out',
+                        value: String(summary.history.allLaidOutMs),
+                        unit: 'ms',
+                      },
+                      {
+                        label: 'streaming wall',
+                        value: String(summary.streams.wallMs),
+                        unit: 'ms',
+                      },
+                    ]
+                  : undefined
+              }
+            />
+            {log !== '' && (
+              <View style={[t.s.sunken, styles.raw]}>
+                <Text selectable style={t.s.mono}>
+                  {log}
+                </Text>
+              </View>
+            )}
+          </View>
+        )}
+      </View>
+      <ScrollView
+        style={styles.flex}
+        contentContainerStyle={[styles.documents, { paddingBottom: bottom }]}
+      >
+        {streams.length === 0 && history.length === 0 && (
+          <EmptyState title="This screen runs itself">
+            It has no controls on purpose. Launch the app with{' '}
+            <Text style={t.s.mono}>-downstreamStress 1</Text> on iOS, or a{' '}
+            <Text style={t.s.mono}>downstream://stress</Text> VIEW intent on
+            Android, and the whole sequence runs unattended.
+          </EmptyState>
+        )}
         {streams.map((stream, index) => (
           <View key={`stream-${index}`} style={styles.message}>
             <DownstreamMarkdown stream={stream} />
@@ -281,14 +354,23 @@ export function StressScreen({ autoStart = false }: { autoStart?: boolean }) {
           </View>
         ))}
       </ScrollView>
-    </View>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
-  status: { padding: 12, fontSize: 11, color: '#333', maxHeight: 220 },
-  statusDark: { color: '#ccc' },
-  content: { padding: 16 },
-  message: { paddingBottom: 24 },
+  flex: { flex: 1 },
+  header: { flexShrink: 0, paddingTop: space.sm },
+  meta: { marginTop: space.md },
+  statusBlock: {
+    paddingHorizontal: space.xl,
+    paddingTop: space.xxl,
+    gap: space.md,
+  },
+  raw: { padding: space.lg, maxHeight: 180 },
+  documents: {
+    paddingHorizontal: space.xl,
+    paddingTop: space.lg,
+  },
+  message: { paddingBottom: space.xxl },
 });
