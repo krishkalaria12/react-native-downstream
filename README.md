@@ -44,12 +44,17 @@ The view parses with md4c and lays text out natively (TextKit on iOS, `StaticLay
 
 ## Example app
 
-`example/` has four screens. Example streams a live Markdown chat reply from
+`example/` has four screens behind a drawer, opened from the app bar or by
+dragging in from the left edge. Example streams a live Markdown chat reply from
 OpenAI. Testing replays one source through Streamdown and then Downstream and
 shows the comparison once both runs finish. Bench replays a source through
 Downstream alone and exports a trace for the
 [performance method](docs/performance-methodology.md). Stress streams several
-answers at once to exercise the worker pool.
+answers at once to exercise the worker pool. Every screen stays mounted, so a
+run configured on one of them survives a trip through the drawer.
+
+The shared look lives in `example/src/ui`: a light and dark palette, a type and
+spacing scale, and the controls the screens are built from.
 
 The Example screen calls OpenAI from the app, so it needs a key in
 `example/.env`:
