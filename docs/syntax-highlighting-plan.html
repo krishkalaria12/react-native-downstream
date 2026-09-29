@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Downstream · syntax highlighting plan</title>
+    <style>
+      :root {
+        --paper: #f5f8f8;
+        --surface: #ffffff;
+        --surface-soft: #edf3f2;
+        --ink: #17272d;
+        --ink-soft: #486167;
+        --muted: #667c80;
+        --line: #cddcda;
+        --line-strong: #94aeaa;
+        --accent: #146e69;
+        --accent-soft: #d9efeb;
+        --tail: #aa681b;
+        --tail-soft: #f8eddb;
+        --risk: #a64242;
+        --risk-soft: #faeaea;
+        --code: #e8f0ef;
+        --sans: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --paper: #0f1b1e;
+          --surface: #152528;
+          --surface-soft: #1c3334;
+          --ink: #e8f2ef;
+          --ink-soft: #b6cac5;
+          --muted: #92aca7;
+          --line: #34504e;
+          --line-strong: #537872;
+          --accent: #84d4c6;
+          --accent-soft: #1b4643;
+          --tail: #efbb72;
+          --tail-soft: #46351f;
+          --risk: #ef9993;
+          --risk-soft: #462d30;
+          --code: #223a3b;
+        }
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.58 var(--sans); }
+      a { color: var(--accent); text-underline-offset: 0.18em; }
+      :focus-visible { outline: 3px solid var(--tail); outline-offset: 3px; border-radius: 3px; }
+      .shell { display: grid; grid-template-columns: 15rem minmax(0, 1fr); min-height: 100vh; }
+      .rail { position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 2.1rem 1.2rem 2rem 1.5rem; border-right: 1px solid var(--line); background: var(--surface); }
+      .rail-title { font-weight: 800; letter-spacing: -0.035em; line-height: 1.18; font-size: 1.12rem; margin: 0 0 0.35rem; }
+      .rail-subtitle { margin: 0; color: var(--muted); font-size: 0.8rem; line-height: 1.4; }
+      .rail nav { margin-top: 2rem; display: grid; gap: 0.06rem; }
+      .rail nav a { display: block; padding: 0.46rem 0.6rem; color: var(--ink-soft); text-decoration: none; font-size: 0.86rem; line-height: 1.3; border-left: 2px solid transparent; }
+      .rail nav a:hover { color: var(--ink); background: var(--surface-soft); border-left-color: var(--accent); }
+      main { min-width: 0; }
+      .wrap { max-width: 74rem; padding: 3.2rem clamp(1rem, 4.8vw, 4.5rem) 6rem; margin: 0 auto; }
+      .mast { border-bottom: 2px solid var(--ink); padding-bottom: 2.2rem; margin-bottom: 0.6rem; }
+      .kicker { font: 700 0.77rem/1.3 var(--mono); color: var(--accent); letter-spacing: 0.02em; margin: 0 0 0.9rem; }
+      h1 { font-size: clamp(2.3rem, 5vw, 4.3rem); letter-spacing: -0.06em; line-height: 1; margin: 0 0 1.3rem; max-width: 15ch; font-weight: 760; }
+      .lede { font-size: clamp(1.05rem, 1.5vw, 1.22rem); line-height: 1.5; max-width: 52rem; margin: 0; color: var(--ink-soft); }
+      .decision { margin-top: 2rem; padding: 1.2rem 1.4rem; background: var(--accent-soft); border-left: 5px solid var(--accent); max-width: 62rem; }
+      .decision strong { display: block; margin-bottom: 0.3rem; }
+      .decision p { margin: 0; }
+      section { scroll-margin-top: 1.5rem; padding: 2.4rem 0 1.6rem; border-top: 1px solid var(--line); }
+      .section-head { display: grid; grid-template-columns: minmax(0, 2fr) minmax(12rem, 1fr); align-items: end; gap: 2rem; margin-bottom: 1.2rem; }
+      .section-head h2 { font-size: clamp(1.6rem, 2.6vw, 2.3rem); letter-spacing: -0.05em; line-height: 1.13; margin: 0; }
+      .section-head p { margin: 0; color: var(--ink-soft); font-size: 0.94rem; line-height: 1.45; }
+      h3 { font-size: 1.18rem; letter-spacing: -0.025em; line-height: 1.25; margin: 1.8rem 0 0.6rem; }
+      p { max-width: 72ch; margin: 0.5rem 0 1rem; }
+      ul, ol { padding-left: 1.35rem; max-width: 80ch; }
+      li { margin: 0.38rem 0; }
+      code, pre { font-family: var(--mono); }
+      code { background: var(--code); border-radius: 3px; padding: 0.08rem 0.25rem; font-size: 0.86em; overflow-wrap: anywhere; }
+      pre { background: var(--surface); border: 1px solid var(--line); padding: 1rem 1.2rem; overflow-x: auto; font-size: 0.8rem; line-height: 1.6; max-width: 100%; }
+      pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+      .table-wrap { max-width: 100%; overflow-x: auto; border: 1px solid var(--line); background: var(--surface); margin: 1rem 0 1.5rem; }
+      table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 0.86rem; line-height: 1.45; }
+      th, td { padding: 0.72rem 0.85rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+      th { background: var(--surface-soft); font-size: 0.77rem; font-weight: 750; }
+      tr:last-child td { border-bottom: 0; }
+      td.num { font-family: var(--mono); white-space: nowrap; }
+      tr.pick td { background: var(--accent-soft); }
+      .tag { display: inline-block; font: 700 0.7rem/1 var(--mono); padding: 0.28rem 0.42rem; border-radius: 3px; margin: 0.1rem 0.25rem 0.1rem 0; white-space: nowrap; }
+      .tag.go { background: var(--accent-soft); color: var(--accent); }
+      .tag.later { background: var(--tail-soft); color: var(--tail); }
+      .tag.no { background: var(--risk-soft); color: var(--risk); }
+      .meta-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 1.2rem; }
+      .meta-grid > div { background: var(--surface); padding: 1rem 1.1rem; }
+      .meta-grid b { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; }
+      .meta-grid span { color: var(--ink-soft); font-size: 0.9rem; }
+      .big { display: block; font: 800 1.7rem/1.1 var(--mono); color: var(--accent); margin-bottom: 0.3rem; letter-spacing: -0.03em; }
+      .callout { padding: 1rem 1.25rem; background: var(--surface-soft); border-left: 4px solid var(--line-strong); margin: 1.3rem 0; }
+      .callout.risk { background: var(--risk-soft); border-left-color: var(--risk); }
+      .callout p:last-child { margin-bottom: 0; }
+      .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.9rem; margin: 1.2rem 0 1.4rem; }
+      .flow-node { position: relative; background: var(--surface); border: 1px solid var(--line); padding: 0.8rem 0.85rem; font-size: 0.84rem; line-height: 1.4; }
+      .flow-node b { display: block; font-size: 0.86rem; margin-bottom: 0.2rem; }
+      .flow-node span { color: var(--ink-soft); }
+      .flow-node.new { border-color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
+      .flow-node:not(:last-child)::after { content: "→"; position: absolute; top: 0.8rem; right: -0.78rem; color: var(--accent); font-weight: bold; }
+      .phase { border: 1px solid var(--line); background: var(--surface); padding: 1.1rem 1.3rem 0.6rem; margin: 1rem 0; }
+      .phase h3 { margin-top: 0; }
+      .phase .exit { border-top: 1px dashed var(--line); padding-top: 0.6rem; margin-top: 0.6rem; font-size: 0.9rem; color: var(--ink-soft); }
+      .phase .exit b { color: var(--ink); }
+      .swatch { display: inline-block; width: 0.8rem; height: 0.8rem; border-radius: 2px; margin-right: 0.4rem; vertical-align: -0.1rem; border: 1px solid rgba(127, 127, 127, 0.35); }
+      .sources li { font-size: 0.9rem; overflow-wrap: anywhere; }
+      @media (max-width: 1000px) {
+        .shell { grid-template-columns: 1fr; }
+        .rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+        .rail nav { grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); margin-top: 1rem; }
+        .flow { grid-template-columns: 1fr; }
+        .flow-node:not(:last-child)::after { content: "↓"; top: auto; bottom: -1.05rem; right: 50%; }
+      }
+      @media (max-width: 760px) {
+        .meta-grid, .section-head { grid-template-columns: 1fr; gap: 0.6rem; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="rail">
+        <p class="rail-title">Syntax highlighting</p>
+        <p class="rail-subtitle">Implementation plan · first item from the Streamdown gap analysis</p>
+        <nav aria-label="Sections">
+          <a href="#constraints">Constraints</a>
+          <a href="#options">Options surveyed</a>
+          <a href="#measurements">Measurements</a>
+          <a href="#design">Design</a>
+          <a href="#streaming">Streaming</a>
+          <a href="#platforms">Platforms and theme</a>
+          <a href="#languages">Languages</a>
+          <a href="#phases">Phases</a>
+          <a href="#testing">Testing</a>
+          <a href="#risks">Risks and open questions</a>
+          <a href="#sources">Sources</a>
+        </nav>
+      </aside>
+      <main>
+        <div class="wrap">
+          <header class="mast">
+            <p class="kicker">docs / syntax-highlighting-plan</p>
+            <h1>Native syntax highlighting for code blocks</h1>
+            <p class="lede">
+              Fenced code is plain monospace today. This plan adds colored code on iOS and Android without moving work to the JavaScript thread, without
+              slowing plain prose, and without breaking the open-fence fast path that keeps long streaming code blocks cheap.
+              It is the first item in the <a href="streamdown-gap-analysis.html">Streamdown gap analysis</a>.
+            </p>
+            <div class="decision">
+              <strong>Decision: vendor a subset of Lexilla lexers in the C++ engine</strong>
+              <p>
+                Code blocks are tokenized on the existing worker pool, right after md4c parses them. Tokens become a new list of runs on each code block.
+                iOS and Android color them from one shared token palette modeled on GitHub light and dark. While a fence streams, only the last line
+                is tokenized again, because Lexilla lexers resume from per-line state. The C++ interface stays engine-agnostic, so a TextMate or
+                tree-sitter engine can replace it later for languages where fidelity matters more than size.
+              </p>
+            </div>
+          </header>
+
+          <section id="constraints">
+            <div class="section-head">
+              <h2>Constraints from the contract</h2>
+              <p>Rules from <a href="api.md">api.md</a> and <a href="feature-matrix.md">the feature matrix</a> that any engine must satisfy.</p>
+            </div>
+            <ul>
+              <li><b>Native only.</b> No parser model or AST is sent to JavaScript for display. Highlighting runs where parsing runs: on the shared worker pool, below UI and JS priority.</li>
+              <li><b>Same on iOS and Android.</b> One tokenizer in shared C++; the platforms only map token classes to colors.</li>
+              <li><b>Plain prose stays independent.</b> A document with no fenced code never loads a lexer. A fence without a known language stays plain.</li>
+              <li><b>Contract limit.</b> Skip highlighting above 64 KiB of code in a block (already written into <code>api.md</code>).</li>
+              <li><b>Streaming invariant.</b> When a stream finishes, its tokens must equal the tokens of a one-shot highlight of the final text, just as a completed snapshot must equal a fresh full parse.</li>
+              <li><b>Nothing else changes.</b> Selection, copy, <code>getSource()</code>, accessibility text and link ranges are unaffected, because highlighting changes only colors, never text.</li>
+              <li><b>Fast path intact.</b> <code>IncrementalParser::watchOpenFence</code> requires the open code block to have no inline runs (<code>IncrementalParser.cpp:581</code>). Tokens must therefore live in their own list, not in <code>Block::runs</code>.</li>
+            </ul>
+          </section>
+
+          <section id="options">
+            <div class="section-head">
+              <h2>Options surveyed</h2>
+              <p>Every engine that can plausibly color code inside a React Native renderer, judged against the constraints above.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Engine</th><th>Runs where</th><th>Fidelity</th><th>Streaming</th><th>License</th><th>Verdict</th></tr>
+                </thead>
+                <tbody>
+                  <tr class="pick">
+                    <td><b>Lexilla</b><br />lexers from Scintilla / Notepad++ / SciTE</td>
+                    <td>C++17 in the engine, worker pool</td>
+                    <td>Keywords, types (second keyword list), strings, comments, numbers, operators, regex, preprocessor. No function or property coloring; a template string is one token.</td>
+                    <td>Designed for editors: per-line state, restart at any line start</td>
+                    <td>HPND-style permissive, commercial use allowed</td>
+                    <td><span class="tag go">choose</span></td>
+                  </tr>
+                  <tr>
+                    <td><b>tree-sitter</b><br />core C library plus grammars and <code>highlights.scm</code></td>
+                    <td>C in the engine, worker pool</td>
+                    <td>High: real syntax tree; functions, properties, parameters</td>
+                    <td>Incremental reparse through <code>ts_tree_edit</code>; tolerates incomplete code</td>
+                    <td>MIT (most grammars MIT)</td>
+                    <td><span class="tag later">later, per language</span> Grammars cost 0.4–1.5 MB each. <code>tree-sitter-highlight</code> is Rust, so capture-to-style resolution would have to be rewritten in C++.</td>
+                  </tr>
+                  <tr>
+                    <td><b>TextMate grammars in C++</b><br />a port of vscode-textmate plus Oniguruma</td>
+                    <td>C/C++ in the engine, worker pool</td>
+                    <td>Same grammars and themes as Shiki, so it matches Streamdown</td>
+                    <td>Per-line rule stack; resumes like Lexilla</td>
+                    <td>Oniguruma BSD-2, vscode-textmate MIT, grammars mostly MIT</td>
+                    <td><span class="tag later">later, if parity matters</span> There is no maintained C++ port (only C# and Java ports exist), and the regex-driven engine is about 50× slower than Lexilla.</td>
+                  </tr>
+                  <tr>
+                    <td><b>Shiki on JS</b><br /><code>react-native-shiki-engine</code> (Oniguruma through JSI) or Shiki's JS regex engine</td>
+                    <td>JavaScript thread</td>
+                    <td>Streamdown parity</td>
+                    <td><code>@shikijs/stream</code> plus <code>grammarState</code></td>
+                    <td>MIT</td>
+                    <td><span class="tag no">reject</span> Tokenizing runs on the JS thread and tokens would have to cross back to native every snapshot, which breaks the no-model-to-JS rule. The JS regex engine needs the <code>v</code> flag and has Hermes regex gaps.</td>
+                  </tr>
+                  <tr>
+                    <td><b>highlight.js / Prism</b><br />including <code>react-native-syntax-highlighter</code> and <code>react-native-code-highlighter</code></td>
+                    <td>JavaScript thread, React views per token</td>
+                    <td>Medium</td>
+                    <td>Whole block again on every chunk</td>
+                    <td>BSD-3 / MIT</td>
+                    <td><span class="tag no">reject</span> Same JS-thread problem, plus one React view per token.</td>
+                  </tr>
+                  <tr>
+                    <td><b>Highlightr / HighlightSwift</b></td>
+                    <td>JavaScriptCore on iOS</td>
+                    <td>highlight.js</td>
+                    <td>Whole block</td>
+                    <td>MIT</td>
+                    <td><span class="tag no">reject</span> iOS only, so Android output would differ. Highlightr is unmaintained.</td>
+                  </tr>
+                  <tr>
+                    <td><b>syntect</b></td>
+                    <td>Rust</td>
+                    <td>Sublime grammars, high</td>
+                    <td>Per-line state</td>
+                    <td>MIT</td>
+                    <td><span class="tag no">reject</span> Adds a Rust toolchain and cross-compiles for four Android ABIs plus iOS slices to a library that is C/C++ only today.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              <code>react-native-enriched-markdown</code> and <code>react-native-streamdown</code>, the two React Native libraries already in <code>devDependencies</code>,
+              do not highlight code, so there is no native precedent to reuse.
+            </p>
+          </section>
+
+          <section id="measurements">
+            <div class="section-head">
+              <h2>Measurements</h2>
+              <p>Spike builds made while writing this plan. Sizes are stripped arm64 shared libraries at <code>-Os</code> with dead stripping; times are on an Apple Silicon host at <code>-O2</code>.</p>
+            </div>
+            <div class="meta-grid">
+              <div><span class="big">≈5 ms</span><b>Lexilla, 4,000 TS lines</b><span>Full tokenize of 181 KB of TypeScript with the C++ lexer</span></div>
+              <div><span class="big">≈30 ms</span><b>tree-sitter, same file</b><span>Parse (19 ms) plus highlight captures (11 ms), and a one-time 22 ms query compile per language</span></div>
+              <div><span class="big">≈275 ms</span><b>Shiki, same file</b><span>Node 24 with V8's JIT; both Oniguruma WASM and the JS regex engine. Hermes has no JIT and would be slower.</span></div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Component</th><th>Binary size</th><th>Notes</th></tr></thead>
+                <tbody>
+                  <tr><td>Lexilla, 14 lexers (CPP, Python, Bash, JSON, HTML, CSS, SQL, Rust, YAML, Ruby, Diff, Markdown, Lua, TOML) plus lexlib</td><td class="num">286 KB</td><td>The entire v1 language set. <code>LexCPP</code> covers the C-family languages through keyword lists.</td></tr>
+                  <tr><td>tree-sitter core with the query API</td><td class="num">151 KB</td><td>Before any grammar.</td></tr>
+                  <tr><td>tree-sitter-javascript</td><td class="num">430 KB</td><td rowspan="4">Per grammar. Five common languages would add 3–5 MB.</td></tr>
+                  <tr><td>tree-sitter-python</td><td class="num">479 KB</td></tr>
+                  <tr><td>tree-sitter-typescript</td><td class="num">1,437 KB</td></tr>
+                  <tr><td>tree-sitter-tsx</td><td class="num">1,487 KB</td></tr>
+                  <tr><td>Oniguruma (UTF-8 and UTF-16 only)</td><td class="num">216 KB</td><td>Plus the TextMate engine port, plus grammars: TypeScript 230 KB of JSON (18 KB gzipped), Python 108 KB (10 KB), Bash 66 KB (7 KB).</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <h3>Streaming cost</h3>
+            <p>
+              A 40 KB code block streamed in 40-byte chunks, 1,000 snapshots in all. Tokenizing the whole block again on every chunk took <b>245 ms</b> in total.
+              Resuming from the last line's start took <b>0.7 ms</b> in total. Resuming at line starts is what makes highlighting cheap for chat, and every engine we keep has to support it.
+            </p>
+            <h3>What Lexilla produces</h3>
+            <p>Raw Lexilla style numbers for part of the TypeScript sample. The design maps these numbers to token classes:</p>
+<pre><code>[5:export] [5:async] [5:function] [11:loadUser][10:(][11:id][10::] [16:number][10:):] [16:Promise][10:&lt;][16:User] [10:|] [16:null][10:&gt;]
+[5:const] [11:res] [10:=] [5:await] [11:fetch][10:(][20:`/api/users/${id}?v=${VERSION}`][10:);]
+[5:throw] [5:new] [11:Error][10:(][6:"failed: "] [10:+] [11:res][10:.][11:status][10:);]
+
+5 keyword · 16 second keyword list (types) · 11 identifier · 10 operator · 6 string · 20 template string</code></pre>
+            <div class="callout">
+              <p>
+                The fidelity gap against Shiki is visible here: <code>loadUser</code> and <code>fetch</code> stay identifiers, and <code>${id}</code> is not split out of the template.
+                Phase 4 adds a cheap per-line pass that colors an identifier followed by <code>(</code> as a function, an identifier after <code>.</code> as a property,
+                and PascalCase as a type. That closes most of the visible gap without a heavier engine.
+              </p>
+            </div>
+            <p>The spike code is not committed. Phase 0 repeats these measurements on a low-end Android device and in the example app's APK and IPA size.</p>
+          </section>
+
+          <section id="design">
+            <div class="section-head">
+              <h2>Design</h2>
+              <p>A new stage between parsing and platform rendering. Everything new lives in <code>src/cpp/highlight/</code> and <code>src/cpp/lexilla/</code>.</p>
+            </div>
+            <div class="flow" aria-label="Pipeline">
+              <div class="flow-node"><b>md4c parse</b><span>Code block with <code>language</code> and UTF-16 <code>text</code></span></div>
+              <div class="flow-node new"><b>Language lookup</b><span>Info string → alias table → lexer; unknown means plain</span></div>
+              <div class="flow-node new"><b>Tokenize</b><span>Lexilla on a <code>CodeDocument</code>; resume from cached line state</span></div>
+              <div class="flow-node new"><b>Map styles</b><span>Lexer style number → <code>TokenClass</code>, merged into runs</span></div>
+              <div class="flow-node"><b>Platform build</b><span>Token color attributes and spans on the worker</span></div>
+            </div>
+
+            <h3>Data model</h3>
+<pre><code>// Document.h
+enum class TokenClass : uint8_t {
+  Plain = 0, Comment, Keyword, Type, String, Number, Constant, Regex,
+  Function, Property, Operator, Preprocessor, Tag, Attribute,
+  Inserted, Deleted, Heading,
+};
+
+/// A run of code text in one token class. UTF-16 offsets into Block::text.
+/// Plain text has no run. Runs are sorted and never overlap.
+struct TokenRun {
+  uint32_t start{0};
+  uint32_t end{0};
+  TokenClass token{TokenClass::Plain};
+};
+
+struct Block {
+  ...
+  /// CodeBlock only: syntax tokens, empty when the language is unknown,
+  /// the block exceeds the highlight limit, or highlighting is off.
+  std::vector&lt;TokenRun&gt; tokens;
+};</code></pre>
+            <p>
+              Keeping tokens apart from <code>runs</code> leaves the open-fence fast path and inline-code semantics alone. A committed block carries its tokens
+              in the shared prefix like every other field, so a finished code block is tokenized exactly once.
+            </p>
+
+            <h3>Engine</h3>
+            <ul>
+              <li><b><code>src/cpp/lexilla/</code></b> vendors <code>lexlib/</code>, the chosen <code>Lex*.cxx</code> files, the three Scintilla headers they need (<code>ILexer.h</code>, <code>Sci_Position.h</code>, <code>Scintilla.h</code>), <code>SciLexer.h</code> and <code>License.txt</code>, pinned to Lexilla 5.5.x. A README records the upstream version and the files taken.</li>
+              <li><b><code>CodeDocument</code></b> implements <code>Scintilla::IDocument</code> over one code block's UTF-8 text: line starts, per-line state, and one style byte per byte of text. It is modeled on Lexilla's own <code>test/TestDocument.cxx</code> (325 lines). Folding and decoration calls do nothing.</li>
+              <li><b><code>CodeHighlighter</code></b> is the engine-agnostic interface:
+                <code>tokenize(const LanguageSpec&amp;, std::u16string_view text, HighlightState *resume) → std::vector&lt;TokenRun&gt;</code>.
+                The Lexilla implementation converts to UTF-8, lexes from the resume line, maps style bytes to <code>TokenClass</code> and converts offsets back to UTF-16 with the helpers in <code>Unicode.h</code>.</li>
+              <li><b><code>LanguageRegistry</code></b> is a static table from normalized info strings (<code>ts</code>, <code>tsx</code>, <code>py</code>, <code>sh</code>, <code>c++</code>…) to a <code>LanguageSpec</code>: lexer name, keyword lists, lexer properties such as <code>lexer.cpp.backquoted.strings</code>, and a style map. Lexers are created on first use per worker and reused.</li>
+              <li><b>Keyword lists and style maps</b> are generated into a C++ table by a node <code>.mjs</code> tool from SciTE's <code>.properties</code> files, which use the same license, plus our own lists for TypeScript, Swift, Kotlin and Go. The table is checked in, so builds do not run the generator.</li>
+              <li><b>Symbol isolation.</b> Lexilla's code is in the <code>Lexilla</code> and <code>Scintilla</code> namespaces. Compile it with <code>-DLexilla=downstream_lexilla -DScintilla=downstream_scintilla</code>, like the md4c prefixes, so an app that links its own Scintilla cannot collide.</li>
+            </ul>
+
+            <h3>Where it runs</h3>
+            <ul>
+              <li><b>Controlled <code>markdown</code>.</b> <code>PreparedDocument::prepare</code> tokenizes each code block after the parse, on the same worker job. The 16 KiB synchronous-layout threshold includes this time.</li>
+              <li><b>Streams.</b> <code>IncrementalParser</code> owns a <code>HighlightCache</code> and tokenizes the tail's code block while building each snapshot. Committed blocks are tokenized once, when they commit.</li>
+              <li><b>Limits.</b> A block over 64 KiB of UTF-8 gets no tokens. A per-snapshot budget (initial value 4 ms, tuned by device traces) stops tokenizing a single snapshot early; the rest of the block stays plain until the next snapshot resumes it.</li>
+            </ul>
+          </section>
+
+          <section id="streaming">
+            <div class="section-head">
+              <h2>Streaming</h2>
+              <p>The part Streamdown handles by highlighting the whole block again. Lexilla's line state allows much less work.</p>
+            </div>
+            <ol>
+              <li><b>Cache key.</b> The tail code block's source start offset, its language, and the generation. A reset or a language change drops the cache.</li>
+              <li><b>Cached state.</b> The <code>CodeDocument</code> holding every complete line with its styles and line states, and the token runs for those lines.</li>
+              <li><b>New snapshot.</b> Check that the cached text is still a prefix of the block text. Append-only streams always pass; full-mode reparses and resets fail, and fail safely. Append the new bytes, then call <code>Lex(startOfLastCachedLine, …, StyleAt(start − 1))</code>. Keep runs for the lines before that line and replace the rest.</li>
+              <li><b>The incomplete last line</b> is tokenized on every snapshot but never cached, so a token that changes with the next chunk (<code>/</code> becoming <code>//</code>, an unterminated string) corrects itself. That is the same "recall" idea as <code>@shikijs/stream</code>, bounded to one line.</li>
+              <li><b>Closing fence.</b> When the block commits, its final tokens move into the shared prefix and the cache is released.</li>
+              <li><b>Lexers that look back.</b> Some lexers (Perl, HTML) back up to a safe earlier line. They read the styles and line states the <code>CodeDocument</code> kept, as they would in an editor, so this stays correct. The streaming equivalence test covers it.</li>
+            </ol>
+            <div class="callout">
+              <p>
+                The platform text for the tail segment is already rebuilt on every snapshot, so adding colors costs one attribute or span per token on the tail.
+                If the Bench screen shows long open fences dominating, a later step can split a long open code block into line chunks that commit early. That is a render-plan change, not a highlighting change.
+              </p>
+            </div>
+          </section>
+
+          <section id="platforms">
+            <div class="section-head">
+              <h2>Platforms and theme</h2>
+              <p>Token classes are shared; colors are per platform, following light and dark like the existing system colors.</p>
+            </div>
+            <ul>
+              <li><b>iOS.</b> In <code>DSRenderedDocument.mm</code>, code blocks already get a monospaced font in <code>applyRuns</code>. Add <code>NSForegroundColorAttributeName</code> per token with dynamic <code>UIColor</code>s (a <code>colorWithDynamicProvider:</code> pair), so switching appearance needs no rebuild.</li>
+              <li><b>Android.</b> Extend <code>nativeReadDocument</code> in <code>DownstreamJni.cpp</code> with a seventh array, <code>tokens</code>: <code>[start, end, class]</code> per run, with block-relative offsets shifted like <code>runs</code>. <code>NativeDocument.kt</code> gains <code>tokenCount/tokenStart/tokenEnd/tokenClass</code>. <code>RenderedDocument.kt</code> adds a <code>ForegroundColorSpan</code> per token from a light or dark palette chosen by the existing <code>night</code> flag, before <code>PrecomputedText</code> is built.</li>
+              <li><b>Prop.</b> <code>syntaxHighlighting?: boolean</code>, default <code>true</code>. Tokens are always computed, because that is cheap and keeps parse caches independent of view props. The prop only decides whether the platform applies colors, and it becomes part of the rendering cache key. Theme overrides wait for the theme prop, which is the first item in the gap analysis.</li>
+            </ul>
+            <h3>Default palette</h3>
+            <p>Taken from GitHub's Primer "prettylights" syntax colors, the palette behind Shiki's <code>github-light</code> and <code>github-dark</code> themes, which are Streamdown's defaults.</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Token class</th><th>Light</th><th>Dark</th><th>Typical sources</th></tr></thead>
+                <tbody>
+                  <tr><td>Keyword</td><td class="num"><span class="swatch" style="background:#cf222e"></span>#cf222e</td><td class="num"><span class="swatch" style="background:#ff7b72"></span>#ff7b72</td><td><code>const</code>, <code>def</code>, <code>if</code>, storage modifiers</td></tr>
+                  <tr><td>String</td><td class="num"><span class="swatch" style="background:#0a3069"></span>#0a3069</td><td class="num"><span class="swatch" style="background:#a5d6ff"></span>#a5d6ff</td><td>Quoted, template, heredoc</td></tr>
+                  <tr><td>Comment</td><td class="num"><span class="swatch" style="background:#6e7781"></span>#6e7781</td><td class="num"><span class="swatch" style="background:#8b949e"></span>#8b949e</td><td>Line, block, doc comments</td></tr>
+                  <tr><td>Number, Constant, Property, Attribute</td><td class="num"><span class="swatch" style="background:#0550ae"></span>#0550ae</td><td class="num"><span class="swatch" style="background:#79c0ff"></span>#79c0ff</td><td>Literals, <code>true</code>, <code>null</code>, <code>obj.prop</code>, HTML attributes</td></tr>
+                  <tr><td>Function, Type</td><td class="num"><span class="swatch" style="background:#8250df"></span>#8250df</td><td class="num"><span class="swatch" style="background:#d2a8ff"></span>#d2a8ff</td><td>Calls, declarations, class names</td></tr>
+                  <tr><td>Preprocessor</td><td class="num"><span class="swatch" style="background:#953800"></span>#953800</td><td class="num"><span class="swatch" style="background:#ffa657"></span>#ffa657</td><td><code>#include</code>, decorators</td></tr>
+                  <tr><td>Tag, Regex, Inserted</td><td class="num"><span class="swatch" style="background:#116329"></span>#116329</td><td class="num"><span class="swatch" style="background:#7ee787"></span>#7ee787</td><td>HTML tags, regex literals, <code>+</code> diff lines</td></tr>
+                  <tr><td>Deleted</td><td class="num"><span class="swatch" style="background:#82071e"></span>#82071e</td><td class="num"><span class="swatch" style="background:#ffa198"></span>#ffa198</td><td><code>-</code> diff lines</td></tr>
+                  <tr><td>Operator, Plain</td><td colspan="2">Default code text color</td><td>Punctuation stays uncolored, as in GitHub's themes</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="languages">
+            <div class="section-head">
+              <h2>Languages in the first release</h2>
+              <p>The languages chat models emit most, mapped to 14 lexers. Anything else renders plain, which is Streamdown's fallback too.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Lexer</th><th>Info-string aliases</th><th>Notes</th></tr></thead>
+                <tbody>
+                  <tr><td><code>cpp</code></td><td><code>js jsx mjs cjs javascript ts tsx typescript java c h cpp c++ cc hpp cs csharp go swift kotlin kt objc objective-c dart scala</code></td><td>One lexer, per-language keyword and type lists. JSX and TSX tags are not recognized; the embedded tags render as operators and identifiers.</td></tr>
+                  <tr><td><code>python</code></td><td><code>py python python3</code></td><td>f-strings, triple quotes, decorators</td></tr>
+                  <tr><td><code>bash</code></td><td><code>sh bash zsh shell console shellscript dockerfile</code></td><td>Dockerfile is approximate until a dedicated lexer exists</td></tr>
+                  <tr><td><code>json</code></td><td><code>json jsonc json5</code></td><td></td></tr>
+                  <tr><td><code>hypertext</code>, <code>xml</code></td><td><code>html htm xml svg vue php</code></td><td>Embedded scripts and styles are colored by the HTML lexer itself</td></tr>
+                  <tr><td><code>css</code></td><td><code>css scss less</code></td><td></td></tr>
+                  <tr><td><code>sql</code></td><td><code>sql postgres mysql sqlite</code></td><td></td></tr>
+                  <tr><td><code>rust</code></td><td><code>rs rust</code></td><td></td></tr>
+                  <tr><td><code>yaml</code>, <code>toml</code></td><td><code>yaml yml toml</code></td><td></td></tr>
+                  <tr><td><code>ruby</code>, <code>lua</code></td><td><code>rb ruby lua</code></td><td></td></tr>
+                  <tr><td><code>diff</code></td><td><code>diff patch</code></td><td>Inserted and Deleted classes</td></tr>
+                  <tr><td><code>markdown</code></td><td><code>md markdown</code></td><td>Headings, emphasis and code spans inside a fenced Markdown sample</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>More lexers (PowerShell, Perl, R, Makefile, Kotlin- or Swift-specific rules) are additions to the table plus one vendored file each, gated on the size budget in Phase 0.</p>
+          </section>
+
+          <section id="phases">
+            <div class="section-head">
+              <h2>Phases</h2>
+              <p>Each phase is shippable on its own and leaves the default rendering unchanged until Phase 3.</p>
+            </div>
+
+            <div class="phase">
+              <h3>Phase 0 · Device spike and budget</h3>
+              <ul>
+                <li>Build the 14-lexer set into the example app on both platforms. Record the release APK (per ABI) and IPA size deltas.</li>
+                <li>Time a full tokenize of the 4,000-line TypeScript file and the 40 KB streaming replay on a low-end Android device and an older iPhone, using the worker pool's priority.</li>
+                <li>Write the result into <code>docs/performance-methodology.md</code> and fix the per-snapshot budget.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> the size delta per ABI is under 400 KB, and a full tokenize of 4,000 lines stays under 50 ms on the low-end device. Otherwise, reduce the language set before continuing.</p>
+            </div>
+
+            <div class="phase">
+              <h3>Phase 1 · Engine core</h3>
+              <ul>
+                <li>Vendor <code>src/cpp/lexilla/</code> with the license and a README that records the version. Add the sources to <code>Downstream.podspec</code> and <code>src/android/src/main/jni/CMakeLists.txt</code> as their own static library with the namespace defines.</li>
+                <li>Add <code>src/cpp/highlight/</code> with <code>CodeDocument</code>, <code>CodeHighlighter</code>, <code>LanguageRegistry</code>, the generated keyword and style tables, and <code>HighlightState</code>.</li>
+                <li>Add <code>src/cpp/highlight/generate-tables.mjs</code>, a node script that writes the keyword and style tables, with its output checked in.</li>
+                <li>Add a <code>dump_tokens</code> host binary next to <code>dump_document.cpp</code>.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm test:native</code> builds the engine with Lexilla on the host and passes golden token fixtures for every alias group.</p>
+            </div>
+
+            <div class="phase">
+              <h3>Phase 2 · Wire into parsing</h3>
+              <ul>
+                <li>Add <code>TokenClass</code>, <code>TokenRun</code> and <code>Block::tokens</code> to <code>Document.h</code>.</li>
+                <li>Tokenize in <code>PreparedDocument::prepare</code> and in <code>IncrementalParser</code>'s snapshot build, including committed chunks, the open-fence fast path and full-mode reparses.</li>
+                <li>Add <code>HighlightCache</code> with the prefix check, resume and release on commit or reset. Apply the 64 KiB limit and the snapshot budget.</li>
+                <li>Add counters to <code>IncrementalCounters</code>: lines tokenized, resumes, cache misses and budget stops. Show them in the example's Bench readout.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> the streaming equivalence test passes for every fixture at every chunk size. <code>openFenceFastUpdates</code> in the trace is unchanged from <code>main</code>.</p>
+            </div>
+
+            <div class="phase">
+              <h3>Phase 3 · Platform rendering and prop</h3>
+              <ul>
+                <li>iOS: dynamic token colors in <code>DSRenderedDocument.mm</code>.</li>
+                <li>Android: the <code>tokens</code> array in JNI, readers in <code>NativeDocument.kt</code>, and spans in <code>RenderedDocument.kt</code>.</li>
+                <li>Add <code>syntaxHighlighting</code> to <code>MarkdownViewProps</code>, the Codegen spec and both view managers, and include it in the rendering cache keys.</li>
+                <li>Add code-heavy samples to <code>__benchmarks__/samples.ts</code> so the Testing and Bench screens show them.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> the device checks in the feature matrix pass with highlighting on, including appearance switching, font scale, selection and copy of highlighted code, and TalkBack or VoiceOver reading code text unchanged.</p>
+            </div>
+
+            <div class="phase">
+              <h3>Phase 4 · Fidelity pass</h3>
+              <ul>
+                <li>A per-line post-pass over identifier tokens: <code>ident(</code> becomes Function, <code>.ident</code> becomes Property, PascalCase becomes Type. It runs on each language's style map where the lexer does not already classify these.</li>
+                <li>Template interpolation: split <code>${…}</code> inside template strings back to Plain.</li>
+                <li>Compare side by side with Streamdown and Shiki's <code>github-light</code> on the Testing screen samples, and record the remaining differences in the feature matrix.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> the sample set reads like GitHub-themed code to a reviewer, with no token class change from the post-pass across chunk boundaries (the equivalence test still holds).</p>
+            </div>
+
+            <div class="phase">
+              <h3>Phase 5 · Docs</h3>
+              <ul>
+                <li>Update the Code rows in <code>docs/api.md</code> (feature scope and implementation status) and <code>docs/feature-matrix.md</code>, and document the prop.</li>
+                <li>Mark syntax highlighting done in the gap analysis. The code block header and copy control follow as the next gap item.</li>
+              </ul>
+            </div>
+          </section>
+
+          <section id="testing">
+            <div class="section-head">
+              <h2>Testing</h2>
+              <p>Host tests in <code>node:test</code> <code>.mjs</code>, like the existing engine tests; device checks only for color and layout.</p>
+            </div>
+            <ul>
+              <li><b>Golden tokens.</b> For each alias group, a sample and its expected <code>[text, class]</code> runs from <code>dump_tokens</code>. They catch lexer upgrades and keyword table drift.</li>
+              <li><b>Streaming equivalence.</b> For every sample, stream it through <code>IncrementalParser</code> in chunks of 1, 3, 7, 40 and 512 bytes, including splits inside UTF-8 sequences at code point boundaries. Final tokens must equal a one-shot tokenize of the finished block. The same sweep runs in full mode.</li>
+              <li><b>Offsets.</b> Samples with emoji, CJK, RTL text and CRLF inside code. Every run must lie inside the block text on UTF-16 surrogate boundaries.</li>
+              <li><b>Boundaries.</b> Unknown language, empty fence, language in a different case (<code>```TypeScript</code>), an info string with a meta string (<code>```ts title="x"</code>), a block at exactly 64 KiB and one byte over, and an indented code block (no language, so plain).</li>
+              <li><b>Isolation.</b> A prose-only document never creates a lexer. A counter checked by the test proves it.</li>
+              <li><b>Benchmarks.</b> Add a code-heavy case to <code>__benchmarks__/stream-append.bench.ts</code> and a device trace comparison before and after on the Bench screen.</li>
+            </ul>
+          </section>
+
+          <section id="risks">
+            <div class="section-head">
+              <h2>Risks and open questions</h2>
+              <p>What could change the decision, and what is still to be settled.</p>
+            </div>
+            <div class="callout risk">
+              <p><b>Fidelity may disappoint next to Streamdown.</b> Lexilla is closer to Notepad++ than to VS Code. The Phase 4 post-pass is the mitigation. If it is not enough for the top languages, the <code>CodeHighlighter</code> interface allows a tree-sitter engine for just TypeScript and Python, at about 1.9 MB, as an opt-in. It should not be the default.</p>
+            </div>
+            <ul>
+              <li><b>Missing lexers.</b> There is no TypeScript-, Swift-, Kotlin- or Go-specific lexer; they rely on <code>LexCPP</code> with their own keyword lists. JSX is the weakest case. Collect examples during Phase 4.</li>
+              <li><b>Upstream shape.</b> Lexilla is maintained (5.5.x in 2026), but it is built with editors in mind. Pin a version, vendor only the lexers we use, and upgrade through the golden fixtures.</li>
+              <li><b>License notice.</b> The HPND-style license requires keeping the copyright and permission notice in copies. Ship <code>License.txt</code> in the package and credit Lexilla in the README.</li>
+              <li><b>Open: auto-detection</b> for fences without a language. Streamdown does not do it. Recommendation: keep them plain, and revisit only with evidence from real transcripts.</li>
+              <li><b>Open: themes.</b> Light and dark GitHub only, until the theme prop defines how per-token colors are overridden.</li>
+              <li><b>Open: code block chrome.</b> The language label, copy button and max height are the next gap item. They share the fence meta string, which <code>MarkdownParser.cpp:177</code> still drops. The token work leaves room for it but does not add it.</li>
+            </ul>
+          </section>
+
+          <section id="sources">
+            <div class="section-head">
+              <h2>Sources</h2>
+              <p>Projects and documents consulted for this plan.</p>
+            </div>
+            <ul class="sources">
+              <li><a href="https://github.com/ScintillaOrg/lexilla">ScintillaOrg/lexilla</a> and <a href="https://www.scintilla.org/Lexilla.html">Lexilla documentation</a> — lexers, <code>CreateLexer</code>, <code>ILexer5</code>, license</li>
+              <li><a href="https://tree-sitter.github.io/tree-sitter/3-syntax-highlighting.html">Tree-sitter syntax highlighting</a> and <a href="https://github.com/tree-sitter/tree-sitter">tree-sitter/tree-sitter</a></li>
+              <li><a href="https://github.com/microsoft/vscode-textmate">microsoft/vscode-textmate</a> and <a href="https://github.com/kkos/oniguruma">kkos/oniguruma</a></li>
+              <li><a href="https://shiki.style/packages/stream">@shikijs/stream</a>, <a href="https://github.com/antfu/shiki-stream">antfu/shiki-stream</a>, <a href="https://shiki.style/guide/regex-engines">Shiki regex engines</a></li>
+              <li><a href="https://github.com/skiniks/react-native-shiki-engine">skiniks/react-native-shiki-engine</a></li>
+              <li><a href="https://github.com/facebook/hermes/issues/128">Hermes regex flag support (issue 128)</a></li>
+              <li><a href="https://github.com/conorhastings/react-native-syntax-highlighter">react-native-syntax-highlighter</a> and <a href="https://github.com/gmsgowtham/react-native-code-highlighter">react-native-code-highlighter</a></li>
+              <li><a href="https://github.com/raspu/Highlightr">Highlightr</a> and <a href="https://github.com/appstefan/highlightswift">HighlightSwift</a></li>
+              <li><a href="https://github.com/trishume/syntect">trishume/syntect</a></li>
+              <li><a href="https://github.com/vercel/streamdown">vercel/streamdown</a> — <code>@streamdown/code</code> plugin and <code>CodeHighlighterPlugin</code> interface</li>
+            </ul>
+          </section>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>
