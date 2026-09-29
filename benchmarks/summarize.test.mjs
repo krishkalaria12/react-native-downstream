@@ -71,3 +71,59 @@ test('candidate, build, device and cold state have separate groups', () => {
   assert.notDeepEqual(groupIdentity({ deviceModel: 'phone' }, variants[0]),
     groupIdentity({ deviceModel: 'other' }, variants[0]));
 });
+
+test('native intervals use only native timestamps from the same snapshot', () => {
+  const summary = summarizeRun(run({ streamEvents: [
+    { sessionId: 'a', generation: 0, sequence: 2, event: 'parse_start', clockDomain: 'native-monotonic', timeNs: '1000000' },
+    { sessionId: 'a', generation: 0, sequence: 2, event: 'parse_end', clockDomain: 'native-monotonic', timeNs: '3500000' },
+    { sessionId: 'a', generation: 0, sequence: 3, event: 'parse_end', clockDomain: 'native-monotonic', timeNs: '9000000' },
+    { sessionId: 'a', generation: 0, sequence: 2, event: 'parse_end', clockDomain: 'js-performance', timeMs: 1 },
+    { sessionId: 'a', generation: 0, sequence: 2, event: 'frame_unavailable', clockDomain: 'native-monotonic', timeNs: '4000000' },
+  ] }));
+  assert.equal(summary.parseMs.samples, 1);
+  assert.equal(summary.parseMs.p50, 2.5);
+  assert.equal(summary.frameUnavailable, 1);
+});
+
+const nativeEvent = (sequence, event, timeNs) => ({
+  sessionId: 'a', generation: 0, sequence, event,
+  clockDomain: 'native-monotonic', timeNs: String(timeNs),
+});
+
+test('coalesced appends each wait for the parse that consumed them', () => {
+  const summary = summarizeRun(run({ streamEvents: [
+    nativeEvent(1, 'append_received', 0),
+    nativeEvent(2, 'append_received', 2000000),
+    nativeEvent(3, 'append_received', 9000000),
+    nativeEvent(3, 'parse_start', 10000000),
+    nativeEvent(3, 'parse_end', 11000000),
+  ] }));
+  assert.equal(summary.queueDelayMs.samples, 3);
+  assert.deepEqual(
+    [summary.queueDelayMs.min, summary.queueDelayMs.p50, summary.queueDelayMs.max],
+    [1, 8, 10]
+  );
+  assert.equal(summary.queueDelayMsUnmatchedAppends, 0);
+});
+
+test('queue delay never pairs an append across a session generation', () => {
+  const summary = summarizeRun(run({ streamEvents: [
+    nativeEvent(1, 'append_received', 0),
+    { ...nativeEvent(1, 'parse_start', 2000000), generation: 1 },
+    nativeEvent(2, 'append_received', 3000000),
+    nativeEvent(2, 'parse_start', 4000000),
+  ] }));
+  assert.equal(summary.queueDelayMs.samples, 2);
+  assert.equal(summary.queueDelayMs.p50, 2.5);
+  assert.equal(summary.queueDelayMsUnmatchedAppends, 0);
+});
+
+test('appends still queued when the run ends are reported as unmatched', () => {
+  const summary = summarizeRun(run({ streamEvents: [
+    nativeEvent(1, 'append_received', 0),
+    nativeEvent(1, 'parse_start', 2000000),
+    nativeEvent(2, 'append_received', 5000000),
+  ] }));
+  assert.equal(summary.queueDelayMs.samples, 1);
+  assert.equal(summary.queueDelayMsUnmatchedAppends, 1);
+});

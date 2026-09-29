@@ -10,6 +10,23 @@ const samples = {
   'batch-delivery': ['deliveryLatenessMs', 'latenessMs'],
 };
 
+const nativeIntervals = {
+  parseMs: ['parse_start', 'parse_end'],
+  snapshotTransferMs: ['parse_end', 'snapshot_ready'],
+  measurementMs: ['measure_start', 'measure_end'],
+  applyMs: ['apply_start', 'apply_end'],
+  applyToFrameEstimateMs: ['apply_end', 'frame_estimate'],
+};
+
+/// The session worker coalesces every append that arrives while it is parsing
+/// into one pass, so only the last append of a group shares a snapshot key with
+/// its parse. Pair each append with the next parse in the same session
+/// generation instead, or coalesced appends go unmeasured and the surviving
+/// samples are the ones that waited least.
+const nativeWaits = {
+  queueDelayMs: ['append_received', 'parse_start'],
+};
+
 const workloadFields = [
   'renderer', 'parseMode', 'fixture', 'sourceHash', 'workloadSize',
   'workloadShape', 'schedule', 'seed', 'streams', 'runCondition',
@@ -50,6 +67,75 @@ function batchKeys(events, type) {
     .map((event) => `${event.stream}:${event.batch}`));
 }
 
+const byTimeNs = (a, b) => (a.timeNs < b.timeNs ? -1 : a.timeNs > b.timeNs ? 1 : 0);
+
+function nativeEvents(events, names) {
+  const selected = [];
+  for (const event of events) {
+    if (event?.clockDomain !== 'native-monotonic' ||
+        !names.includes(event?.event) ||
+        typeof event.sessionId !== 'string' ||
+        !Number.isInteger(event.generation) ||
+        !Number.isInteger(event.sequence) ||
+        typeof event.timeNs !== 'string' ||
+        !/^\d{1,30}$/.test(event.timeNs)) continue;
+    selected.push({
+      sessionId: event.sessionId,
+      generation: event.generation,
+      event: event.event,
+      timeNs: BigInt(event.timeNs),
+    });
+  }
+  return selected;
+}
+
+function groupNative(events, names, key) {
+  const groups = new Map();
+  for (const event of nativeEvents(events, names)) {
+    const groupKey = key(event);
+    if (!groups.has(groupKey)) groups.set(groupKey, []);
+    groups.get(groupKey).push(event);
+  }
+  for (const records of groups.values()) records.sort(byTimeNs);
+  return groups.values();
+}
+
+function nativeDurations(events, startEvent, endEvent) {
+  const durations = [];
+  for (const records of groupNative(events, [startEvent, endEvent], (event) =>
+    `${event.sessionId}:${event.generation}:${event.sequence}`)) {
+    const starts = [];
+    for (const record of records) {
+      if (record.event === startEvent) starts.push(record.timeNs);
+      else if (starts.length) {
+        const elapsed = record.timeNs - starts.shift();
+        if (elapsed >= 0n) durations.push(Number(elapsed) / 1e6);
+      }
+    }
+  }
+  return durations;
+}
+
+function nativeWaitDurations(events, startEvent, endEvent) {
+  const durations = [];
+  let appends = 0;
+  for (const records of groupNative(events, [startEvent, endEvent], (event) =>
+    `${event.sessionId}:${event.generation}`)) {
+    let next = null;
+    for (let index = records.length - 1; index >= 0; index -= 1) {
+      if (records[index].event === endEvent) {
+        next = records[index].timeNs;
+        continue;
+      }
+      appends += 1;
+      if (next === null) continue;
+      const elapsed = next - records[index].timeNs;
+      if (elapsed >= 0n) durations.push(Number(elapsed) / 1e6);
+    }
+  }
+  return { durations, unmatchedAppends: appends - durations.length };
+}
+
 export function summarizeRun(run, environment = {}) {
   const events = Array.isArray(run.events) ? run.events : [];
   const summary = {};
@@ -57,13 +143,25 @@ export function summarizeRun(run, environment = {}) {
     'run', 'startedAt', 'renderer', 'parseMode', 'sampleOrder', 'runCondition',
     'deviceId', 'fixture', 'sourceBytes', 'sourceHash', 'workloadSize',
     'workloadShape', 'schedule', 'seed', 'streams', 'traceEnabled',
-    'sampleStride', 'batchWindowMs', 'droppedEvents', 'completionStatus',
+    'sampleStride', 'batchWindowMs', 'droppedEvents', 'droppedStreamEvents', 'completionStatus',
     'runDurationMs', 'wallDurationMs',
   ]) summary[field] = run[field] ?? null;
   summary.buildRevision = run.buildRevision ?? environment.buildRevision ?? null;
 
   for (const [type, [name, field]] of Object.entries(samples)) {
     summary[name] = distribution(numbers(events, type, field));
+  }
+  const streamEvents = Array.isArray(run.streamEvents) ? run.streamEvents : [];
+  summary.streamTraceEvents = streamEvents.length;
+  summary.frameUnavailable = streamEvents.filter((event) =>
+    event?.clockDomain === 'native-monotonic' && event.event === 'frame_unavailable').length;
+  for (const [name, [start, end]] of Object.entries(nativeIntervals)) {
+    summary[name] = distribution(nativeDurations(streamEvents, start, end));
+  }
+  for (const [name, [start, end]] of Object.entries(nativeWaits)) {
+    const waits = nativeWaitDurations(streamEvents, start, end);
+    summary[name] = distribution(waits.durations);
+    summary[`${name}UnmatchedAppends`] = waits.unmatchedAppends;
   }
 
   const flushed = batchKeys(events, 'batch-flush');
@@ -106,7 +204,10 @@ export function summarizeGroup(group) {
     traceOffRuns: untraced.length,
     repeatedRunVariation: {},
   };
-  for (const metric of ['chunkToFrameEstimateMs', 'jsFrameIntervalMs', 'deliveryLatenessMs']) {
+  for (const metric of [
+    'chunkToFrameEstimateMs', 'jsFrameIntervalMs', 'deliveryLatenessMs',
+    ...Object.keys(nativeIntervals), ...Object.keys(nativeWaits),
+  ]) {
     for (const statistic of ['p50', 'p95', 'p99']) {
       result.repeatedRunVariation[`${metric}.${statistic}`] = distribution(
         traced.map((run) => run[metric][statistic]).filter(finite)
