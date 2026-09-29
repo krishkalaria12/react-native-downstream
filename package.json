@@ -2,6 +2,15 @@
   "name": "react-native-downstream",
   "version": "0.1.0",
   "description": "React Native Downstream",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/krishkalaria12/react-native-downstream.git"
+  },
+  "author": "Krish Kalaria <codewithkrish12@gmail.com>",
+  "homepage": "https://github.com/krishkalaria12/react-native-downstream#readme",
+  "bugs": {
+    "url": "https://github.com/krishkalaria12/react-native-downstream/issues"
+  },
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",
   "exports": {
@@ -15,29 +24,32 @@
   "files": [
     "src",
     "lib",
-    "android",
-    "ios",
-    "cpp",
     "*.podspec",
     "react-native.config.js",
-    "!ios/build",
-    "!android/build",
-    "!android/gradle",
-    "!android/gradlew",
-    "!android/gradlew.bat",
-    "!android/local.properties",
+    "!src/ios/build",
+    "!src/android/build",
+    "!src/android/gradle",
+    "!src/android/gradlew",
+    "!src/android/gradlew.bat",
+    "!src/android/local.properties",
     "!**/__tests__",
     "!**/__fixtures__",
     "!**/__mocks__",
+    "!__tests__",
+    "!__benchmarks__",
     "!**/.*"
   ],
   "scripts": {
     "example": "pnpm --filter react-native-downstream-example",
     "clean": "del-cli lib",
     "prepare": "bob build",
-    "typecheck": "tsc",
+    "typecheck": "tsc -p tsconfig.test.json",
     "lint": "eslint \"**/*.{js,ts,tsx}\"",
-    "test": "jest",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:native": "node --test src/cpp/tests/engine.test.mjs",
+    "bench": "vitest bench --run",
     "release": "release-it --only-version"
   },
   "keywords": [
@@ -59,20 +71,29 @@
     "@release-it/conventional-changelog": "^10.0.1",
     "@types/jest": "^29.5.14",
     "@types/react": "^19.1.12",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.1.2",
+    "@vitest/coverage-v8": "5.0.2",
     "commitlint": "^19.8.1",
     "del-cli": "^6.0.0",
     "eslint": "^9.35.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",
+    "happy-dom": "20.14.5",
     "jest": "^29.7.0",
     "lefthook": "^2.0.3",
     "prettier": "^2.8.8",
     "react": "19.2.0",
+    "react-dom": "19.2.0",
     "react-native": "0.83.2",
     "react-native-builder-bob": "^0.40.18",
+    "react-native-enriched-markdown": "0.6.0",
+    "react-native-streamdown": "0.2.0",
     "release-it": "^19.0.4",
     "turbo": "^2.5.6",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "vite": "8.3.1",
+    "vitest": "5.0.2"
   },
   "peerDependencies": {
     "react": "*",
@@ -95,7 +116,8 @@
           "project": "tsconfig.build.json"
         }
       ]
-    ]
+    ],
+    "exclude": "**/{__tests__,__fixtures__,__mocks__,cpp,ios,android,fixtures}/**"
   },
   "prettier": {
     "quoteProps": "consistent",
@@ -103,16 +125,6 @@
     "tabWidth": 2,
     "trailingComma": "es5",
     "useTabs": false
-  },
-  "jest": {
-    "preset": "react-native",
-    "transformIgnorePatterns": [
-      "node_modules/(?!\\.pnpm/|(?:jest-)?react-native/|@react-native(?:-community)?/)"
-    ],
-    "modulePathIgnorePatterns": [
-      "<rootDir>/example/node_modules",
-      "<rootDir>/lib/"
-    ]
   },
   "commitlint": {
     "extends": [
@@ -148,5 +160,21 @@
       "release-it"
     ],
     "version": "0.57.2"
+  },
+  "codegenConfig": {
+    "name": "DownstreamSpec",
+    "type": "all",
+    "jsSrcsDir": "src",
+    "android": {
+      "javaPackageName": "com.downstream"
+    },
+    "ios": {
+      "componentProvider": {
+        "DownstreamMarkdownView": "DownstreamMarkdownView"
+      },
+      "modulesProvider": {
+        "DownstreamSession": "DownstreamSessionProvider"
+      }
+    }
   }
 }

@@ -51,7 +51,6 @@ example/vendor/
 # node.js
 #
 node_modules/
-__pycache__/
 npm-debug.log
 pnpm-debug.log
 
@@ -66,6 +65,11 @@ android/keystores/debug.keystore
 example/dist/
 example/ios/
 example/android/
+# Local secrets for the example chat screen
+.env
+.env.local
+example/.env
+example/.env.local
 
 # Turborepo
 .turbo/
@@ -74,8 +78,8 @@ example/android/
 lib/
 
 # React Native Codegen
-ios/generated
-android/generated
+src/ios/generated
+src/android/generated
 
 # React Native Nitro Modules
 nitrogen/

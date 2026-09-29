@@ -2,3 +2,16 @@ packages:
   - example
 allowBuilds:
   lefthook: false
+  # esbuild's postinstall places the platform binary vite and vitest load. Without
+  # it a clean install fails before any test runs.
+  esbuild: true
+  # Ships no build script, but pnpm lists it as unapproved, which is an error.
+  react-native-enriched-markdown: false
+minimumReleaseAgeExclude:
+  - '@ai-sdk/gateway@4.0.100'
+  - '@ai-sdk/openai@4.0.80'
+  - '@ai-sdk/provider-utils@5.0.51'
+  - '@ai-sdk/provider@4.0.19'
+  - ai@7.0.122
+patchedDependencies:
+  metro@0.83.8: patches/metro@0.83.8.patch

@@ -1,3 +1,0 @@
-- [ ] first
-  - nested **item**
-- [x] second

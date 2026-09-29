@@ -1,6 +1,6 @@
 # Markdown display API contract
 
-This is the Phase 0 contract for the planned native Markdown component. `src/types.ts` is a checked TypeScript draft. The component and stream factory are not runtime exports yet. Both iOS and Android follow this contract. The first supported app target is the repository's React Native 0.83.2 and Expo 55 example, using a development build.
+This is the Phase 0 contract for the native Markdown component. `src/types.ts` holds the public types. `DownstreamMarkdown` accepts a controlled `markdown` prop or a controller from `createMarkdownStream`. See [implementation status](#implementation-status) for what the current build covers. Both iOS and Android follow this contract. The first supported app target is the repository's React Native 0.83.2 and Expo 55 example, using a development build.
 
 ## Feature scope
 
@@ -18,7 +18,7 @@ This is the Phase 0 contract for the planned native Markdown component. `src/typ
 | Selection                           | Select/copy visible text and complete canonical source                         | Block-specific copy controls                                           | Editing inside the display view                            |
 | Accessibility                       | Text reading order, heading and link roles, task state, font scaling, RTL text | Rich table navigation if needed                                        | Platform-specific semantics that change source meaning     |
 
-The same feature matrix applies on iOS and Android. The first release is not complete until the first-release cells work on both. A native renderer may show unsupported syntax as literal text; it must never silently execute it. For oracle fixtures, md4c's parsed HTML records syntax interpretation. The display policy above is a separate projection of that parse.
+The same feature matrix applies on iOS and Android. See the [platform behavior matrix](feature-matrix.md) for rendering and device checks. The first release is not complete until the first-release cells work on both. A native renderer may show unsupported syntax as literal text; it must never silently execute it. For oracle fixtures, md4c's parsed HTML records syntax interpretation. The display policy above is a separate projection of that parse.
 
 ## Input modes
 
@@ -32,7 +32,7 @@ stream.append('**world**');
 stream.finish();
 ```
 
-The examples describe the future runtime API. A view receives exactly one of `markdown` or `stream`. TypeScript rejects both or neither. Native code also rejects both at runtime with `invalid_input` and retains the last valid display. A controlled string replacement starts a new generation when its value changes. An unchanged value, including a React rerender, does not reset work. `stream` identity changes unbind the previous controller and bind the new one; they do not copy source between controllers.
+The examples describe the runtime API. A view receives exactly one of `markdown` or `stream`. TypeScript rejects both or neither. A controlled string replacement starts a new generation when its value changes. An unchanged value, including a React rerender, does not reset work. `stream` identity changes unbind the previous controller and bind the new one; they do not copy source between controllers.
 
 `createMarkdownStream(options?)` creates an active, empty controller. `append(chunk)` adds a nonempty chunk in call order and increments its sequence. An empty chunk is a no-op. `reset(source = '')` starts a new generation, clears pending work and preview state, and allows appends even after `finish()`. It validates the replacement before discarding the previous source. `finish()` flushes queued chunks, marks the generation complete, and requests an ordinary full-source parse with no synthetic preview. Repeated `finish()` is a no-op. `append()` after finish throws `invalid_state`; the caller must reset first. `dispose()` is idempotent and terminal. Other methods after disposal throw `invalid_state`. `getSource()` returns the canonical raw string on demand; it does not subscribe to every update. It rejects after disposal.
 
@@ -56,3 +56,28 @@ The initial limits are 1 MiB UTF-8 per source, 64 KiB UTF-8 per append, 256 KiB 
 
 The first release targets iOS and Android with the New Architecture enabled. The first supported app is the repository's React Native 0.83.2 and Expo 55 example, using a development build.
 
+## Implementation status
+
+The native display path renders complete documents on iOS and Android. Parsing, measurement, and drawing are native.
+
+A document is a vertical stack of segments. A text segment is a run of non-table blocks in one platform text view. A table segment is one table in a horizontal scroll view. In a stream, completed blocks are grouped into text segments of about 16 blocks that later snapshots reuse, so only the active tail is rebuilt. Incremental mode commits blocks once md4c proves them closed. Full mode reparses the whole source but gives a block that is unchanged since the previous snapshot a stable identity, so both modes rebuild and lay out only the tail.
+
+### Threading
+
+Parsing and platform text preparation run on one shared pool of worker threads: two fewer than the device's cores, between one and four. The workers run below the UI and JavaScript threads' priority (user-initiated QoS on iOS, background niceness on Android), so under load they yield to input, animation, and app code.
+
+- **Streams.** A session has no thread of its own. While it has new input, one job for it is queued on the pool. The job parses, builds the platform rendering at the width the view was last measured at, and then publishes the snapshot. Fabric's measurement on the JavaScript thread and the view's mount on the UI thread find the rendering cached. Several streams share the pool in turn. A pass publishes even if more input arrived while it parsed, so a stream that outpaces parsing still shows progress.
+- **Controlled `markdown`.** A new value starts preparing when its shadow node is created. Every Markdown view in a commit, such as a conversation's history, is therefore prepared in parallel while React finishes the commit. Layout waits for sources up to 16 KiB; if no worker has started one yet, the JavaScript thread runs it itself. A larger source shows the view's previous content until preparation finishes, then relayouts through a Fabric state update without a React render. Equal sources share one parse, so a recycled message is not parsed or laid out again.
+- **Android.** Text segments are built as `PrecomputedText` on the worker (Android 9 and later). A non-selectable text view shows it with a static layout, so the UI thread breaks lines without measuring glyphs again.
+
+| Area | Current behavior | Planned |
+| --- | --- | --- |
+| Input | Controlled `markdown` and `createMarkdownStream` with a `stream` prop. The stream buffers up to 64 KiB per native append and 256 KiB of unacknowledged input. Lone surrogates and sources over 1 MiB are rejected in JavaScript. | Device traces will choose the default full or incremental parse mode. |
+| Line breaks | Soft line breaks display as line breaks, as the fixture contract requires. | None |
+| Tables | Columns take their widest cell, clamped to 56–280 points plus padding, with md4c's column alignment. Wide tables scroll horizontally. Cells keep inline styles and links. Completed rows appear during streaming without resetting the scroll position. | None |
+| Admonitions and footnotes | Admonitions render as a quote with a colored bar and title. Footnote references are superscript numbers; definitions follow a rule at the end. | None |
+| Links | Tap hit testing emits `onLinkPress` with a validated URL and the UTF-16 range of its Markdown occurrence, in text and table cells. VoiceOver and TalkBack expose each link as a focusable link role. | Long press actions in a later release. |
+| Selection | `selectable` enables native selection and copy in text segments. Copy is plain visible text; `getSource()` returns the complete canonical stream source. Selection cannot span a table or completed segment boundary. | Per-block copy controls. |
+| Accessibility | VoiceOver and TalkBack expose reading stops for text blocks, table rows, and links, with heading and link roles and spoken task state. | Rich table navigation if needed. |
+| RTL | Text uses natural writing direction. List markers, quote bars, code backgrounds, rules, and table columns mirror for RTL content. | None |
+| Colors | System colors follow light and dark appearance on both platforms. | Style customization after the feature set is fixed. |

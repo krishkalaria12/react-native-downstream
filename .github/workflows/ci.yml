@@ -42,7 +42,10 @@ jobs:
         uses: ./.github/actions/setup
 
       - name: Run unit tests
-        run: pnpm test --maxWorkers=2 --coverage
+        run: pnpm test
+
+      - name: Run native engine tests
+        run: pnpm test:native
 
   build-library:
     runs-on: ubuntu-latest

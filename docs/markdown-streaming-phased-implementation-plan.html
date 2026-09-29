@@ -426,15 +426,15 @@
               <a href="#phase-0">0 · contract</a><a href="#phase-1">1 · native display</a><a href="#phase-2">2 · session</a><a href="#phase-3">3 · incremental tail</a><a href="#phase-4">4 · features</a><a href="#phase-5">5 · benchmark</a><a href="#phase-6">6 · release</a>
             </div>
             <div class="milestone-note"><strong>Critical path</strong><p>Implement first; benchmark once the implementation is complete. Phases 1–4 build the full Downstream path against the Phase 0 behavior oracle and are gated by correctness, not device timings. Both parse modes, coalesced full parse and incremental tail, ship behind an internal switch, and native trace points are built in along the way but stay disabled. Phase 5 measures the finished implementation against Enriched + Streamdown on physical devices, picks the default parse mode, and drives performance fixes. A benchmark taken earlier would measure an incomplete renderer rather than the finished design.</p></div>
-            <div class="callout"><strong>Baseline harness is parked, not discarded</strong><p>The baseline work already drafted in the repository (<code>example/src/bench/</code>, <code>benchmarks/summarize.py</code>, <code>docs/performance-methodology.md</code>, and the Streamdown + Enriched example setup) becomes a Phase 5 input. It is not a prerequisite for Phases 1–4. The fixture corpus in <code>benchmarks/fixtures/</code> remains the Phase 0 correctness oracle and is used throughout.</p></div>
+            <div class="callout"><strong>Baseline harness is parked, not discarded</strong><p>The baseline work already drafted in the repository (<code>example/src/bench/</code>, <code>benchmarks/summarize.mjs</code>, <code>docs/performance-methodology.md</code>, and the Streamdown + Enriched example setup) becomes a Phase 5 input. It is not a prerequisite for Phases 1–4. The parser oracle in <code>src/cpp/tests/oracle.mjs</code> remains the Phase 0 correctness oracle and is used throughout.</p></div>
             <h3>Proposed code boundaries</h3>
             <div class="table-wrap">
               <table>
                 <thead><tr><th>Boundary</th><th>Proposed location</th><th>Responsibility</th></tr></thead>
                 <tbody>
                   <tr><td>Public TypeScript API</td><td><code>src/</code></td><td>Controlled view, stream controller/ref, native component spec, type-safe events, source and style types. No Markdown parser in the live render path.</td></tr>
-                  <tr><td>Shared native engine</td><td><code>cpp/</code></td><td>Vendored md4c, bounded source buffer, parser adapter, block model, session sequencing, parse-mode switch, cache and fallbacks, trace points.</td></tr>
-                  <tr><td>Platform rendering</td><td><code>ios/</code>, <code>android/</code></td><td>Attributed text or spans, layout measurement, images, selection, accessibility, Codegen/Fabric registration.</td></tr>
+                  <tr><td>Shared native engine</td><td><code>src/cpp/</code></td><td>Vendored md4c, bounded source buffer, parser adapter, block model, session sequencing, parse-mode switch, cache and fallbacks, trace points.</td></tr>
+                  <tr><td>Platform rendering</td><td><code>src/ios/</code>, <code>src/android/</code></td><td>Attributed text or spans, layout measurement, images, selection, accessibility, Codegen/Fabric registration.</td></tr>
                   <tr><td>Example and performance rig</td><td><code>example/</code>, <code>benchmarks/</code></td><td>Streaming demo and fixture playback for correctness during Phases 1–4; reference renderer comparison, trace collection, and results in Phase 5.</td></tr>
                   <tr><td>Packaging and release</td><td><code>package.json</code>, podspec, Gradle/CMake, CI</td><td>Autolinking, Codegen metadata, build compatibility, parser license, clean install and tarball verification.</td></tr>
                 </tbody>
@@ -456,7 +456,7 @@
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>docs/api.md</code> and <code>docs/streaming-semantics.md</code></li><li><code>benchmarks/fixtures/*.md</code></li><li><code>benchmarks/fixtures/manifest.json</code></li><li><code>src/types.ts</code> draft</li></ul>
+                  <ul class="path-list"><li><code>docs/api.md</code> and <code>docs/streaming-semantics.md</code></li><li><code>__benchmarks__/samples.ts</code></li><li><code>src/cpp/tests/oracle.mjs</code></li><li><code>src/types.ts</code> draft</li></ul>
                   <h4>Verification</h4><p>Review every prefix policy against a fixture; compare final expected output with a fresh md4c/CommonMark/GFM parse. Check that app-facing methods can represent reset, completion, and errors without implicit state.</p>
                   <p class="gate"><strong>Exit gate.</strong> Feature scope, public API, fixtures, and supported platforms are fixed. Unresolved syntax policies are listed explicitly.</p>
                 </div>
@@ -479,7 +479,7 @@
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>docs/decisions/renderer-ownership.md</code></li><li><code>src/DownstreamMarkdownNativeComponent.ts</code></li><li><code>src/DownstreamMarkdown.tsx</code></li><li><code>cpp/parser/</code>, <code>cpp/render-model/</code></li><li><code>ios/</code>, <code>android/</code></li><li><code>Downstream.podspec</code>, <code>package.json</code> Codegen config</li></ul>
+                  <ul class="path-list"><li><code>docs/decisions/renderer-ownership.md</code></li><li><code>src/DownstreamMarkdownNativeComponent.ts</code></li><li><code>src/DownstreamMarkdown.tsx</code></li><li><code>src/cpp/parser/</code>, <code>src/cpp/render-model/</code></li><li><code>src/ios/</code>, <code>src/android/</code></li><li><code>Downstream.podspec</code>, <code>package.json</code> Codegen config</li></ul>
                   <h4>Verification</h4><p>Run CommonMark/GFM final-document fixtures, native layout tests, font-scale and width-change tests, platform screenshot comparisons, clean-install builds, and link/accessibility checks on device.</p>
                   <p class="gate"><strong>Exit gate.</strong> Complete documents render correctly on both platforms and the native component measures, mounts, and recycles without stale content.</p>
                 </div>
@@ -504,7 +504,7 @@
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>src/createMarkdownSession.ts</code></li><li><code>src/NativeDownstreamSession.ts</code> Codegen spec</li><li><code>cpp/session/</code>, <code>cpp/worker/</code>, <code>cpp/trace/</code></li><li><code>example/src/StreamingChat.tsx</code></li></ul>
+                  <ul class="path-list"><li><code>src/createMarkdownSession.ts</code></li><li><code>src/NativeDownstreamSession.ts</code> Codegen spec</li><li><code>src/cpp/session/</code>, <code>src/cpp/worker/</code>, <code>src/cpp/trace/</code></li><li><code>example/src/StreamingChat.tsx</code></li></ul>
                   <h4>Verification</h4><p>Replay every fixture prefix. Stress reset/unmount while work is in flight, split Unicode at allowed boundaries, run simultaneous sessions, and compare completed output with a fresh full parse.</p>
                   <p class="gate"><strong>Exit gate.</strong> Zero stale paints or lost chunks, bounded queue/memory, and correct output for every fixture prefix.</p>
                 </div>
@@ -528,7 +528,7 @@
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>cpp/session/block-index.*</code></li><li><code>cpp/session/tail-classifier.*</code></li><li><code>cpp/session/snapshot-diff.*</code></li><li><code>benchmarks/fixtures/adversarial/</code></li></ul>
+                  <ul class="path-list"><li><code>src/cpp/session/block-index.*</code></li><li><code>src/cpp/session/tail-classifier.*</code></li><li><code>src/cpp/session/snapshot-diff.*</code></li><li>adversarial cases in <code>src/cpp/tests/oracle.mjs</code></li></ul>
                   <h4>Verification</h4><p>Track bytes reparsed per update, full-parse fallback rate, and cache hit rate as deterministic counters in tests. Timing and frame metrics wait for Phase 5.</p>
                   <p class="gate"><strong>Exit gate.</strong> No final-output divergence across every-prefix and fuzz runs; fallback reasons are counted; full-parse mode remains selectable.</p>
                 </div>
@@ -550,7 +550,7 @@
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>cpp/render-model/</code> rich block types</li><li><code>ios/</code> and <code>android/</code> feature renderers</li><li><code>example/src/fixtures/</code> feature gallery</li><li><code>docs/feature-matrix.md</code></li></ul>
+                  <ul class="path-list"><li><code>src/cpp/render-model/</code> rich block types</li><li><code>src/ios/</code> and <code>src/android/</code> feature renderers</li><li><code>example/src/fixtures/</code> feature gallery</li><li><code>docs/feature-matrix.md</code></li></ul>
                   <h4>Verification</h4><p>Use platform screenshots, accessibility traversal, link/image policy tests, rotation/font-scale tests, long tables and code blocks, and scroll tests with active and completed messages.</p>
                   <p class="gate"><strong>Exit gate.</strong> Every first-release feature passes the same correctness and streaming checks on iOS and Android. Downstream is feature-complete and ready to benchmark.</p>
                 </div>
@@ -573,7 +573,7 @@
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>example/src/bench/</code></li><li><code>benchmarks/results/</code></li><li><code>benchmarks/summarize.py</code></li><li><code>docs/performance-methodology.md</code></li></ul>
+                  <ul class="path-list"><li><code>example/src/bench/</code></li><li><code>benchmarks/results/</code></li><li><code>benchmarks/summarize.mjs</code></li><li><code>docs/performance-methodology.md</code></li></ul>
                   <h4>Verification</h4><p>Two independent runs of the same fixture should preserve output and show comparable distributions. Validate instrumentation overhead by running with tracing enabled and disabled. Inspect video/screenshots for text flashes and stale content. Re-run the full correctness suite after every tuning change.</p>
                   <p class="gate"><strong>Exit gate.</strong> Reproducible physical-device results for all three candidates, an evidence-backed default parse mode, and budgets either met or documented as known limits.</p>
                 </div>
