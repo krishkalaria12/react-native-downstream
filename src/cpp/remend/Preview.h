@@ -51,11 +51,10 @@ struct PreviewOptions {
   bool enabled() const { return features != 0; }
   bool has(PreviewFeature feature) const { return (features & static_cast<features_t>(feature)) != 0; }
 
-  /// Both features, which is what the example app and the tests use.
+  /// Every feature, which is what `preview: true` asks for.
   static PreviewOptions all() {
     PreviewOptions options;
-    options.features = static_cast<features_t>(PreviewFeature::Emphasis) |
-        static_cast<features_t>(PreviewFeature::InlineCode);
+    options.features = allFeatures();
     return options;
   }
 

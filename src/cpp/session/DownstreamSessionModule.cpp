@@ -205,9 +205,12 @@ void DownstreamSessionModule::setPreview(jsi::Runtime & /*rt*/, std::string sess
   // A bitmask crosses the bridge as a number. Only the bits the pass defines
   // are honoured, so a stale caller cannot switch on a feature that no longer
   // exists and quietly do nothing.
-  const auto requested = static_cast<downstream::remend::PreviewOptions::features_t>(features);
+  // validCounter allows up to 2^53, so the mask is taken in 64 bits: narrowing
+  // a double above UINT32_MAX straight to the 32-bit mask is undefined.
+  const auto requested = static_cast<uint64_t>(features);
   downstream::remend::PreviewOptions options;
-  options.features = requested & downstream::remend::PreviewOptions::allFeatures();
+  options.features = static_cast<downstream::remend::PreviewOptions::features_t>(
+      requested & downstream::remend::PreviewOptions::allFeatures());
   if (sessions_.count(sessionId) == 0 ||
       !downstream::SessionRegistry::setPreview(sessionId, options)) {
     reportError(sessionId, "invalid_session", "Session is unavailable", 0, 0);
