@@ -8,42 +8,92 @@ import { StressScreen } from './bench/StressScreen';
 import { ChatScreen } from './example/ChatScreen';
 import { ROUTES, routeById, type RouteId } from './navigation';
 import { CompareScreen } from './testing/CompareScreen';
+import { PreviewScreen, type PreviewLaunch } from './testing/PreviewScreen';
 import { NavigationDrawer } from './ui/drawer';
 import { ShellProvider, useShell } from './ui/shell';
 import { ThemeProvider, useTheme } from './ui/theme';
 
-/** Launch with `-downstreamStress 1` (iOS) or a downstream://stress VIEW intent
- * (Android) to run the stress screen without interaction. */
-function useStressDeepLink(): boolean {
-  const [autoStress, setAutoStress] = useState(false);
+interface Launch {
+  route: 'stress' | 'preview';
+  preview?: PreviewLaunch;
+}
+
+/** `mode=incremental&state=finished&from=4`, as a URL query or a launch argument. */
+function parsePreviewLaunch(query: string): PreviewLaunch {
+  const launch: PreviewLaunch = {};
+  for (const pair of query.split('&')) {
+    const [key, value = ''] = pair.split('=');
+    if (key === 'preview' && (value === 'on' || value === 'off')) {
+      launch.preview = value;
+    } else if (
+      key === 'mode' &&
+      (value === 'full' || value === 'incremental')
+    ) {
+      launch.mode = value;
+    } else if (key === 'state' && (value === 'open' || value === 'finished')) {
+      launch.state = value;
+    } else if (key === 'from' && /^\d+$/.test(value)) {
+      launch.from = Number(value);
+    }
+  }
+  return launch;
+}
+
+function launchFromUrl(url: string | null | undefined): Launch | undefined {
+  if (url?.includes('stress')) return { route: 'stress' };
+  if (url?.includes('preview')) {
+    return {
+      route: 'preview',
+      preview: parsePreviewLaunch(url.split('?')[1] ?? ''),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Launch with `-downstreamStress 1` (iOS) or a downstream://stress VIEW intent
+ * (Android) to run the stress screen without interaction.
+ *
+ * `-downstreamPreview 'mode=incremental&from=4'` (iOS) or a
+ * downstream://preview?mode=incremental&from=4 VIEW intent (Android) opens the
+ * preview gallery configured, so each state can be captured without a tap.
+ */
+function useLaunch(): Launch | undefined {
+  const [launch, setLaunch] = useState<Launch>();
   useEffect(() => {
-    const start = () => setAutoStress(true);
-    if (Platform.OS === 'ios' && Settings.get('downstreamStress')) start();
-    Linking.getInitialURL().then(
-      (url) => {
-        if (url?.includes('stress')) start();
-      },
-      () => {}
+    if (Platform.OS === 'ios') {
+      const preview = Settings.get('downstreamPreview');
+      if (Settings.get('downstreamStress')) setLaunch({ route: 'stress' });
+      else if (preview !== undefined && preview !== null) {
+        setLaunch({
+          route: 'preview',
+          preview: parsePreviewLaunch(String(preview)),
+        });
+      }
+    }
+    const apply = (url: string | null | undefined) => {
+      const next = launchFromUrl(url);
+      if (next) setLaunch(next);
+    };
+    Linking.getInitialURL().then(apply, () => {});
+    const subscription = Linking.addEventListener('url', ({ url }) =>
+      apply(url)
     );
-    const subscription = Linking.addEventListener('url', ({ url }) => {
-      if (url.includes('stress')) start();
-    });
     return () => subscription.remove();
   }, []);
-  return autoStress;
+  return launch;
 }
 
 function Navigation() {
   const { open, setOpen } = useShell();
   const t = useTheme();
-  const autoStress = useStressDeepLink();
-  const [id, setId] = useState<RouteId>(() =>
-    autoStress ? 'stress' : 'example'
-  );
+  const launch = useLaunch();
+  const autoStress = launch?.route === 'stress';
+  const [id, setId] = useState<RouteId>('example');
 
   useEffect(() => {
-    if (autoStress) setId('stress');
-  }, [autoStress]);
+    if (launch) setId(launch.route);
+  }, [launch]);
 
   return (
     <NavigationDrawer
@@ -70,6 +120,8 @@ function Navigation() {
               <CompareScreen />
             ) : route.id === 'bench' ? (
               <BenchScreen />
+            ) : route.id === 'preview' ? (
+              <PreviewScreen launch={launch?.preview} />
             ) : (
               <StressScreen autoStart={autoStress} />
             )}
