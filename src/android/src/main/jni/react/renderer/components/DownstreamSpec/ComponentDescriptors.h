@@ -1,7 +1,7 @@
 #pragma once
 
 // Shadows the Codegen header so autolinking registers the hand-written
-// descriptor from cpp/fabric.
+// descriptor from src/cpp/fabric.
 
 #include "DownstreamMarkdownComponentDescriptor.h"
 

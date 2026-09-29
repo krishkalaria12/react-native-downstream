@@ -1,5 +1,5 @@
 // Host test driver: parses Markdown from stdin and prints the render model
-// as JSON for cpp/tests/engine.test.mjs.
+// as JSON for src/cpp/tests/engine.test.mjs.
 
 #include "MarkdownParser.h"
 #include "Unicode.h"

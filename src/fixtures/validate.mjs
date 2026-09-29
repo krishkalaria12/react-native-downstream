@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Checks fixture playback and final HTML against a fresh md4c parse.
 //
-//     node fixtures/validate.mjs --md2html /tmp/md2html-fixtures
+//     node src/fixtures/validate.mjs --md2html /tmp/md2html-fixtures
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -88,7 +88,7 @@ function validateDirectory(md2html, directory) {
 const { values } = parseArgs({ options: { md2html: { type: 'string' } } });
 if (!values.md2html) {
   console.error(
-    'usage: node fixtures/validate.mjs --md2html <md4c 0.6.0 md2html binary>'
+    'usage: node src/fixtures/validate.mjs --md2html <md4c 0.6.0 md2html binary>'
   );
   process.exit(2);
 }

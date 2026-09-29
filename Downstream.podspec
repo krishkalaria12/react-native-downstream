@@ -16,23 +16,23 @@ Pod::Spec.new do |s|
   s.source       = { :git => package["repository"]["url"].sub(/^git\+/, ""), :tag => "v#{s.version}" }
 
   # md4c-html.c is the fixture oracle's HTML renderer; it is used only by the
-  # host tests in cpp/tests.
+  # host tests in src/cpp/tests.
   s.source_files = [
-    "ios/**/*.{h,m,mm}",
-    "cpp/downstream/*.{h,cpp}",
-    "cpp/session/*.{h,cpp}",
-    "cpp/fabric/*.{h,cpp}",
-    "cpp/md4c/md4c.{c,h}",
-    "cpp/md4c/entity.{c,h}",
+    "src/ios/**/*.{h,m,mm}",
+    "src/cpp/downstream/*.{h,cpp}",
+    "src/cpp/session/*.{h,cpp}",
+    "src/cpp/fabric/*.{h,cpp}",
+    "src/cpp/md4c/md4c.{c,h}",
+    "src/cpp/md4c/entity.{c,h}",
   ]
-  s.private_header_files = "ios/**/*.h", "cpp/**/*.h"
+  s.private_header_files = "src/ios/**/*.h", "src/cpp/**/*.h"
 
   s.pod_target_xcconfig = {
     "HEADER_SEARCH_PATHS" => [
-      "\"$(PODS_TARGET_SRCROOT)/cpp/downstream\"",
-      "\"$(PODS_TARGET_SRCROOT)/cpp/session\"",
-      "\"$(PODS_TARGET_SRCROOT)/cpp/fabric\"",
-      "\"$(PODS_TARGET_SRCROOT)/cpp/md4c\"",
+      "\"$(PODS_TARGET_SRCROOT)/src/cpp/downstream\"",
+      "\"$(PODS_TARGET_SRCROOT)/src/cpp/session\"",
+      "\"$(PODS_TARGET_SRCROOT)/src/cpp/fabric\"",
+      "\"$(PODS_TARGET_SRCROOT)/src/cpp/md4c\"",
     ].join(" "),
     # Other libraries, such as Enriched Markdown, link their own md4c. Prefixing
     # ours keeps the linker from binding our calls to theirs.

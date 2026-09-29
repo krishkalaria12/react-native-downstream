@@ -14,9 +14,9 @@
 namespace facebook::react {
 
 /// Measures a document with the platform text system. Implemented per
-/// platform: TextKit on iOS (ios/DownstreamTextLayoutManager.mm) and
+/// platform: TextKit on iOS (src/ios/DownstreamTextLayoutManager.mm) and
 /// StaticLayout through the view manager on Android
-/// (android/src/main/jni/DownstreamTextLayoutManager.cpp).
+/// (src/android/src/main/jni/DownstreamTextLayoutManager.cpp).
 class DownstreamTextLayoutManager final {
 public:
   explicit DownstreamTextLayoutManager(std::shared_ptr<const ContextContainer> contextContainer)

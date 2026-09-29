@@ -78,8 +78,8 @@ example/.env.local
 lib/
 
 # React Native Codegen
-ios/generated
-android/generated
+src/ios/generated
+src/android/generated
 
 # React Native Nitro Modules
 nitrogen/

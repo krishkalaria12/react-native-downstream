@@ -47,7 +47,7 @@ dependencies {
 }
 
 react {
-  jsRootDir = file("../src/")
+  jsRootDir = file("../")
   libraryName = "DownstreamSpec"
   codegenJavaPackageName = "com.downstream"
 }

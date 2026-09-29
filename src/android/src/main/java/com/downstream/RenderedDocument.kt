@@ -125,7 +125,7 @@ private fun startsRightToLeft(text: CharSequence, start: Int, end: Int): Boolean
  * Block spacing and decoration in one paragraph span: extra space above the
  * block and around code, then code backgrounds, quote bars, list markers, and
  * rules. It reads its own span range, so it survives copying into a segment.
- * Mirrors ios/DSLayoutManager.mm.
+ * Mirrors src/ios/DSLayoutManager.mm.
  */
 private class BlockSpan(
   private val spacingBefore: Int,
@@ -303,7 +303,7 @@ internal class TableSegment(
 /**
  * A document rendered to segments at one font scale. The same instance
  * measures and lays out, so both agree. Committed segments are shared with
- * earlier snapshots of the same stream. Mirrors ios/DSRenderedDocument.mm.
+ * earlier snapshots of the same stream. Mirrors src/ios/DSRenderedDocument.mm.
  */
 internal class RenderedDocument(
   val documentId: Long,

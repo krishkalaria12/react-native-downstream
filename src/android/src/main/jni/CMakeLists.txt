@@ -22,7 +22,7 @@ file(GLOB LIB_JNI_SRCS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
 # hidden symbols keep the linker from binding our calls to theirs.
 set(MD4C_SYMBOL_PREFIXES md_parse=downstream_md_parse entity_lookup=downstream_entity_lookup)
 
-# md4c-html.c is only used by the host tests in cpp/tests.
+# md4c-html.c is only used by the host tests in src/cpp/tests.
 add_library(downstream_md4c STATIC
   ${LIB_CPP_DIR}/md4c/md4c.c
   ${LIB_CPP_DIR}/md4c/entity.c)

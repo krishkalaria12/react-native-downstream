@@ -4,7 +4,7 @@
 #include "DownstreamSessionModule.h"
 
 /// Registered through codegenConfig.ios.modulesProvider. The module itself
-/// is shared C++ in cpp/session.
+/// is shared C++ in src/cpp/session.
 @interface DownstreamSessionProvider : NSObject <RCTModuleProvider>
 @end
 

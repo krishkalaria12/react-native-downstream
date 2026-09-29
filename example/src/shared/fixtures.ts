@@ -1,4 +1,4 @@
-import manifest from '../../../fixtures/manifest.json';
+import manifest from '../../../src/fixtures/manifest.json';
 
 export type Fixture = (typeof manifest.fixtures)[number];
 

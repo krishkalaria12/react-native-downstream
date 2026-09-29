@@ -24,18 +24,16 @@
   "files": [
     "src",
     "lib",
-    "android",
-    "ios",
-    "cpp",
     "*.podspec",
     "react-native.config.js",
-    "!ios/build",
-    "!android/build",
-    "!android/gradle",
-    "!android/gradlew",
-    "!android/gradlew.bat",
-    "!android/local.properties",
-    "!cpp/tests",
+    "!src/ios/build",
+    "!src/android/build",
+    "!src/android/gradle",
+    "!src/android/gradlew",
+    "!src/android/gradlew.bat",
+    "!src/android/local.properties",
+    "!src/cpp/tests",
+    "!src/fixtures",
     "!**/__tests__",
     "!**/__fixtures__",
     "!**/__mocks__",
@@ -48,7 +46,7 @@
     "typecheck": "tsc",
     "lint": "eslint \"**/*.{js,ts,tsx}\"",
     "test": "jest",
-    "test:native": "node --test cpp/tests/engine.test.mjs",
+    "test:native": "node --test src/cpp/tests/engine.test.mjs",
     "release": "release-it --only-version"
   },
   "keywords": [
@@ -106,7 +104,8 @@
           "project": "tsconfig.build.json"
         }
       ]
-    ]
+    ],
+    "exclude": "**/{__tests__,__fixtures__,__mocks__,cpp,ios,android,fixtures}/**"
   },
   "prettier": {
     "quoteProps": "consistent",

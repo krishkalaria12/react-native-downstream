@@ -1,9 +1,9 @@
 // Host tests for the shared C++ Markdown engine.
 //
 // Builds the vendored md4c and the render-model engine with the system C/C++
-// compiler, then checks final documents against fixtures/.
+// compiler, then checks final documents against src/fixtures/.
 //
-//     node --test cpp/tests/engine.test.mjs
+//     node --test src/cpp/tests/engine.test.mjs
 
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
@@ -16,10 +16,10 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const CPP = join(ROOT, 'cpp');
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+const CPP = join(ROOT, 'src', 'cpp');
 const MD4C = join(CPP, 'md4c');
-const FIXTURES = join(ROOT, 'fixtures');
+const FIXTURES = join(ROOT, 'src', 'fixtures');
 const ADVERSARIAL = join(FIXTURES, 'adversarial');
 
 const KIND = { paragraph: 0, heading: 1, code: 2, html: 3, hr: 4, table: 5 };
@@ -29,7 +29,7 @@ const [STRONG, EMPHASIS, STRIKE, CODE, LINK, IMAGE_ALT, FOOTNOTE] = [
   0, 1, 2, 3, 4, 5, 6,
 ].map((bit) => 1 << bit);
 
-// Mirrors the prefixes in Downstream.podspec and android/src/main/jni/CMakeLists.txt.
+// Mirrors the prefixes in Downstream.podspec and src/android/src/main/jni/CMakeLists.txt.
 const SYMBOL_PREFIXES = [
   '-Dmd_parse=downstream_md_parse',
   '-Dentity_lookup=downstream_entity_lookup',
