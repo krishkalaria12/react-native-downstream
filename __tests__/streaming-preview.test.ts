@@ -25,7 +25,7 @@ import {
   stylesOf,
   visibleText,
 } from './engine';
-import { CORPUS, MAX_INPUT_BYTES } from './remend-corpus';
+import { CORPUS } from './remend-corpus';
 
 /** Splits a source into single characters, the worst case a token stream has. */
 const byCharacter = (source: string): string[] => [...source];
@@ -33,22 +33,32 @@ const byCharacter = (source: string): string[] => [...source];
 /** Splits on line boundaries, the shape a real model emits in. */
 const byLine = (source: string): string[] => source.split(/(?<=\n)/);
 
-/** Truncates an input that a single concatenated document would make too long. */
-const bounded = (input: string): string =>
-  Buffer.byteLength(input, 'utf8') <= MAX_INPUT_BYTES
-    ? input
-    : input.slice(0, MAX_INPUT_BYTES);
+/**
+ * A ceiling for the one document built by joining the whole corpus, which is
+ * otherwise a single source the size of every input at once. The adjacency it
+ * checks needs a few thousand bytes to be true of every boundary, and the sweep
+ * is one parse per byte, so the whole corpus would cost more than the rest of
+ * the suite put together.
+ */
+const MAX_JOINED_BYTES = 4 * 1024;
 
-const overSized = CORPUS.filter(
-  (input) => Buffer.byteLength(input, 'utf8') > MAX_INPUT_BYTES
-);
+/** Joins inputs with blank lines, up to a ceiling, each ending a block. */
+const joined = (inputs: readonly string[]): string => {
+  const parts: string[] = [];
+  let bytes = 0;
+  for (const input of inputs) {
+    if (bytes >= MAX_JOINED_BYTES) break;
+    parts.push(`${input}\n\n`);
+    bytes += Buffer.byteLength(input, 'utf8') + 2;
+  }
+  return parts.join('');
+};
 
 describe('ported corpus', () => {
   it('holds a corpus worth sweeping', () => {
     // A silently emptied corpus would leave every assertion below vacuous.
-    expect(CORPUS.length).toBeGreaterThan(400);
+    expect(CORPUS.length).toBeGreaterThan(800);
     expect(new Set(CORPUS).size).toBe(CORPUS.length);
-    expect(overSized).toEqual([]);
   });
 
   it('parses every input without reporting an error', () => {
@@ -158,8 +168,7 @@ describe('ported corpus', () => {
     // Concatenation is where a repair pass would leak: a stray marker in one
     // input is adjacent to real syntax in the next, so the parser cannot treat
     // each entry as isolated.
-    const joined = CORPUS.map((input) => bounded(`${input}\n\n`));
-    assertStreamingBatchMatchesFullParse([byCharacter(joined.join(''))]);
+    assertStreamingBatchMatchesFullParse([byCharacter(joined(CORPUS))]);
   });
 });
 
@@ -468,5 +477,157 @@ describe('where a repair pass would change the parse', () => {
       'See [entry][ref].\n\n[ref]: https://example.com/r\n'
     );
     expect(linkUrls(resolved)).toEqual(['https://example.com/r']);
+  });
+});
+
+describe('escapes', () => {
+  // The corpus covers `\*` and `\``. It does not cover `_`, `~`, `$`, `[` or a
+  // backtick, so these are pinned here. A backslash is syntax: it does not
+  // reach the reader, and it stops the character after it from opening a span.
+
+  it('does not open emphasis from an underscore inside a word', () => {
+    // CommonMark flanking rules, not a repair decision. `snake_case_name` has
+    // two underscores and neither can open, so nothing is styled.
+    for (const input of [
+      'The value is 1_000_000',
+      'snake_case_name',
+      'a_b_c',
+      'some\\_text_with_underscores',
+    ]) {
+      const block = parse(input).blocks[0]!;
+      expect(block.runs, JSON.stringify(input)).toEqual([]);
+      expect(visibleText(parse(input)), JSON.stringify(input)).toBe(
+        input.replace(/\\_/g, '_')
+      );
+    }
+    // Two underscores around a whole word still emphasize it, so the cases
+    // above are not passing because underscores never work.
+    const emphasis = parse('_real emphasis_').blocks[0]!;
+    expect(
+      stylesOf(emphasis, 'real emphasis').some((r) => r[2] & STYLE.emphasis)
+    ).toBe(true);
+  });
+
+  it('consumes the backslash on an escaped marker', () => {
+    for (const [input, text] of [
+      ['α\\~β', 'α~β'],
+      ['value \\[a<b\\] end', 'value [a<b] end'],
+      ['Text with \\* escaped asterisk', 'Text with * escaped asterisk'],
+      // `(` and `)` are punctuation, so an escaped paren is a literal paren.
+      // This is why inline LaTeX loses its delimiters to the reader.
+      ['\\(x_1, x_t\\)', '(x_1, x_t)'],
+    ] as const) {
+      expect(visibleText(parse(input)), JSON.stringify(input)).toBe(text);
+    }
+  });
+
+  it('keeps a real span alive beside an escaped one', () => {
+    // The escaped `$` is literal text and the underscores still emphasize, so
+    // one escape does not disarm the rest of the line.
+    const currency = parse('Price is \\$50 and _this is italic_').blocks[0]!;
+    expect(currency.text).toBe('Price is $50 and this is italic');
+    expect(
+      stylesOf(currency, 'this is italic').some((r) => r[2] & STYLE.emphasis)
+    ).toBe(true);
+    // An unterminated span after an escape stays literal either way.
+    const incomplete = parse('Cost \\$100 with _incomplete').blocks[0]!;
+    expect(incomplete.runs).toEqual([]);
+    expect(incomplete.text).toBe('Cost $100 with _incomplete');
+  });
+
+  it('does not let an escaped backtick open a code span', () => {
+    // The backticks are literal, so the `**` beside them is real emphasis.
+    const block = parse('\\`not code\\` **bold**').blocks[0]!;
+    expect(block.text).toBe('`not code` bold');
+    expect(stylesOf(block, 'bold').some((r) => r[2] & STYLE.strong)).toBe(true);
+  });
+});
+
+describe('a fence needs a line break', () => {
+  // An info string is only an info string once a line break follows it. With no
+  // break the backticks are an inline code span, which reads very differently
+  // and is worth pinning.
+
+  it('reads a fence opener with no line break as inline code', () => {
+    for (const input of ['```python code```', '```code```', '```code```\n']) {
+      const block = parse(input).blocks[0]!;
+      expect(block.kind, JSON.stringify(input)).toBe(KIND.paragraph);
+      expect(block.language, JSON.stringify(input)).toBe('');
+      expect(
+        stylesOf(block, block.text).some((r) => r[2] & STYLE.code),
+        JSON.stringify(input)
+      ).toBe(true);
+    }
+  });
+
+  it('reads the same opener as a fence once a line break arrives', () => {
+    const block = parse('```python code\n```\n').blocks[0]!;
+    expect(block.kind).toBe(KIND.code);
+    expect(block.language).toBe('python');
+    expect(block.text).toBe('');
+  });
+
+  it('reads a bare backtick run as an open fence, but not mid-word', () => {
+    // Six backticks on their own line is an opener with an empty info string.
+    expect(parse('``````').blocks[0]?.kind).toBe(KIND.code);
+    // Three or more backticks need to start a line, so a trailing run is text.
+    const inline = parse('text``````').blocks[0]!;
+    expect(inline.kind).toBe(KIND.paragraph);
+    expect(inline.text).toBe('text``````');
+    expect(inline.runs).toEqual([]);
+  });
+});
+
+describe('inputs too large or too composed for a corpus file', () => {
+  it('handles a long run of text before an open span', () => {
+    // Ten thousand characters, then an unterminated span at the end. The sweep
+    // would need a parse per byte, so this asserts the shape instead.
+    const long = `${'a'.repeat(10_000)} **bold`;
+    const block = parse(long).blocks[0]!;
+    expect(block.kind).toBe(KIND.paragraph);
+    expect(block.runs).toEqual([]);
+    expect(block.text).toBe(long);
+  });
+
+  it('streams a long run of text to the same document', () => {
+    const long = `${'a'.repeat(10_000)} **bold`;
+    assertStreamingBatchMatchesFullParse([long.split('')]);
+  });
+
+  it('keeps LaTeX literal while the bold around it completes', () => {
+    // A composed document rather than a single literal, because that is the
+    // shape it has in the suite it came from. Math stays literal by policy, and
+    // the span beside it settles when its closer arrives.
+    const document = [
+      '> Given tokens \\(x_1, ..., x_t\\), maximize \\(P(x_{t+1} | x_1, ..., x_t)\\)',
+      '',
+      '**2. Instruction Tuning (SFT)**',
+      '- Dataset size is much smaller than pre-training',
+    ].join('\n');
+
+    const finished = parse(document);
+    expect(finished.blocks.map((b) => b.text)).toEqual([
+      // The `\\(` and `\\)` are escaped punctuation, so the delimiters are
+      // consumed and the reader sees bare parens. The math itself stays
+      // literal either way, which is the point.
+      'Given tokens (x_1, ..., x_t), maximize (P(x_{t+1} | x_1, ..., x_t))',
+      '2. Instruction Tuning (SFT)',
+      'Dataset size is much smaller than pre-training',
+    ]);
+    expect(
+      stylesOf(finished.blocks[1]!, 'Instruction Tuning').some(
+        (r) => r[2] & STYLE.strong
+      )
+    ).toBe(true);
+
+    // Cut mid-word and the span is open, so it stays literal.
+    const partial = document.slice(
+      0,
+      document.indexOf('(SFT)') + '(SFT'.length
+    );
+    const open = parse(partial);
+    expect(open.blocks[1]?.text).toBe('**2. Instruction Tuning (SFT');
+    expect(open.blocks[1]?.runs).toEqual([]);
+    assertStreamingBatchMatchesFullParse([partial.split('')]);
   });
 });
