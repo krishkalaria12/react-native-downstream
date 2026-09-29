@@ -55,8 +55,16 @@ them reliably. Mark any unavailable measurement as unavailable.
 
 Run `node benchmarks/summarize.mjs <export-1.json> <export-2.json> ...` on raw
 exports. Keep one device, build revision, and cold/warm cohort together. The tool
-prints per-run p50/p95/p99 and repeat-run variation for sampled JS estimates,
-counts superseded frame samples, and compares trace-on/off run duration. Add
+prints per-run p50/p95/p99 and repeat-run variation for sampled JS estimates
+and paired native queue, parse, measurement, and apply intervals. It counts
+superseded frame samples and compares trace-on/off run duration. Read
+`queueDelayMsUnmatchedAppends` and `frameUnavailable` next to their intervals:
+appends still queued at export and snapshots superseded before a frame each lose
+a sample, so a healthy run reports few of both. The native worker coalesces every
+append that lands while it is parsing, so `queueDelayMs` pairs each append with
+the next parse in the same session generation rather than only the append that
+shares a snapshot with it; the intervals after `parseMs` stay snapshot-scoped.
+The native apply-to-frame interval still ends at a frame callback estimate. Add
 native UI frame, allocation, memory, and CPU results from Instruments or Perfetto.
 Report variability, not a best run. Keep before/after traces if tuning changes
 batching, parsing, measurement, rich content, or list behavior.
