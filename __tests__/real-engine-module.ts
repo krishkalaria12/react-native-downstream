@@ -11,13 +11,19 @@
  */
 import { vi } from 'vitest';
 
-import { parse, preview, type RenderModel } from './engine';
+import {
+  replaySession,
+  type RenderModel,
+  type SessionMode,
+  type SessionOp,
+} from './engine';
 
 type SnapshotListener = (event: object) => void;
 type ErrorListener = (event: object) => void;
 type TraceListener = (event: object) => void;
 
 interface Session {
+  mode: SessionMode;
   source: string;
   generation: number;
   sequence: number;
@@ -25,6 +31,13 @@ interface Session {
   model: RenderModel | undefined;
   /** Provisional-styling features, as the native bitmask. */
   preview: number;
+  /**
+   * Everything the worker has applied to this session's parser, in order.
+   * Each pass replays it through the real `IncrementalParser`, so what the
+   * parser does with a finished stream or a preview policy is the engine's
+   * answer, not this file's.
+   */
+  steps: SessionOp[];
 }
 
 const sessions = new Map<string, Session>();
@@ -74,16 +87,12 @@ function emitTrace(
   }
 }
 
-/** Parses the session's source and reports a snapshot, like the worker does. */
+/** Runs one worker pass and reports a snapshot, like the worker does. */
 function publish(session: Session, sessionId: string): void {
   emitTrace(sessionId, session.generation, session.sequence, 'append_received');
   nativeWork.parses += 1;
-  // A finished stream never previews, and neither does a session with no
-  // features, which is the same rule the native session applies.
-  const model =
-    session.preview !== 0 && !session.finished
-      ? preview(session.source, session.preview)
-      : parse(session.source);
+  session.steps.push({ op: 'parse', finished: session.finished });
+  const model = replaySession(session.mode, session.steps);
   session.model = model;
   emitTrace(sessionId, session.generation, session.sequence, 'parse_start');
   emitTrace(sessionId, session.generation, session.sequence, 'parse_end');
@@ -114,15 +123,16 @@ export const realEngineModule = {
   default: {
     create(sessionId: string, mode: string) {
       sessions.set(sessionId, {
+        // The TurboModule treats anything but `incremental` as full mode.
+        mode: mode === 'incremental' ? 'incremental' : 'full',
         source: '',
         generation: 0,
         sequence: 0,
         finished: false,
         model: undefined,
         preview: 0,
+        steps: [],
       });
-      // The mode selects a parse strategy inside the real engine.
-      mode;
     },
 
     append(
@@ -135,6 +145,7 @@ export const realEngineModule = {
       const session = sessions.get(sessionId);
       if (!session || session.generation !== generation) return;
       session.source += chunk;
+      session.steps.push({ op: 'append', chunk });
       session.sequence = sequence;
       publish(session, sessionId);
     },
@@ -143,6 +154,7 @@ export const realEngineModule = {
       const session = sessions.get(sessionId);
       if (!session) return;
       session.source = source;
+      session.steps.push({ op: 'replace', source });
       session.generation = generation;
       session.sequence = 0;
       session.finished = false;
@@ -171,9 +183,11 @@ export const realEngineModule = {
       const session = sessions.get(sessionId);
       if (!session) return;
       session.preview = features;
+      session.steps.push({ op: 'preview', features });
       // The native side queues a pass so a policy change reaches the reader
-      // without new input, so the double republishes too.
-      publish(session, sessionId);
+      // without new input, unless the stream has settled and there is nothing
+      // left to repaint. The policy still reaches the parser either way.
+      if (!session.finished) publish(session, sessionId);
     },
 
     onSnapshotReady(callback: SnapshotListener) {

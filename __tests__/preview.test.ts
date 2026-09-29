@@ -3,10 +3,12 @@
  * The JavaScript half of the provisional-styling pass: the option a caller
  * passes, the call that reaches the native session, and what a reader sees.
  *
- * `__tests__/real-engine-module.ts` runs the real pass, so these assert on the
- * document the engine would publish rather than on a mock's call log. The pass
- * itself is covered in C++ by src/cpp/tests/test_preview.cpp; what matters here
- * is that the option reaches it and that the default stays off.
+ * `__tests__/real-engine-module.ts` replays each session through the real
+ * `IncrementalParser`, in the mode the stream was created with, so these assert
+ * on the document the engine would publish rather than on a mock's call log or
+ * on the double's own copy of the finish rule. The pass itself is covered in
+ * C++ by src/cpp/tests/test_preview.cpp; what matters here is that the option
+ * reaches it, that the default stays off, and that both modes agree.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -17,6 +19,7 @@ vi.mock(
 
 import {
   createMarkdownStream,
+  createMarkdownStreamWithMode,
   getStreamState,
 } from '../src/createMarkdownStream';
 import type {
@@ -64,10 +67,15 @@ type Harness = {
   append(...chunks: string[]): string;
 };
 
-function stream(options?: {
-  preview?: boolean | MarkdownPreviewOptions;
-}): Harness {
-  const controller = createMarkdownStream(options);
+function stream(
+  options?: {
+    preview?: boolean | MarkdownPreviewOptions;
+  },
+  mode?: 'full' | 'incremental'
+): Harness {
+  const controller = mode
+    ? createMarkdownStreamWithMode(options ?? {}, mode)
+    : createMarkdownStream(options);
   live.push(controller);
   const sessionId = getStreamState(controller).sessionId;
   return {
@@ -274,4 +282,49 @@ describe('the pass never touches the canonical source', () => {
     harness.stream.finish();
     expect(shown(harness.sessionId)).toBe(visibleText(preview(source, 0)));
   });
+});
+
+describe('both parse modes', () => {
+  for (const mode of ['full', 'incremental'] as const) {
+    describe(mode, () => {
+      it('previews an open span and drops it on finish', () => {
+        const harness = stream({ preview: true }, mode);
+        expect(harness.append('Hello **bold wor')).toBe('Hello bold wor');
+        harness.stream.finish();
+        expect(shown(harness.sessionId)).toBe('Hello **bold wor');
+      });
+
+      it('keeps previewing across a chunk that ends on a space', () => {
+        const harness = stream({ preview: true }, mode);
+        expect(harness.append('Hello **bold')).toBe('Hello bold');
+        expect(harness.append(' ')).toBe('Hello bold');
+        expect(harness.append('word')).toBe('Hello bold word');
+      });
+
+      it('closes nested spans together', () => {
+        const harness = stream({ preview: true }, mode);
+        expect(harness.append('**bold *ital')).toBe('bold ital');
+        const block = snapshotOf(harness.sessionId)?.blocks[0];
+        const styles = block
+          ? stylesOf(block, 'ital').reduce((mask, run) => mask | run[2], 0)
+          : 0;
+        expect(styles & STYLE.strong).toBeTruthy();
+        expect(styles & STYLE.emphasis).toBeTruthy();
+      });
+
+      it('leaves a heading literal once its line has ended', () => {
+        const harness = stream({ preview: true }, mode);
+        expect(harness.append('# **Tit')).toBe('Tit');
+        expect(harness.append('le\n')).toBe('**Title');
+      });
+
+      it('keeps previewing after a reset to a new source', () => {
+        const harness = stream({ preview: true }, mode);
+        harness.append('first');
+        harness.stream.reset('Hello **bold wor');
+        flushFrames();
+        expect(shown(harness.sessionId)).toBe('Hello bold wor');
+      });
+    });
+  }
 });

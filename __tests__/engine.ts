@@ -218,34 +218,83 @@ export const PREVIEW_EMPHASIS = 1 << 0;
 export const PREVIEW_INLINE_CODE = 1 << 1;
 export const PREVIEW_ALL = PREVIEW_EMPHASIS | PREVIEW_INLINE_CODE;
 
-function previewBinary(): string {
+function sessionBinary(): string {
   const objects = compileObjects();
   return compile(
-    [join(CPP, 'tests', 'dump_preview.cpp'), ...ENGINE],
-    'downstream-preview',
+    [
+      join(CPP, 'tests', 'dump_session.cpp'),
+      join(CPP, 'session', 'IncrementalParser.cpp'),
+      ...ENGINE,
+    ],
+    'downstream-session',
     CXXFLAGS,
     objects
   );
 }
 
+/** The parser strategies a native session can be created with. */
+export type SessionMode = 'full' | 'incremental';
+
+/** One step a native session's worker applies to its parser, in order. */
+export type SessionOp =
+  | { op: 'append'; chunk: string }
+  | { op: 'replace'; source: string }
+  | { op: 'preview'; features: number }
+  | { op: 'parse'; finished: boolean };
+
+function frame(op: string, payload: Buffer): Buffer {
+  const header = Buffer.alloc(5);
+  header.write(op, 0, 'latin1');
+  header.writeUInt32LE(payload.length, 1);
+  return Buffer.concat([header, payload]);
+}
+
+function encodeOp(step: SessionOp): Buffer {
+  switch (step.op) {
+    case 'append':
+      return frame('a', Buffer.from(step.chunk, 'utf8'));
+    case 'replace':
+      return frame('r', Buffer.from(step.source, 'utf8'));
+    case 'preview': {
+      const mask = Buffer.alloc(4);
+      mask.writeUInt32LE(step.features >>> 0);
+      return frame('p', mask);
+    }
+    case 'parse':
+      return frame(step.finished ? 'f' : 'u', Buffer.alloc(0));
+  }
+}
+
 /**
- * Parses a complete document through the real provisional-styling pass.
+ * Replays a session through the real `IncrementalParser` and returns the
+ * document its last pass published.
  *
- * This is the pass a session runs on its unstable tail. The whole document is
- * the tail here, because nothing has committed, so it is the same path.
+ * This is the parser the native worker owns, in the mode the stream asked for,
+ * so the finish rule, the preview policy, and the commit path are the engine's
+ * own rather than a restatement of them in the test.
  */
-export function preview(
-  source: string | Buffer,
-  features: number
+export function replaySession(
+  mode: SessionMode,
+  steps: readonly SessionOp[]
 ): RenderModel {
-  const input =
-    typeof source === 'string' ? Buffer.from(source, 'utf8') : source;
   return JSON.parse(
-    execFileSync(previewBinary(), [String(features)], {
-      input,
+    execFileSync(sessionBinary(), [mode], {
+      input: Buffer.concat(steps.map(encodeOp)),
       maxBuffer: 256 << 20,
     }).toString('utf8')
   );
+}
+
+/**
+ * The first frame of a stream that previews: `source` arrives in one chunk of
+ * an unfinished full-mode session with `features` enabled.
+ */
+export function preview(source: string, features: number): RenderModel {
+  return replaySession('full', [
+    { op: 'preview', features },
+    { op: 'append', chunk: source },
+    { op: 'parse', finished: false },
+  ]);
 }
 
 function incrementalBinary(): string {
