@@ -12,7 +12,8 @@
  * mtime of the sources, so a second run reuses the binary.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -121,65 +122,72 @@ function sourcesKey(targets: string[]): string {
     .join('|');
 }
 
+/**
+ * Runs a compiler and publishes the result at `target` atomically.
+ *
+ * Vitest runs test files in parallel processes and every one of them needs the
+ * engine, so on a cold cache they all build it at once. Writing straight to
+ * `target` would let a second process exec a half-written binary, which shows up
+ * as a parse that returns nonsense rather than as a build error. The compiler
+ * therefore writes to a name only this process uses, and the result is renamed
+ * into place. Two processes building the same target both publish a complete
+ * binary, so the last rename simply wins.
+ */
+function compileInto(target: string, compiler: string, args: string[]): void {
+  const pending = `${target}.${process.pid}.${randomUUID()}`;
+  try {
+    execFileSync(compiler, [...args, '-o', pending]);
+    renameSync(pending, target);
+  } catch (error) {
+    rmSync(pending, { force: true });
+    throw error;
+  }
+}
+
 function compile(
   sources: string[],
   name: string,
   flags: string[],
   linkObjects: string[]
 ): string {
-  const key = sourcesKey([...sources, ...linkObjects.map((o) => `${o}.stamp`)]);
+  const key = sourcesKey([...sources, ...linkObjects]);
   if (cached?.key === key) return cached.binary;
   const root = buildRoot();
-  const binary = join(root, name);
-  if (existsSync(binary) && statSync(binary).mtimeMs > 0) {
-    // A binary from a previous run is reused when the sources are unchanged,
-    // which the key proves only if the binary was written for this key. Keep a
-    // stamp next to it so a rebuild is detected.
-    const stamp = `${binary}.key`;
-    if (existsSync(stamp) && readFileSync(stamp, 'utf8') === key) {
-      cached = { binary, key };
-      return binary;
-    }
-  }
-  execFileSync(process.env.CXX ?? 'c++', [
-    ...flags,
-    ...sources,
-    ...linkObjects,
-    '-o',
-    binary,
-  ]);
-  const { writeFileSync, mkdirSync } =
-    require('node:fs') as typeof import('node:fs');
   mkdirSync(root, { recursive: true });
-  writeFileSync(`${binary}.key`, key);
+  // The key is part of the name, so the file existing proves it was built from
+  // these sources. A separate stamp file could disagree with the binary it
+  // describes if a process died between the two writes.
+  const digest = createHash('sha256').update(key).digest('hex').slice(0, 16);
+  const binary = join(root, `${name}-${digest}`);
+  if (!existsSync(binary)) {
+    compileInto(binary, process.env.CXX ?? 'c++', [
+      ...flags,
+      ...sources,
+      ...linkObjects,
+    ]);
+  }
   cached = { binary, key };
   return binary;
 }
 
 function compileObjects(): string[] {
   const root = buildRoot();
-  const { mkdirSync } = require('node:fs') as typeof import('node:fs');
   mkdirSync(root, { recursive: true });
   return ['md4c.c', 'entity.c'].map((source) => {
-    const object = join(root, `${source}.o`);
     const sourcePath = join(MD4C, source);
-    const stamp = `${object}.stamp`;
-    if (
-      existsSync(object) &&
-      existsSync(stamp) &&
-      readFileSync(stamp, 'utf8') === String(statSync(sourcePath).mtimeMs)
-    ) {
-      return object;
+    // The source mtime is part of the name for the same reason it is part of a
+    // binary's name: existence then proves the object is current.
+    const object = join(
+      root,
+      `${source}-${String(statSync(sourcePath).mtimeMs)}.o`
+    );
+    if (!existsSync(object)) {
+      compileInto(object, process.env.CC ?? 'cc', [
+        ...CFLAGS,
+        '-c',
+        sourcePath,
+      ]);
     }
-    execFileSync(process.env.CC ?? 'cc', [
-      ...CFLAGS,
-      '-c',
-      sourcePath,
-      '-o',
-      object,
-    ]);
-    const { writeFileSync } = require('node:fs') as typeof import('node:fs');
-    writeFileSync(stamp, String(statSync(sourcePath).mtimeMs));
     return object;
   });
 }
@@ -316,5 +324,3 @@ export function tableRows(model: RenderModel): string[][] {
 export function linkUrls(model: RenderModel): string[] {
   return model.links.map((link) => link.url);
 }
-
-export { mkdtempSync };
