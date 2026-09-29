@@ -221,15 +221,14 @@ void IncrementalParser::publish(DocumentHandle document) {
   replaced_ = false;
 }
 
-ParseResult IncrementalParser::fullParse(ParseFallback reason) {
+ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable) {
   const std::string_view source = source_;
   // A full parse is also how a stream is rendered before anything has proved a
   // commit boundary, and in full mode on every update. Those are the only two
   // paths where a preview may apply, and in both the whole document is the
-  // unstable tail, so there is no committed prefix for a repair to reach. A
-  // finished parse, a reset, and a rejected source are all whole documents the
-  // writer is done with, and none of them is repaired.
-  const bool previewable = reason == ParseFallback::Count || reason == ParseFallback::InitialOrUnprovenBoundary;
+  // unstable tail, so there is no committed prefix for a repair to reach.
+  previewable = previewable &&
+      (reason == ParseFallback::Count || reason == ParseFallback::InitialOrUnprovenBoundary);
   ParseResult result = parseMarkdown(source);
   counters_.fullParses++;
   if (previewable && preview_.enabled()) {
@@ -609,16 +608,18 @@ bool IncrementalParser::appendOpenFence() {
 ParseResult IncrementalParser::parse(bool finished) {
   counters_.updates++;
   if (source_.size() > kMaxSourceBytes) {
-    return fullParse(ParseFallback::InvalidSource);
+    return fullParse(ParseFallback::InvalidSource, false);
   }
+  // Full mode takes this branch for a finished stream too, so it has to pass
+  // the flag itself: the settled document is never previewed.
   if (mode_ == ParseMode::FullParse) {
-    return fullParse(ParseFallback::Count);
+    return fullParse(ParseFallback::Count, !finished);
   }
   if (replaced_) {
-    return fullParse(ParseFallback::NonAppend);
+    return fullParse(ParseFallback::NonAppend, !finished);
   }
   if (finished) {
-    return fullParse(ParseFallback::Finished);
+    return fullParse(ParseFallback::Finished, false);
   }
   ParseResult current;
   // A pending policy change has to be applied to what the reader is looking at,
@@ -632,10 +633,10 @@ ParseResult IncrementalParser::parse(bool finished) {
 
   tryCommit();
   if (source_.size() - committedBytes_ > kMaxRetainedTailBytes) {
-    return fullParse(ParseFallback::TailLimit);
+    return fullParse(ParseFallback::TailLimit, true);
   }
   if (committedBytes_ == 0) {
-    return fullParse(ParseFallback::InitialOrUnprovenBoundary);
+    return fullParse(ParseFallback::InitialOrUnprovenBoundary, true);
   }
   return parseTail();
 }

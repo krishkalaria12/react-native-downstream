@@ -94,7 +94,9 @@ public:
   remend::PreviewStats previewStats() const { return previewStats_; }
 
 private:
-  ParseResult fullParse(ParseFallback reason);
+  /// `previewable` is false for a finished stream and a rejected source, which
+  /// are the documents the provisional-styling pass must never touch.
+  ParseResult fullParse(ParseFallback reason, bool previewable);
   /// Full mode: gives leading blocks that are unchanged since the previous
   /// snapshot a stable identity, so platforms reuse their rendering.
   void carryIdentities(ParseResult &result);

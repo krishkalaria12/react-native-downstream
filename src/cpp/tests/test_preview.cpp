@@ -755,9 +755,11 @@ bool sessionIntegration() {
   }
 
   // A finished stream drops the repair entirely, which is what
-  // docs/streaming-semantics.md requires of finish().
-  {
-    IncrementalParser parser{ParseMode::IncrementalTail};
+  // docs/streaming-semantics.md requires of finish(). Full mode is the one
+  // createMarkdownStream uses, and it reaches the parser by a different branch,
+  // so both modes have to be asked.
+  for (const ParseMode mode : {ParseMode::FullParse, ParseMode::IncrementalTail}) {
+    IncrementalParser parser{mode};
     parser.setPreview(PreviewOptions::all());
     parser.append("**bold wor");
     parser.parse(false);
@@ -774,10 +776,10 @@ bool sessionIntegration() {
 
   // The same is true across a full stream: a previewed session and a plain one
   // have to agree the moment the stream finishes.
-  {
-    IncrementalParser previewed{ParseMode::IncrementalTail};
+  for (const ParseMode mode : {ParseMode::FullParse, ParseMode::IncrementalTail}) {
+    IncrementalParser previewed{mode};
     previewed.setPreview(PreviewOptions::all());
-    IncrementalParser plain{ParseMode::IncrementalTail};
+    IncrementalParser plain{mode};
     for (const char *chunk : {"# Title\n\nSome ", "**bold", " text with ", "`code",
                              " and *more", emphasis_mark, " done.\n\n- item one\n- item two\n"}) {
       previewed.append(chunk);

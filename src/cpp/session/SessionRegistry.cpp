@@ -96,6 +96,10 @@ public:
   /// the worker thread, which is the only thread that touches the parser, and
   /// it queues a pass so the new policy reaches the reader without waiting for
   /// the next chunk.
+  ///
+  /// A finished stream is settled and never previewed, so there is nothing to
+  /// repaint. The policy still waits for the worker, and applies from the next
+  /// reset.
   void setPreview(remend::PreviewOptions options) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (stopped_) {
@@ -103,7 +107,9 @@ public:
     }
     preview_ = options;
     SessionTrace::record(id_, generation_, sequence_, "preview_set");
-    markDirty();
+    if (!finished_) {
+      markDirty();
+    }
   }
 
   void noteLayout(LayoutHint hint) {
