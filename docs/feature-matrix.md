@@ -12,7 +12,7 @@ This matrix applies to the controlled view and the native stream session on iOS 
 | Links | Complete absolute `http:`, `https:`, and `mailto:` targets can emit `onLinkPress` with the full Markdown source range. The package does not open URLs. | Incomplete and disallowed destinations cannot emit an event. A bare URL inside an unfinished `](` is left as text, because md4c's permissive autolinks would otherwise offer a target the next chunk can move or remove. A bare URL in prose still becomes a link. |
 | Selection and copy | The `selectable` prop enables native text selection in text segments. Copy returns visible text. The controlled prop or `stream.getSource()` provides the complete canonical source. | Completed text segments retain their selection when their native view is reused. Selection cannot cross a table or segment boundary. |
 | Accessibility | Native reading order includes headings, individual link-role elements, and spoken checked or unchecked task state. Table rows are available in reading order. | Accessibility content follows the current snapshot and does not expose superseded text. |
-| Font scale, RTL, colors | Text follows system font scale and natural writing direction. List and quote decorations follow the paragraph direction. Colors follow the system light or dark appearance. | Layout updates when the view's font scale, width, or appearance changes. |
+| Font scale, RTL, colors | Text follows system font scale and natural writing direction. List and quote decorations follow the paragraph direction. Colors follow the system light or dark appearance. Wrapping is advance-based on every Android version, including 15 and later, where the platform would otherwise break lines on glyph bounds and drop the last word of a line. | Layout updates when the view's font scale, width, or appearance changes. |
 
 Network images, syntax highlighting, native math layout, link long press actions, and per-block copy controls belong to a later release. Their absence keeps plain prose independent of those heavier paths.
 
@@ -23,7 +23,7 @@ Run the example on both platforms with a development build. The Example screen n
 1. With VoiceOver or TalkBack, traverse headings, task items, links, and each table row. Check link activation and task state announcements.
 2. Select and copy text, then compare it with the visible text. Compare `getSource()` with the exact appended Markdown after a stream finishes.
 3. Scroll a wide table horizontally while a new row streams in. Its position should stay put. Replay or reset the stream and check that a different table starts at the leading edge.
-4. Rotate the device, enlarge system text, switch light and dark appearance, and revisit the RTL case. Check wrapping, mirrored decorations, and table overflow.
+4. Rotate the device, enlarge system text, switch light and dark appearance, and revisit the RTL case. Check wrapping, mirrored decorations, and table overflow. On an Android 15 or later image, render a paragraph in an overhanging font such as `cursive` and confirm the last word of every line is painted.
 5. Scroll between active and completed messages. Check that old content does not reappear after a cell is recycled or a session resets.
 
 Automated parser and controller tests cover source preservation, URL policy, prefix classification, and final parse equality. Native layout and accessibility checks require a device or simulator.

@@ -254,6 +254,21 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
       isFallbackLineSpacing = true
     }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+      // Android 15 flips TextView#USE_BOUNDS_FOR_WIDTH on for apps targeting
+      // API 35+, so a TextView breaks lines on glyph bounds where the
+      // measuring StaticLayout in RenderedDocument.buildLayout breaks them on
+      // glyph advances. For any font whose ink overhangs its advance, a line
+      // that fits at measure time wraps at draw time, and that extra line
+      // falls outside the height Yoga measured: the last word silently
+      // disappears. Measurement sets setUseBoundsForWidth(false) too, so both
+      // sides break lines the same way.
+      //
+      // The trade is Android 15's automatic reservation of overhang space at
+      // the edges of a line, which is what every earlier version did not do
+      // and what losing whole words is worse than.
+      setUseBoundsForWidth(false)
+    }
     gravity = Gravity.TOP or Gravity.START
     setBackgroundColor(0)
     highlightColor = 0x33007AFF

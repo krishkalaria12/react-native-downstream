@@ -404,6 +404,11 @@ internal class RenderedDocument(
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
         builder.setUseLineSpacingFromFallbacks(true)
       }
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+        // The half of the advance-based breaking contract. See the note on
+        // TextSegmentView for why both halves are needed.
+        builder.setUseBoundsForWidth(false)
+      }
       return builder.build()
     }
 
