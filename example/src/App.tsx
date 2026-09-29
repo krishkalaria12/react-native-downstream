@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Button,
+  Linking,
   Platform,
+  Settings,
   SafeAreaView,
   StatusBar,
   StyleSheet,
@@ -11,12 +13,26 @@ import {
 
 import { GalleryScreen } from './gallery/GalleryScreen';
 import { PlaybackScreen } from './bench/PlaybackScreen';
+import { StressScreen } from './bench/StressScreen';
 import { StreamingChat } from './StreamingChat';
 
 export default function App() {
-  const [screen, setScreen] = useState<'gallery' | 'stream' | 'bench'>(
-    'gallery'
-  );
+  const [screen, setScreen] = useState<
+    'gallery' | 'stream' | 'bench' | 'stress'
+  >('gallery');
+  const [autoStress, setAutoStress] = useState(false);
+  // Launch with `-downstreamStress 1` (iOS) or a downstream://stress VIEW
+  // intent (Android) to run the stress screen without interaction.
+  useEffect(() => {
+    const start = () => {
+      setScreen('stress');
+      setAutoStress(true);
+    };
+    if (Platform.OS === 'ios' && Settings.get('downstreamStress')) start();
+    Linking.getInitialURL().then((url) => {
+      if (url?.includes('stress')) start();
+    });
+  }, []);
   const dark = useColorScheme() === 'dark';
   return (
     <SafeAreaView style={[styles.root, dark ? styles.dark : styles.light]}>
@@ -24,11 +40,14 @@ export default function App() {
         <Button title="Gallery" onPress={() => setScreen('gallery')} />
         <Button title="Stream" onPress={() => setScreen('stream')} />
         <Button title="Benchmark" onPress={() => setScreen('bench')} />
+        <Button title="Stress" onPress={() => setScreen('stress')} />
       </View>
       {screen === 'gallery' ? (
         <GalleryScreen />
       ) : screen === 'stream' ? (
         <StreamingChat />
+      ) : screen === 'stress' ? (
+        <StressScreen autoStart={autoStress} />
       ) : (
         <PlaybackScreen />
       )}
