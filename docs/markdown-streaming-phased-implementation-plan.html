@@ -433,8 +433,8 @@
                 <thead><tr><th>Boundary</th><th>Proposed location</th><th>Responsibility</th></tr></thead>
                 <tbody>
                   <tr><td>Public TypeScript API</td><td><code>src/</code></td><td>Controlled view, stream controller/ref, native component spec, type-safe events, source and style types. No Markdown parser in the live render path.</td></tr>
-                  <tr><td>Shared native engine</td><td><code>cpp/</code></td><td>Vendored md4c, bounded source buffer, parser adapter, block model, session sequencing, parse-mode switch, cache and fallbacks, trace points.</td></tr>
-                  <tr><td>Platform rendering</td><td><code>ios/</code>, <code>android/</code></td><td>Attributed text or spans, layout measurement, images, selection, accessibility, Codegen/Fabric registration.</td></tr>
+                  <tr><td>Shared native engine</td><td><code>src/cpp/</code></td><td>Vendored md4c, bounded source buffer, parser adapter, block model, session sequencing, parse-mode switch, cache and fallbacks, trace points.</td></tr>
+                  <tr><td>Platform rendering</td><td><code>src/ios/</code>, <code>src/android/</code></td><td>Attributed text or spans, layout measurement, images, selection, accessibility, Codegen/Fabric registration.</td></tr>
                   <tr><td>Example and performance rig</td><td><code>example/</code>, <code>benchmarks/</code></td><td>Streaming demo and fixture playback for correctness during Phases 1–4; reference renderer comparison, trace collection, and results in Phase 5.</td></tr>
                   <tr><td>Packaging and release</td><td><code>package.json</code>, podspec, Gradle/CMake, CI</td><td>Autolinking, Codegen metadata, build compatibility, parser license, clean install and tarball verification.</td></tr>
                 </tbody>
@@ -479,7 +479,7 @@
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>docs/decisions/renderer-ownership.md</code></li><li><code>src/DownstreamMarkdownNativeComponent.ts</code></li><li><code>src/DownstreamMarkdown.tsx</code></li><li><code>cpp/parser/</code>, <code>cpp/render-model/</code></li><li><code>ios/</code>, <code>android/</code></li><li><code>Downstream.podspec</code>, <code>package.json</code> Codegen config</li></ul>
+                  <ul class="path-list"><li><code>docs/decisions/renderer-ownership.md</code></li><li><code>src/DownstreamMarkdownNativeComponent.ts</code></li><li><code>src/DownstreamMarkdown.tsx</code></li><li><code>src/cpp/parser/</code>, <code>src/cpp/render-model/</code></li><li><code>src/ios/</code>, <code>src/android/</code></li><li><code>Downstream.podspec</code>, <code>package.json</code> Codegen config</li></ul>
                   <h4>Verification</h4><p>Run CommonMark/GFM final-document fixtures, native layout tests, font-scale and width-change tests, platform screenshot comparisons, clean-install builds, and link/accessibility checks on device.</p>
                   <p class="gate"><strong>Exit gate.</strong> Complete documents render correctly on both platforms and the native component measures, mounts, and recycles without stale content.</p>
                 </div>
@@ -504,7 +504,7 @@
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>src/createMarkdownSession.ts</code></li><li><code>src/NativeDownstreamSession.ts</code> Codegen spec</li><li><code>cpp/session/</code>, <code>cpp/worker/</code>, <code>cpp/trace/</code></li><li><code>example/src/StreamingChat.tsx</code></li></ul>
+                  <ul class="path-list"><li><code>src/createMarkdownSession.ts</code></li><li><code>src/NativeDownstreamSession.ts</code> Codegen spec</li><li><code>src/cpp/session/</code>, <code>src/cpp/worker/</code>, <code>src/cpp/trace/</code></li><li><code>example/src/StreamingChat.tsx</code></li></ul>
                   <h4>Verification</h4><p>Replay every fixture prefix. Stress reset/unmount while work is in flight, split Unicode at allowed boundaries, run simultaneous sessions, and compare completed output with a fresh full parse.</p>
                   <p class="gate"><strong>Exit gate.</strong> Zero stale paints or lost chunks, bounded queue/memory, and correct output for every fixture prefix.</p>
                 </div>
@@ -528,7 +528,7 @@
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>cpp/session/block-index.*</code></li><li><code>cpp/session/tail-classifier.*</code></li><li><code>cpp/session/snapshot-diff.*</code></li><li><code>benchmarks/fixtures/adversarial/</code></li></ul>
+                  <ul class="path-list"><li><code>src/cpp/session/block-index.*</code></li><li><code>src/cpp/session/tail-classifier.*</code></li><li><code>src/cpp/session/snapshot-diff.*</code></li><li><code>benchmarks/fixtures/adversarial/</code></li></ul>
                   <h4>Verification</h4><p>Track bytes reparsed per update, full-parse fallback rate, and cache hit rate as deterministic counters in tests. Timing and frame metrics wait for Phase 5.</p>
                   <p class="gate"><strong>Exit gate.</strong> No final-output divergence across every-prefix and fuzz runs; fallback reasons are counted; full-parse mode remains selectable.</p>
                 </div>
@@ -550,7 +550,7 @@
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>cpp/render-model/</code> rich block types</li><li><code>ios/</code> and <code>android/</code> feature renderers</li><li><code>example/src/fixtures/</code> feature gallery</li><li><code>docs/feature-matrix.md</code></li></ul>
+                  <ul class="path-list"><li><code>src/cpp/render-model/</code> rich block types</li><li><code>src/ios/</code> and <code>src/android/</code> feature renderers</li><li><code>example/src/fixtures/</code> feature gallery</li><li><code>docs/feature-matrix.md</code></li></ul>
                   <h4>Verification</h4><p>Use platform screenshots, accessibility traversal, link/image policy tests, rotation/font-scale tests, long tables and code blocks, and scroll tests with active and completed messages.</p>
                   <p class="gate"><strong>Exit gate.</strong> Every first-release feature passes the same correctness and streaming checks on iOS and Android. Downstream is feature-complete and ready to benchmark.</p>
                 </div>

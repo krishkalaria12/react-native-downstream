@@ -21,7 +21,7 @@ A newline alone never commits a block. A following setext underline, table separ
 
 Chunks are applied in call order to one session. A coalesced batch preserves the same order. Each reset changes generation; each accepted nonempty append advances sequence within that generation. `finish()` makes the final state observable after all earlier appends. Results and measurements carry generation and sequence, and the view only applies the current pair. Old worker results after reset, unmount, or rebinding cannot repaint the view. Width or style changes also invalidate stale measurements.
 
-The fixtures in `fixtures/manifest.json` give exact chunk strings and prefix checkpoints. The `.md` files are canonical finished sources and the `.expected.html` files are md4c parse oracles. The renderer's safe projection, such as escaped raw HTML, alt text instead of images, and literal math, is governed by [the API matrix](api.md#feature-scope). Prefix checkpoints describe visual behavior that an HTML oracle alone cannot test.
+The fixtures in `src/fixtures/manifest.json` give exact chunk strings and prefix checkpoints. The `.md` files are canonical finished sources and the `.expected.html` files are md4c parse oracles. The renderer's safe projection, such as escaped raw HTML, alt text instead of images, and literal math, is governed by [the API matrix](api.md#feature-scope). Prefix checkpoints describe visual behavior that an HTML oracle alone cannot test.
 
 ## Unresolved implementation details
 

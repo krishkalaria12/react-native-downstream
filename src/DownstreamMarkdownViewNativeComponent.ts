@@ -34,7 +34,7 @@ export interface NativeProps extends ViewProps {
   onMarkdownError?: CodegenTypes.DirectEventHandler<NativeMarkdownErrorEvent>;
 }
 
-// The shadow node is hand-written C++ (cpp/fabric), so Codegen emits only the
+// The shadow node is hand-written C++ (src/cpp/fabric), so Codegen emits only the
 // props and event emitter.
 export default codegenNativeComponent<NativeProps>('DownstreamMarkdownView', {
   interfaceOnly: true,

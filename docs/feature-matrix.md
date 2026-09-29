@@ -18,7 +18,7 @@ Network images, syntax highlighting, native math layout, link long press actions
 
 ## Device checks
 
-Run the example on both platforms with a development build. The Example screen needs an `EXPO_PUBLIC_OPENAI_API_KEY` in `example/.env`; without one it shows a setup note instead of calling the API. The Testing and Bench screens run from the parser fixtures in `fixtures/manifest.json` and need no key. The Example screen exercises the first-release forms as live text, and the Testing screen replays the same forms in full and incremental parse modes.
+Run the example on both platforms with a development build. The Example screen needs an `EXPO_PUBLIC_OPENAI_API_KEY` in `example/.env`; without one it shows a setup note instead of calling the API. The Testing and Bench screens run from the parser fixtures in `src/fixtures/manifest.json` and need no key. The Example screen exercises the first-release forms as live text, and the Testing screen replays the same forms in full and incremental parse modes.
 
 1. With VoiceOver or TalkBack, traverse headings, task items, links, and each table row. Check link activation and task state announcements.
 2. Select and copy text, then compare it with the visible text. Compare `getSource()` with the exact appended Markdown after a stream finishes.
