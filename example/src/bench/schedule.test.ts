@@ -45,6 +45,22 @@ test('generated workloads have exact UTF-8 byte sizes and stable schedules', () 
   ).toBe(true);
 });
 
+test('normal chunk schedules use 10–50 ms arrivals at fixture and stress sizes', () => {
+  for (const size of ['fixture', 10] as const) {
+    const workload = createWorkload(fixture, size);
+    for (const kind of ['manifest', 'character', 'range'] as const) {
+      const schedule = createSchedule(kind, 20260928, workload);
+      let previousDueMs = 0;
+      for (const chunk of schedule.chunks) {
+        const interval = chunk.dueMs - previousDueMs;
+        expect(interval).toBeGreaterThanOrEqual(10);
+        expect(interval).toBeLessThanOrEqual(50);
+        previousDueMs = chunk.dueMs;
+      }
+    }
+  }
+});
+
 test('open-fence workloads keep one unclosed fence at each target size', () => {
   for (const size of [10, 50, 100] as const) {
     const workload = createWorkload(fixture, size, 'open-fence');

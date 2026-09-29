@@ -6,6 +6,10 @@ import {
 } from '../../../src/createMarkdownStream';
 import type { Fixture } from './fixtures';
 import {
+  allFinalSnapshotsReady,
+  resetSessionControllers,
+} from './sessionLifecycle';
+import {
   createSchedule,
   BATCH_WINDOW_MS,
   nextScheduledBatch,
@@ -24,7 +28,12 @@ import {
   type WorkloadSize,
 } from './workload';
 
-export type PlaybackStatus = 'idle' | 'running' | 'paused' | 'complete';
+export type PlaybackStatus =
+  | 'idle'
+  | 'running'
+  | 'paused'
+  | 'finishing'
+  | 'complete';
 
 export interface PlaybackConfig {
   fixture: Fixture;
@@ -79,7 +88,9 @@ interface ActiveRun {
   batch: number;
   batchIndex: number;
   committedBatch: number;
+  completionRequested: boolean;
   controllers: MarkdownStreamController[];
+  unsubscribeSnapshots: (() => void)[];
   elapsedMs: number;
   resumedAt: number;
   timer?: ReturnType<typeof setTimeout>;
@@ -97,7 +108,10 @@ const initialView: PlaybackView = {
 
 function activeElapsedMs(run: ActiveRun): number {
   return (
-    run.elapsedMs + (run.status === 'running' ? nowMs() - run.resumedAt : 0)
+    run.elapsedMs +
+    (run.status === 'running' || run.status === 'finishing'
+      ? nowMs() - run.resumedAt
+      : 0)
   );
 }
 
@@ -129,15 +143,16 @@ export function usePlayback() {
     (run: ActiveRun) => {
       stopTimer(run);
       run.trace.stopFrames();
+      run.unsubscribeSnapshots.forEach((unsubscribe) => unsubscribe());
+      run.unsubscribeSnapshots = [];
     },
     [stopTimer]
   );
 
-  const finishRun = useCallback(
+  const completeRun = useCallback(
     (run: ActiveRun) => {
       if (run.status === 'complete') return;
       const duration = activeElapsedMs(run);
-      run.controllers.forEach((controller) => controller.finish());
       stopRun(run);
       run.status = 'complete';
       run.elapsedMs = duration;
@@ -151,6 +166,43 @@ export function usePlayback() {
     [stopRun]
   );
 
+  const maybeComplete = useCallback(
+    (run: ActiveRun) => {
+      if (
+        active.current !== run ||
+        !run.completionRequested ||
+        run.committedBatch !== run.batch ||
+        !allFinalSnapshotsReady(
+          run.controllers.map(
+            (controller) => getStreamState(controller).binding().readySequence
+          ),
+          run.cursor
+        )
+      )
+        return;
+      completeRun(run);
+    },
+    [completeRun]
+  );
+
+  const requestCompletion = useCallback(
+    (run: ActiveRun) => {
+      if (run.completionRequested) return;
+      run.controllers.forEach((controller) => controller.finish());
+      run.completionRequested = true;
+      if (run.status === 'paused') run.resumedAt = nowMs();
+      run.status = 'finishing';
+      setView((previous) =>
+        previous.run === run.id
+          ? { ...previous, status: 'finishing' }
+          : previous
+      );
+      run.trace.mark('finish-sent');
+      maybeComplete(run);
+    },
+    [maybeComplete]
+  );
+
   const receiveThrough = useCallback(
     (
       run: ActiveRun,
@@ -158,6 +210,7 @@ export function usePlayback() {
       scheduledDueMs?: number,
       latenessMs?: number
     ) => {
+      if (run.cursor >= end) return;
       const receipts: Receipt[] = [];
       const batch = ++run.batch;
       const start = run.cursor;
@@ -242,7 +295,7 @@ export function usePlayback() {
         elapsed
       );
       if (!next) {
-        finishRun(run);
+        requestCompletion(run);
         return;
       }
       if (next.waitMs > 0) {
@@ -258,9 +311,11 @@ export function usePlayback() {
       );
       if (following) {
         run.timer = setTimeout(() => tick(run), Math.max(1, following.waitMs));
+      } else {
+        requestCompletion(run);
       }
     },
-    [finishRun, receiveThrough]
+    [receiveThrough, requestCompletion]
   );
 
   const acknowledgeCommit = useCallback(
@@ -269,14 +324,9 @@ export function usePlayback() {
       if (!run || run.id !== runId || batch <= run.committedBatch) return;
       run.committedBatch = batch;
       run.trace.mark('react-commit', { batch });
-      if (
-        run.batchIndex === run.schedule.batches.length &&
-        batch === run.batch
-      ) {
-        finishRun(run);
-      }
+      maybeComplete(run);
     },
-    [finishRun]
+    [maybeComplete]
   );
 
   const play = useCallback(
@@ -349,12 +399,17 @@ export function usePlayback() {
         batch: 0,
         batchIndex: 0,
         committedBatch: 0,
+        completionRequested: false,
         controllers,
+        unsubscribeSnapshots: [],
         elapsedMs: 0,
         resumedAt: nowMs(),
         status: 'running',
       };
       active.current = run;
+      run.unsubscribeSnapshots = controllers.map((controller) =>
+        getStreamState(controller).subscribe(() => maybeComplete(run))
+      );
       trace.mark('run-start');
       trace.startFrames();
       setView((current) => {
@@ -388,9 +443,9 @@ export function usePlayback() {
       });
       const first = schedule.batches[0];
       if (first) run.timer = setTimeout(() => tick(run), first.dueMs);
-      else finishRun(run);
+      else requestCompletion(run);
     },
-    [finishRun, stopRun, tick]
+    [maybeComplete, requestCompletion, stopRun, tick]
   );
 
   const pause = useCallback(() => {
@@ -417,23 +472,44 @@ export function usePlayback() {
 
   const finish = useCallback(() => {
     const run = active.current;
-    if (!run || run.status === 'complete') return;
+    if (!run || run.status === 'complete' || run.completionRequested) return;
     stopTimer(run);
     run.trace.mark('finish-request');
     receiveThrough(run, run.schedule.chunks.length);
-    finishRun(run);
-  }, [finishRun, receiveThrough, stopTimer]);
+    run.batchIndex = run.schedule.batches.length;
+    requestCompletion(run);
+  }, [receiveThrough, requestCompletion, stopTimer]);
 
   const reset = useCallback(() => {
-    if (active.current) {
-      stopRun(active.current);
-      active.current.controllers.forEach((controller) => controller.dispose());
-      if (active.current.status !== 'complete') {
-        active.current.trace.end('cancelled', activeElapsedMs(active.current));
-      }
+    const run = active.current;
+    if (!run) {
+      setView(initialView);
+      return;
     }
-    active.current = null;
-    setView(initialView);
+    stopRun(run);
+    run.trace.mark('reset-request');
+    if (run.status !== 'complete') {
+      run.trace.end('cancelled', activeElapsedMs(run));
+    }
+    resetSessionControllers(run.controllers);
+    run.status = 'idle';
+    run.completionRequested = false;
+    run.cursor = 0;
+    run.prefix = '';
+    run.batch = 0;
+    run.batchIndex = 0;
+    run.committedBatch = 0;
+    setView({
+      ...initialView,
+      run: run.id,
+      live: {
+        markdown: '',
+        controllers: run.controllers,
+        revision: 0,
+        batch: 0,
+        receipts: [],
+      },
+    });
   }, [stopRun]);
 
   const exportTrace = useCallback(

@@ -94,24 +94,16 @@ export function createSchedule(
       : splitRange(source, next, kind === 'range' ? 20 : 32);
 
   let dueMs = 0;
-  const large = workload.size !== 'fixture';
   const chunks = texts.map((text, index) => {
     if (kind === 'manifest') {
-      dueMs += large ? 2 : 90;
+      dueMs += 24;
     } else if (kind === 'character') {
-      dueMs += large ? 2 : 24;
+      dueMs += 24;
     } else if (kind === 'range') {
-      dueMs += large
-        ? 3 + Math.floor(next() * 8)
-        : 35 + Math.floor(next() * 90);
+      dueMs += 10 + Math.floor(next() * 41);
     } else {
       // Short clusters separated by reproducible network stalls.
-      dueMs +=
-        index % 5 === 0
-          ? large
-            ? 40 + Math.floor(next() * 80)
-            : 160 + Math.floor(next() * 220)
-          : 2;
+      dueMs += index % 5 === 0 ? 160 + Math.floor(next() * 220) : 2;
     }
     return { text, dueMs, index };
   });
