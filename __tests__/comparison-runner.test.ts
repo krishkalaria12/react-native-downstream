@@ -1,15 +1,19 @@
-import { fixtures } from '../shared/fixtures';
-import { ComparisonRunner, type ComparisonView } from './comparisonRunner';
+import { afterEach, beforeEach, expect, vi } from 'vitest';
 
-jest.mock('../../../src/NativeDownstreamSession', () => {
+import { fixtures } from '../example/src/shared/fixtures';
+import NativeDownstreamSession from '../src/NativeDownstreamSession';
+
+import { ComparisonRunner, type ComparisonView } from '../example/src/testing/comparisonRunner';
+
+vi.mock('../src/NativeDownstreamSession', () => {
   const listeners = { snapshot: new Set<Function>() };
   return {
     __esModule: true,
     default: {
-      create: jest.fn(),
+      create: vi.fn(),
       // The real worker parses asynchronously, so a snapshot follows the
       // append instead of arriving in the same call.
-      append: jest.fn(
+      append: vi.fn(
         (
           sessionId: string,
           _chunk: string,
@@ -23,16 +27,16 @@ jest.mock('../../../src/NativeDownstreamSession', () => {
           }, 0);
         }
       ),
-      reset: jest.fn(),
-      finish: jest.fn(),
-      dispose: jest.fn(),
-      setTracing: jest.fn(),
-      onSnapshotReady: jest.fn((callback: (event: object) => void) => {
+      reset: vi.fn(),
+      finish: vi.fn(),
+      dispose: vi.fn(),
+      setTracing: vi.fn(),
+      onSnapshotReady: vi.fn((callback: (event: object) => void) => {
         listeners.snapshot.add(callback);
         return { remove: () => listeners.snapshot.delete(callback) };
       }),
-      onSessionError: jest.fn(() => ({ remove: () => {} })),
-      onTrace: jest.fn(() => ({ remove: () => {} })),
+      onSessionError: vi.fn(() => ({ remove: () => {} })),
+      onTrace: vi.fn(() => ({ remove: () => {} })),
     },
   };
 });
@@ -54,19 +58,19 @@ function advanceUntil(
   for (let step = 0; step < 5000; step += 1) {
     const view = runner.getView();
     if (ready(view)) return view;
-    jest.advanceTimersByTime(20);
+    vi.advanceTimersByTime(20);
   }
   return runner.getView();
 }
 
 beforeEach(() => {
-  jest.useFakeTimers();
+  vi.useFakeTimers();
   // The mock factory is evaluated once, so calls carry over between tests.
-  jest.clearAllMocks();
+  vi.clearAllMocks();
 });
 
 afterEach(() => {
-  jest.useRealTimers();
+  vi.useRealTimers();
 });
 
 test('both candidates run in order over the same source', () => {
@@ -106,13 +110,9 @@ test('the Downstream candidate hands the source to one native session', () => {
   });
 
   const view = drain(runner);
-  const native = jest.requireMock('../../../src/NativeDownstreamSession');
-  const modes = native.default.create.mock.calls.map(
-    (call: [string, string]) => call[1]
-  );
-  const appended = native.default.append.mock.calls
-    .map((call: [string, string]) => call[1])
-    .join('');
+  const native = vi.mocked(NativeDownstreamSession);
+  const modes = native.create.mock.calls.map((call) => call[1]);
+  const appended = native.append.mock.calls.map((call) => call[1]).join('');
 
   expect(view.status).toBe('complete');
   expect(modes).toEqual(['incremental']);
@@ -132,18 +132,18 @@ test('a reset mid-comparison frees the live session and stops the run', () => {
   });
   // Stop while Downstream is the candidate under test.
   advanceUntil(runner, (view) => view.active === 1);
-  const native = jest.requireMock('../../../src/NativeDownstreamSession');
-  expect(native.default.create).toHaveBeenCalledTimes(1);
+  const native = vi.mocked(NativeDownstreamSession);
+  expect(native.create).toHaveBeenCalledTimes(1);
 
   runner.reset();
   const view = runner.getView();
 
   expect(view.status).toBe('idle');
   expect(view.runs).toEqual([null, null]);
-  expect(native.default.dispose).toHaveBeenCalledTimes(1);
+  expect(native.dispose).toHaveBeenCalledTimes(1);
 
   // Advancing past the run must not resurrect either pane.
-  jest.advanceTimersByTime(5000);
+  vi.advanceTimersByTime(5000);
   expect(runner.getView()).toEqual(view);
   runner.dispose();
 });

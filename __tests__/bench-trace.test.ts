@@ -1,4 +1,4 @@
-import { TraceRun } from './trace';
+import { TraceRun } from '../example/src/bench/trace';
 
 test('trace-off runs still report completion and active duration', () => {
   const trace = new TraceRun({

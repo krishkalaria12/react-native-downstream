@@ -1,4 +1,11 @@
 {
   "extends": "./tsconfig",
-  "exclude": ["example", "lib"]
+  "exclude": [
+    "example",
+    "lib",
+    "__tests__",
+    "__benchmarks__",
+    "scripts",
+    "vitest.config.mts"
+  ]
 }

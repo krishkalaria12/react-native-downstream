@@ -1,12 +1,14 @@
+import { expect, vi } from 'vitest';
+
 import {
   afterTwoAnimationFrames,
   allFinalSnapshotsReady,
   resetSessionControllers,
-} from './sessionLifecycle';
+} from '../example/src/shared/sessionLifecycle';
 
 test('reset clears pending sessions without disposing them', () => {
-  const first = { reset: jest.fn(), dispose: jest.fn() };
-  const second = { reset: jest.fn(), dispose: jest.fn() };
+  const first = { reset: vi.fn(), dispose: vi.fn() };
+  const second = { reset: vi.fn(), dispose: vi.fn() };
 
   resetSessionControllers([first, second]);
 
@@ -24,14 +26,14 @@ test('completion waits for every native session to reach the final sequence', ()
 test('completion waits for two frames and cancellation stops the pending frame', () => {
   const frames = new Map<number, Parameters<typeof requestAnimationFrame>[0]>();
   let nextFrame = 1;
-  const request = jest
+  const request = vi
     .spyOn(globalThis, 'requestAnimationFrame')
     .mockImplementation((callback) => {
       const frame = nextFrame++;
       frames.set(frame, callback);
       return frame;
     });
-  const cancel = jest
+  const cancel = vi
     .spyOn(globalThis, 'cancelAnimationFrame')
     .mockImplementation((frame) => {
       frames.delete(frame);
@@ -43,14 +45,14 @@ test('completion waits for two frames and cancellation stops the pending frame',
   };
 
   try {
-    const completed = jest.fn();
+    const completed = vi.fn();
     afterTwoAnimationFrames(completed);
     advanceFrame();
     expect(completed).not.toHaveBeenCalled();
     advanceFrame();
     expect(completed).toHaveBeenCalledTimes(1);
 
-    const cancelled = jest.fn();
+    const cancelled = vi.fn();
     const stop = afterTwoAnimationFrames(cancelled);
     advanceFrame();
     stop();

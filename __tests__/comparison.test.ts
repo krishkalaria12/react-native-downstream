@@ -5,7 +5,7 @@ import {
   formatValue,
   LONG_FRAME_MS,
   type CandidateMetrics,
-} from './comparison';
+} from '../example/src/testing/comparison';
 
 function metrics(overrides: Partial<CandidateMetrics> = {}): CandidateMetrics {
   return {

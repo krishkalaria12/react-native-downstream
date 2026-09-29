@@ -3,7 +3,7 @@ import {
   checkSource,
   initialControlledSource,
   MAX_SOURCE_BYTES,
-} from '../controlledSource';
+} from '../src/controlledSource';
 
 describe('checkSource', () => {
   it('accepts well-formed text, including astral characters', () => {

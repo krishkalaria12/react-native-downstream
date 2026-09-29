@@ -1,16 +1,19 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import {
   createMarkdownStream,
   createMarkdownStreamWithMode,
   getStreamState,
-} from '../createMarkdownStream';
-import NativeDownstreamSession from '../NativeDownstreamSession';
+} from '../src/createMarkdownStream';
+import NativeDownstreamSession from '../src/NativeDownstreamSession';
+import * as NativeDownstreamSessionModule from '../src/NativeDownstreamSession';
 import {
   setStreamTracing,
   subscribeStreamTrace,
   type StreamTraceEvent,
-} from '../streamTrace';
+} from '../src/streamTrace';
 
-jest.mock('../NativeDownstreamSession', () => {
+vi.mock('../src/NativeDownstreamSession', () => {
   const listeners = {
     snapshot: new Set(),
     error: new Set(),
@@ -19,21 +22,21 @@ jest.mock('../NativeDownstreamSession', () => {
   return {
     __esModule: true,
     default: {
-      create: jest.fn(),
-      append: jest.fn(),
-      reset: jest.fn(),
-      finish: jest.fn(),
-      dispose: jest.fn(),
-      setTracing: jest.fn(),
-      onSnapshotReady: jest.fn((callback: (event: object) => void) => {
+      create: vi.fn(),
+      append: vi.fn(),
+      reset: vi.fn(),
+      finish: vi.fn(),
+      dispose: vi.fn(),
+      setTracing: vi.fn(),
+      onSnapshotReady: vi.fn((callback: (event: object) => void) => {
         listeners.snapshot.add(callback);
         return { remove: () => listeners.snapshot.delete(callback) };
       }),
-      onSessionError: jest.fn((callback: (event: object) => void) => {
+      onSessionError: vi.fn((callback: (event: object) => void) => {
         listeners.error.add(callback);
         return { remove: () => listeners.error.delete(callback) };
       }),
-      onTrace: jest.fn((callback: (event: object) => void) => {
+      onTrace: vi.fn((callback: (event: object) => void) => {
         listeners.trace.add(callback);
         return { remove: () => listeners.trace.delete(callback) };
       }),
@@ -53,8 +56,10 @@ jest.mock('../NativeDownstreamSession', () => {
   };
 });
 
-const native = jest.mocked(NativeDownstreamSession);
-const events = jest.requireMock('../NativeDownstreamSession') as {
+const native = vi.mocked(NativeDownstreamSession);
+// The factory above adds emitters the real module does not have, so a test can
+// drive native events into the controller.
+const events = NativeDownstreamSessionModule as unknown as {
   emitSnapshot(event: object): void;
   emitError(event: object): void;
   emitTrace(event: object): void;
@@ -63,15 +68,15 @@ const events = jest.requireMock('../NativeDownstreamSession') as {
 let frames: Array<Parameters<typeof requestAnimationFrame>[0]>;
 
 beforeEach(() => {
-  jest.clearAllMocks();
+  vi.clearAllMocks();
   frames = [];
-  jest
+  vi
     .spyOn(globalThis, 'requestAnimationFrame')
     .mockImplementation((callback) => {
       frames.push(callback);
       return frames.length;
     });
-  jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+  vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
 });
 
 function runFrames(): void {
@@ -81,7 +86,7 @@ function runFrames(): void {
 }
 
 afterEach(() => {
-  jest.restoreAllMocks();
+  vi.restoreAllMocks();
 });
 
 describe('createMarkdownStream', () => {
@@ -110,7 +115,7 @@ describe('createMarkdownStream', () => {
       onError: (error) => errors.push(error),
     });
     const id = getStreamState(stream).binding().sessionId;
-    jest.mocked(native.append).mockImplementationOnce(() => {
+    vi.mocked(native.append).mockImplementationOnce(() => {
       throw new Error('unavailable');
     });
 
@@ -207,7 +212,7 @@ describe('createMarkdownStream', () => {
     });
     const state = getStreamState(stream);
     const id = state.binding().sessionId;
-    const renders = jest.fn();
+    const renders = vi.fn();
     state.subscribe(renders);
     stream.append('a');
     state.flush();
