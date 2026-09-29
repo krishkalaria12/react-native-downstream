@@ -1,8 +1,13 @@
 #pragma once
 
+#include "Document.h"
+
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <iterator>
 #include <mutex>
@@ -40,8 +45,9 @@ public:
     state.callbacks.erase(sessionId);
     state.anyEnabled.store(!state.callbacks.empty(), std::memory_order_relaxed);
     for (auto it = state.documents.begin(); it != state.documents.end();) {
-      it = it->second.sessionId == sessionId ? state.documents.erase(it) : std::next(it);
+      it = it->second.key.sessionId == sessionId ? state.documents.erase(it) : std::next(it);
     }
+    state.pruneThreshold = std::max<size_t>(64, state.documents.size() * 2);
   }
 
   static bool enabled(const std::string &sessionId) {
@@ -51,13 +57,20 @@ public:
     return state.callbacks.count(sessionId) != 0;
   }
 
-  static void bindDocument(uint64_t documentId, const std::string &sessionId, uint64_t generation,
+  static void bindDocument(const DocumentHandle &document, const std::string &sessionId, uint64_t generation,
                            uint64_t sequence) {
+    if (!document) return;
     auto &state = instance();
     if (!state.anyEnabled.load(std::memory_order_relaxed)) return;
     std::lock_guard<std::mutex> lock(state.mutex);
     if (state.callbacks.count(sessionId)) {
-      state.documents[documentId] = {sessionId, generation, sequence};
+      state.documents[document->id] = {{sessionId, generation, sequence}, document};
+      if (state.documents.size() >= state.pruneThreshold) {
+        for (auto it = state.documents.begin(); it != state.documents.end();) {
+          it = it->second.document.expired() ? state.documents.erase(it) : std::next(it);
+        }
+        state.pruneThreshold = std::max<size_t>(64, state.documents.size() * 2);
+      }
     }
   }
 
@@ -85,7 +98,20 @@ public:
       std::lock_guard<std::mutex> lock(state.mutex);
       const auto it = state.documents.find(documentId);
       if (it == state.documents.end()) return;
-      key = it->second;
+      if (it->second.document.expired()) {
+        // Android can release the old Fabric state before its view reports
+        // that a pending frame was superseded.
+        if (std::strcmp(event, "frame_unavailable") == 0) {
+          key = it->second.key;
+          state.documents.erase(it);
+          // Deliver below, outside the registry lock.
+        } else {
+          state.documents.erase(it);
+          return;
+        }
+      } else {
+        key = it->second.key;
+      }
     }
     record(key.sessionId, key.generation, key.sequence, event);
   }
@@ -94,7 +120,20 @@ public:
     if (!instance().anyEnabled.load(std::memory_order_relaxed)) return false;
     auto &state = instance();
     std::lock_guard<std::mutex> lock(state.mutex);
-    return state.documents.count(documentId) != 0;
+    const auto it = state.documents.find(documentId);
+    if (it == state.documents.end()) return false;
+    if (it->second.document.expired()) {
+      state.documents.erase(it);
+      return false;
+    }
+    return true;
+  }
+
+  /// Diagnostic count for validating that trace metadata follows live documents.
+  static size_t trackedDocumentCount() {
+    auto &state = instance();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    return state.documents.size();
   }
 
 private:
@@ -103,11 +142,16 @@ private:
     uint64_t generation;
     uint64_t sequence;
   };
+  struct DocumentEntry {
+    Key key;
+    std::weak_ptr<const Document> document;
+  };
   struct State {
     std::mutex mutex;
     std::atomic<bool> anyEnabled{false};
     std::unordered_map<std::string, Callback> callbacks;
-    std::unordered_map<uint64_t, Key> documents;
+    std::unordered_map<uint64_t, DocumentEntry> documents;
+    size_t pruneThreshold{64};
   };
   static State &instance() {
     static State state;

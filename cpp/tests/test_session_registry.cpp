@@ -74,6 +74,29 @@ int main() {
       return 1;
     }
   }
+  for (uint64_t index = 1; index <= 200; index++) {
+    auto transient = std::make_shared<Document>();
+    transient->id = 1000000 + index;
+    SessionTrace::bindDocument(transient, id, 0, index);
+  }
+  if (SessionTrace::trackedDocumentCount() > 64 ||
+      SessionTrace::enabledDocument(1000001)) {
+    std::cerr << "Trace retained expired snapshot associations\n";
+    return 1;
+  }
+  {
+    auto transient = std::make_shared<Document>();
+    transient->id = 2000000;
+    SessionTrace::bindDocument(transient, id, 0, 3);
+  }
+  SessionTrace::recordDocument(2000000, "frame_unavailable");
+  {
+    std::lock_guard<std::mutex> lock(traceMutex);
+    if (traces.empty() || traces.back().event != "frame_unavailable" || traces.back().sequence != 3) {
+      std::cerr << "Trace dropped the superseded frame marker\n";
+      return 1;
+    }
+  }
 
   // A published prefix stays paintable while the next batch is pending.
   if (!SessionRegistry::append(id, " world", 0, 4) || !SessionRegistry::snapshot(id, 0, 2) ||

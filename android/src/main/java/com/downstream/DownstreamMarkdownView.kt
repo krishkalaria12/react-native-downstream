@@ -53,6 +53,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
   private var generation = 0
   private var sessionId: String? = null
   private var sourceEpoch = 0
+  private var pendingTraceDocumentId = 0L
 
   fun setGeneration(value: Int) {
     if (value != generation) {
@@ -79,6 +80,10 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
     if (documentId == this.documentId && fontScale == this.fontScale && rendered != null) {
       return
     }
+    if (pendingTraceDocumentId != 0L && pendingTraceDocumentId != documentId) {
+      DownstreamNative.traceDocument(pendingTraceDocumentId, "frame_unavailable")
+      pendingTraceDocumentId = 0L
+    }
     this.documentId = documentId
     this.fontScale = fontScale
     val tracing = documentId != 0L && DownstreamNative.isTracingDocument(documentId)
@@ -87,13 +92,25 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
     syncSegmentViews()
     if (tracing) {
       DownstreamNative.traceDocument(documentId, "apply_end")
-      postOnAnimation {
-        // The next frame callback estimates visibility; it is not a GPU paint timestamp.
-        if (this.documentId == documentId && isAttachedToWindow) {
-          DownstreamNative.traceDocument(documentId, "frame_estimate")
-        }
-      }
+      pendingTraceDocumentId = documentId
+      scheduleTraceFrame()
     }
+  }
+
+  private fun scheduleTraceFrame() {
+    val pending = pendingTraceDocumentId
+    if (pending == 0L || !isAttachedToWindow) return
+    postOnAnimation {
+      if (pendingTraceDocumentId != pending || !isAttachedToWindow) return@postOnAnimation
+      pendingTraceDocumentId = 0L
+      // This frame callback estimates visibility; it is not a GPU paint timestamp.
+      DownstreamNative.traceDocument(pending, "frame_estimate")
+    }
+  }
+
+  override fun onAttachedToWindow() {
+    super.onAttachedToWindow()
+    scheduleTraceFrame()
   }
 
   fun setSelectable(selectable: Boolean) {
@@ -104,6 +121,10 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
   }
 
   fun reset() {
+    if (pendingTraceDocumentId != 0L) {
+      DownstreamNative.traceDocument(pendingTraceDocumentId, "frame_unavailable")
+      pendingTraceDocumentId = 0L
+    }
     documentId = 0L
     rendered = null
     generation = 0

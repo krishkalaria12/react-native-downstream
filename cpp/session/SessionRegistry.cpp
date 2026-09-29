@@ -141,7 +141,7 @@ private:
       }
       if (parsed) {
         snapshot_ = std::move(result.document);
-        SessionTrace::bindDocument(snapshot_->id, id_, generation, sequence);
+        SessionTrace::bindDocument(snapshot_, id_, generation, sequence);
         SessionTrace::record(id_, generation, sequence, "snapshot_ready");
         readyGeneration_ = generation;
         readySequence_ = sequence;

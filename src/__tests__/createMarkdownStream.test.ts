@@ -4,11 +4,17 @@ import {
   getStreamState,
 } from '../createMarkdownStream';
 import NativeDownstreamSession from '../NativeDownstreamSession';
+import {
+  setStreamTracing,
+  subscribeStreamTrace,
+  type StreamTraceEvent,
+} from '../streamTrace';
 
 jest.mock('../NativeDownstreamSession', () => {
   const listeners = {
     snapshot: new Set(),
     error: new Set(),
+    trace: new Set(),
   };
   return {
     __esModule: true,
@@ -18,6 +24,7 @@ jest.mock('../NativeDownstreamSession', () => {
       reset: jest.fn(),
       finish: jest.fn(),
       dispose: jest.fn(),
+      setTracing: jest.fn(),
       onSnapshotReady: jest.fn((callback: (event: object) => void) => {
         listeners.snapshot.add(callback);
         return { remove: () => listeners.snapshot.delete(callback) };
@@ -25,6 +32,10 @@ jest.mock('../NativeDownstreamSession', () => {
       onSessionError: jest.fn((callback: (event: object) => void) => {
         listeners.error.add(callback);
         return { remove: () => listeners.error.delete(callback) };
+      }),
+      onTrace: jest.fn((callback: (event: object) => void) => {
+        listeners.trace.add(callback);
+        return { remove: () => listeners.trace.delete(callback) };
       }),
     },
     emitSnapshot: (event: object) =>
@@ -35,6 +46,10 @@ jest.mock('../NativeDownstreamSession', () => {
       listeners.error.forEach((callback) => {
         if (typeof callback === 'function') callback(event);
       }),
+    emitTrace: (event: object) =>
+      listeners.trace.forEach((callback) => {
+        if (typeof callback === 'function') callback(event);
+      }),
   };
 });
 
@@ -42,6 +57,7 @@ const native = jest.mocked(NativeDownstreamSession);
 const events = jest.requireMock('../NativeDownstreamSession') as {
   emitSnapshot(event: object): void;
   emitError(event: object): void;
+  emitTrace(event: object): void;
 };
 
 let frames: Array<Parameters<typeof requestAnimationFrame>[0]>;
@@ -218,5 +234,37 @@ describe('createMarkdownStream', () => {
       { code: 'parse_failed', message: 'current' },
     ]);
     stream.dispose();
+  });
+
+  it('keeps native stage and timestamp with its JS delivery record', () => {
+    const records: StreamTraceEvent[] = [];
+    const unsubscribe = subscribeStreamTrace((event) => records.push(event));
+    const stream = createMarkdownStream();
+    const id = getStreamState(stream).binding().sessionId;
+    setStreamTracing(stream, true);
+    stream.append('a');
+    events.emitTrace({
+      sessionId: id,
+      generation: 0,
+      sequence: 1,
+      event: 'parse_end',
+      clockDomain: 'native-monotonic',
+      timeNs: '123456789',
+    });
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sessionId: id,
+          event: 'native_event_received',
+          nativeEvent: 'parse_end',
+          nativeTimeNs: '123456789',
+          clockDomain: 'js-performance',
+          timeMs: expect.any(Number),
+        }),
+      ])
+    );
+    expect(native.setTracing).toHaveBeenCalledWith(id, true);
+    stream.dispose();
+    unsubscribe();
   });
 });

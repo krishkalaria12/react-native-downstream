@@ -15,6 +15,7 @@
 using namespace facebook::react;
 
 @interface DownstreamMarkdownView () <RCTDownstreamMarkdownViewViewProtocol, DSLinkDelegate>
+- (void)scheduleTraceFrame;
 @end
 
 @implementation DownstreamMarkdownView {
@@ -55,6 +56,13 @@ using namespace facebook::react;
   if (data.document == _document && data.fontSizeMultiplier == _fontScale) {
     return;
   }
+  const uint64_t nextDocumentId = data.document ? data.document->id : 0;
+  if (_traceDocumentId && _traceDocumentId != nextDocumentId) {
+    downstream::SessionTrace::recordDocument(_traceDocumentId, "frame_unavailable");
+    [_traceDisplayLink invalidate];
+    _traceDisplayLink = nil;
+    _traceDocumentId = 0;
+  }
   _document = data.document;
   _fontScale = data.fontSizeMultiplier;
   const uint64_t documentId = _document ? _document->id : 0;
@@ -64,11 +72,20 @@ using namespace facebook::react;
       _document ? [DSRenderedDocument renderedDocumentFor:_document fontScale:_fontScale] : nil;
   if (tracing) {
     downstream::SessionTrace::recordDocument(documentId, "apply_end");
-    [_traceDisplayLink invalidate];
     _traceDocumentId = documentId;
-    _traceDisplayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(traceDisplayTick:)];
-    [_traceDisplayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    [self scheduleTraceFrame];
   }
+}
+
+- (void)scheduleTraceFrame {
+  if (!_traceDocumentId || _traceDisplayLink || !self.window) return;
+  _traceDisplayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(traceDisplayTick:)];
+  [_traceDisplayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+}
+
+- (void)didMoveToWindow {
+  [super didMoveToWindow];
+  [self scheduleTraceFrame];
 }
 
 - (void)traceDisplayTick:(CADisplayLink *)link {
@@ -78,6 +95,7 @@ using namespace facebook::react;
   if (_document && _document->id == _traceDocumentId && self.window) {
     // A display-link tick follows the mount; it is an estimate, not a GPU paint timestamp.
     downstream::SessionTrace::recordDocument(_traceDocumentId, "frame_estimate");
+    _traceDocumentId = 0;
   }
 }
 
@@ -92,12 +110,19 @@ using namespace facebook::react;
 }
 
 - (void)prepareForRecycle {
+  if (_traceDocumentId) downstream::SessionTrace::recordDocument(_traceDocumentId, "frame_unavailable");
+  _traceDocumentId = 0;
   [_traceDisplayLink invalidate];
   _traceDisplayLink = nil;
   [super prepareForRecycle];
   _state.reset();
   _document.reset();
   _documentView.rendered = nil;
+}
+
+- (void)dealloc {
+  if (_traceDocumentId) downstream::SessionTrace::recordDocument(_traceDocumentId, "frame_unavailable");
+  [_traceDisplayLink invalidate];
 }
 
 - (void)handleTap:(UITapGestureRecognizer *)recognizer {

@@ -11,6 +11,9 @@ export type JsStreamTraceEvent = Readonly<{
   event: string;
   clockDomain: 'js-performance';
   timeMs: number;
+  /** Present for native_event_received, linking JS delivery to its source event. */
+  nativeEvent?: string;
+  nativeTimeNs?: string;
 }>;
 
 export type StreamTraceEvent = NativeTraceEvent | JsStreamTraceEvent;
@@ -29,7 +32,8 @@ export function subscribeStreamTrace(listener: TraceListener): () => void {
         event.sessionId,
         event.generation,
         event.sequence,
-        'native_event_received'
+        'native_event_received',
+        event
       );
     });
   }
@@ -54,7 +58,8 @@ export function emitJsStreamTrace(
   sessionId: string,
   generation: number,
   sequence: number,
-  event: string
+  event: string,
+  nativeEvent?: NativeTraceEvent
 ): void {
   if (listeners.size === 0) return;
   publish({
@@ -66,6 +71,10 @@ export function emitJsStreamTrace(
     timeMs: (
       globalThis as unknown as { performance: { now(): number } }
     ).performance.now(),
+    ...(nativeEvent && {
+      nativeEvent: nativeEvent.event,
+      nativeTimeNs: nativeEvent.timeNs,
+    }),
   });
 }
 
