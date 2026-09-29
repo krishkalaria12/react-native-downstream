@@ -259,7 +259,12 @@ public:
         frame.autolink = a->is_autolink != 0;
         frame.cursorAtEnter = cursor_;
         std::string url = attributeToUtf8(a->href);
-        if (isActionableUrl(url)) {
+        if (frame.autolink) {
+          // A bare URL is only a target once its offset is known, because an
+          // unfinished destination has to be left as text. A real link owns its
+          // destination, so it can be recorded straight away.
+          frame.autolinkUrl = std::move(url);
+        } else if (isActionableUrl(url)) {
           frame.link = static_cast<int32_t>(document_->links.size());
           document_->links.push_back({std::move(url), {}});
         }
@@ -368,6 +373,9 @@ private:
   struct SpanFrame {
     bool image{false};
     bool autolink{false};
+    /// A bare URL, held until the first text offset reveals whether it is prose
+    /// or the destination of a link or image that never closed.
+    std::string autolinkUrl;
     int32_t link{-1};
     size_t cursorAtEnter{kUnknownOffset};
     size_t firstText{kUnknownOffset};
@@ -540,10 +548,30 @@ private:
     for (auto &span : spans_) {
       if (span.firstText == kUnknownOffset) {
         span.firstText = begin;
+        if (span.autolink) {
+          // md4c autolinks a bare URL wherever it appears in text, so the `](`
+          // of a link or image that never closed reaches here as literal text
+          // and the URL would be linked anyway. That target is provisional: the
+          // next chunk can extend the URL, or close the construct and remove it.
+          // A completed link or image consumes its own destination, so only an
+          // unfinished one leaves the `](` behind, and that one stays text.
+          if (!isUnfinishedDestination(begin) && isActionableUrl(span.autolinkUrl)) {
+            span.link = static_cast<int32_t>(document_->links.size());
+            document_->links.push_back({std::move(span.autolinkUrl), {}});
+          }
+        }
       }
       span.lastTextEnd = span.lastTextEnd == kUnknownOffset ? end : std::max(span.lastTextEnd, end);
     }
     cursor_ = end;
+  }
+
+  /// True when a bare URL starting at `at` is the destination of a link or
+  /// image whose opening `](` is still in the text. The bracket has to be a
+  /// real one, since `\](` is an escaped literal bracket followed by a paren
+  /// and leaves a URL in prose.
+  bool isUnfinishedDestination(size_t at) const {
+    return at >= 2 && source_[at - 1] == '(' && source_[at - 2] == ']' && !isEscaped(at - 2);
   }
 
   bool isEscaped(size_t index) const {

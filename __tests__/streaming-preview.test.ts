@@ -91,18 +91,55 @@ describe('ported corpus', () => {
     }
   });
 
-  it('autolinks a complete URL that an unfinished image left behind', () => {
-    // `![a](http://ex` has no dot, so there is no URL to find and nothing is
-    // linked. `![a](http://example.com/x` does contain a complete URL, and
-    // permissive autolinks are enabled, so the URL is linked on its own. The
-    // image itself is not recognised: no alt text is extracted and no request
-    // is made, because the `![` is still literal text.
-    expect(linkUrls(parse('![a](http://ex'))).toEqual([]);
-    const model = parse('See ![diagram](http://example.com/img');
-    expect(linkUrls(model)).toEqual(['http://example.com/img']);
-    expect(model.blocks[0]?.text).toBe('See ![diagram](http://example.com/img');
-    // Style 16 is Link with an ImageAlt-free run, so the alt text was not taken.
-    expect(model.blocks[0]?.runs).toEqual([[15, 37, STYLE.link, 0]]);
+  it('leaves an unfinished destination as text, not a tap target', () => {
+    // md4c autolinks a bare URL anywhere in text, so the `](` of a link or
+    // image that never closed used to leave a tappable URL behind a target the
+    // next chunk could move or delete. `![a](http://ex` never had a URL to find
+    // because there is no dot, and `![a](http://example.com/x` did.
+    for (const input of [
+      '![a](http://ex',
+      '![a](http://example.com/x',
+      '[a](http://example.com/x',
+      'See ![diagram](http://example.com/img',
+      'read [the docs](http://example.com/guide now',
+    ]) {
+      const model = parse(input);
+      expect(linkUrls(model), JSON.stringify(input)).toEqual([]);
+      expect(model.blocks[0]?.runs, JSON.stringify(input)).toEqual([]);
+      expect(visibleText(model), JSON.stringify(input)).toBe(input);
+    }
+  });
+
+  it("keeps a bare URL in prose, where it is the writer's destination", () => {
+    // The contrast case. Suppressing only the ones inside an unfinished `](`
+    // would be a bug if it reached prose, so every autolink shape that has to
+    // survive is listed here.
+    const kept: [string, string[]][] = [
+      ['see http://example.com/x now', ['http://example.com/x']],
+      ['mail someone@example.com now', ['mailto:someone@example.com']],
+      ['see <http://example.com/x> here', ['http://example.com/x']],
+      ['<http://example.com/x>', ['http://example.com/x']],
+      ['[a](http://example.com/x)', ['http://example.com/x']],
+      ['[a][r]\n\n[r]: http://example.com/x', ['http://example.com/x']],
+      [
+        '![a](http://example.com/y) http://example.com/x',
+        ['http://example.com/x'],
+      ],
+    ];
+    for (const [input, urls] of kept) {
+      expect(linkUrls(parse(input)), JSON.stringify(input)).toEqual(urls);
+    }
+    // A completed image is alt text, and it never becomes a target of its own.
+    const image = parse('![a](http://example.com/x)');
+    expect(linkUrls(image)).toEqual([]);
+    expect(image.blocks[0]?.text).toBe('a');
+    // A URL inside a code span or fence is verbatim, so it is never a target.
+    for (const input of [
+      '`http://example.com/x`',
+      '```\nhttp://example.com/x\n```',
+    ]) {
+      expect(linkUrls(parse(input)), JSON.stringify(input)).toEqual([]);
+    }
   });
 
   it('reaches the same document whether it arrives by char or by line', () => {
