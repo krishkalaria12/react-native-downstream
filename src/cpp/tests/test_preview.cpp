@@ -201,7 +201,10 @@ bool unterminatedItalic() {
   // A trailing newline belongs after the closer, not inside the span.
   openSpan("Start _text\n", "Start text", kEmphasis);
   openSpan("Start _italic\n", "Start italic", kEmphasis);
-  openSpan("_incomplete\n\n", "incomplete", kEmphasis);
+  // remend closes this one. The blank line has already ended the paragraph,
+  // so no later chunk can close the span, and styling it would show something
+  // the settled document never will.
+  showsAs("_incomplete\n\n", "_incomplete", "a blank line has closed the paragraph");
   openSpan("line1\n\n*italic text", "line1|italic text", kEmphasis);
 
   for (const char *input : {
@@ -481,6 +484,35 @@ bool nestedOpenSpans() {
 /// A repair that reached past the last block would restyle text a reader has
 /// already seen settled, so the policy refuses it. These cases prove the check
 /// is not vacuous.
+/// Where the closer goes, and when there is nowhere it could go.
+bool trailingWhitespace() {
+  // A chunk that ends on whitespace still previews. A closer after the space
+  // would not be right-flanking, so it goes before the trailing run.
+  openSpan("**bold word ", "bold word", kStrong);
+  openSpan("**bold word  ", "bold word", kStrong);
+  openSpan("**bold word\t", "bold word", kStrong);
+  openSpan("*italic word ", "italic word", kEmphasis);
+  openSpan("~~strike word ", "strike word", kStrike);
+  openSpan("`code word ", "code word", kCode);
+  openSpan("**bold wor\r\n", "bold wor", kStrong);
+
+  // One line break leaves a paragraph open: the next line may continue it and
+  // carry the closer.
+  openSpan("**bold\n", "bold", kStrong);
+  openSpan("- **bold item\n", "bold item", kStrong);
+  openSpan("# **Tit", "Tit", kStrong);
+
+  // A block md4c has already closed can never receive a closer, so a preview
+  // there would be retracted by the next block rather than confirmed.
+  showsAs("# **Title\n", "**Title", "a heading ends with its line");
+  showsAs("## *Note\n\n", "*Note", "a heading ends with its line");
+  showsAs("**bold text\n\n", "**bold text", "a blank line ends the paragraph");
+  showsAs("**bold text\n  \n", "**bold text", "a blank line ends the paragraph");
+  showsAs("- **bold item\n\n", "**bold item", "a blank line ends the item's paragraph");
+  untouched("| A | B |\n| --- | --- |\n| **x | y |\n", "a table row ends with its line");
+  return true;
+}
+
 bool repairIsScopedToTheLastBlock() {
   for (const char *input : {"# Heading\n**bold", "```\ncode\n```\n**bold", "* One\n* Two **bo",
                             "text **bold and *ital", "**bold** then **more",
@@ -794,6 +826,23 @@ bool sessionIntegration() {
     CHECK(previewed.previewStats().applied > 0, "the stream really did exercise the preview");
   }
 
+  // A heading's style never survives past its own line. Once the line ends the
+  // span is literal for good, so the reader sees it go literal then rather than
+  // when the next block happens to arrive.
+  {
+    IncrementalParser parser{ParseMode::IncrementalTail};
+    parser.setPreview(PreviewOptions::all());
+    parser.append("# **Tit");
+    parser.parse(false);
+    CHECK(visible(*parser.document()) == "Tit", "an open heading previews");
+    parser.append("le\n");
+    parser.parse(false);
+    CHECK(visible(*parser.document()) == "**Title", "a closed heading is literal");
+    parser.append("Next");
+    parser.parse(false);
+    CHECK(visible(*parser.document()) == "**Title|Next", "and stays literal after the next block");
+  }
+
   // An open fence is where the preview has least to say, and the fast path
   // that skips md4c entirely must not be confused by it.
   {
@@ -823,7 +872,8 @@ int main() {
   CHECK(escapesAndMarkers(), "escapes and markers");
   CHECK(listMarkers(), "list markers");
   CHECK(nestedOpenSpans(), "nested open spans");
-  CHECK(repairIsScopedToTheLastBlock(), "repair is scoped to the last block");
+  CHECK(trailingWhitespace(), "trailing whitespace");
+  CHECK(repairIsScopedToTheLastBlock(),"repair is scoped to the last block");
   CHECK(featuresAreOptIn(), "features are opt in");
   CHECK(corpusInvariants(), "corpus invariants");
   CHECK(sessionIntegration(), "session integration");

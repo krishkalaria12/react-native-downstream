@@ -82,6 +82,38 @@ std::optional<OpenSpan> findOpenSpan(const Block &block) {
   return found;
 }
 
+struct TrailingWhitespace {
+  /// Byte offset where the region's trailing whitespace begins.
+  size_t start{0};
+  size_t lineBreaks{0};
+};
+
+TrailingWhitespace trailingWhitespace(std::string_view region) {
+  TrailingWhitespace trailing{region.size(), 0};
+  while (trailing.start > 0) {
+    const char c = region[trailing.start - 1];
+    if (c != ' ' && c != '\t' && c != '\r' && c != '\n') {
+      break;
+    }
+    trailing.lineBreaks += c == '\n' ? 1 : 0;
+    trailing.start--;
+  }
+  return trailing;
+}
+
+/// True when md4c has already closed `last`, so no later input can close a span
+/// inside it. Styling it would show something the settled document never will,
+/// and the style would vanish as soon as the next block starts.
+///
+/// A blank line ends a paragraph, and a heading or table row ends with its line.
+/// A paragraph followed by one line break can still continue, so it stays open.
+bool closedBy(const TrailingWhitespace &trailing, const Block &last) {
+  if (trailing.lineBreaks >= 2) {
+    return true;
+  }
+  return trailing.lineBreaks == 1 && (last.kind == BlockKind::Heading || last.kind == BlockKind::TableRow);
+}
+
 /// UTF-16 units carrying any inline style. A repair has to increase this, or it
 /// styles nothing and the literal text was the better answer.
 size_t styledUnits(const Block &block) {
@@ -211,12 +243,14 @@ PreviewResult Preview::apply(std::string_view region, size_t origin) const {
     return result;
   }
 
-  // CommonMark puts a delimiter before trailing line breaks, so a stream that
-  // ended on a newline closes the span above the newline rather than below it.
-  size_t insertAt = region.size();
-  while (insertAt > 0 && region[insertAt - 1] == '\n') {
-    insertAt--;
+  // A closer after whitespace is not right-flanking, so the closer goes before
+  // the trailing run. A chunk boundary often lands on a space, and without this
+  // the span would flicker literal between two styled frames.
+  const TrailingWhitespace trailing = trailingWhitespace(region);
+  if (closedBy(trailing, last)) {
+    return result;
   }
+  size_t insertAt = trailing.start;
 
   std::string closer;
   closer.reserve(span->length);
