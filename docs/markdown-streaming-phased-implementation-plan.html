@@ -426,7 +426,7 @@
               <a href="#phase-0">0 · contract</a><a href="#phase-1">1 · native display</a><a href="#phase-2">2 · session</a><a href="#phase-3">3 · incremental tail</a><a href="#phase-4">4 · features</a><a href="#phase-5">5 · benchmark</a><a href="#phase-6">6 · release</a>
             </div>
             <div class="milestone-note"><strong>Critical path</strong><p>Implement first; benchmark once the implementation is complete. Phases 1–4 build the full Downstream path against the Phase 0 behavior oracle and are gated by correctness, not device timings. Both parse modes, coalesced full parse and incremental tail, ship behind an internal switch, and native trace points are built in along the way but stay disabled. Phase 5 measures the finished implementation against Enriched + Streamdown on physical devices, picks the default parse mode, and drives performance fixes. A benchmark taken earlier would measure an incomplete renderer rather than the finished design.</p></div>
-            <div class="callout"><strong>Baseline harness is parked, not discarded</strong><p>The baseline work already drafted in the repository (<code>example/src/bench/</code>, <code>benchmarks/summarize.py</code>, <code>docs/performance-methodology.md</code>, and the Streamdown + Enriched example setup) becomes a Phase 5 input. It is not a prerequisite for Phases 1–4. The fixture corpus in <code>benchmarks/fixtures/</code> remains the Phase 0 correctness oracle and is used throughout.</p></div>
+            <div class="callout"><strong>Baseline harness is parked, not discarded</strong><p>The baseline work already drafted in the repository (<code>example/src/bench/</code>, <code>benchmarks/summarize.mjs</code>, <code>docs/performance-methodology.md</code>, and the Streamdown + Enriched example setup) becomes a Phase 5 input. It is not a prerequisite for Phases 1–4. The fixture corpus in <code>benchmarks/fixtures/</code> remains the Phase 0 correctness oracle and is used throughout.</p></div>
             <h3>Proposed code boundaries</h3>
             <div class="table-wrap">
               <table>
@@ -573,7 +573,7 @@
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>example/src/bench/</code></li><li><code>benchmarks/results/</code></li><li><code>benchmarks/summarize.py</code></li><li><code>docs/performance-methodology.md</code></li></ul>
+                  <ul class="path-list"><li><code>example/src/bench/</code></li><li><code>benchmarks/results/</code></li><li><code>benchmarks/summarize.mjs</code></li><li><code>docs/performance-methodology.md</code></li></ul>
                   <h4>Verification</h4><p>Two independent runs of the same fixture should preserve output and show comparable distributions. Validate instrumentation overhead by running with tracing enabled and disabled. Inspect video/screenshots for text flashes and stale content. Re-run the full correctness suite after every tuning change.</p>
                   <p class="gate"><strong>Exit gate.</strong> Reproducible physical-device results for all three candidates, an evidence-backed default parse mode, and budgets either met or documented as known limits.</p>
                 </div>
