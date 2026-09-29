@@ -426,7 +426,7 @@
               <a href="#phase-0">0 · contract</a><a href="#phase-1">1 · native display</a><a href="#phase-2">2 · session</a><a href="#phase-3">3 · incremental tail</a><a href="#phase-4">4 · features</a><a href="#phase-5">5 · benchmark</a><a href="#phase-6">6 · release</a>
             </div>
             <div class="milestone-note"><strong>Critical path</strong><p>Implement first; benchmark once the implementation is complete. Phases 1–4 build the full Downstream path against the Phase 0 behavior oracle and are gated by correctness, not device timings. Both parse modes, coalesced full parse and incremental tail, ship behind an internal switch, and native trace points are built in along the way but stay disabled. Phase 5 measures the finished implementation against Enriched + Streamdown on physical devices, picks the default parse mode, and drives performance fixes. A benchmark taken earlier would measure an incomplete renderer rather than the finished design.</p></div>
-            <div class="callout"><strong>Baseline harness is parked, not discarded</strong><p>The baseline work already drafted in the repository (<code>example/src/bench/</code>, <code>benchmarks/summarize.mjs</code>, <code>docs/performance-methodology.md</code>, and the Streamdown + Enriched example setup) becomes a Phase 5 input. It is not a prerequisite for Phases 1–4. The parser oracle in <code>src/cpp/tests/oracle.mjs</code> remains the Phase 0 correctness oracle and is used throughout.</p></div>
+            <div class="callout"><strong>Baseline harness is parked, not discarded</strong><p>The baseline work already drafted in the repository (<code>example/src/bench/</code>, <code>__benchmarks__/summarize.mjs</code>, <code>docs/performance-methodology.md</code>, and the Streamdown + Enriched example setup) becomes a Phase 5 input. It is not a prerequisite for Phases 1–4. The parser oracle in <code>src/cpp/tests/oracle.mjs</code> remains the Phase 0 correctness oracle and is used throughout.</p></div>
             <h3>Proposed code boundaries</h3>
             <div class="table-wrap">
               <table>
@@ -435,7 +435,7 @@
                   <tr><td>Public TypeScript API</td><td><code>src/</code></td><td>Controlled view, stream controller/ref, native component spec, type-safe events, source and style types. No Markdown parser in the live render path.</td></tr>
                   <tr><td>Shared native engine</td><td><code>src/cpp/</code></td><td>Vendored md4c, bounded source buffer, parser adapter, block model, session sequencing, parse-mode switch, cache and fallbacks, trace points.</td></tr>
                   <tr><td>Platform rendering</td><td><code>src/ios/</code>, <code>src/android/</code></td><td>Attributed text or spans, layout measurement, images, selection, accessibility, Codegen/Fabric registration.</td></tr>
-                  <tr><td>Example and performance rig</td><td><code>example/</code>, <code>benchmarks/</code></td><td>Streaming demo and fixture playback for correctness during Phases 1–4; reference renderer comparison, trace collection, and results in Phase 5.</td></tr>
+                  <tr><td>Example and performance rig</td><td><code>example/</code>, <code>__benchmarks__/</code></td><td>Streaming demo and fixture playback for correctness during Phases 1–4; reference renderer comparison, trace collection, and results in Phase 5.</td></tr>
                   <tr><td>Packaging and release</td><td><code>package.json</code>, podspec, Gradle/CMake, CI</td><td>Autolinking, Codegen metadata, build compatibility, parser license, clean install and tarball verification.</td></tr>
                 </tbody>
               </table>
@@ -573,7 +573,7 @@
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>example/src/bench/</code></li><li><code>benchmarks/results/</code></li><li><code>benchmarks/summarize.mjs</code></li><li><code>docs/performance-methodology.md</code></li></ul>
+                  <ul class="path-list"><li><code>example/src/bench/</code></li><li><code>__benchmarks__/results/</code></li><li><code>__benchmarks__/summarize.mjs</code></li><li><code>docs/performance-methodology.md</code></li></ul>
                   <h4>Verification</h4><p>Two independent runs of the same fixture should preserve output and show comparable distributions. Validate instrumentation overhead by running with tracing enabled and disabled. Inspect video/screenshots for text flashes and stale content. Re-run the full correctness suite after every tuning change.</p>
                   <p class="gate"><strong>Exit gate.</strong> Reproducible physical-device results for all three candidates, an evidence-backed default parse mode, and budgets either met or documented as known limits.</p>
                 </div>
@@ -595,7 +595,7 @@
                 </div>
                 <div class="phase-side">
                   <h4>Proposed artifacts</h4>
-                  <ul class="path-list"><li><code>README.md</code>, <code>docs/api.md</code></li><li><code>example/</code> streaming demo</li><li><code>benchmarks/results/</code> release report</li><li>CI build and conformance jobs</li><li>Packed-package consumer smoke apps</li></ul>
+                  <ul class="path-list"><li><code>README.md</code>, <code>docs/api.md</code></li><li><code>example/</code> streaming demo</li><li><code>__benchmarks__/results/</code> release report</li><li>CI build and conformance jobs</li><li>Packed-package consumer smoke apps</li></ul>
                   <h4>Verification</h4><p>Fresh checkout, clean install, packaged build, iOS/Android launch, final fixture suite, physical-device performance report, and memory-leak checks after repeated session mount/dispose cycles.</p>
                   <p class="gate"><strong>Exit gate.</strong> A consumer can install and run the packed library; both platforms pass runtime and correctness gates; measured limits and unsupported behavior are documented.</p>
                 </div>

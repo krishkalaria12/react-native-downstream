@@ -254,7 +254,7 @@ export function summarizeFiles(paths) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   if (process.argv.length < 3) {
-    console.error('Usage: node benchmarks/summarize.mjs <trace.json> [trace.json ...]');
+    console.error('Usage: node __benchmarks__/summarize.mjs <trace.json> [trace.json ...]');
     process.exitCode = 2;
   } else {
     try {
