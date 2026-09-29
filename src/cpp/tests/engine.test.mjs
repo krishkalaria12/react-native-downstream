@@ -79,7 +79,7 @@ before(async () => {
   const engine = [
     ...['MarkdownParser.cpp', 'Unicode.cpp', 'LinkPolicy.cpp'].map(downstream),
     // The preview pass and the shared scanners it and the parser both use.
-    ...['Scan.cpp', 'Compare.cpp'].map((name) => remend(name)),
+    ...['Scan.cpp', 'Compare.cpp', 'Preview.cpp'].map((name) => remend(name)),
   ];
   const pool = ['WorkerPool.cpp', 'RenderPreparer.cpp'].map(downstream);
   await Promise.all([

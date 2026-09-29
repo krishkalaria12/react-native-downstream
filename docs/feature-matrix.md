@@ -4,7 +4,7 @@ This matrix applies to the controlled view and the native stream session on iOS 
 
 | Feature | iOS and Android behavior | Streaming behavior |
 | --- | --- | --- |
-| CommonMark and GFM text | Paragraphs, headings, lists, quotes, rules, emphasis, strikethrough, inline code, fenced and indented code, and task markers render as native text. | The active tail can change classification; completed snapshots match a fresh full parse. |
+| CommonMark and GFM text | Paragraphs, headings, lists, quotes, rules, emphasis, strikethrough, inline code, fenced and indented code, and task markers render as native text. | The active tail can change classification; completed snapshots match a fresh full parse. An open span renders literally by default. Provisional styling is implemented in `remend/` and is off until a session opts in; see [provisional styling](streaming-semantics.md#provisional-styling). |
 | Tables | A valid separator classifies a table. Columns use the widest current cell, clamped to 56–280 points plus padding. Wide tables scroll horizontally; inline styles and validated links remain in cells. | Rows appear as their source completes. The visible table updates without discarding the user's horizontal scroll position. Column widths can grow when a longer cell arrives. |
 | Code | Code uses plain monospace text. No highlighter is loaded. | Open fences show incoming lines before the closing fence arrives. |
 | Images | The renderer shows alt text and makes no image request. | A partial image destination remains non-actionable, including when the URL inside it is already complete. |

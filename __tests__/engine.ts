@@ -45,7 +45,9 @@ const ENGINE = [
   ...['MarkdownParser.cpp', 'Unicode.cpp', 'LinkPolicy.cpp'].map((name) =>
     join(CPP, 'downstream', name)
   ),
-  ...['Scan.cpp', 'Compare.cpp'].map((name) => join(ROOT, 'remend', name)),
+  ...['Scan.cpp', 'Compare.cpp', 'Preview.cpp'].map((name) =>
+    join(ROOT, 'remend', name)
+  ),
 ];
 
 /** Block kinds, matching `Block::Kind` in the engine. */

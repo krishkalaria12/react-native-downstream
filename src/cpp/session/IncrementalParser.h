@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MarkdownParser.h"
+#include "Preview.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -71,6 +72,20 @@ public:
   IncrementalCounters counters() const { return counters_; }
   size_t committedBytes() const { return committedBytes_; }
 
+  /// Opts the unstable tail into provisional styling. Off by default, which is
+  /// why every open span renders literally unless a caller asks for this.
+  ///
+  /// Only the tail is ever repaired, and a repair is applied only when parsing
+  /// it proves the repair changed nothing but the block it aimed at. Committed
+  /// blocks and the canonical source are never touched, and `finished` ignores
+  /// the policy entirely, so the settled document is always a parse of the
+  /// bytes the writer actually sent.
+  void setPreview(remend::PreviewOptions options) { preview_ = remend::Preview(options); }
+  bool previewEnabled() const { return preview_.enabled(); }
+  /// Cumulative across every parse since the last reset, so a caller can see
+  /// how often the pass fired without instrumenting each snapshot.
+  remend::PreviewStats previewStats() const { return previewStats_; }
+
 private:
   ParseResult fullParse(ParseFallback reason);
   /// Full mode: gives leading blocks that are unchanged since the previous
@@ -112,6 +127,10 @@ private:
   // A trailing open fence accepts plain content without reparsing.
   bool openFence_{false};
   bool fencePendingNewline_{false};
+
+  // Provisional styling for the tail. Inert until a caller sets it.
+  remend::Preview preview_;
+  remend::PreviewStats previewStats_{};
 
   IncrementalCounters counters_;
 };
