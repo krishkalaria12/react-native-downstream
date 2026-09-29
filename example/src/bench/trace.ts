@@ -1,7 +1,7 @@
 import { Dimensions, PixelRatio, Platform } from 'react-native';
 import type { StreamTraceEvent } from '../../../src/streamTrace';
-import type { ScheduleKind } from './schedule';
-import type { WorkloadShape, WorkloadSize } from './workload';
+import type { ScheduleKind } from '../shared/schedule';
+import type { WorkloadShape, WorkloadSize } from '../shared/workload';
 
 export interface TraceEvent {
   atMs: number;

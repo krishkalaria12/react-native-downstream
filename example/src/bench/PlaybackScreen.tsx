@@ -14,13 +14,13 @@ import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { DownstreamMarkdown } from 'react-native-downstream';
 import { BaselineMarkdown } from './BaselineMarkdown';
-import { fixtures } from './fixtures';
+import { fixtures } from '../shared/fixtures';
 import type { CompletedMessage, LiveMessage } from './usePlayback';
 import { usePlayback } from './usePlayback';
-import type { ScheduleKind } from './schedule';
+import type { ScheduleKind } from '../shared/schedule';
 import { nowMs, type TraceRun } from './trace';
 import type { RendererCandidate } from './trace';
-import type { WorkloadShape, WorkloadSize } from './workload';
+import type { WorkloadShape, WorkloadSize } from '../shared/workload';
 
 const SEED = 20260928;
 const STREAM_INDICES = [0, 1, 2, 3, 4, 5, 6, 7];

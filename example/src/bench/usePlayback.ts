@@ -8,19 +8,19 @@ import {
   setStreamTracing,
   subscribeStreamTrace,
 } from '../../../src/streamTrace';
-import type { Fixture } from './fixtures';
+import type { Fixture } from '../shared/fixtures';
 import {
   afterTwoAnimationFrames,
   allFinalSnapshotsReady,
   resetSessionControllers,
-} from './sessionLifecycle';
+} from '../shared/sessionLifecycle';
 import {
   createSchedule,
   BATCH_WINDOW_MS,
   nextScheduledBatch,
   type PlaybackSchedule,
   type ScheduleKind,
-} from './schedule';
+} from '../shared/schedule';
 import {
   nowMs,
   TraceRun,
@@ -31,7 +31,7 @@ import {
   createWorkload,
   type WorkloadShape,
   type WorkloadSize,
-} from './workload';
+} from '../shared/workload';
 
 export type PlaybackStatus =
   | 'idle'
