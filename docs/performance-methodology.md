@@ -1,11 +1,27 @@
 # Phase 5 performance method
 
-The benchmark compares Enriched Markdown with React Native Streamdown, Downstream
-full parsing, and Downstream incremental tail parsing. Select each candidate in
-the example playback screen. The screen uses the same source, chunk schedule,
-viewport, and stream count for every candidate. Its schedules and summaries can
-be checked without a device; performance claims require Release builds on physical
+The example app splits the work across three measurement screens. Bench measures Downstream
+alone: select full or incremental tail parsing, then replay one source across
+fixed chunk schedules. Testing replays the same source through React Native
+Streamdown and then Downstream, and shows the comparison once both runs finish.
+The Testing screen reuses the same seeded schedules as Bench, so a workload in
+one screen means the same workload in the other. Schedules and summaries can be
+checked without a device; performance claims require Release builds on physical
 iOS and Android devices.
+
+## Testing versus Bench
+
+Use Testing to answer "is Downstream faster than Streamdown on this device?".
+It runs one candidate at a time over an identical schedule, keeps both panes
+mounted in the same place in the view tree, and reports time to first frame,
+time to the final frame, the longest frame gap, the worst delivery delay, and
+whether both candidates received the same source. Streamdown runs first so
+Downstream never inherits a warm renderer. Those numbers come from JavaScript
+animation frame callbacks and bound JS-thread work only; they are not evidence
+that a glyph reached the display.
+
+Use Bench to answer "which Downstream parse mode should ship?". It keeps the
+full trace export, the native session markers, and the JSON the summarizer reads.
 
 ## Build and run
 
@@ -19,26 +35,32 @@ iOS and Android devices.
    Record the exact commands, Git revision, package versions, and any signing or
    variant change. A successful dependency install or Metro export alone does not
    prove that the baseline runs on either device.
-3. Run each candidate with the same fixture, size, shape, seeded schedule, and
-   1, 4, then 8 streams. Cover one-character, 1–20-character, bursty, and manifest
-   chunking; 10, 50, and 100 KiB sources; prose, long open code, and many completed
-   blocks. Exercise pause/resume, reset during pending work, finish, scrolling,
-   rotation, font scale, and theme changes. Compare the final source to the fixture
-   and inspect screen recordings for flashes, missing text, or stale updates.
-4. Alternate candidate order and tracing on/off. Capture at least two independent
-   completed runs per workload and device, including cold and warm runs. Keep all
-   samples in order, including failed runs. Export app JSON, Instruments or Perfetto
-   trace, and screen recording for each run to `benchmarks/results/`.
+3. On Bench, run each parse mode with the same fixture, size, shape, seeded
+   schedule, and 1, 4, then 8 streams. Cover one-character, 1–20-character,
+   bursty, and manifest chunking; 10, 50, and 100 KiB sources; prose, long open
+   code, and many completed blocks. Exercise pause/resume, reset during pending
+   work, finish, scrolling, rotation, font scale, and theme changes. Compare the
+   final source to the fixture and inspect screen recordings for flashes, missing
+   text, or stale updates.
+4. On Testing, run each workload for both candidates and capture at least two
+   independent pairs per workload and device, including cold and warm runs. Keep
+   all samples in order, including pairs where the run failed.
+5. Alternate candidate order, parse mode, and tracing on/off. Keep native traces
+   and screen recordings for each Bench run next to its JSON in
+   `benchmarks/results/`. The Testing screen has no JSON export; transcribe its
+   table into the run notes.
 
 ## Metadata and clocks
 
 Record device model and ID, OS, refresh rate, thermal state, battery mode, viewport,
 font scale, build revision, RN/Expo and renderer versions, fixture hash, seed,
 schedule, stream count, renderer, parse mode, sample order, cold/warm state, and
-trace toggle. Use one JSON export per run; keep native trace and video paths next
-to it. The baseline has no Downstream native markers, so compare its CPU, memory,
-allocations, and UI frames with system tools rather than implying matching parser
-timings.
+trace toggle. Bench writes one JSON export per run; keep native trace and video
+paths next to it. Streamdown has no Downstream native markers, so compare its
+CPU, memory, allocations, and UI frames with system tools rather than implying
+matching parser timings. The Testing screen records the fixture, seed, schedule,
+and parse mode on screen but exports nothing, so copy its table into the same
+notes.
 
 The app records JavaScript receipt, delivery, append, and frame callbacks. The
 Downstream opt-in trace records native append, parse, measurement, and apply
@@ -53,7 +75,7 @@ them reliably. Mark any unavailable measurement as unavailable.
 
 ## Analysis and decision
 
-Run `node benchmarks/summarize.mjs <export-1.json> <export-2.json> ...` on raw
+Run `node benchmarks/summarize.mjs <export-1.json> <export-2.json> ...` on Bench
 exports. Keep one device, build revision, and cold/warm cohort together. The tool
 prints per-run p50/p95/p99 and repeat-run variation for sampled JS estimates
 and paired native queue, parse, measurement, and apply intervals. It counts
@@ -68,6 +90,11 @@ The native apply-to-frame interval still ends at a frame callback estimate. Add
 native UI frame, allocation, memory, and CPU results from Instruments or Perfetto.
 Report variability, not a best run. Keep before/after traces if tuning changes
 batching, parsing, measurement, rich content, or list behavior.
+
+Use the Testing comparison to say which renderer met those budgets on a given
+device, and the Bench traces to say why. A single Testing pair is one sample: take
+at least two per workload before drawing a conclusion, and record a loss for
+Downstream as plainly as a win.
 
 The proposed review budgets are p95 chunk arrival to visible glyph below 50 ms,
 p95 Markdown UI-thread work below 4 ms on a 60 Hz target, and p95 JS append work

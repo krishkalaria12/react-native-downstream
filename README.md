@@ -42,6 +42,27 @@ The view parses with md4c and lays text out natively (TextKit on iOS, `StaticLay
 - [Sending a pull request](CONTRIBUTING.md#sending-a-pull-request)
 - [Code of conduct](CODE_OF_CONDUCT.md)
 
+## Example app
+
+`example/` has four screens. Example streams a live Markdown chat reply from
+OpenAI. Testing replays one source through Streamdown and then Downstream and
+shows the comparison once both runs finish. Bench replays a source through
+Downstream alone and exports a trace for the
+[performance method](docs/performance-methodology.md). Stress streams several
+answers at once to exercise the worker pool.
+
+The Example screen calls OpenAI from the app, so it needs a key in
+`example/.env`:
+
+```sh
+cp example/.env.example example/.env
+# then set EXPO_PUBLIC_OPENAI_API_KEY
+```
+
+Expo compiles `EXPO_PUBLIC_` variables into the bundle, so use a key you can
+revoke and never ship that build. Clear the bundler cache after changing the
+value. The other three screens need no key.
+
 ## Markdown implementation plan
 
 Phase 0 defines the [API contract](docs/api.md), [streaming behavior](docs/streaming-semantics.md), and [parser fixtures](fixtures/README.md). The native display path, stream controller, and conservative incremental-tail parser are implemented. Full parsing remains the default mode while the two modes await device measurements.
