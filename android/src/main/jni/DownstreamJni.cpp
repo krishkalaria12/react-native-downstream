@@ -2,6 +2,7 @@
 
 #include "DocumentRegistry.h"
 #include "SegmentPlan.h"
+#include "SessionTrace.h"
 #include "Unicode.h"
 
 #include <jni.h>
@@ -24,6 +25,21 @@ jintArray toJavaArray(JNIEnv *env, const std::vector<jint> &values) {
 }
 
 } // namespace
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_downstream_DownstreamNative_nativeTraceDocument(JNIEnv *env, jclass /*clazz*/, jlong id, jstring event) {
+  if (!event) return;
+  const char *name = env->GetStringUTFChars(event, nullptr);
+  if (name) {
+    downstream::SessionTrace::recordDocument(static_cast<uint64_t>(id), name);
+    env->ReleaseStringUTFChars(event, name);
+  }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_downstream_DownstreamNative_nativeIsTracingDocument(JNIEnv * /*env*/, jclass /*clazz*/, jlong id) {
+  return downstream::SessionTrace::enabledDocument(static_cast<uint64_t>(id)) ? JNI_TRUE : JNI_FALSE;
+}
 
 /// Flattens blocks [from, to) of a document into one text and integer
 /// tables, with block indices and text offsets relative to `from`. Layouts

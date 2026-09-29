@@ -12,6 +12,7 @@
 
 namespace downstream {
 struct SessionEvent;
+struct TraceEvent;
 }
 
 namespace facebook::react {
@@ -35,12 +36,14 @@ public:
   void reset(jsi::Runtime &rt, std::string sessionId, std::string source, double generation);
   void finish(jsi::Runtime &rt, std::string sessionId, double generation, double sequence);
   void dispose(jsi::Runtime &rt, std::string sessionId);
+  void setTracing(jsi::Runtime &rt, std::string sessionId, bool enabled);
 
 private:
   /// Lets session workers reach the module only while it is alive.
   struct Events;
 
   void deliver(const downstream::SessionEvent &event);
+  void deliverTrace(const downstream::TraceEvent &event);
   void reportError(const std::string &sessionId, const std::string &code, const std::string &message,
                    double generation, double sequence);
 

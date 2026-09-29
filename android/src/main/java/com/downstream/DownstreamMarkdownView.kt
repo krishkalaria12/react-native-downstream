@@ -81,8 +81,19 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
     }
     this.documentId = documentId
     this.fontScale = fontScale
+    val tracing = documentId != 0L && DownstreamNative.isTracingDocument(documentId)
+    if (tracing) DownstreamNative.traceDocument(documentId, "apply_start")
     rendered = if (documentId != 0L) RenderedDocument.obtain(context, documentId, fontScale) else null
     syncSegmentViews()
+    if (tracing) {
+      DownstreamNative.traceDocument(documentId, "apply_end")
+      postOnAnimation {
+        // The next frame callback estimates visibility; it is not a GPU paint timestamp.
+        if (this.documentId == documentId && isAttachedToWindow) {
+          DownstreamNative.traceDocument(documentId, "frame_estimate")
+        }
+      }
+    }
   }
 
   fun setSelectable(selectable: Boolean) {

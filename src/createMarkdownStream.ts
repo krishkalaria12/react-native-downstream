@@ -3,6 +3,7 @@ import NativeDownstreamSession, {
   type SnapshotReadyEvent,
 } from './NativeDownstreamSession';
 import { checkSource, MAX_SOURCE_BYTES } from './controlledSource';
+import { emitJsStreamTrace } from './streamTrace';
 import type {
   MarkdownErrorCode,
   MarkdownErrorEvent,
@@ -49,6 +50,7 @@ class StreamState implements MarkdownStreamController {
   private finished = false;
   private disposed = false;
   private bound = false;
+  private tracing = false;
   private subscribers = new Set<() => void>();
 
   constructor(options: MarkdownStreamOptions, mode: ParseMode) {
@@ -93,6 +95,7 @@ class StreamState implements MarkdownStreamController {
         `Queued Markdown exceeds ${MAX_QUEUED_BYTES} bytes of UTF-8.`
       );
     }
+    this.trace('receipt', this.sequence + 1);
     this.source += chunk;
     this.sourceBytes += bytes;
     this.queuedBytes += bytes;
@@ -122,6 +125,7 @@ class StreamState implements MarkdownStreamController {
     }
     while (this.pending.length) {
       const batch = this.pending[0]!;
+      this.trace('batch_flush_start', batch.sequence);
       try {
         NativeDownstreamSession.append(
           this.sessionId,
@@ -131,6 +135,7 @@ class StreamState implements MarkdownStreamController {
         );
         this.inFlight.push({ bytes: batch.bytes, sequence: batch.sequence });
         this.pending.shift();
+        this.trace('batch_flush_end', batch.sequence);
       } catch (error) {
         this.emitError(
           'render_failed',
@@ -189,6 +194,7 @@ class StreamState implements MarkdownStreamController {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.tracing = false;
     if (this.frame !== undefined) cancelAnimationFrame(this.frame);
     this.frame = undefined;
     this.pending = [];
@@ -214,6 +220,18 @@ class StreamState implements MarkdownStreamController {
       readySequence: this.readySequence,
       revision: this.revision,
     };
+  }
+
+  setTracing(enabled: boolean): void {
+    this.assertActive();
+    NativeDownstreamSession.setTracing(this.sessionId, enabled);
+    this.tracing = enabled;
+  }
+
+  private trace(event: string, sequence: number): void {
+    if (this.tracing) {
+      emitJsStreamTrace(this.sessionId, this.generation, sequence, event);
+    }
   }
 
   bind(): () => void {

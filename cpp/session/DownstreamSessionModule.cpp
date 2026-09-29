@@ -2,6 +2,7 @@
 
 #include "MarkdownParser.h"
 #include "SessionRegistry.h"
+#include "SessionTrace.h"
 
 #include <cmath>
 #include <cstdint>
@@ -15,12 +16,17 @@ namespace facebook::react {
 using SnapshotReadyEvent = NativeDownstreamSessionSnapshotReadyEvent<std::string, int32_t, int32_t>;
 using SessionErrorEvent =
     NativeDownstreamSessionSessionErrorEvent<std::string, int32_t, int32_t, std::string, std::string, bool>;
+using NativeTraceEvent =
+    NativeDownstreamSessionNativeTraceEvent<std::string, int32_t, int32_t, std::string, std::string, std::string>;
 
 template <>
 struct Bridging<SnapshotReadyEvent> : NativeDownstreamSessionSnapshotReadyEventBridging<SnapshotReadyEvent> {};
 
 template <>
 struct Bridging<SessionErrorEvent> : NativeDownstreamSessionSessionErrorEventBridging<SessionErrorEvent> {};
+
+template <>
+struct Bridging<NativeTraceEvent> : NativeDownstreamSessionNativeTraceEventBridging<NativeTraceEvent> {};
 
 namespace {
 
@@ -56,8 +62,15 @@ DownstreamSessionModule::~DownstreamSessionModule() {
     events_->module = nullptr;
   }
   for (const std::string &sessionId : sessions_) {
+    downstream::SessionTrace::disable(sessionId);
     downstream::SessionRegistry::dispose(sessionId);
   }
+}
+
+void DownstreamSessionModule::deliverTrace(const downstream::TraceEvent &event) {
+  emitOnTrace(NativeTraceEvent{event.sessionId, eventCounter(static_cast<double>(event.generation)),
+                               eventCounter(static_cast<double>(event.sequence)), event.event,
+                               "native-monotonic", event.timeNs});
 }
 
 void DownstreamSessionModule::deliver(const downstream::SessionEvent &event) {
@@ -164,8 +177,24 @@ void DownstreamSessionModule::finish(jsi::Runtime & /*rt*/, std::string sessionI
 
 void DownstreamSessionModule::dispose(jsi::Runtime & /*rt*/, std::string sessionId) {
   if (sessions_.erase(sessionId) != 0) {
+    downstream::SessionTrace::disable(sessionId);
     downstream::SessionRegistry::dispose(sessionId);
   }
+}
+
+void DownstreamSessionModule::setTracing(jsi::Runtime & /*rt*/, std::string sessionId, bool enabled) {
+  if (sessions_.count(sessionId) == 0) return;
+  if (!enabled) {
+    downstream::SessionTrace::disable(sessionId);
+    return;
+  }
+  std::weak_ptr<Events> weakEvents = events_;
+  downstream::SessionTrace::enable(sessionId, [weakEvents](const downstream::TraceEvent &event) {
+    const auto events = weakEvents.lock();
+    if (!events) return;
+    std::lock_guard<std::mutex> lock(events->mutex);
+    if (events->module) events->module->deliverTrace(event);
+  });
 }
 
 } // namespace facebook::react

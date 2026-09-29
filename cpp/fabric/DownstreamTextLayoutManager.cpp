@@ -1,4 +1,5 @@
 #include "DownstreamTextLayoutManager.h"
+#include "SessionTrace.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,6 +16,7 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
                                           const LayoutConstraints &layoutConstraints, SurfaceId surfaceId) const {
   const Float maximumWidth = layoutConstraints.maximumSize.width;
   Size size{0, 0};
+  if (document) downstream::SessionTrace::recordDocument(document->id, "measure_start");
 
   if (document && !document->blocks.empty()) {
     bool cached = false;
@@ -37,6 +39,8 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
         cache_.erase(cache_.begin());
       }
       cache_.push_back({document->id, fontSizeMultiplier, maximumWidth, size});
+    } else {
+      downstream::SessionTrace::recordDocument(document->id, "measure_cache_hit");
     }
   }
 
@@ -49,6 +53,7 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
   if (std::isfinite(layoutConstraints.maximumSize.height)) {
     size.height = std::min(size.height, layoutConstraints.maximumSize.height);
   }
+  if (document) downstream::SessionTrace::recordDocument(document->id, "measure_end");
   return size;
 }
 

@@ -1,6 +1,7 @@
 #include "SessionRegistry.h"
 
 #include "MarkdownParser.h"
+#include "SessionTrace.h"
 #include "Unicode.h"
 
 #include <condition_variable>
@@ -50,6 +51,7 @@ public:
     sourceBytes_ += chunk.size();
     sequence_ = sequence;
     dirty_ = true;
+    SessionTrace::record(id_, generation, sequence, "append_received");
     changed_.notify_one();
     return true;
   }
@@ -69,6 +71,7 @@ public:
     sequence_ = 0;
     finished_ = false;
     dirty_ = true;
+    SessionTrace::record(id_, generation, 0, "reset_received");
     snapshot_.reset();
     readyGeneration_ = 0;
     readySequence_ = 0;
@@ -120,21 +123,26 @@ private:
         dirty_ = false;
       }
 
+      SessionTrace::record(id_, generation, sequence, "parse_start");
       if (replacement) {
         parser_.replace(*replacement);
       }
       parser_.append(pending);
       auto result = parser_.parse(finished);
+      SessionTrace::record(id_, generation, sequence, "parse_end");
       const bool parsed = result.status == ParseStatus::Ok && result.document;
 
       // The callback runs under the lock so that no event follows stop().
       // It must not call back into this session.
       std::lock_guard<std::mutex> lock(mutex_);
       if (stopped_ || generation != generation_ || sequence != sequence_ || finished != finished_) {
+        SessionTrace::record(id_, generation, sequence, "dropped");
         continue;
       }
       if (parsed) {
         snapshot_ = std::move(result.document);
+        SessionTrace::bindDocument(snapshot_->id, id_, generation, sequence);
+        SessionTrace::record(id_, generation, sequence, "snapshot_ready");
         readyGeneration_ = generation;
         readySequence_ = sequence;
       }
@@ -212,6 +220,7 @@ void SessionRegistry::dispose(const std::string &id) {
     }
   }
   if (removed) {
+    SessionTrace::disable(id);
     removed->stop();
   }
 }

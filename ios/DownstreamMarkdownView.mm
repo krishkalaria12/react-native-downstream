@@ -2,6 +2,7 @@
 
 #import "DSRenderedDocument.h"
 #import "DSSegmentViews.h"
+#import <QuartzCore/CADisplayLink.h>
 
 #import <React/RCTConversions.h>
 #import <react/renderer/components/DownstreamSpec/EventEmitters.h>
@@ -9,6 +10,7 @@
 #import <react/renderer/components/DownstreamSpec/RCTComponentViewHelpers.h>
 
 #include "DownstreamMarkdownComponentDescriptor.h"
+#include "SessionTrace.h"
 
 using namespace facebook::react;
 
@@ -20,6 +22,8 @@ using namespace facebook::react;
   DownstreamMarkdownShadowNode::ConcreteState::Shared _state;
   downstream::DocumentHandle _document;
   CGFloat _fontScale;
+  CADisplayLink *_traceDisplayLink;
+  uint64_t _traceDocumentId;
 }
 
 + (ComponentDescriptorProvider)componentDescriptorProvider {
@@ -53,8 +57,28 @@ using namespace facebook::react;
   }
   _document = data.document;
   _fontScale = data.fontSizeMultiplier;
+  const uint64_t documentId = _document ? _document->id : 0;
+  const BOOL tracing = documentId && downstream::SessionTrace::enabledDocument(documentId);
+  if (tracing) downstream::SessionTrace::recordDocument(documentId, "apply_start");
   _documentView.rendered =
       _document ? [DSRenderedDocument renderedDocumentFor:_document fontScale:_fontScale] : nil;
+  if (tracing) {
+    downstream::SessionTrace::recordDocument(documentId, "apply_end");
+    [_traceDisplayLink invalidate];
+    _traceDocumentId = documentId;
+    _traceDisplayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(traceDisplayTick:)];
+    [_traceDisplayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+  }
+}
+
+- (void)traceDisplayTick:(CADisplayLink *)link {
+  [link invalidate];
+  if (_traceDisplayLink != link) return;
+  _traceDisplayLink = nil;
+  if (_document && _document->id == _traceDocumentId && self.window) {
+    // A display-link tick follows the mount; it is an estimate, not a GPU paint timestamp.
+    downstream::SessionTrace::recordDocument(_traceDocumentId, "frame_estimate");
+  }
 }
 
 - (void)updateProps:(const Props::Shared &)props oldProps:(const Props::Shared &)oldProps {
@@ -68,6 +92,8 @@ using namespace facebook::react;
 }
 
 - (void)prepareForRecycle {
+  [_traceDisplayLink invalidate];
+  _traceDisplayLink = nil;
   [super prepareForRecycle];
   _state.reset();
   _document.reset();

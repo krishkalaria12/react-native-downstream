@@ -17,6 +17,13 @@ export type SessionErrorEvent = SnapshotReadyEvent &
     recoverable: boolean;
   }>;
 
+export type NativeTraceEvent = SnapshotReadyEvent &
+  Readonly<{
+    event: string;
+    clockDomain: 'native-monotonic';
+    timeNs: string;
+  }>;
+
 export interface Spec extends TurboModule {
   create(sessionId: string, mode: string): void;
   append(
@@ -28,8 +35,10 @@ export interface Spec extends TurboModule {
   reset(sessionId: string, source: string, generation: number): void;
   finish(sessionId: string, generation: number, sequence: number): void;
   dispose(sessionId: string): void;
+  setTracing(sessionId: string, enabled: boolean): void;
   readonly onSnapshotReady: CodegenTypes.EventEmitter<SnapshotReadyEvent>;
   readonly onSessionError: CodegenTypes.EventEmitter<SessionErrorEvent>;
+  readonly onTrace: CodegenTypes.EventEmitter<NativeTraceEvent>;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('DownstreamSession');

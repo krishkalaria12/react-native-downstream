@@ -134,6 +134,9 @@ internal object DownstreamNative {
     return NativeLink(parts[0] as String, range[0], range[1])
   }
 
+  fun traceDocument(id: Long, event: String) = nativeTraceDocument(id, event)
+  fun isTracingDocument(id: Long) = nativeIsTracingDocument(id)
+
   private const val PLAN_STRIDE = 4
 
   // Implemented in DownstreamJni.cpp, which links into libappmodules.so.
@@ -145,4 +148,10 @@ internal object DownstreamNative {
 
   @JvmStatic
   private external fun nativeReadLink(id: Long, index: Int): Array<Any>?
+
+  @JvmStatic
+  private external fun nativeTraceDocument(id: Long, event: String)
+
+  @JvmStatic
+  private external fun nativeIsTracingDocument(id: Long): Boolean
 }

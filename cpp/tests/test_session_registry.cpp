@@ -1,4 +1,5 @@
 #include "SessionRegistry.h"
+#include "SessionTrace.h"
 
 #include <atomic>
 #include <chrono>
@@ -18,6 +19,12 @@ int main() {
   std::condition_variable ready;
   std::vector<std::tuple<uint64_t, uint64_t>> published;
   const std::string id = "session-test";
+  std::mutex traceMutex;
+  std::vector<TraceEvent> traces;
+  SessionTrace::enable(id, [&](const TraceEvent &event) {
+    std::lock_guard<std::mutex> lock(traceMutex);
+    traces.push_back(event);
+  });
   const auto callback = [&](const SessionEvent &event) {
     if (event.sessionId != id || event.status != ParseStatus::Ok) {
       return;
@@ -52,6 +59,21 @@ int main() {
     std::cerr << "Snapshot version mismatch\n";
     return 1;
   }
+  SessionTrace::recordDocument(first->id, "measure_start");
+  {
+    std::lock_guard<std::mutex> lock(traceMutex);
+    bool parsed = false;
+    bool measured = false;
+    for (const auto &event : traces) {
+      if (event.sessionId != id || event.generation != 0 || event.sequence != 2 || event.timeNs.empty()) continue;
+      parsed |= event.event == "parse_end";
+      measured |= event.event == "measure_start";
+    }
+    if (!parsed || !measured) {
+      std::cerr << "Trace lost the snapshot correlation\n";
+      return 1;
+    }
+  }
 
   // A published prefix stays paintable while the next batch is pending.
   if (!SessionRegistry::append(id, " world", 0, 4) || !SessionRegistry::snapshot(id, 0, 2) ||
@@ -73,7 +95,8 @@ int main() {
     return 1;
   }
   SessionRegistry::dispose(id);
-  if (SessionRegistry::snapshot(id, 1, 0) || SessionRegistry::append(id, "late", 1, 1)) {
+  if (SessionRegistry::snapshot(id, 1, 0) || SessionRegistry::append(id, "late", 1, 1) ||
+      SessionTrace::enabled(id) || SessionTrace::enabledDocument(first->id)) {
     std::cerr << "Disposed session remained accessible\n";
     return 1;
   }
