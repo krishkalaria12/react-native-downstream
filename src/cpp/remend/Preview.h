@@ -85,6 +85,9 @@ struct PreviewResult {
   /// True when `text` is not the region that was passed in.
   bool repaired{false};
   PreviewStats stats;
+  /// Bytes handed to md4c: the region once, plus every probe. With no features
+  /// enabled this is exactly the region, so an inert pass costs one parse.
+  uint64_t bytesParsed{0};
 };
 
 class Preview {
@@ -99,9 +102,13 @@ public:
   /// `origin` is the region's byte offset in the canonical source. It only
   /// matters to md4c's block-record arithmetic; see parseMarkdownAt.
   ///
+  /// `frozenBlocks` counts leading blocks of the parse that a reader has seen
+  /// settle, as a full parse over a committed prefix has. A repair is refused
+  /// when the last block is one of them.
+  ///
   /// Never throws and never mutates the caller's state, so it is safe to call
   /// from the worker pool and to construct once per session.
-  PreviewResult apply(std::string_view region, size_t origin) const;
+  PreviewResult apply(std::string_view region, size_t origin, size_t frozenBlocks = 0) const;
 
 private:
   PreviewOptions options_;

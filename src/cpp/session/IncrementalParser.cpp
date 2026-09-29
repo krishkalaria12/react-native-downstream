@@ -223,26 +223,21 @@ void IncrementalParser::publish(DocumentHandle document) {
 
 ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable) {
   const std::string_view source = source_;
-  // A full parse is also how a stream is rendered before anything has proved a
-  // commit boundary, and in full mode on every update. Those are the only two
-  // paths where a preview may apply, and in both the whole document is the
-  // unstable tail, so there is no committed prefix for a repair to reach.
-  previewable = previewable &&
-      (reason == ParseFallback::Count || reason == ParseFallback::InitialOrUnprovenBoundary);
-  ParseResult result = parseMarkdown(source);
-  counters_.fullParses++;
-  if (previewable && preview_.enabled()) {
-    const remend::PreviewResult preview = preview_.apply(source, 0);
-    previewStats_.probes += preview.stats.probes;
-    previewStats_.applied += preview.stats.applied;
-    previewStats_.refused += preview.stats.refused;
-    counters_.bytesParsed += preview.text.size() - source.size();
-    if (preview.repaired) {
-      result = preview.parsed;
-    }
+  // A stream that is still open previews on every full parse: before a commit
+  // boundary, in full mode, after a reset, and past the tail limit. The pass
+  // parses the source itself, so this is one parse when nothing is repaired.
+  // Committed blocks lead the parse and are frozen, so a repair cannot restyle
+  // one even though this parse covers them.
+  ParseResult result;
+  if (previewable) {
+    const remend::PreviewResult preview = preview_.apply(source, 0, committedCount());
+    notePreview(preview);
+    result = preview.parsed;
   } else {
+    result = parseMarkdown(source);
     counters_.bytesParsed += source.size();
   }
+  counters_.fullParses++;
   if (reason != ParseFallback::Count) {
     counters_.fallback[static_cast<size_t>(reason)]++;
   }
@@ -288,6 +283,13 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable)
   publish(result.document);
   watchOpenFence(source, committedBytes_, committedCount());
   return result;
+}
+
+void IncrementalParser::notePreview(const remend::PreviewResult &preview) {
+  previewStats_.probes += preview.stats.probes;
+  previewStats_.applied += preview.stats.applied;
+  previewStats_.refused += preview.stats.refused;
+  counters_.bytesParsed += preview.bytesParsed;
 }
 
 void IncrementalParser::carryIdentities(ParseResult &result) {
@@ -339,12 +341,9 @@ ParseResult IncrementalParser::parseTail() {
   // the repair cannot reach, so no repair can restyle a block a reader has
   // already seen settled.
   const remend::PreviewResult preview = preview_.apply(tail, committedBytes_);
-  previewStats_.probes += preview.stats.probes;
-  previewStats_.applied += preview.stats.applied;
-  previewStats_.refused += preview.stats.refused;
+  notePreview(preview);
   ParseResult result = preview.parsed;
   counters_.tailParses++;
-  counters_.bytesParsed += preview.text.size();
   if (result.status != ParseStatus::Ok) {
     return result;
   }

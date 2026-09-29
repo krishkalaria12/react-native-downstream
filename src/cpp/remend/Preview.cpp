@@ -237,12 +237,14 @@ bool provesRepair(const ParseResult &before, const ParseResult &after, const Ope
 
 } // namespace
 
-PreviewResult Preview::apply(std::string_view region, size_t origin) const {
+PreviewResult Preview::apply(std::string_view region, size_t origin, size_t frozenBlocks) const {
   PreviewResult result;
   result.text.assign(region);
   const ParseResult baseline = parseMarkdownAt(region, origin);
   result.parsed = baseline;
-  if (!options_.enabled() || baseline.status != ParseStatus::Ok || baseline.document->blocks.empty()) {
+  result.bytesParsed = region.size();
+  if (!options_.enabled() || baseline.status != ParseStatus::Ok ||
+      baseline.document->blocks.size() <= frozenBlocks) {
     return result;
   }
 
@@ -278,6 +280,7 @@ PreviewResult Preview::apply(std::string_view region, size_t origin) const {
     std::string probe(text);
     probe.insert(insertAt, span.length, static_cast<char>(span.marker));
     result.stats.probes++;
+    result.bytesParsed += probe.size();
     ParseResult probed = parseMarkdownAt(probe, origin);
     if (!provesRepair(current, probed, span)) {
       continue;

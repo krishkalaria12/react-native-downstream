@@ -100,6 +100,8 @@ private:
   /// Full mode: gives leading blocks that are unchanged since the previous
   /// snapshot a stable identity, so platforms reuse their rendering.
   void carryIdentities(ParseResult &result);
+  /// Adds one preview pass to the stats and counters, probes included.
+  void notePreview(const remend::PreviewResult &preview);
   ParseResult parseTail();
   void publish(DocumentHandle document);
   void tryCommit();

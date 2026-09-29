@@ -854,6 +854,67 @@ bool sessionIntegration() {
     CHECK(visible(*parser.document()) == "**Title|Next", "and stays literal after the next block");
   }
 
+  // The pass does the parse it replaces. Off, a full-mode update costs exactly
+  // the source; on, it costs the source and the probe, and nothing twice.
+  {
+    IncrementalParser plain{ParseMode::FullParse};
+    plain.append("**bold wor");
+    plain.parse(false);
+    IncrementalParser previewed{ParseMode::FullParse};
+    previewed.setPreview(PreviewOptions::all());
+    previewed.append("**bold wor");
+    previewed.parse(false);
+    CHECK(plain.counters().bytesParsed == 10, "a plain full parse counts the source once");
+    CHECK(previewed.counters().bytesParsed == 10 + 12, "a previewed full parse counts the source and one probe");
+    CHECK(previewed.counters().fullParses == 1, "a previewed update is still one full parse");
+    const PreviewResult inert = kDisabled.apply("**bold wor", 0);
+    CHECK(inert.bytesParsed == 10 && inert.stats.probes == 0, "an inert pass is one parse");
+  }
+
+  // A reset mid-stream is still a stream the writer has not finished, so the
+  // preview carries through it rather than dropping out for one frame.
+  {
+    IncrementalParser parser{ParseMode::IncrementalTail};
+    parser.setPreview(PreviewOptions::all());
+    parser.append("**bold wor");
+    parser.parse(false);
+    parser.replace("**bold word");
+    parser.parse(false);
+    CHECK(visible(*parser.document()) == "bold word", "a reset source still previews");
+    parser.parse(true);
+    CHECK(visible(*parser.document()) == "**bold word", "and a finished reset source does not");
+  }
+
+  // So does a tail too long to keep, which falls back to a full parse over the
+  // committed prefix. The committed blocks come through untouched.
+  {
+    IncrementalParser parser{ParseMode::IncrementalTail};
+    parser.setPreview(PreviewOptions::all());
+    std::string filler;
+    for (int i = 0; i < 12; i++) {
+      filler += "A committed paragraph with enough words to be worth committing. ";
+    }
+    parser.append(filler + "\n\n");
+    parser.parse(false);
+    const DocumentHandle settled = parser.document();
+    CHECK(parser.committedBytes() > 0, "the prefix commits before the long tail");
+    parser.append(std::string(70 * 1024, 'x') + " **bold wor");
+    parser.parse(false);
+    CHECK(parser.counters().fallbackCount(ParseFallback::TailLimit) == 1, "the long tail takes the fallback");
+    const Block &last = parser.document()->blocks.back();
+    CHECK(last.text.size() > 4 && last.text.substr(last.text.size() - 9) == u" bold wor",
+          "a tail past the limit still previews");
+    CHECK(settled->blocks[0].identity == parser.document()->blocks[0].identity,
+          "the committed block keeps its identity through the fallback");
+  }
+
+  // A block a reader has seen settle is never the one a repair lands on.
+  {
+    const PreviewResult frozen = kPreview.apply("**bold wor", 0, 1);
+    CHECK(!frozen.repaired && frozen.stats.probes == 0, "a frozen last block is not probed");
+    CHECK(kPreview.apply("settled\n\n**bold wor", 0, 1).repaired, "a block after the frozen ones previews");
+  }
+
   // An open fence is where the preview has least to say, and the fast path
   // that skips md4c entirely must not be confused by it.
   {
