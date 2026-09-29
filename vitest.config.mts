@@ -71,6 +71,11 @@ export default defineConfig({
     },
     environment: 'happy-dom',
     globals: true,
+    // The first parse compiles the C++ engine, which takes about a second here
+    // and longer on a loaded CI runner. Every other test is far under the
+    // default, so only the compile needs the headroom.
+    testTimeout: 30_000,
+    hookTimeout: 60_000,
     include: [
       '__tests__/**/*.test.ts',
       '__tests__/**/*.test.tsx',
