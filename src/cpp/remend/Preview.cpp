@@ -4,6 +4,7 @@
 #include "Scan.h"
 
 #include <algorithm>
+#include <bit>
 
 namespace downstream::remend {
 namespace {
@@ -11,6 +12,11 @@ namespace {
 using scan::isMarkdownSpace;
 using scan::isWordish;
 using scan::sameBlock;
+
+/// Probes one tail may cost: each is a parse of the whole tail. Four covers
+/// remend's deepest nesting case, `**bold *italic `code ~~strike`, and bounds a
+/// tail full of markers that all fail.
+constexpr uint64_t kMaxProbes = 4;
 
 /// A run of marker characters that md4c left as literal text, which is what an
 /// opener looks like while a stream is still arriving. A completed span has no
@@ -37,15 +43,17 @@ bool inCodeSpan(const Block &block, size_t index) {
   return false;
 }
 
-/// The last literal marker run in `block` that could be an opener md4c has not
-/// closed yet. Innermost wins, so `**bold *ital` proposes closing the `*` and
-/// leaves the `**` literal until its own closer arrives.
+/// Every literal marker run in `block` that could be an opener md4c has not
+/// closed yet, last first. The last is the innermost, so `**bold *ital` offers
+/// the `*` before the `**`, and closers are appended in the order that nests.
 ///
-/// This only proposes a candidate. Nothing here decides the answer: the caller
-/// has to prove the proposal by parsing it.
-std::optional<OpenSpan> findOpenSpan(const Block &block) {
+/// This only proposes candidates. Nothing here decides the answer: the caller
+/// has to prove each proposal by parsing it, which is also what rejects an
+/// escaped marker. The block text has already had its escapes removed, so a
+/// backslash in it is a literal one and says nothing about the marker after it.
+std::vector<OpenSpan> findOpenSpans(const Block &block) {
   const std::u16string &text = block.text;
-  std::optional<OpenSpan> found;
+  std::vector<OpenSpan> found;
   size_t index = 0;
   while (index < text.size()) {
     const char16_t marker = text[index];
@@ -70,15 +78,16 @@ std::optional<OpenSpan> findOpenSpan(const Block &block) {
       const char16_t after = text[end];
       const char16_t before = index > 0 ? text[index - 1] : u'\0';
       const bool leftFlanking = !isMarkdownSpace(after) && after != u'\0';
-      // `\` makes it an escape, and a word character on both sides makes it
-      // intraword, which CommonMark says cannot open.
+      // A word character on both sides makes it intraword. CommonMark lets `*`
+      // open there, but `2*3` is arithmetic far more often than emphasis.
       const bool intraword = isWordish(before) && isWordish(after);
-      if (tildePair && leftFlanking && before != u'\\' && !intraword) {
-        found = OpenSpan{marker, index, length};
+      if (tildePair && leftFlanking && !intraword) {
+        found.push_back(OpenSpan{marker, index, length});
       }
     }
     index = end;
   }
+  std::reverse(found.begin(), found.end());
   return found;
 }
 
@@ -114,12 +123,14 @@ bool closedBy(const TrailingWhitespace &trailing, const Block &last) {
   return trailing.lineBreaks == 1 && (last.kind == BlockKind::Heading || last.kind == BlockKind::TableRow);
 }
 
-/// UTF-16 units carrying any inline style. A repair has to increase this, or it
-/// styles nothing and the literal text was the better answer.
-size_t styledUnits(const Block &block) {
+/// Inline style coverage: every UTF-16 unit counted once per style it carries.
+/// A repair has to increase this, or it styles nothing and the literal text was
+/// the better answer. Counting styles rather than units is what lets an outer
+/// span prove itself over text an inner repair already styled, as in `**_x`.
+size_t styleCoverage(const Block &block) {
   size_t total = 0;
   for (const InlineRun &run : block.runs) {
-    total += run.end - run.start;
+    total += static_cast<size_t>(std::popcount(run.styles)) * (run.end - run.start);
   }
   return total;
 }
@@ -205,6 +216,11 @@ bool provesRepair(const ParseResult &before, const ParseResult &after, const Ope
   if (last.text.size() != repaired.text.size() + span.length || span.start + span.length > last.text.size()) {
     return false;
   }
+  for (size_t i = span.start; i < span.start + span.length; i++) {
+    if (last.text[i] != span.marker) {
+      return false;
+    }
+  }
   for (size_t i = 0; i < span.start; i++) {
     if (last.text[i] != repaired.text[i]) {
       return false;
@@ -216,7 +232,7 @@ bool provesRepair(const ParseResult &before, const ParseResult &after, const Ope
     }
   }
 
-  return styledUnits(repaired) > styledUnits(last);
+  return styleCoverage(repaired) > styleCoverage(last);
 }
 
 } // namespace
@@ -234,14 +250,6 @@ PreviewResult Preview::apply(std::string_view region, size_t origin) const {
   if (!carriesInlineSpans(last)) {
     return result;
   }
-  const auto span = findOpenSpan(last);
-  if (!span) {
-    return result;
-  }
-  const bool isCode = span->marker == u'`';
-  if (isCode ? !options_.has(PreviewFeature::InlineCode) : !options_.has(PreviewFeature::Emphasis)) {
-    return result;
-  }
 
   // A closer after whitespace is not right-flanking, so the closer goes before
   // the trailing run. A chunk boundary often lands on a space, and without this
@@ -252,25 +260,41 @@ PreviewResult Preview::apply(std::string_view region, size_t origin) const {
   }
   size_t insertAt = trailing.start;
 
-  std::string closer;
-  closer.reserve(span->length);
-  for (size_t i = 0; i < span->length; i++) {
-    closer.push_back(static_cast<char>(span->marker));
+  // Innermost first. A candidate that fails its proof, such as a `*` the writer
+  // escaped, is skipped rather than ending the pass, so it cannot hide a real
+  // opener before it. Each proven closer becomes the baseline for the next, so
+  // `~~strike **bold` closes both spans, and a candidate before the one just
+  // closed keeps its offset because only text after it moved.
+  ParseResult current = baseline;
+  std::string text(region);
+  for (const OpenSpan &span : findOpenSpans(last)) {
+    if (result.stats.probes == kMaxProbes) {
+      break;
+    }
+    const bool isCode = span.marker == u'`';
+    if (isCode ? !options_.has(PreviewFeature::InlineCode) : !options_.has(PreviewFeature::Emphasis)) {
+      continue;
+    }
+    std::string probe(text);
+    probe.insert(insertAt, span.length, static_cast<char>(span.marker));
+    result.stats.probes++;
+    ParseResult probed = parseMarkdownAt(probe, origin);
+    if (!provesRepair(current, probed, span)) {
+      continue;
+    }
+    result.stats.applied++;
+    insertAt += span.length;
+    text = std::move(probe);
+    current = std::move(probed);
   }
-  std::string probe(region);
-  probe.insert(insertAt, closer);
 
-  result.stats.probes++;
-  const ParseResult probed = parseMarkdownAt(probe, origin);
-  if (!provesRepair(baseline, probed, *span)) {
-    result.stats.refused++;
+  if (result.stats.applied == 0) {
+    result.stats.refused += result.stats.probes > 0 ? 1 : 0;
     return result;
   }
-
-  result.stats.applied++;
   result.repaired = true;
-  result.text = std::move(probe);
-  result.parsed = probed;
+  result.text = std::move(text);
+  result.parsed = std::move(current);
   return result;
 }
 

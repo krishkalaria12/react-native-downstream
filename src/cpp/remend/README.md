@@ -102,11 +102,13 @@ the same answers without rewriting the source.
 | `code-block-utils` | `isInsideCodeBlock` reimplements fence tracking that `Scan.h` already does, and does it worse: it knows only ` ``` `, where the scanner knows `~~~`, indentation, and info strings. The pass does not need it at all, because a completed code span is already identified by the parser's own `InlineStyle::Code` runs, which is an exact answer rather than a re-scan. |
 
 One ordering difference also worth naming. remend runs its handlers in a fixed
-priority order, so it closes `**` before a code span. This pass closes the
-innermost open run, so a nested opener settles before the one around it. For
-`**bold with \`code` that means `code` reads as code now and `**bold with`
-stays literal until its own closer arrives, which is the same progression
-remend produces for `**bold *italic`.
+priority order, so it closes `**` before a code span and writes
+`**bold with \`code**\``, which puts the bold closer inside the code. This pass
+closes open runs innermost first, each proven before the next is tried, so
+`**bold with \`code` reads as bold text ending in a code span, the way the
+writer's own closers will nest. A candidate that fails its proof, such as a
+star the writer escaped, is skipped rather than ending the pass, and one tail
+costs at most four probes.
 
 ## What lives alongside the policy
 

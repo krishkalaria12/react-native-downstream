@@ -15,6 +15,10 @@
 // claimed to close. A repair that cannot be proven is not made, so the default
 // answer is always the literal one.
 //
+// Nested spans close innermost first, one proven closer at a time, so
+// `**bold *ital` reads as bold and italic. A candidate that fails its proof is
+// skipped, not fatal, and a tail costs at most a few probes.
+//
 // Scope is deliberately narrow, and narrower than the library it is ported
 // from. See README.md for the full list of what was left out and why.
 
@@ -65,7 +69,8 @@ struct PreviewOptions {
 struct PreviewStats {
   /// Candidate closers appended and parsed.
   uint64_t probes{0};
-  /// Probes that passed the safety proof and were kept.
+  /// Closers that passed the safety proof and were kept. A tail with nested
+  /// open spans can apply more than one.
   uint64_t applied{0};
   /// Tails where a span looked open but no candidate could be proven safe.
   uint64_t refused{0};

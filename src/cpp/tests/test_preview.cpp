@@ -153,7 +153,7 @@ bool unterminatedBold() {
   openSpan("text\n**bold", "text\nbold", kStrong);
   openSpan("1. First\n2. **Second item with bold", "First|Second item with bold", kStrong);
   openSpan("> quote\n**bold", "quote\nbold", kStrong);
-  openSpan("***bold-italic with `code", "***bold-italic with code", kCode);
+  openSpan("***bold-italic with `code", "bold-italic with code", kStrong | kEmphasis | kCode);
   // A half-typed closer is not an open span. md4c already reads `**bold*` as
   // emphasis, which is the CommonMark answer and the one the engine pins.
   showsAs("**xxx*", "*xxx", "a half-typed closer is not an open span");
@@ -214,7 +214,7 @@ bool unterminatedItalic() {
            // Escaped markers open nothing, so the unescaped one beside them is
            // the only opener and it settles on its own.
            "Text with \\_escaped underscore", "\\_escaped\\_ _complete_ pair",
-           "\\*not italic", "\\\\*actually italic",
+           "\\*not italic",
            // Intraword markers are not delimiters.
            "123*abc", "abc*123", "234234*123", "foo*bar", "hello*world", "test*123*test",
            "*file*name*ext", "5*6*78", "x *y*z w", "a *b*c*d",
@@ -290,7 +290,7 @@ bool unterminatedInlineCode() {
   openSpan("`한국어 코드", "한국어 코드", kCode);
   openSpan("`code` then `more", "code then more", kCode);
   openSpan("`code` **bold", "code bold", kStrong);
-  openSpan("**bold with `code", "**bold with code", kCode);
+  openSpan("**bold with `code", "bold with code", kStrong | kCode);
   // The escaped backticks are literal, so the `**` beside them is a real
   // opener and settles on its own.
   openSpan("\\`not code\\` **bold", "`not code` bold", kStrong);
@@ -412,7 +412,8 @@ bool escapesAndMarkers() {
   // A backslash is syntax: it does not reach the reader, and it stops the
   // character after it from opening anything.
   showsAs("\\**not bold", "**not bold", "an escaped star opens nothing");
-  showsAs("\\\\*actually italic", "\\*actually italic", "an escaped backslash leaves a real opener");
+  // An escaped backslash leaves the star after it a real opener, so it closes.
+  openSpan("\\\\*actually italic", "\\actually italic", kEmphasis);
   showsAs("\\*not italic", "*not italic", "an escaped star opens nothing");
   // The escaped backtick is literal, so the star beside it is a real opener.
   openSpan("\\` *italic", "` italic", kEmphasis);
@@ -463,27 +464,34 @@ bool listMarkers() {
   return true;
 }
 
-/// remend closes the innermost open span first, so a nested opener settles
-/// before the one around it. This is the rule that makes a half-written
-/// document restyle one span at a time instead of all at once.
+/// Every open span closes, innermost first, so the closers nest the way the
+/// writer's eventual ones will. remend produces the same document for these.
 bool nestedOpenSpans() {
-  openSpan("**bold *italic", "**bold italic", kEmphasis);
-  openSpan("**bold _und", "**bold und", kEmphasis);
-  openSpan("**bold *italic `code", "**bold *italic code", kCode);
-  openSpan("**bold ~~strike", "**bold strike", kStrike);
-  openSpan("***bold-italic with `code", "***bold-italic with code", kCode);
+  openSpan("**bold *italic", "bold italic", kStrong | kEmphasis);
+  openSpan("**bold _und", "bold und", kStrong | kEmphasis);
+  openSpan("**bold *italic `code", "bold italic code", kStrong | kEmphasis | kCode);
+  openSpan("**bold ~~strike", "bold strike", kStrong | kStrike);
+  openSpan("~~strike with **bold", "strike with bold", kStrike | kStrong);
+  openSpan("*italic with **bold", "italic with bold", kEmphasis | kStrong);
+  openSpan("**bold *italic ~~strike `code", "bold italic strike code", kStrong | kEmphasis | kStrike | kCode);
   openSpan("**bold with $x^2", "bold with $x^2", kStrong);
-  openSpan("combined **_bold and italic", "combined **bold and italic", kEmphasis);
-  // The outer span settles once its own closer arrives, which is the next
-  // chunk rather than this one.
+  openSpan("combined **_bold and italic", "combined bold and italic", kStrong | kEmphasis);
+  // The inner span already closed, so only the outer one is left to settle.
   openSpan("**bold *italic*", "bold italic", kStrong);
   openSpan("**bold and *italic*", "bold and italic", kStrong);
+
+  // A candidate that fails its proof is skipped, so the escaped star cannot
+  // hide the real opener before it.
+  openSpan("**bold and \\*literal", "bold and *literal", kStrong);
+
+  // Each candidate costs a parse of the tail, so a tail full of markers that
+  // all fail is bounded rather than probed once per marker.
+  const PreviewResult capped = kPreview.apply("**a \\*b \\*c \\*d \\*e \\*f", 0);
+  CHECK(capped.stats.probes == 4, "a tail of failing candidates stops at the probe budget");
+  CHECK(!capped.repaired && capped.stats.refused == 1, "and is refused once, as one tail");
   return true;
 }
 
-/// A repair that reached past the last block would restyle text a reader has
-/// already seen settled, so the policy refuses it. These cases prove the check
-/// is not vacuous.
 /// Where the closer goes, and when there is nowhere it could go.
 bool trailingWhitespace() {
   // A chunk that ends on whitespace still previews. A closer after the space
@@ -513,6 +521,9 @@ bool trailingWhitespace() {
   return true;
 }
 
+/// A repair that reached past the last block would restyle text a reader has
+/// already seen settled, so the policy refuses it. These cases prove the check
+/// is not vacuous.
 bool repairIsScopedToTheLastBlock() {
   for (const char *input : {"# Heading\n**bold", "```\ncode\n```\n**bold", "* One\n* Two **bo",
                             "text **bold and *ital", "**bold** then **more",
