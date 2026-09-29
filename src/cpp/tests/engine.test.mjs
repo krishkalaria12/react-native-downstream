@@ -105,6 +105,16 @@ before(async () => {
     ]),
     execFileAsync(cxx, [
       ...cxxFlags,
+      remend('tests', 'test_preview.cpp'),
+      session('IncrementalParser.cpp'),
+      ...engine,
+      md4c,
+      entity,
+      '-o',
+      binary('test_preview'),
+    ]),
+    execFileAsync(cxx, [
+      ...cxxFlags,
       testSource('test_session_registry.cpp'),
       session('SessionRegistry.cpp'),
       session('IncrementalParser.cpp'),
@@ -605,6 +615,13 @@ describe('input', () => {
 
   test('worker pool prepares and shares sessions', () => {
     execFileSync(binary('test_worker_pool'), { timeout: 30_000 });
+  });
+
+  test('provisional styling for the unstable tail', () => {
+    // Off by default, so nothing in the suites above exercises it. Its cases are
+    // the ported remend corpus plus the session integration that proves a repair
+    // cannot reach a committed block.
+    execFileSync(binary('test_preview'), { timeout: 15_000 });
   });
 
   test('rejects malformed UTF-8', () => {
