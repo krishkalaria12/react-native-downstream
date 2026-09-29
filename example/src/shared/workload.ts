@@ -5,7 +5,7 @@ export type WorkloadShape = 'repeat' | 'open-fence';
 
 export interface Workload {
   source: string;
-  manifestChunks: string[];
+  manifestChunks: readonly string[];
   bytes: number;
   hash: string;
   size: WorkloadSize;

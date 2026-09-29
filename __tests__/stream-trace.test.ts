@@ -1,43 +1,29 @@
+/**
+ * The trace path, driven by real parses.
+ *
+ * Tracing exists so a benchmark can join a JavaScript timestamp to the native
+ * one. That join is only meaningful if the native markers come from real parse
+ * work, so the session TurboModule here is the engine-backed one: every
+ * `parse_end` a test sees was produced by parsing a real document.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createMarkdownStream } from '../src/createMarkdownStream';
-import NativeDownstreamSession from '../src/NativeDownstreamSession';
-import * as NativeDownstreamSessionModule from '../src/NativeDownstreamSession';
+import {
+  createMarkdownStream,
+  getStreamState,
+} from '../src/createMarkdownStream';
 import {
   emitJsStreamTrace,
   setStreamTracing,
   subscribeStreamTrace,
   type StreamTraceEvent,
 } from '../src/streamTrace';
+import { nativeWork, resetEngine } from './real-engine-module';
 
-vi.mock('../src/NativeDownstreamSession', () => {
-  const listeners = { trace: new Set<Function>() };
-  return {
-    __esModule: true,
-    default: {
-      create: vi.fn(),
-      append: vi.fn(),
-      reset: vi.fn(),
-      finish: vi.fn(),
-      dispose: vi.fn(),
-      setTracing: vi.fn(),
-      onSnapshotReady: vi.fn(() => ({ remove: vi.fn() })),
-      onSessionError: vi.fn(() => ({ remove: vi.fn() })),
-      onTrace: vi.fn((callback: (event: object) => void) => {
-        listeners.trace.add(callback);
-        return { remove: () => listeners.trace.delete(callback) };
-      }),
-    },
-    emitTrace(event: object) {
-      for (const listener of listeners.trace) listener(event);
-    },
-  };
-});
-
-const native = vi.mocked(NativeDownstreamSession);
-const events = NativeDownstreamSessionModule as unknown as {
-  emitTrace(event: object): void;
-};
+vi.mock(
+  '../src/NativeDownstreamSession',
+  async () => (await import('./real-engine-module')).realEngineModule
+);
 
 const streams: { dispose(): void }[] = [];
 
@@ -47,8 +33,19 @@ function stream(): ReturnType<typeof createMarkdownStream> {
   return created;
 }
 
+/**
+ * Appends a real document, which makes the engine emit its native markers.
+ * Tracing is per stream and off by default, so it is enabled here.
+ */
+function parseSomething(): void {
+  const session = stream();
+  setStreamTracing(session, true);
+  session.append('# Title\n\nBody.\n');
+  getStreamState(session).flush();
+}
+
 beforeEach(() => {
-  vi.clearAllMocks();
+  resetEngine();
 });
 
 afterEach(() => {
@@ -56,135 +53,112 @@ afterEach(() => {
 });
 
 describe('subscribeStreamTrace', () => {
-  it('subscribes to native once, no matter how many listeners', () => {
-    const first = vi.fn();
-    const second = vi.fn();
-    const unsubscribeFirst = subscribeStreamTrace(first);
-    const unsubscribeSecond = subscribeStreamTrace(second);
-
-    expect(native.onTrace).toHaveBeenCalledTimes(1);
-
-    unsubscribeFirst();
-    // The second listener is still live, so the native subscription stays.
-    expect(native.onTrace).toHaveBeenCalledTimes(1);
-    unsubscribeSecond();
-  });
-
-  it('delivers native events to every listener', () => {
-    const first = vi.fn();
-    const second = vi.fn();
-    const unsubscribeFirst = subscribeStreamTrace(first);
-    const unsubscribeSecond = subscribeStreamTrace(second);
-
-    events.emitTrace({
-      sessionId: 'downstream-a',
-      generation: 0,
-      sequence: 1,
-      event: 'parse_end',
-      clockDomain: 'native-monotonic',
-      timeNs: '42',
-    });
-
-    expect(first).toHaveBeenCalledTimes(2);
-    expect(second).toHaveBeenCalledTimes(2);
-    unsubscribeFirst();
-    unsubscribeSecond();
-  });
-
-  it('pairs a native event with a JS delivery record', () => {
+  it('delivers the markers a real parse produced', () => {
     const received: StreamTraceEvent[] = [];
     const unsubscribe = subscribeStreamTrace((event) => received.push(event));
 
-    events.emitTrace({
-      sessionId: 'downstream-a',
-      generation: 2,
-      sequence: 7,
-      event: 'parse_end',
-      clockDomain: 'native-monotonic',
-      timeNs: '99',
-    });
+    parseSomething();
 
-    // The native event, then a JS record that points back at it, so a JS
-    // timestamp can be joined to the native one.
-    expect(received).toHaveLength(2);
-    expect(received[0]).toMatchObject({ event: 'parse_end', timeNs: '99' });
-    expect(received[1]).toMatchObject({
-      event: 'native_event_received',
-      sessionId: 'downstream-a',
-      generation: 2,
-      sequence: 7,
-      nativeEvent: 'parse_end',
-      nativeTimeNs: '99',
-      clockDomain: 'js-performance',
-    });
+    const events = received.filter(
+      (event) => event.clockDomain === 'native-monotonic'
+    );
+    expect(events.map((event) => event.event)).toContain('parse_end');
+    expect(events.map((event) => event.event)).toContain('append_received');
+    expect(events[0]?.timeNs).toMatch(/^\d+$/);
     unsubscribe();
   });
 
-  it('does no work when nothing is listening', () => {
-    const before = performance.now();
-    emitJsStreamTrace('downstream-a', 0, 1, 'receipt');
-    expect(performance.now()).toBeGreaterThanOrEqual(before);
-    // Nothing observable happens, and in particular nothing throws.
-    expect(native.onTrace).not.toHaveBeenCalled();
+  it('pairs each native marker with a JavaScript delivery record', () => {
+    const received: StreamTraceEvent[] = [];
+    const unsubscribe = subscribeStreamTrace((event) => received.push(event));
+
+    parseSomething();
+
+    // For every native marker there is a JS record naming it, so a JS clock
+    // reading can be joined to the native one that produced it.
+    const native = received.filter(
+      (event) => event.clockDomain === 'native-monotonic'
+    );
+    const joined = received.filter(
+      (event) => event.event === 'native_event_received'
+    );
+    expect(joined).toHaveLength(native.length);
+    for (const event of joined) {
+      expect(event).toMatchObject({
+        clockDomain: 'js-performance',
+        nativeTimeNs: expect.stringMatching(/^\d+$/),
+        nativeEvent: expect.any(String),
+      });
+    }
+    unsubscribe();
   });
 
-  it('stops publishing after the last listener unsubscribes', () => {
+  it('gives every listener the same events', () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const unsubscribeFirst = subscribeStreamTrace(first);
+    const unsubscribeSecond = subscribeStreamTrace(second);
+
+    parseSomething();
+
+    expect(first).toHaveBeenCalled();
+    expect(second.mock.calls.length).toBe(first.mock.calls.length);
+    unsubscribeFirst();
+    unsubscribeSecond();
+  });
+
+  it('stops after the last listener leaves', () => {
     const listener = vi.fn();
-    const unsubscribe = subscribeStreamTrace(listener);
-    unsubscribe();
+    const unsubscribeFirst = subscribeStreamTrace(listener);
+    const unsubscribeSecond = subscribeStreamTrace(vi.fn());
+    unsubscribeFirst();
+    unsubscribeSecond();
+    listener.mockClear();
 
-    events.emitTrace({
-      sessionId: 'downstream-a',
-      generation: 0,
-      sequence: 1,
-      event: 'parse_end',
-      clockDomain: 'native-monotonic',
-      timeNs: '1',
-    });
+    parseSomething();
 
     expect(listener).not.toHaveBeenCalled();
   });
 
   it('resubscribes after every listener has left', () => {
-    const first = vi.fn();
-    const unsubscribeFirst = subscribeStreamTrace(first);
+    const unsubscribeFirst = subscribeStreamTrace(vi.fn());
     const unsubscribeSecond = subscribeStreamTrace(vi.fn());
     unsubscribeFirst();
     unsubscribeSecond();
-    vi.mocked(native.onTrace).mockClear();
 
     const listener = vi.fn();
     const unsubscribe = subscribeStreamTrace(listener);
-    expect(native.onTrace).toHaveBeenCalledTimes(1);
+    parseSomething();
+    expect(listener).toHaveBeenCalled();
     unsubscribe();
   });
 });
 
-describe('setStreamTracing', () => {
-  it('enables tracing on one stream only', () => {
-    const traced = stream();
-    const quiet = stream();
-    setStreamTracing(traced, true);
-
-    expect(native.setTracing).toHaveBeenCalledTimes(1);
-    expect(native.setTracing).toHaveBeenCalledWith(
-      native.create.mock.calls[0]?.[0],
-      true
-    );
-    void quiet;
+describe('emitJsStreamTrace', () => {
+  it('does no work when nothing is listening', () => {
+    const before = performance.now();
+    emitJsStreamTrace('downstream-a', 0, 1, 'receipt');
+    // Nothing observable happens, and in particular nothing throws.
+    expect(performance.now()).toBeGreaterThanOrEqual(before);
   });
+});
 
-  it('emits a JS receipt for each append while tracing', () => {
+describe('setStreamTracing', () => {
+  it('records JavaScript receipts once a real parse runs', () => {
     const session = stream();
     const received: StreamTraceEvent[] = [];
     const unsubscribe = subscribeStreamTrace((event) => received.push(event));
     setStreamTracing(session, true);
 
-    session.append('hello');
+    session.append('# Title\n');
+    getStreamState(session).flush();
 
-    expect(received).toMatchObject([
-      { event: 'receipt', sequence: 1, clockDomain: 'js-performance' },
-    ]);
+    const receipts = received.filter((event) => event.event === 'receipt');
+    expect(receipts.length).toBeGreaterThan(0);
+    expect(receipts[0]).toMatchObject({
+      clockDomain: 'js-performance',
+      sequence: 1,
+    });
     unsubscribe();
   });
 
@@ -193,9 +167,43 @@ describe('setStreamTracing', () => {
     const received: StreamTraceEvent[] = [];
     const unsubscribe = subscribeStreamTrace((event) => received.push(event));
 
-    session.append('hello');
+    session.append('# Title\n');
+    getStreamState(session).flush();
 
     expect(received).toEqual([]);
+    unsubscribe();
+  });
+
+  it('turns off again', () => {
+    const session = stream();
+    const received: StreamTraceEvent[] = [];
+    const unsubscribe = subscribeStreamTrace((event) => received.push(event));
+
+    setStreamTracing(session, true);
+    session.append('a');
+    getStreamState(session).flush();
+    setStreamTracing(session, false);
+    received.length = 0;
+    session.append('b');
+    getStreamState(session).flush();
+
+    expect(received).toEqual([]);
+    unsubscribe();
+  });
+});
+
+describe('what the trace records', () => {
+  it('shows a real parse happening once per append', () => {
+    const received: StreamTraceEvent[] = [];
+    const unsubscribe = subscribeStreamTrace((event) => received.push(event));
+    const before = nativeWork.parses;
+
+    parseSomething();
+
+    expect(nativeWork.parses).toBeGreaterThan(before);
+    expect(
+      received.filter((event) => event.event === 'parse_end')
+    ).toHaveLength(nativeWork.parses - before);
     unsubscribe();
   });
 });

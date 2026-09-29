@@ -1,17 +1,10 @@
-import manifest from '../../../src/fixtures/manifest.json';
-
-export type Fixture = (typeof manifest.fixtures)[number];
-
-export const fixtures: readonly Fixture[] = manifest.fixtures;
-
-export function fixtureSource(fixture: Fixture): string {
-  return fixture.chunks.join('');
-}
-
-export function fixtureById(id: string): Fixture {
-  const fixture = fixtures.find((item) => item.id === id);
-  if (!fixture) {
-    throw new Error(`Unknown fixture: ${id}`);
-  }
-  return fixture;
-}
+/**
+ * The Markdown documents the app plays back. The same list is used by the
+ * repository's benchmarks, so a workload measured in the app and a workload
+ * measured in `pnpm bench` are the same documents.
+ */
+export {
+  sampleById as fixtureById,
+  samples as fixtures,
+  type Sample as Fixture,
+} from '../../../__benchmarks__/samples';

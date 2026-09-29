@@ -1,25 +1,29 @@
 /**
  * Downstream against Streamdown RN, on the same documents.
  *
- * What this measures: the work each renderer does on the JavaScript thread
- * while a document grows. Downstream validates and batches a chunk, then hands
- * it to a native session; Streamdown reparses the whole document in JavaScript
- * on every update. That difference is the design, and it is what the numbers
- * below show.
+ * What this measures: the cost each renderer pays to show a document that is
+ * still arriving. Both sides run for real here. Downstream's TurboModule is the
+ * engine-backed one in `__tests__/real-engine-module.ts`, so its row includes
+ * the actual C++ parse; Streamdown renders through a real React root, so its
+ * row includes its whole-document reparse and commit on every update.
  *
- * What this does NOT measure, and what the ratio must not be read as:
+ * What this does NOT measure: native layout, paint, or the frame budget. Those
+ * need a device, and the example app's Bench and Testing screens measure them.
+ * The engine here runs in a subprocess, which is not how it runs on a phone:
+ * in the app it is an in-process session with a warm parser. So a win or a loss
+ * here is a signal about this harness, not a verdict about the library.
  *
- * - Downstream's native parse. The TurboModule is a stub, so its append is a
- *   no-op. The C++ engine that does the real work is absent from this number.
- * - Either renderer's layout or paint. Neither runs in Node.
- *
- * So the gap here is a JavaScript-thread gap, not a total-cost gap. A full
- * answer needs the native parse, the layout, and the frame timings, which the
- * example app's Bench and Testing screens measure on a device. Read these rows
- * as "how much JavaScript each renderer asks of the thread that also has to
- * stay responsive", and nothing stronger.
+ * Read it as: on the same document, in the same process, how much time does
+ * each renderer spend before the text is ready to show.
  */
-import { describe, test } from 'vitest';
+// The TurboModule is backed by the real C++ engine, so a Downstream number
+// includes the parse it would really do.
+vi.mock(
+  '../src/NativeDownstreamSession',
+  async () => (await import('../__tests__/real-engine-module')).realEngineModule
+);
+
+import { describe, test, vi } from 'vitest';
 
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
@@ -57,7 +61,9 @@ function downstreamGrow(chunks: readonly string[]): void {
 
 /** Re-renders Streamdown over the growing document, as a chat view would. */
 function streamdownGrow(chunks: readonly string[]): void {
-  const render = renderGrowth(() => <StreamdownText markdown={source} flavor="github" />);
+  const render = renderGrowth(() => (
+    <StreamdownText markdown={source} flavor="github" />
+  ));
   let source = '';
   for (const chunk of chunks) {
     source += chunk;
@@ -68,18 +74,12 @@ function streamdownGrow(chunks: readonly string[]): void {
 describe('sample documents', () => {
   for (const sample of samples) {
     test(`${sample.id}: ${sample.description}`, async ({ bench }) => {
-      await bench(
-        `downstream, ${sample.chunks.length} chunks`,
-        () => {
-          downstreamGrow(sample.chunks);
-        }
-      ).run();
-      await bench(
-        `streamdown, ${sample.chunks.length} chunks`,
-        () => {
-          streamdownGrow(sample.chunks);
-        }
-      ).run();
+      await bench(`downstream, ${sample.chunks.length} chunks`, () => {
+        downstreamGrow(sample.chunks);
+      }).run();
+      await bench(`streamdown, ${sample.chunks.length} chunks`, () => {
+        streamdownGrow(sample.chunks);
+      }).run();
     });
   }
 });

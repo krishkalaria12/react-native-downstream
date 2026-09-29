@@ -1,10 +1,19 @@
 /**
- * The controller is the JS half of the render path. Appending to a stream
- * schedules a native parse, so this measures the cost the JavaScript thread
- * pays per chunk: validation, batching, and the native call. It is not a
- * measure of layout or paint, which happen elsewhere.
+ * What a stream costs to feed, end to end, with the real parser.
+ *
+ * The TurboModule is the engine-backed one, so this includes the C++ parse that
+ * a real append triggers. What it does not include is layout or paint, and the
+ * engine runs in a subprocess here where it is in-process on a device, so these
+ * numbers describe this harness rather than the shipping app.
  */
-import { describe, test } from 'vitest';
+// The TurboModule is backed by the real C++ engine, so a Downstream number
+// includes the parse it would really do.
+vi.mock(
+  '../src/NativeDownstreamSession',
+  async () => (await import('../__tests__/real-engine-module')).realEngineModule
+);
+
+import { describe, test, vi } from 'vitest';
 
 import { createMarkdownStream } from '../src/createMarkdownStream';
 import { samples, syntheticDocument } from './samples';

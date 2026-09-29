@@ -1,0 +1,185 @@
+/**
+ * A TurboModule backed by the real C++ engine.
+ *
+ * A `vi.fn()` TurboModule proves only that the JavaScript called a function
+ * with some arguments; it cannot show that a document rendered correctly. This
+ * one keeps a real source per session, parses it with the parser that ships in
+ * the app, and emits the snapshot and trace events the controller expects from
+ * what actually happened. A test can then assert on the text a reader sees.
+ *
+ * Only the transport is simulated. The parse is real.
+ */
+import { vi } from 'vitest';
+
+import { parse, type RenderModel } from './engine';
+
+type SnapshotListener = (event: object) => void;
+type ErrorListener = (event: object) => void;
+type TraceListener = (event: object) => void;
+
+interface Session {
+  source: string;
+  generation: number;
+  sequence: number;
+  finished: boolean;
+  model: RenderModel | undefined;
+}
+
+const sessions = new Map<string, Session>();
+const snapshotListeners = new Set<SnapshotListener>();
+const errorListeners = new Set<ErrorListener>();
+const traceListeners = new Set<TraceListener>();
+const nativeTraceEnabled = new Set<string>();
+
+/** The render model a session last produced, for assertions. */
+export function snapshotOf(sessionId: string): RenderModel | undefined {
+  return sessions.get(sessionId)?.model;
+}
+
+/** The canonical source a session has accumulated, as the worker sees it. */
+export function sourceForSession(sessionId: string): string {
+  return sessions.get(sessionId)?.source ?? '';
+}
+
+/** How many times native was handed work, for asserting a batch count. */
+export const nativeWork = { appends: 0, parses: 0 };
+
+function nowNs(): string {
+  return String(Math.round(performance.now() * 1e6));
+}
+
+function emitTrace(
+  sessionId: string,
+  generation: number,
+  sequence: number,
+  event: string
+): void {
+  if (!nativeTraceEnabled.has(sessionId)) return;
+  for (const listener of traceListeners) {
+    listener({
+      sessionId,
+      generation,
+      sequence,
+      event,
+      clockDomain: 'native-monotonic',
+      timeNs: nowNs(),
+    });
+  }
+}
+
+/** Parses the session's source and reports a snapshot, like the worker does. */
+function publish(session: Session, sessionId: string): void {
+  emitTrace(sessionId, session.generation, session.sequence, 'append_received');
+  nativeWork.parses += 1;
+  const model = parse(session.source);
+  session.model = model;
+  emitTrace(sessionId, session.generation, session.sequence, 'parse_start');
+  emitTrace(sessionId, session.generation, session.sequence, 'parse_end');
+  if (model.error) {
+    for (const listener of errorListeners) {
+      listener({
+        sessionId,
+        generation: session.generation,
+        sequence: session.sequence,
+        code: model.error,
+        message: model.error,
+        recoverable: true,
+      });
+    }
+    return;
+  }
+  for (const listener of snapshotListeners) {
+    listener({
+      sessionId,
+      generation: session.generation,
+      sequence: session.sequence,
+    });
+  }
+}
+
+export const realEngineModule = {
+  __esModule: true,
+  default: {
+    create(sessionId: string, mode: string) {
+      sessions.set(sessionId, {
+        source: '',
+        generation: 0,
+        sequence: 0,
+        finished: false,
+        model: undefined,
+      });
+      // The mode selects a parse strategy inside the real engine.
+      mode;
+    },
+
+    append(
+      sessionId: string,
+      chunk: string,
+      generation: number,
+      sequence: number
+    ) {
+      nativeWork.appends += 1;
+      const session = sessions.get(sessionId);
+      if (!session || session.generation !== generation) return;
+      session.source += chunk;
+      session.sequence = sequence;
+      publish(session, sessionId);
+    },
+
+    reset(sessionId: string, source: string, generation: number) {
+      const session = sessions.get(sessionId);
+      if (!session) return;
+      session.source = source;
+      session.generation = generation;
+      session.sequence = 0;
+      session.finished = false;
+      publish(session, sessionId);
+    },
+
+    finish(sessionId: string, generation: number, sequence: number) {
+      const session = sessions.get(sessionId);
+      if (!session || session.generation !== generation) return;
+      session.finished = true;
+      session.sequence = sequence;
+      publish(session, sessionId);
+    },
+
+    dispose(sessionId: string) {
+      nativeTraceEnabled.delete(sessionId);
+      sessions.delete(sessionId);
+    },
+
+    setTracing(sessionId: string, enabled: boolean) {
+      if (enabled) nativeTraceEnabled.add(sessionId);
+      else nativeTraceEnabled.delete(sessionId);
+    },
+
+    onSnapshotReady(callback: SnapshotListener) {
+      snapshotListeners.add(callback);
+      return { remove: () => snapshotListeners.delete(callback) };
+    },
+
+    onSessionError(callback: ErrorListener) {
+      errorListeners.add(callback);
+      return { remove: () => errorListeners.delete(callback) };
+    },
+
+    onTrace(callback: TraceListener) {
+      traceListeners.add(callback);
+      return { remove: () => traceListeners.delete(callback) };
+    },
+  },
+};
+
+/** Clears every session and counter between tests. */
+export function resetEngine(): void {
+  sessions.clear();
+  snapshotListeners.clear();
+  errorListeners.clear();
+  traceListeners.clear();
+  nativeTraceEnabled.clear();
+  nativeWork.appends = 0;
+  nativeWork.parses = 0;
+}
+
+export const mockTurboModule = vi.fn(() => realEngineModule.default);

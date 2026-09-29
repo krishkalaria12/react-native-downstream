@@ -3,7 +3,10 @@ import { afterEach, beforeEach, expect, vi } from 'vitest';
 import { fixtures } from '../example/src/shared/fixtures';
 import NativeDownstreamSession from '../src/NativeDownstreamSession';
 
-import { ComparisonRunner, type ComparisonView } from '../example/src/testing/comparisonRunner';
+import {
+  ComparisonRunner,
+  type ComparisonView,
+} from '../example/src/testing/comparisonRunner';
 
 vi.mock('../src/NativeDownstreamSession', () => {
   const listeners = { snapshot: new Set<Function>() };

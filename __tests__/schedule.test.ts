@@ -1,7 +1,10 @@
 import { expect } from 'vitest';
 
 import { fixtureById } from '../example/src/shared/fixtures';
-import { createSchedule, nextScheduledBatch } from '../example/src/shared/schedule';
+import {
+  createSchedule,
+  nextScheduledBatch,
+} from '../example/src/shared/schedule';
 import { createWorkload } from '../example/src/shared/workload';
 
 const fixture = fixtureById('unicode-crlf');

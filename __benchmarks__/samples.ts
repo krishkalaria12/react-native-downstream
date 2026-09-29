@@ -87,7 +87,7 @@ const playback = [
   {
     id: 'unsafe-url',
     description: 'Complete disallowed link never becomes actionable',
-    chunks: ['Do not open ', '[trap](', 'javascript:alert', '(1))', '.\n'],
+    chunks: ['Do not open ', '[trap](', 'javascript:alert', '(1))', '.\n'], // eslint-disable-line no-script-url -- the target a renderer must refuse
   },
 ] satisfies readonly Omit<Sample, 'source'>[];
 

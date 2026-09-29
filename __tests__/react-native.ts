@@ -61,13 +61,16 @@ export const Dimensions = {
 export const PixelRatio = { get: () => 3, getFontScale: () => 1 };
 
 export const StyleSheet = {
-  create: <T,>(styles: T): T => styles,
+  create: <T>(styles: T): T => styles,
   hairlineWidth: 0.5,
   flatten: (style: unknown) => style,
   absoluteFill: {},
 };
 
-export const Linking = { openURL: vi.fn(), getInitialURL: vi.fn(async () => null) };
+export const Linking = {
+  openURL: vi.fn(),
+  getInitialURL: vi.fn(async () => null),
+};
 export const Settings = { get: vi.fn(), set: vi.fn() };
 export const I18nManager = { isRTL: false };
 

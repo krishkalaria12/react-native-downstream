@@ -15,8 +15,6 @@ Pod::Spec.new do |s|
   s.platforms    = { :ios => min_ios_version_supported }
   s.source       = { :git => package["repository"]["url"].sub(/^git\+/, ""), :tag => "v#{s.version}" }
 
-  # md4c-html.c is the fixture oracle's HTML renderer; it is used only by the
-  # host tests in src/cpp/tests.
   s.source_files = [
     "src/ios/**/*.{h,m,mm}",
     "src/cpp/downstream/*.{h,cpp}",
