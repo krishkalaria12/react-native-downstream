@@ -216,7 +216,10 @@ function engineBinary(): string {
 /** Feature bitmask for the real provisional-styling pass. */
 export const PREVIEW_EMPHASIS = 1 << 0;
 export const PREVIEW_INLINE_CODE = 1 << 1;
-export const PREVIEW_ALL = PREVIEW_EMPHASIS | PREVIEW_INLINE_CODE;
+export const PREVIEW_LINKS = 1 << 2;
+export const PREVIEW_IMAGES = 1 << 3;
+export const PREVIEW_ALL =
+  PREVIEW_EMPHASIS | PREVIEW_INLINE_CODE | PREVIEW_LINKS | PREVIEW_IMAGES;
 
 function sessionBinary(): string {
   const objects = compileObjects();

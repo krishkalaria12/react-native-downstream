@@ -18,7 +18,8 @@ literal text in its last block, and tries them innermost first: append a
 matching closer, reparse, and keep the result only if the reparse proves the
 closer changed nothing but that span. Each kept closer becomes the baseline for
 the next, so `**bold *ital` closes both spans. A candidate that fails its proof
-is skipped, and a tail costs at most four probes.
+is skipped, and a tail costs at most five probes. An unfinished link or image is
+settled first; see below.
 
 The proof is the design. A closer is accepted when:
 
@@ -33,6 +34,29 @@ The proof is the design. A closer is accepted when:
 A closer that fails any of those is discarded and the literal text stands. A
 closer that changes nothing visible is also discarded, because there was
 nothing to style.
+
+An unfinished link or image at the end of the tail is settled before any span,
+because its partial target is not content: a `_` inside `https://exa_m` must not
+open emphasis. `[text` and `[text](https://exa` become `[text]()`, and the image
+forms become `![alt]()`. The reader sees the link text, or an image's alt text,
+which is how the engine renders a finished image too. The partial target is
+dropped rather than followed, and an empty target is not actionable, so nothing
+is tappable until the writer's own `)` arrives. remend points the link at a
+`streamdown:incomplete-link` sentinel instead; the visible result is the same.
+
+Its proof has the same shape as a span's: the last block's text lost the `[` or
+`![` and everything after the link text, the text before the link kept its
+styles, and no actionable link appeared. Spans inside the link text then close
+before its `]`, and spans around the link close after it.
+
+Three shapes stay literal on purpose:
+
+- `[note](which is long`: a space ends a bare destination, so this is prose that
+  will never be a link, and dropping it would delete words the writer typed.
+- `- [` and `- [x`: a task marker still arriving, where a checkbox is about to
+  appear.
+- `[outer [inner]]`: balanced brackets are already whatever they will be until a
+  `(` arrives. remend treats the outer bracket as an open link.
 
 Where the closer goes matters as much as whether it is proven:
 
@@ -108,14 +132,13 @@ cannot ask for a feature that no longer exists and appear to succeed.
 
 ## What was not ported
 
-remend has fourteen handlers. The emphasis, inline-code, and strikethrough ones
-are ported in spirit through the one pass above. Links and images are not yet.
-Most of the rest are workarounds for a parser that is not CommonMark-complete.
-md4c is, so the same inputs reach the same answers without rewriting the source.
+remend has fourteen handlers. The emphasis, inline-code, strikethrough, link,
+and image ones are ported in spirit through the one pass above. Most of the rest
+are workarounds for a parser that is not CommonMark-complete. md4c is, so the
+same inputs reach the same answers without rewriting the source.
 
 | remend handler | Why it is not ported |
 | --- | --- |
-| `links`, `images` | Not yet, and this is the most visible gap. The engine already refuses to make an unfinished target tappable: `isUnfinishedDestination` suppresses it, so `[docs](https://exa` can never open a half-typed URL. But the reader sees that raw syntax, where remend rewrites the target to `](streamdown:incomplete-link)` so Streamdown shows `docs` as link text, and drops a half-typed image. Doing the same here needs a proof of a different shape, since the visible text changes by more than a marker run, and a link the renderer knows not to open. It is left for its own change. |
 | `singleTilde` | md4c's GitHub dialect reads `~x~` as strikethrough, so remend escapes the tilde to stop it. The pass refuses to treat a single tilde as an opener at all, which is the same answer without touching the source. `__tests__/streaming-preview.test.ts` pins `~hello` as literal. |
 | `comparisonOperators` | remend rewrites `- > 25` to `- \> 25`. CommonMark says the `>` is a quote, so the item really is a list item containing a blockquote, and the test at `streaming-preview.test.ts:351` pins that. Escaping it would break the document. |
 | `setextHeadings` | remend injects U+200B after a partial `---` underline because it cannot tell a heading from a rule until both arrive. md4c waits for the line, which is the same answer without an invisible character. |
@@ -132,7 +155,7 @@ closes open runs innermost first, each proven before the next is tried, so
 `**bold with \`code` reads as bold text ending in a code span, the way the
 writer's own closers will nest. A candidate that fails its proof, such as a
 star the writer escaped, is skipped rather than ending the pass, and one tail
-costs at most four probes.
+costs at most five probes, one of them for an unfinished link.
 
 ## What lives alongside the policy
 

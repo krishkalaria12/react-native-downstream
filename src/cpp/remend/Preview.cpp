@@ -5,6 +5,9 @@
 
 #include <algorithm>
 #include <bit>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace downstream::remend {
 namespace {
@@ -13,10 +16,10 @@ using scan::isMarkdownSpace;
 using scan::isWordish;
 using scan::sameBlock;
 
-/// Probes one tail may cost: each is a parse of the whole tail. Four covers
-/// remend's deepest nesting case, `**bold *italic `code ~~strike`, and bounds a
-/// tail full of markers that all fail.
-constexpr uint64_t kMaxProbes = 4;
+/// Probes one tail may cost: each is a parse of the whole tail. One for an
+/// unfinished link and four for spans covers remend's deepest nesting case,
+/// `**bold *italic `code ~~strike`, and bounds a tail of markers that all fail.
+constexpr uint64_t kMaxProbes = 5;
 
 /// A run of marker characters that md4c left as literal text, which is what an
 /// opener looks like while a stream is still arriving. A completed span has no
@@ -174,13 +177,11 @@ bool sameLinks(const Document &a, const Document &b) {
   return true;
 }
 
-/// True when `after` is the parse `before` would have produced had the span at
-/// `span` really been closed, and no more than that.
-///
-/// The text check is the proof. A repair that changed a word, added a block, or
-/// moved a container fails it, and an unproven repair is dropped rather than
-/// guessed at.
-bool provesRepair(const ParseResult &before, const ParseResult &after, const OpenSpan &span) {
+/// True when `after` has the same structure as `before`: the same blocks, every
+/// block before the last identical, the last block the same kind in the same
+/// containers and cells, and the same actionable links. What remains for a
+/// proof is the last block's text.
+bool sameShape(const ParseResult &before, const ParseResult &after) {
   if (before.status != ParseStatus::Ok || after.status != ParseStatus::Ok) {
     return false;
   }
@@ -208,9 +209,21 @@ bool provesRepair(const ParseResult &before, const ParseResult &after, const Ope
   if (!sameContainers(last, repaired) || !sameCells(last, repaired)) {
     return false;
   }
-  if (!sameLinks(*before.document, *after.document)) {
+  return sameLinks(*before.document, *after.document);
+}
+
+/// True when `after` is the parse `before` would have produced had the span at
+/// `span` really been closed, and no more than that.
+///
+/// The text check is the proof. A repair that changed a word, added a block, or
+/// moved a container fails it, and an unproven repair is dropped rather than
+/// guessed at.
+bool provesRepair(const ParseResult &before, const ParseResult &after, const OpenSpan &span) {
+  if (!sameShape(before, after)) {
     return false;
   }
+  const Block &last = before.document->blocks.back();
+  const Block &repaired = after.document->blocks.back();
 
   // Exactly the claimed marker run leaves the text, and nothing else moves.
   if (last.text.size() != repaired.text.size() + span.length || span.start + span.length > last.text.size()) {
@@ -233,6 +246,177 @@ bool provesRepair(const ParseResult &before, const ParseResult &after, const Ope
   }
 
   return styleCoverage(repaired) > styleCoverage(last);
+}
+
+/// An unfinished link or image at the end of the tail. It is found in the
+/// source rather than the block text, because the source syntax is what the
+/// repair rewrites.
+struct OpenLink {
+  bool image{false};
+  /// Offset of the `[`, or of the `!` before it for an image.
+  size_t start{0};
+  /// Offset where `]()` goes: the `]` of `[text](partial`, or the content end
+  /// for `[text`. Everything from here to the content end is dropped, so a
+  /// partial target never reaches the parse.
+  size_t close{0};
+};
+
+bool isOpenBracket(std::string_view source, size_t index) {
+  return source[index] == '[' && !scan::isEscaped(source, index);
+}
+
+/// The `[` that the `]` at `close` closes, or kNoOffset.
+size_t matchingOpen(std::string_view source, size_t close) {
+  size_t depth = 0;
+  for (size_t i = close; i-- > 0;) {
+    if (scan::isEscaped(source, i)) {
+      continue;
+    }
+    if (source[i] == ']') {
+      depth++;
+    } else if (source[i] == '[') {
+      if (depth == 0) {
+        return i;
+      }
+      depth--;
+    }
+  }
+  return scan::kNoOffset;
+}
+
+/// Whether the text after `](` could still become a destination. A space ends a
+/// bare destination, so `[note](which is long` is prose unless a title follows
+/// the space; dropping it would delete words that will never be a link.
+bool couldBeDestination(std::string_view partial) {
+  if (!partial.empty() && partial.front() == '<') {
+    return true;
+  }
+  const size_t space = partial.find_first_of(" \t\r\n");
+  if (space == std::string_view::npos) {
+    return true;
+  }
+  const size_t next = partial.find_first_not_of(" \t\r\n", space);
+  return next == std::string_view::npos || partial[next] == '"' || partial[next] == '\'' || partial[next] == '(';
+}
+
+/// Whether `[` at `open` is a task marker still arriving, as in `- [` or
+/// `- [x`. Closing it as a link would show a letter where a checkbox is about
+/// to appear.
+bool looksLikeTaskMarker(std::string_view content, size_t open) {
+  const std::string_view rest = content.substr(open + 1);
+  if (rest.size() > 1 || (rest.size() == 1 && rest != " " && rest != "x" && rest != "X")) {
+    return false;
+  }
+  const size_t newline = content.rfind('\n', open);
+  const size_t lineStart = newline == std::string_view::npos ? 0 : newline + 1;
+  const std::string_view prefix = content.substr(lineStart, open - lineStart);
+  // Quote markers and indentation, then a list marker and its space.
+  size_t at = prefix.find_first_not_of(" >");
+  if (at == std::string_view::npos) {
+    return false;
+  }
+  if (prefix[at] == '-' || prefix[at] == '*' || prefix[at] == '+') {
+    at++;
+  } else {
+    const size_t digits = prefix.find_first_not_of("0123456789", at);
+    if (digits == at || digits == std::string_view::npos || (prefix[digits] != '.' && prefix[digits] != ')')) {
+      return false;
+    }
+    at = digits + 1;
+  }
+  return at < prefix.size() && prefix.find_first_not_of(' ', at) == std::string_view::npos;
+}
+
+std::optional<OpenLink> findOpenLink(std::string_view content) {
+  const auto link = [&](size_t open, size_t close) {
+    const bool image = open > 0 && content[open - 1] == '!' && !scan::isEscaped(content, open - 1);
+    return OpenLink{image, image ? open - 1 : open, close};
+  };
+
+  // `[text](partial`: the last `](` whose destination has not closed. Any later
+  // `](` would sit inside that destination, so the last is the only candidate.
+  const size_t paren = content.rfind("](");
+  if (paren != std::string_view::npos && !scan::isEscaped(content, paren) &&
+      scan::skipInlineDestination(content, paren + 1) == scan::kNoOffset) {
+    if (!couldBeDestination(content.substr(paren + 2))) {
+      return std::nullopt;
+    }
+    const size_t open = matchingOpen(content, paren);
+    return open == scan::kNoOffset ? std::nullopt : std::optional<OpenLink>(link(open, paren));
+  }
+
+  // `[text`: the last `[` nothing has closed. Appending `]` closes the
+  // innermost, as the writer's own bracket will.
+  std::vector<size_t> open;
+  for (size_t i = 0; i < content.size(); i++) {
+    if (isOpenBracket(content, i)) {
+      open.push_back(i);
+    } else if (content[i] == ']' && !scan::isEscaped(content, i) && !open.empty()) {
+      open.pop_back();
+    }
+  }
+  if (open.empty() || looksLikeTaskMarker(content, open.back())) {
+    return std::nullopt;
+  }
+  return link(open.back(), content.size());
+}
+
+/// The runs of `block` that start before `end`, clipped to it, so two blocks
+/// can be compared over a shared prefix.
+std::vector<InlineRun> runsBefore(const Block &block, size_t end) {
+  std::vector<InlineRun> runs;
+  for (const InlineRun &run : block.runs) {
+    if (run.start < end) {
+      InlineRun clipped = run;
+      clipped.end = std::min<uint32_t>(run.end, static_cast<uint32_t>(end));
+      runs.push_back(clipped);
+    }
+  }
+  return runs;
+}
+
+/// True when `after` shows the unfinished link in `before` as its text and
+/// nothing else changed: the last block lost the opening bracket (`[` or `![`)
+/// and everything after the link text, which is `](` and the partial target or
+/// nothing at all, and the text before the link kept its styles. `textStart`
+/// receives where the link text begins in `after`.
+bool provesLinkRepair(const ParseResult &before, const ParseResult &after, bool image, size_t &textStart) {
+  if (!sameShape(before, after)) {
+    return false;
+  }
+  const std::u16string &was = before.document->blocks.back().text;
+  const std::u16string &now = after.document->blocks.back().text;
+  const std::u16string_view opener = image ? u"![" : u"[";
+
+  size_t prefix = 0;
+  while (prefix < now.size() && prefix < was.size() && now[prefix] == was[prefix]) {
+    prefix++;
+  }
+  const size_t linkText = prefix + opener.size();
+  const size_t length = now.size() - prefix;
+  if (std::u16string_view(was).substr(prefix, opener.size()) != opener || linkText + length > was.size() ||
+      std::u16string_view(was).substr(linkText, length) != std::u16string_view(now).substr(prefix)) {
+    return false;
+  }
+  const std::u16string_view dropped = std::u16string_view(was).substr(linkText + length);
+  if (!dropped.empty() && dropped.substr(0, 2) != u"](") {
+    return false;
+  }
+  const Block &last = before.document->blocks.back();
+  const Block &repaired = after.document->blocks.back();
+  const std::vector<InlineRun> wasRuns = runsBefore(last, prefix);
+  const std::vector<InlineRun> nowRuns = runsBefore(repaired, prefix);
+  if (wasRuns.size() != nowRuns.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < wasRuns.size(); i++) {
+    if (wasRuns[i].start != nowRuns[i].start || wasRuns[i].end != nowRuns[i].end ||
+        wasRuns[i].styles != nowRuns[i].styles) {
+      return false;
+    }
+  }
+  textStart = prefix;
+  return true;
 }
 
 } // namespace
@@ -260,16 +444,46 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
   if (closedBy(trailing, last)) {
     return result;
   }
-  size_t insertAt = trailing.start;
+  ParseResult current = baseline;
+  std::string text(region);
+
+  // Closers for spans outside any repaired link go after the content; closers
+  // for spans inside the link text go before its `]`. Until a link is repaired
+  // there is no inside.
+  size_t outerAt = trailing.start;
+  size_t innerAt = std::string::npos;
+  size_t linkTextStart = std::u16string::npos;
+
+  // An unfinished link or image first, because its partial target is not
+  // content: a span opened inside `https://exa_m` must not be styled, and
+  // dropping the target removes it before the spans are looked for.
+  if (options_.has(PreviewFeature::Links) || options_.has(PreviewFeature::Images)) {
+    const auto link = findOpenLink(std::string_view(text).substr(0, trailing.start));
+    if (link && options_.has(link->image ? PreviewFeature::Images : PreviewFeature::Links)) {
+      std::string probe = text.substr(0, link->close);
+      probe += "]()";
+      probe.append(text, trailing.start, std::string::npos);
+      result.stats.probes++;
+      result.bytesParsed += probe.size();
+      ParseResult probed = parseMarkdownAt(probe, origin);
+      size_t textStart = 0;
+      if (provesLinkRepair(current, probed, link->image, textStart)) {
+        result.stats.applied++;
+        innerAt = link->close;
+        outerAt = link->close + 3;
+        linkTextStart = textStart;
+        text = std::move(probe);
+        current = std::move(probed);
+      }
+    }
+  }
 
   // Innermost first. A candidate that fails its proof, such as a `*` the writer
   // escaped, is skipped rather than ending the pass, so it cannot hide a real
   // opener before it. Each proven closer becomes the baseline for the next, so
   // `~~strike **bold` closes both spans, and a candidate before the one just
   // closed keeps its offset because only text after it moved.
-  ParseResult current = baseline;
-  std::string text(region);
-  for (const OpenSpan &span : findOpenSpans(last)) {
+  for (const OpenSpan &span : findOpenSpans(current.document->blocks.back())) {
     if (result.stats.probes == kMaxProbes) {
       break;
     }
@@ -277,8 +491,9 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
     if (isCode ? !options_.has(PreviewFeature::InlineCode) : !options_.has(PreviewFeature::Emphasis)) {
       continue;
     }
+    const bool inside = linkTextStart != std::u16string::npos && span.start >= linkTextStart;
     std::string probe(text);
-    probe.insert(insertAt, span.length, static_cast<char>(span.marker));
+    probe.insert(inside ? innerAt : outerAt, span.length, static_cast<char>(span.marker));
     result.stats.probes++;
     result.bytesParsed += probe.size();
     ParseResult probed = parseMarkdownAt(probe, origin);
@@ -286,7 +501,10 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
       continue;
     }
     result.stats.applied++;
-    insertAt += span.length;
+    if (inside) {
+      innerAt += span.length;
+    }
+    outerAt += span.length;
     text = std::move(probe);
     current = std::move(probed);
   }

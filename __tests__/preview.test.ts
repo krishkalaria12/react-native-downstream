@@ -200,14 +200,54 @@ describe('styling an open span', () => {
   });
 
   it('never styles a link target that has not been typed', () => {
+    // The partial target is dropped whole, markers and all, so nothing inside
+    // it is styled and nothing is tappable.
     const harness = stream({ preview: true });
     expect(harness.append('See [the docs](https://exa**bold')).toBe(
-      'See [the docs](https://exa**bold'
+      'See the docs'
     );
+    expect(snapshotOf(harness.sessionId)?.links).toEqual([]);
   });
 });
 
-describe('the two features are independent', () => {
+describe('unfinished links and images', () => {
+  it('shows a link as its text until its own bracket arrives', () => {
+    const harness = stream({ preview: true });
+    expect(harness.append('See [the docs](https://exa')).toBe('See the docs');
+    expect(snapshotOf(harness.sessionId)?.links).toEqual([]);
+    expect(harness.append('mple.com) now')).toBe('See the docs now');
+    expect(
+      snapshotOf(harness.sessionId)?.links.map((link) => link.url)
+    ).toEqual(['https://example.com']);
+  });
+
+  it('shows link text whose bracket has not closed', () => {
+    expect(stream({ preview: true }).append('Check the [documentation')).toBe(
+      'Check the documentation'
+    );
+  });
+
+  it('shows an image as its alt text', () => {
+    expect(
+      stream({ preview: true }).append('See ![diagram](http://example.com/im')
+    ).toBe('See diagram');
+  });
+
+  it('leaves prose with a space in the would-be target alone', () => {
+    expect(stream({ preview: true }).append('see [note](which is long')).toBe(
+      'see [note](which is long'
+    );
+  });
+
+  it('settles to the literal syntax when the stream finishes first', () => {
+    const harness = stream({ preview: true });
+    harness.append('See [the docs](https://exa');
+    harness.stream.finish();
+    expect(shown(harness.sessionId)).toBe('See [the docs](https://exa');
+  });
+});
+
+describe('the features are independent', () => {
   it('emphasis alone does not close a code span', () => {
     const harness = stream({ preview: { emphasis: true } });
     expect(harness.append('a `code')).toBe('a `code');
@@ -216,6 +256,20 @@ describe('the two features are independent', () => {
   it('inline code alone does not close a bold span', () => {
     const harness = stream({ preview: { inlineCode: true } });
     expect(harness.append('a **bold')).toBe('a **bold');
+  });
+
+  it('links alone settle a link and nothing else', () => {
+    const harness = stream({ preview: { links: true } });
+    expect(harness.append('**bold [the docs](https://exa')).toBe(
+      '**bold the docs'
+    );
+  });
+
+  it('images alone leave a link as typed', () => {
+    const harness = stream({ preview: { images: true } });
+    expect(harness.append('See [the docs](https://exa')).toBe(
+      'See [the docs](https://exa'
+    );
   });
 
   it('the inline-code feature styles the span as code', () => {
@@ -249,7 +303,12 @@ describe('changing the pass mid-stream', () => {
     // Spied after construction, so only the explicit calls are counted.
     const spy = vi.spyOn(realEngineModule.default, 'setPreview');
     controller.setPreview(true);
-    controller.setPreview({ emphasis: true, inlineCode: true });
+    controller.setPreview({
+      emphasis: true,
+      inlineCode: true,
+      links: true,
+      images: true,
+    });
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });

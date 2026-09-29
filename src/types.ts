@@ -51,6 +51,17 @@ export type MarkdownPreviewOptions = Readonly<{
    * Close an unclosed backtick run, so the text after it shows as code.
    */
   inlineCode?: boolean;
+  /**
+   * Show an unfinished link, `[text` or `[text](https://exa`, as its text. The
+   * partial target is dropped rather than followed, so nothing is tappable
+   * until the link's own `)` arrives.
+   */
+  links?: boolean;
+  /**
+   * Show an unfinished image, `![alt` or `![alt](https://exa`, as its alt text,
+   * which is how a finished image renders too.
+   */
+  images?: boolean;
 }>;
 
 export type MarkdownStreamOptions = Readonly<{

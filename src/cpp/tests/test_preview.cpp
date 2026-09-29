@@ -311,20 +311,72 @@ bool unterminatedInlineCode() {
   return true;
 }
 
+/// An unfinished link previews as its text and an unfinished image as its alt
+/// text, the way Streamdown shows them. remend points the link at a sentinel
+/// scheme; here the partial target is dropped, so no link event can fire and
+/// the text reads exactly as the finished document will, minus the tap target.
+void showsLinkText(std::string_view input, std::string_view expectedVisible) {
+  const std::string name = label("unfinished link", input);
+  const PreviewResult result = kPreview.apply(input, 0);
+  CHECK(result.repaired, name.c_str());
+  CHECK(visible(*result.parsed.document) == std::string(expectedVisible), name.c_str());
+  CHECK(result.parsed.document->links.empty(), name.c_str());
+}
+
 bool linksAndImages() {
-  // The engine already refuses to make an unfinished target actionable, and it
-  // does so by leaving the text alone rather than by rewriting the source. That
-  // is a stronger answer than remend's sentinel URL, which turns the text into
-  // a link to a scheme that resolves nowhere.
-  for (const char *input : {"[link text", "[incomplete link", "Text with [incomplete link",
-                            "Check out [this lin", "Check the [documentation", "[some text",
-                            "Text [outer [inner", "Text ![incomplete image", "![partial",
-                            "Text ![outer [inner", "See ![the diag", "[link [nested] text"}) {
-    untouched(input, "an unfinished target is left as text, not rewritten");
+  showsLinkText("[link text", "link text");
+  showsLinkText("[incomplete link", "incomplete link");
+  showsLinkText("Text with [incomplete link", "Text with incomplete link");
+  showsLinkText("Check out [this lin", "Check out this lin");
+  showsLinkText("Check the [documentation", "Check the documentation");
+  showsLinkText("[some text", "some text");
+  showsLinkText("[link [nested] text", "link [nested] text");
+  // Appending the bracket closes the innermost, as the writer's own will.
+  showsLinkText("Text [outer [inner", "Text [outer inner");
+  showsLinkText("[foo [bar [baz", "[foo [bar baz");
+  // The partial target is dropped, never followed, whatever shape it has.
+  showsLinkText("See [the docs](https://exa", "See the docs");
+  showsLinkText("Visit [our site](https://exa", "Visit our site");
+  showsLinkText("[a](http://example.com/x", "a");
+  showsLinkText("[text](https://example.com \"tit", "text");
+  showsLinkText("[text](<https://exa", "text");
+  showsLinkText("[a](https://x.com/_foo", "a");
+  // An image shows its alt text, which is how the engine renders a finished one.
+  showsLinkText("![partial", "partial");
+  showsLinkText("Text ![incomplete image", "Text incomplete image");
+  showsLinkText("See ![the diag", "See the diag");
+  showsLinkText("![a](http://ex", "a");
+  showsLinkText("See ![diagram](http://example.com/img", "See diagram");
+  showsLinkText("Text ![outer [inner", "Text ![outer inner");
+
+  // Spans inside the link text close inside it, and spans around the link close
+  // around it, so the closers nest the way the writer's will.
+  openSpan("[**bold link", "bold link", kStrong);
+  openSpan("Text with [link and **bold", "Text with link and bold", kStrong);
+  openSpan("**bold [docs](htt", "bold docs", kStrong);
+
+  // A space ends a bare destination, so this is prose that will never be a link,
+  // and dropping it would delete words the writer typed.
+  untouched("see [note](which is long", "a space ends a bare destination");
+  untouched("read [the docs](http://example.com/guide now", "a space ends a bare destination");
+  // Balanced brackets are already whatever they will be until `(` arrives.
+  untouched("Text [outer [inner]]", "balanced brackets are not open");
+  untouched("a \\[not a link", "an escaped bracket opens nothing");
+  // A task marker still arriving would show a letter where a checkbox is about
+  // to appear.
+  untouched("- [", "a task marker is not a link");
+  untouched("- [x", "a task marker is not a link");
+  untouched("1. [ ", "a task marker is not a link");
+  // A complete link keeps its target; only the unfinished one is touched.
+  {
+    const PreviewResult beside = kPreview.apply("[a](https://example.com) and [more", 0);
+    CHECK(beside.repaired && visible(*beside.parsed.document) == "a and more",
+          "an unfinished link beside a complete one previews");
+    CHECK(beside.parsed.document->links.size() == 1 &&
+              beside.parsed.document->links[0].url == "https://example.com",
+          "and the complete link keeps its target");
   }
-  for (const char *input : {"[link text", "![partial", "Text with [incomplete link"}) {
-    showsAs(input, input, "an unfinished target stays as the text that was typed");
-  }
+
   // A partial destination is not a target even when the URL inside it is
   // already complete, because the next chunk can extend or move it.
   for (const char *input : {"![a](http://ex", "![a](http://example.com/x", "[a](http://example.com/x",
@@ -487,7 +539,7 @@ bool nestedOpenSpans() {
   // Each candidate costs a parse of the tail, so a tail full of markers that
   // all fail is bounded rather than probed once per marker.
   const PreviewResult capped = kPreview.apply("**a \\*b \\*c \\*d \\*e \\*f", 0);
-  CHECK(capped.stats.probes == 4, "a tail of failing candidates stops at the probe budget");
+  CHECK(capped.stats.probes == 5, "a tail of failing candidates stops at the probe budget");
   CHECK(!capped.repaired && capped.stats.refused == 1, "and is refused once, as one tail");
   return true;
 }
@@ -570,6 +622,19 @@ bool featuresAreOptIn() {
   const Preview code{codeOnly};
   CHECK(!code.apply("**bold wor", 0).repaired, "code alone does not close bold");
   CHECK(code.apply("`code", 0).repaired, "code alone closes a code span");
+
+  PreviewOptions linksOnly;
+  linksOnly.features = static_cast<uint32_t>(PreviewFeature::Links);
+  const Preview links{linksOnly};
+  CHECK(links.apply("See [the docs](https://exa", 0).repaired, "links alone settles a link");
+  CHECK(!links.apply("See ![diagram](https://exa", 0).repaired, "links alone leaves an image");
+  CHECK(!links.apply("**bold wor", 0).repaired, "links alone does not close bold");
+
+  PreviewOptions imagesOnly;
+  imagesOnly.features = static_cast<uint32_t>(PreviewFeature::Images);
+  const Preview images{imagesOnly};
+  CHECK(images.apply("See ![diagram](https://exa", 0).repaired, "images alone settles an image");
+  CHECK(!images.apply("See [the docs](https://exa", 0).repaired, "images alone leaves a link");
 
   PreviewOptions empty;
   CHECK(!empty.enabled(), "no features means disabled");
@@ -913,6 +978,30 @@ bool sessionIntegration() {
     const PreviewResult frozen = kPreview.apply("**bold wor", 0, 1);
     CHECK(!frozen.repaired && frozen.stats.probes == 0, "a frozen last block is not probed");
     CHECK(kPreview.apply("settled\n\n**bold wor", 0, 1).repaired, "a block after the frozen ones previews");
+  }
+
+  // An unfinished link reads as its text, becomes a real link the moment its
+  // `)` arrives, and is never a target before then. A stream that finishes
+  // first settles to the literal syntax, like any other open span.
+  for (const ParseMode mode : {ParseMode::FullParse, ParseMode::IncrementalTail}) {
+    IncrementalParser parser{mode};
+    parser.setPreview(PreviewOptions::all());
+    parser.append("See [the docs](https://exa");
+    parser.parse(false);
+    CHECK(visible(*parser.document()) == "See the docs", "an unfinished link previews as its text");
+    CHECK(parser.document()->links.empty(), "and is not a target");
+    parser.append("mple.com)");
+    parser.parse(false);
+    CHECK(parser.document()->links.size() == 1 && parser.document()->links[0].url == "https://example.com",
+          "the writer's own bracket makes it a link");
+
+    IncrementalParser unfinished{mode};
+    unfinished.setPreview(PreviewOptions::all());
+    unfinished.append("See [the docs](https://exa");
+    unfinished.parse(false);
+    unfinished.parse(true);
+    CHECK(visible(*unfinished.document()) == "See [the docs](https://exa",
+          "a finished stream shows the unfinished link as typed");
   }
 
   // An open fence is where the preview has least to say, and the fast path

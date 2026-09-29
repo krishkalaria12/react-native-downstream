@@ -19,6 +19,11 @@
 // `**bold *ital` reads as bold and italic. A candidate that fails its proof is
 // skipped, not fatal, and a tail costs at most a few probes.
 //
+// An unfinished link or image at the end of the tail is settled first, as
+// `[text]()` or `![alt]()`: the reader sees the text and nothing becomes
+// tappable. Its proof is the same kind: the text loses the bracket and the
+// partial target, nothing else, and no actionable link appears.
+//
 // Scope is deliberately narrow, and narrower than the library it is ported
 // from. See README.md for the full list of what was left out and why.
 
@@ -35,12 +40,19 @@ namespace downstream::remend {
 /// default: an empty set means the policy is inert and every span stays
 /// literal, which is what the engine did before this existed.
 enum class PreviewFeature : uint32_t {
-  /// A `*`, `_`, `~` or `` ` `` run that md4c left as literal text, closed
+  /// A `*`, `_` or `~~` run that md4c left as literal text, closed
   /// provisionally so its content shows styled.
   Emphasis = 1u << 0,
   /// Retained separately from Emphasis so a caller can style code spans
   /// differently, and so the inline-code case has its own name in a test.
   InlineCode = 1u << 1,
+  /// An unfinished link, `[text` or `[text](partial`, shown as its text. The
+  /// partial target is dropped rather than guessed, so nothing is tappable
+  /// until the writer's own `)` arrives.
+  Links = 1u << 2,
+  /// An unfinished image, `![alt` or `![alt](partial`, shown as its alt text,
+  /// which is how the engine renders a finished image too.
+  Images = 1u << 3,
 };
 
 struct PreviewOptions {
@@ -61,7 +73,8 @@ struct PreviewOptions {
   /// Every bit this build defines. A caller that passes anything else gets the
   /// bits it meant, not a silently inert policy.
   static constexpr features_t allFeatures() {
-    return static_cast<features_t>(PreviewFeature::Emphasis) | static_cast<features_t>(PreviewFeature::InlineCode);
+    return static_cast<features_t>(PreviewFeature::Emphasis) | static_cast<features_t>(PreviewFeature::InlineCode) |
+        static_cast<features_t>(PreviewFeature::Links) | static_cast<features_t>(PreviewFeature::Images);
   }
 };
 

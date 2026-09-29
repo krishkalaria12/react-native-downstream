@@ -40,7 +40,7 @@ An open span renders as the literal text the writer sent, so a half-arrived `**b
 
 ```tsx
 const stream = createMarkdownStream({ preview: true });
-// Or one feature at a time: { preview: { emphasis: true } }
+// Or one feature at a time: { preview: { emphasis: true, links: true } }
 ```
 
 The pass only ever repairs the stream's unstable tail, and only when reparsing proves the repair changed nothing but the block it aimed at. It never touches `getSource()` or source ranges, and `finish()` drops it, so the settled document is always a parse of the bytes you appended; see [provisional styling](docs/streaming-semantics.md#provisional-styling).

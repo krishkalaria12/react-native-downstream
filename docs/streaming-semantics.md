@@ -30,6 +30,8 @@ Every open run closes, innermost first, so `**bold *ital` reads as bold and ital
 
 A single tilde never opens a span. md4c's GitHub dialect reads `~x~` as strikethrough, so closing one would invent a span the writer did not ask for.
 
+An unfinished link or image previews as its text, the way Streamdown shows it. `[text` and `[text](https://exa` read as `text`, and `![alt](https://exa` as `alt`, which is how a finished image renders. The partial target is dropped rather than followed, so nothing is tappable until the link's own `)` arrives, and a stream that finishes first shows the syntax as typed. `[note](which is long` stays literal: a space ends a bare destination, so it is prose that will never be a link.
+
 ## Classification and ordering
 
 A newline alone never commits a block. A following setext underline, table separator, list continuation, reference definition, quote continuation, or fence close may change earlier classification. Until the native implementation proves a safe boundary, it reparses the full source. A later tail optimization must fall back to full parse when context is uncertain and pass every prefix case in the parser oracle.

@@ -25,6 +25,10 @@ const MAX_QUEUED_BYTES = 256 * 1024;
  */
 const PREVIEW_EMPHASIS = 1 << 0;
 const PREVIEW_INLINE_CODE = 1 << 1;
+const PREVIEW_LINKS = 1 << 2;
+const PREVIEW_IMAGES = 1 << 3;
+const PREVIEW_ALL =
+  PREVIEW_EMPHASIS | PREVIEW_INLINE_CODE | PREVIEW_LINKS | PREVIEW_IMAGES;
 
 /**
  * Resolves the public `preview` option to a bitmask.
@@ -36,7 +40,7 @@ const PREVIEW_INLINE_CODE = 1 << 1;
  */
 function previewFeatures(options: boolean | MarkdownPreviewOptions): number {
   if (typeof options === 'boolean') {
-    return options ? PREVIEW_EMPHASIS | PREVIEW_INLINE_CODE : 0;
+    return options ? PREVIEW_ALL : 0;
   }
   if (typeof options !== 'object' || options === null) {
     throw operationError(
@@ -47,6 +51,8 @@ function previewFeatures(options: boolean | MarkdownPreviewOptions): number {
   let features = 0;
   if (options.emphasis) features |= PREVIEW_EMPHASIS;
   if (options.inlineCode) features |= PREVIEW_INLINE_CODE;
+  if (options.links) features |= PREVIEW_LINKS;
+  if (options.images) features |= PREVIEW_IMAGES;
   return features;
 }
 const controllers = new Map<string, StreamState>();
