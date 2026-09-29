@@ -54,8 +54,10 @@ before(async () => {
     '-DMD4C_USE_UTF8',
     ...SYMBOL_PREFIXES,
     `-I${MD4C}`,
+    `-I${CPP}`,
     `-I${join(CPP, 'downstream')}`,
     `-I${join(CPP, 'session')}`,
+    `-I${join(ROOT, 'remend')}`,
   ];
   const [md4c, entity] = await Promise.all(
     ['md4c.c', 'entity.c'].map(async (source) => {
@@ -72,10 +74,13 @@ before(async () => {
   );
   const downstream = (name) => join(CPP, 'downstream', name);
   const session = (name) => join(CPP, 'session', name);
+  const remend = (...parts) => join(ROOT, 'remend', ...parts);
   const testSource = (name) => join(CPP, 'tests', name);
-  const engine = ['MarkdownParser.cpp', 'Unicode.cpp', 'LinkPolicy.cpp'].map(
-    downstream
-  );
+  const engine = [
+    ...['MarkdownParser.cpp', 'Unicode.cpp', 'LinkPolicy.cpp'].map(downstream),
+    // The preview pass and the shared scanners it and the parser both use.
+    ...['Scan.cpp', 'Compare.cpp'].map((name) => remend(name)),
+  ];
   const pool = ['WorkerPool.cpp', 'RenderPreparer.cpp'].map(downstream);
   await Promise.all([
     execFileAsync(cxx, [

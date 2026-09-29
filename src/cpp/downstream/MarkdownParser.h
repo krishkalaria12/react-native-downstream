@@ -45,6 +45,13 @@ struct ParseResult {
 /// Thread-safe; each call is independent.
 ParseResult parseMarkdown(std::string_view source);
 
+/// Parses a region of a larger document, as a stream's unstable tail is. The
+/// result matches a full parse of the same bytes at the same offset, because
+/// md4c's check that a list item cannot begin with two blank lines reads the
+/// last line record as a block record and so depends on each line's byte offset
+/// modulo 256. Returns ranges relative to the region, not the document.
+ParseResult parseMarkdownAt(std::string_view region, size_t origin);
+
 /// Allocates an ID for a derived immutable snapshot without reparsing it.
 uint64_t allocateDocumentId();
 

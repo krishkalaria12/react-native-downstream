@@ -18,7 +18,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const CPP = resolve(dirname(fileURLToPath(import.meta.url)), '../src/cpp');
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const CPP = join(ROOT, 'src/cpp');
 const MD4C = join(CPP, 'md4c');
 
 /** Symbol renames, matching Downstream.podspec and the Android CMakeLists. */
@@ -37,9 +38,15 @@ const CXXFLAGS = [
   `-I${MD4C}`,
   `-I${join(CPP, 'downstream')}`,
   `-I${join(CPP, 'session')}`,
+  `-I${join(ROOT, 'remend')}`,
 ];
 
-const ENGINE = ['MarkdownParser.cpp', 'Unicode.cpp', 'LinkPolicy.cpp'];
+const ENGINE = [
+  ...['MarkdownParser.cpp', 'Unicode.cpp', 'LinkPolicy.cpp'].map((name) =>
+    join(CPP, 'downstream', name)
+  ),
+  ...['Scan.cpp', 'Compare.cpp'].map((name) => join(ROOT, 'remend', name)),
+];
 
 /** Block kinds, matching `Block::Kind` in the engine. */
 export const KIND = {
@@ -195,10 +202,7 @@ function compileObjects(): string[] {
 function engineBinary(): string {
   const objects = compileObjects();
   return compile(
-    [
-      join(CPP, 'tests', 'dump_document.cpp'),
-      ...ENGINE.map((f) => join(CPP, 'downstream', f)),
-    ],
+    [join(CPP, 'tests', 'dump_document.cpp'), ...ENGINE],
     'downstream-dump',
     CXXFLAGS,
     objects
@@ -212,7 +216,7 @@ function incrementalBinary(): string {
       join(CPP, 'tests', 'test_incremental.cpp'),
       join(CPP, 'session', 'IncrementalParser.cpp'),
       join(CPP, 'downstream', 'SegmentPlan.cpp'),
-      ...ENGINE.map((f) => join(CPP, 'downstream', f)),
+      ...ENGINE,
     ],
     'downstream-incremental',
     CXXFLAGS,
