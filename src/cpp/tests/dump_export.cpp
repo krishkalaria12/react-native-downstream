@@ -1,6 +1,6 @@
 // Host test driver: parses Markdown from stdin, serializes the ranges named on
 // the command line, and prints the parse model and every result as one JSON
-// object. `src/cpp/tests/engine.test.mjs` and `__tests__/engine.ts` read it, so
+// object. `src/cpp/tests/engine.test.mjs` and `tests/engine.ts` read it, so
 // the export rules are tested against the code that ships rather than against a
 // restatement of them.
 //

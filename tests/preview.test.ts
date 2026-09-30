@@ -57,7 +57,9 @@ function flushFrames(): void {
 
 /** The text a reader would currently see for a session. */
 function shown(sessionId: string): string {
-  return visibleText(snapshotOf(sessionId) ?? { blocks: [], links: [] });
+  return visibleText(
+    snapshotOf(sessionId) ?? { blocks: [], links: [], settled: 0 }
+  );
 }
 
 type Harness = {

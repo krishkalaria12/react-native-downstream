@@ -601,7 +601,7 @@ type MarkdownViewBaseProps = Readonly&lt;{
                 <li><code>Block::info</code> from <code>MD_BLOCK_CODE_DETAIL::info</code> and from the open-fence fast path.</li>
                 <li><code>SegmentPlan::kind</code> with <code>Code</code> segments, and <code>DownstreamJni.cpp</code> flag bit 8.</li>
                 <li><code>Export.{h,cpp}</code> for code text, CSV, TSV, Markdown and HTML, plus <code>downloadName(block, configuredBase, fallback)</code>. <code>ExportNames.cpp</code> is generated from Streamdown's map by a script next to <code>generate-tables.mjs</code>, with an attribution header.</li>
-                <li>Add the new sources to <code>Downstream.podspec</code>, <code>src/android/src/main/jni/CMakeLists.txt</code>, <code>engine.test.mjs</code> and <code>__tests__/engine.ts</code>.</li>
+                <li>Add the new sources to <code>Downstream.podspec</code>, <code>src/android/src/main/jni/CMakeLists.txt</code>, <code>engine.test.mjs</code> and <code>tests/engine.ts</code>.</li>
               </ul>
               <p class="exit"><b>Exit:</b> <code>pnpm test:native</code> passes the export goldens, the Markdown round trip, <code>settledBlocks</code> for each producer, and segment plans; existing snapshots change only in plan dumps.</p>
             </div>
@@ -656,7 +656,7 @@ type MarkdownViewBaseProps = Readonly&lt;{
               <h2>Testing</h2>
               <p>Engine rules are tested against the real engine; platform behavior is checked on simulators and emulators.</p>
             </div>
-            <h3>Engine (<code>pnpm test:native</code>, <code>__tests__/engine.ts</code>)</h3>
+            <h3>Engine (<code>pnpm test:native</code>, <code>tests/engine.ts</code>)</h3>
             <ul>
               <li><b>Code text goldens.</b> Plain, empty, tabs, CRLF source, NUL, astral emoji, RTL text, and code inside a list item, a quote, and a nested quote in a list. The expected value is written by hand, never computed by a second implementation.</li>
               <li><b>CSV and TSV goldens.</b> Streamdown's <code>table-utils.test.ts</code> cases, ported one to one, plus each separator, a short row, a cell holding the separator, and a header-only table.</li>

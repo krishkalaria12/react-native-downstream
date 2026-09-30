@@ -1,3 +1,4 @@
+/* eslint-disable no-bitwise -- the native `controls` prop is a bitmask */
 /**
  * @vitest-environment happy-dom
  */
@@ -329,5 +330,338 @@ describe('DownstreamMarkdown props', () => {
     expect(nativeView.last()?.sessionId).toBe(
       getStreamState(session).binding().sessionId
     );
+  });
+});
+
+describe('DownstreamMarkdown controls', () => {
+  const SOURCE =
+    '```ts title="app.ts"\nconst a = 1;\n```\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n';
+
+  /** The event the native view would send, with everything a control sends. */
+  function controlEvent(
+    overrides: Partial<{
+      block: string;
+      action: string;
+      format: string;
+      language: string;
+      filename: string;
+      wrapped: boolean;
+    }> = {}
+  ) {
+    return {
+      nativeEvent: {
+        block: 'code',
+        action: 'copy',
+        format: 'text',
+        language: 'ts',
+        filename: '',
+        wrapped: false,
+        ...overrides,
+      },
+    };
+  }
+
+  /** Calls the native view's event handler as Fabric would. */
+  function fire(
+    name: 'onControlAction' | 'onMarkdownError',
+    event: unknown
+  ): void {
+    act(() => {
+      (nativeView.last()?.[name] as (event: unknown) => void)(event);
+    });
+  }
+
+  it('sends every control on by default', () => {
+    mount(<DownstreamMarkdown markdown={SOURCE} />);
+    expect(nativeView.last()?.controls).toBe(31);
+  });
+
+  it('sends the resolved bitmask rather than the prop', () => {
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        controls={{ code: { download: false } }}
+      />
+    );
+    expect(nativeView.last()?.controls).toBe(31 & ~2);
+  });
+
+  it('sends the file names, the separator, and the labels', () => {
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        controls={{
+          code: { download: { filename: 'snippet' } },
+          table: { csvSeparator: ';' },
+        }}
+        translations={{ copyCode: 'Copiar' }}
+      />
+    );
+    const props = nativeView.last();
+    expect(props?.codeFilename).toBe('snippet');
+    expect(props?.tableFilename).toBe('table');
+    expect(props?.csvSeparator).toBe(';');
+    const labels = props?.controlLabels as string[];
+    expect(labels[0]).toBe('Copiar');
+    expect(labels).toHaveLength(15);
+  });
+
+  it('does not wrap code by default', () => {
+    mount(<DownstreamMarkdown markdown={SOURCE} />);
+    expect(nativeView.last()?.codeBlockWrap).toBe(false);
+  });
+
+  it('passes codeBlockWrap through', () => {
+    mount(<DownstreamMarkdown markdown={SOURCE} codeBlockWrap />);
+    expect(nativeView.last()?.codeBlockWrap).toBe(true);
+  });
+
+  it('selects by default', () => {
+    mount(<DownstreamMarkdown markdown="x" />);
+    expect(nativeView.last()?.selectable).toBe(true);
+  });
+
+  it('selects by default for a stream too', () => {
+    const session = stream();
+    mount(<DownstreamMarkdown stream={session} />);
+    expect(nativeView.last()?.selectable).toBe(true);
+  });
+
+  it('routes a code copy to the code handler', () => {
+    const onCopy = vi.fn();
+    const tableCopy = vi.fn();
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        controls={{
+          code: { copy: { onCopy } },
+          table: { copy: { onCopy: tableCopy } },
+        }}
+      />
+    );
+    fire('onControlAction', controlEvent());
+    expect(onCopy).toHaveBeenCalledWith({
+      block: 'code',
+      action: 'copy',
+      format: 'text',
+      language: 'ts',
+    });
+    expect(tableCopy).not.toHaveBeenCalled();
+  });
+
+  it('routes a table copy to the table handler with its format', () => {
+    const onCopy = vi.fn();
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        controls={{ table: { copy: { onCopy } } }}
+      />
+    );
+    fire(
+      'onControlAction',
+      controlEvent({
+        block: 'table',
+        action: 'copy',
+        format: 'csv',
+        language: '',
+      })
+    );
+    expect(onCopy).toHaveBeenCalledWith({
+      block: 'table',
+      action: 'copy',
+      format: 'csv',
+      language: '',
+    });
+  });
+
+  it('routes a download with the file name the native side chose', () => {
+    const onDownload = vi.fn();
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        controls={{ code: { download: { onDownload } } }}
+      />
+    );
+    fire(
+      'onControlAction',
+      controlEvent({ action: 'download', filename: 'app.ts' })
+    );
+    expect(onDownload).toHaveBeenCalledWith({
+      block: 'code',
+      action: 'download',
+      format: 'text',
+      language: 'ts',
+      filename: 'app.ts',
+    });
+  });
+
+  it('routes a wrap toggle with the layout the press left behind', () => {
+    const onToggle = vi.fn();
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        controls={{ code: { wrap: { onToggle } } }}
+      />
+    );
+    fire(
+      'onControlAction',
+      controlEvent({ action: 'wrap', format: '', wrapped: true })
+    );
+    expect(onToggle).toHaveBeenCalledWith({
+      block: 'code',
+      action: 'wrap',
+      wrapped: true,
+      language: 'ts',
+    });
+  });
+
+  it('drops an event that names a control this build does not have', () => {
+    const onCopy = vi.fn();
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        controls={{ code: { copy: { onCopy } } }}
+      />
+    );
+    fire(
+      'onControlAction',
+      controlEvent({ block: 'mermaid', action: 'download' })
+    );
+    fire('onControlAction', controlEvent({ action: 'fullscreen' }));
+    expect(onCopy).not.toHaveBeenCalled();
+  });
+
+  it('drops a format native does not know rather than passing it on', () => {
+    const onCopy = vi.fn();
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        controls={{ table: { copy: { onCopy } } }}
+      />
+    );
+    fire(
+      'onControlAction',
+      controlEvent({ block: 'table', format: 'pdf', language: '' })
+    );
+    expect(onCopy).toHaveBeenCalledTimes(1);
+    expect(onCopy.mock.calls[0]?.[0]).not.toHaveProperty('format');
+  });
+
+  it('routes a control failure to that control onError', () => {
+    const onError = vi.fn();
+    const viewError = vi.fn();
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        onError={viewError}
+        controls={{ code: { download: { onError } } }}
+      />
+    );
+    fire('onMarkdownError', {
+      nativeEvent: {
+        code: 'control_failed',
+        message:
+          'code download failed: the clipboard could not take that much text.',
+        generation: 1,
+        sequence: 0,
+        recoverable: true,
+      },
+    });
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0]?.[0]).toMatchObject({
+      code: 'control_failed',
+    });
+    expect(viewError).not.toHaveBeenCalled();
+  });
+
+  it('routes a control failure to the view onError when the control has none', () => {
+    const onError = vi.fn();
+    mount(<DownstreamMarkdown markdown={SOURCE} onError={onError} />);
+    fire('onMarkdownError', {
+      nativeEvent: {
+        code: 'control_failed',
+        message: 'table copy failed: the document is gone.',
+        generation: 1,
+        sequence: 0,
+        recoverable: true,
+      },
+    });
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes a non-control failure to the view onError', () => {
+    const copyError = vi.fn();
+    const onError = vi.fn();
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        onError={onError}
+        controls={{ code: { copy: { onError: copyError } } }}
+      />
+    );
+    fire('onMarkdownError', {
+      nativeEvent: {
+        code: 'parse_failed',
+        message: 'The Markdown parser could not complete.',
+        generation: 1,
+        sequence: 0,
+        recoverable: true,
+      },
+    });
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(copyError).not.toHaveBeenCalled();
+  });
+
+  it('drops a control failure from a generation that is gone', () => {
+    const onError = vi.fn();
+    mount(<DownstreamMarkdown markdown={SOURCE} onError={onError} />);
+    fire('onMarkdownError', {
+      nativeEvent: {
+        code: 'control_failed',
+        message: 'code copy failed: too large.',
+        generation: 99,
+        sequence: 0,
+        recoverable: true,
+      },
+    });
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('reports nothing when a control is turned off', () => {
+    const onCopy = vi.fn();
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        controls={{ code: { copy: { onCopy } } }}
+      />
+    );
+    rerender(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        controls={{ code: { copy: false } }}
+      />
+    );
+    fire('onControlAction', controlEvent());
+    expect(onCopy).not.toHaveBeenCalled();
+  });
+
+  it('keeps the handlers when the control value is rebuilt each render', () => {
+    const onCopy = vi.fn();
+    for (let index = 0; index < 3; index++) {
+      mount(
+        <DownstreamMarkdown
+          markdown={SOURCE}
+          controls={{ code: { copy: { onCopy } } }}
+        />
+      );
+      rerender(
+        <DownstreamMarkdown
+          markdown={SOURCE}
+          controls={{ code: { copy: { onCopy } } }}
+        />
+      );
+    }
+    fire('onControlAction', controlEvent());
+    expect(onCopy).toHaveBeenCalledTimes(1);
   });
 });
