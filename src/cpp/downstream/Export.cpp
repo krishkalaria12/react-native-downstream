@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <string>
-#include <vector>
 
 namespace downstream {
 namespace {
@@ -148,33 +147,7 @@ void appendMarkdownCode(std::u16string &out, std::u16string_view text) {
   out.append(fence);
 }
 
-/// The runs of a cell that overlap it, so the visible text can be written back
-/// with its styles. Runs are sorted and never overlap, and a cell's own range
-/// clamps them to the block's text, so a piece can never address a byte the
-/// block does not have.
-struct CellRun {
-  uint32_t start;
-  uint32_t end;
-  uint32_t styles;
-  int32_t link;
-};
-
-std::vector<CellRun> cellRuns(const Block &block, const TableCell &cell) {
-  const auto length = static_cast<uint32_t>(block.text.size());
-  const uint32_t cellStart = std::min<uint32_t>(cell.start, length);
-  const uint32_t cellEnd = std::min<uint32_t>(std::max(cell.start, cell.end), length);
-  std::vector<CellRun> runs;
-  for (const InlineRun &run : block.runs) {
-    const uint32_t start = std::max(run.start, cellStart);
-    const uint32_t end = std::min(run.end, cellEnd);
-    if (start < end) {
-      runs.push_back({start, end, run.styles, run.link});
-    }
-  }
-  return runs;
-}
-
-/// Splits a cell's visible text into unstyled gaps and styled runs, in order.
+/// One styled run or unstyled gap clipped to a cell's visible text.
 struct Piece {
   uint32_t start;
   uint32_t end;
@@ -182,23 +155,32 @@ struct Piece {
   int32_t link;
 };
 
-std::vector<Piece> pieces(const Block &block, const TableCell &cell) {
-  std::vector<Piece> out;
+/// Runs are sorted and disjoint. Locate the first possible overlap rather
+/// than scanning a wide row again for every cell, and emit pieces directly
+/// without allocating temporary run and gap vectors.
+template <typename Visit>
+void visitPieces(const Block &block, const TableCell &cell, Visit visit) {
   const auto length = static_cast<uint32_t>(block.text.size());
   const uint32_t start = std::min<uint32_t>(cell.start, length);
   const uint32_t end = std::min<uint32_t>(std::max(cell.start, cell.end), length);
   uint32_t cursor = start;
-  for (const CellRun &run : cellRuns(block, cell)) {
-    if (run.start > cursor) {
-      out.push_back({cursor, run.start, 0, -1});
+  auto run = std::lower_bound(block.runs.begin(), block.runs.end(), start,
+                              [](const InlineRun &run, uint32_t offset) { return run.end <= offset; });
+  for (; run != block.runs.end() && run->start < end; ++run) {
+    const uint32_t runStart = std::max(run->start, start);
+    const uint32_t runEnd = std::min(run->end, end);
+    if (runStart >= runEnd) {
+      continue;
     }
-    out.push_back({run.start, run.end, run.styles, run.link});
-    cursor = run.end;
+    if (runStart > cursor) {
+      visit(Piece{cursor, runStart, 0, -1});
+    }
+    visit(Piece{runStart, runEnd, run->styles, run->link});
+    cursor = runEnd;
   }
   if (cursor < end) {
-    out.push_back({cursor, end, 0, -1});
+    visit(Piece{cursor, end, 0, -1});
   }
-  return out;
 }
 
 /// A destination is written back only when the link policy already accepted it,
@@ -219,7 +201,7 @@ const Link *acceptedLink(const Document &document, int32_t index) {
  */
 void appendMarkdownCell(std::u16string &out, const Document &document, const Block &block, const TableCell &cell,
                         bool headerBold) {
-  for (const Piece &piece : pieces(block, cell)) {
+  visitPieces(block, cell, [&](const Piece &piece) {
     const std::u16string_view text(block.text.data() + piece.start, piece.end - piece.start);
     const uint32_t styles = headerBold ? piece.styles & ~static_cast<uint32_t>(InlineStyle::Strong) : piece.styles;
     const bool strike = (styles & InlineStyle::Strikethrough) != 0;
@@ -262,7 +244,7 @@ void appendMarkdownCell(std::u16string &out, const Document &document, const Blo
       appendUtf8(out, link->url);
       out.push_back(u')');
     }
-  }
+  });
 }
 
 /// `:--`, `:-:`, `--:`, or `---`. GFM reads the separator row as the column
@@ -370,7 +352,7 @@ void appendHtmlCell(std::u16string &out, const Document &document, const Block &
   out.append(header ? u"<th" : u"<td");
   out.append(alignAttribute(cell.align));
   out.append(u">");
-  for (const Piece &piece : pieces(block, cell)) {
+  visitPieces(block, cell, [&](const Piece &piece) {
     const std::u16string_view text(block.text.data() + piece.start, piece.end - piece.start);
     // A GFM header is bold because it is a header, which a `th` is too, so the
     // implicit weight is dropped rather than nested inside a second `strong`.
@@ -413,7 +395,7 @@ void appendHtmlCell(std::u16string &out, const Document &document, const Block &
     if (link != nullptr) {
       out.append(u"</a>");
     }
-  }
+  });
   out.append(header ? u"</th>" : u"</td>");
 }
 

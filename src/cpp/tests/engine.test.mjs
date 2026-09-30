@@ -6,22 +6,22 @@
 //     node --test src/cpp/tests/engine.test.mjs
 
 import assert from 'node:assert/strict';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { availableParallelism, tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
-import { after, before, describe, test } from 'node:test';
-import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { before, describe, test } from 'node:test';
 
+import {
+  CPP,
+  ENGINE,
+  MD4C_SOURCES,
+  compile,
+  prepareTargets,
+} from './build.mjs';
 import { fencedCases, highlightCases } from './highlight_fixtures.mjs';
 import { adversarialCases, cases } from './oracle.mjs';
 
-const execFileAsync = promisify(execFile);
-
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-const CPP = join(ROOT, 'src', 'cpp');
 const MD4C = join(CPP, 'md4c');
 const LEXILLA = join(CPP, 'lexilla');
 
@@ -32,95 +32,14 @@ const [STRONG, EMPHASIS, STRIKE, CODE, LINK, IMAGE_ALT, FOOTNOTE] = [
   0, 1, 2, 3, 4, 5, 6,
 ].map((bit) => 1 << bit);
 
-// Mirrors the prefixes in Downstream.podspec and src/android/src/main/jni/CMakeLists.txt.
-const SYMBOL_PREFIXES = [
-  '-Dmd_parse=downstream_md_parse',
-  '-Dentity_lookup=downstream_entity_lookup',
-];
-
-// The vendored lexers and everything that reaches them are built with the
-// namespace renames Lexilla and Scintilla use to keep two copies apart.
-const LEXILLA_PREFIXES = [
-  '-DLexilla=downstream_lexilla',
-  '-DScintilla=downstream_scintilla',
-];
-
-const HIGHLIGHT = ['CodeBlocks.cpp', 'CodeDocument.cpp', 'CodeHighlighter.cpp', 'LanguageRegistry.cpp', 'LanguageTables.cpp'];
-
-/** The vendored lexer sources, compiled once into an archive every test links. */
-function lexillaSources() {
-  const sources = [];
-  for (const directory of ['lexers', 'lexlib']) {
-    const path = join(LEXILLA, directory);
-    for (const name of readdirSync(path).sort()) {
-      if (name.endsWith('.cxx')) {
-        sources.push(join(path, name));
-      }
-    }
-  }
-  return sources;
-}
-
-let buildDir;
-const binary = (name) => join(buildDir, name);
-
-// Keep compiler processes within the host's CPU budget. A cold build used to
-// launch every lexer at once and compile the shared engine for each executable.
-async function mapConcurrent(values, operation) {
-  const results = new Array(values.length);
-  let next = 0;
-  let failed = false;
-  const jobs = Math.min(availableParallelism(), 4, values.length);
-  const workers = await Promise.allSettled(
-    Array.from({ length: jobs }, async () => {
-      while (!failed && next < values.length) {
-        const index = next++;
-        try {
-          results[index] = await operation(values[index], index);
-        } catch (error) {
-          failed = true;
-          throw error;
-        }
-      }
-    })
-  );
-  const failure = workers.find((worker) => worker.status === 'rejected');
-  if (failure) throw failure.reason;
-  return results;
-}
+const targets = {};
+const binary = (name) => compile(targets[name], name);
 
 before(async () => {
-  buildDir = mkdtempSync(join(tmpdir(), 'downstream-engine-'));
-  const cc = process.env.CC ?? 'cc';
-  const cxx = process.env.CXX ?? 'c++';
-  const cFlags = ['-std=c11', '-O1', '-DMD4C_USE_UTF8', ...SYMBOL_PREFIXES];
-  const cxxFlags = [
-    '-std=c++20',
-    '-O1',
-    '-Wall',
-    '-Wextra',
-    '-Werror',
-    '-pthread',
-    '-DMD4C_USE_UTF8',
-    ...SYMBOL_PREFIXES,
-    ...LEXILLA_PREFIXES,
-    `-I${MD4C}`,
-    `-I${CPP}`,
-    `-I${join(CPP, 'downstream')}`,
-    `-I${join(CPP, 'session')}`,
-    `-I${join(CPP, 'remend')}`,
-    `-I${join(CPP, 'highlight')}`,
-    `-I${LEXILLA}`,
-    `-I${join(LEXILLA, 'lexlib')}`,
-  ];
   const downstream = (name) => join(CPP, 'downstream', name);
   const session = (name) => join(CPP, 'session', name);
   const testSource = (name) => join(CPP, 'tests', name);
-  const engine = [
-    ...['MarkdownParser.cpp', 'Unicode.cpp', 'LinkPolicy.cpp'].map(downstream),
-    ...['Scan.cpp', 'Compare.cpp', 'Export.cpp', 'ExportNames.cpp'].map(downstream),
-    join(CPP, 'remend', 'Preview.cpp'),
-  ];
+  const engine = ENGINE;
   const pool = ['WorkerPool.cpp', 'RenderPreparer.cpp'].map(downstream);
   const incremental = session('IncrementalParser.cpp');
   const registry = session('SessionRegistry.cpp');
@@ -148,57 +67,14 @@ before(async () => {
     ['test_highlight', engine],
     ['dump_tokens', [downstream('Unicode.cpp')]],
   ];
-  const highlightSources = lexillaSources().concat(
-    HIGHLIGHT.map((name) => join(CPP, 'highlight', name))
-  );
-  const cSources = ['md4c.c', 'entity.c'].map((name) => join(MD4C, name));
-  const sources = [
-    ...new Set([
-      ...cSources,
-      ...highlightSources,
-      ...executables.flatMap(([name, dependencies]) => [
-        testSource(`${name}.cpp`),
-        ...dependencies,
-      ]),
-    ]),
-  ];
-  const objects = new Map();
-  await mapConcurrent(sources, async (source) => {
-    const object = binary(`${basename(source)}.o`);
-    const isC = source.endsWith('.c');
-    const compiler = isC ? cc : cxx;
-    const launcher = process.env.DOWNSTREAM_COMPILER_LAUNCHER;
-    await execFileAsync(launcher ?? compiler, [
-      ...(launcher ? [compiler] : []),
-      ...(isC ? cFlags : cxxFlags),
-      '-c',
-      source,
-      '-o',
-      object,
-    ]);
-    objects.set(source, object);
-  });
-  const highlightArchive = binary('libhighlight.a');
-  await execFileAsync('ar', [
-    'rcs',
-    highlightArchive,
-    ...highlightSources.map((source) => objects.get(source)),
-  ]);
-  await mapConcurrent(executables, async ([name, dependencies]) => {
-    await execFileAsync(cxx, [
-      '-pthread',
-      objects.get(testSource(`${name}.cpp`)),
-      ...dependencies.map((source) => objects.get(source)),
-      ...cSources.map((source) => objects.get(source)),
-      highlightArchive,
-      '-o',
-      binary(name),
-    ]);
-  });
-});
-
-after(() => {
-  if (buildDir) rmSync(buildDir, { recursive: true, force: true });
+  for (const [name, dependencies] of executables) {
+    targets[name] = [
+      testSource(`${name}.cpp`),
+      ...dependencies,
+      ...MD4C_SOURCES,
+    ];
+  }
+  await prepareTargets(targets);
 });
 
 /** Tokenizes one code block and returns dump_tokens' JSON. */

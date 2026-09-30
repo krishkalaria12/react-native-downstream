@@ -4,8 +4,6 @@ on:
     branches:
       - main
   pull_request:
-    branches:
-      - main
   merge_group:
     types:
       - checks_requested
@@ -34,11 +32,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     env:
-      DOWNSTREAM_COMPILER_LAUNCHER: ccache
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_COMPILERCHECK: content
-      CCACHE_MAXSIZE: 256M
+      DOWNSTREAM_ENGINE_CACHE: ${{ github.workspace }}/.native-test-build-cache
 
     steps:
       - name: Checkout
@@ -47,26 +41,44 @@ jobs:
       - name: Setup
         uses: ./.github/actions/setup
 
-      - name: Install compiler cache
-        run: command -v ccache || sudo apt-get install --yes --no-install-recommends ccache
-
-      - name: Restore compiler cache
+      - name: Restore native test builds
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: .ccache
-          key: ${{ runner.os }}-ccache-v1-${{ hashFiles('src/cpp/**', 'tests/engine.ts', '.github/workflows/ci.yml') }}
+          path: ${{ env.DOWNSTREAM_ENGINE_CACHE }}
+          key: ${{ runner.os }}-${{ runner.arch }}-engine-unit-v2-${{ hashFiles('src/cpp/**', 'tests/engine.ts', '.nvmrc') }}
           restore-keys: |
-            ${{ runner.os }}-ccache-v1-
-
-      - name: Run native engine tests
-        run: pnpm test:native
+            ${{ runner.os }}-${{ runner.arch }}-engine-unit-v2-
+            ${{ runner.os }}-${{ runner.arch }}-engine-host-v2-
 
       - name: Run unit tests
         run: pnpm test
 
-      - name: Report compiler cache
-        if: always()
-        run: ccache --show-stats
+  test-native:
+    runs-on: ubuntu-latest
+    env:
+      DOWNSTREAM_ENGINE_CACHE: ${{ github.workspace }}/.native-test-build-cache
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      # The host suite uses only Node built-ins and the system compiler.
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Restore native test builds
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.DOWNSTREAM_ENGINE_CACHE }}
+          key: ${{ runner.os }}-${{ runner.arch }}-engine-host-v2-${{ hashFiles('src/cpp/**', 'tests/engine.ts', '.nvmrc') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-engine-host-v2-
+            ${{ runner.os }}-${{ runner.arch }}-engine-unit-v2-
+
+      - name: Run native engine tests
+        run: node --test src/cpp/tests/engine.test.mjs
 
   build-library:
     runs-on: ubuntu-latest

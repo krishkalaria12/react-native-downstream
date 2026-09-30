@@ -262,7 +262,8 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   // mismatch alone would drop the shared prefix on the next parse.
   highlight_.clear();
   HighlightStats stats;
-  result.document = highlightSettledCodeBlocks(lexillaHighlighter(), result.document, kHighlightBudgetMs, &stats);
+  result.document = highlightSettledCodeBlocks(lexillaHighlighter(), result.document, kHighlightBudgetMs, &stats,
+                                               replaced_ ? nullptr : document_);
   noteHighlight(stats);
   // A full parse has no proof that any particular block is closed, so nothing
   // is settled until the stream finishes. Only a finished stream settles; a
@@ -322,10 +323,9 @@ void IncrementalParser::noteHighlight(const HighlightStats &stats) {
 void IncrementalParser::highlightTail(Document *document) {
   HighlightStats stats;
   std::vector<Block> &blocks = document->blocks.tail();
-  // Every pass rebuilds the tail from scratch, so every code block in it has to
-  // be colored again: only a committed block keeps its tokens between
-  // snapshots. The last one is the only block that can still grow, so it gets
-  // the state that resumes where the previous snapshot stopped.
+  // The tail is rebuilt from scratch, but unchanged code keeps its completed
+  // tokens. The last code block may still grow, so it gets the state that
+  // resumes where the previous snapshot stopped.
   size_t last = blocks.size();
   while (last > 0 &&
          !(blocks[last - 1].kind == BlockKind::CodeBlock && !blocks[last - 1].language.empty())) {
@@ -338,16 +338,25 @@ void IncrementalParser::highlightTail(Document *document) {
   // A local state for the settled blocks in front of it: they share a lexer with
   // each other, and never disturb the growing block's.
   HighlightState settled;
-  for (size_t i = 0; i + 1 < last; i++) {
-    if (blocks[i].kind == BlockKind::CodeBlock && !blocks[i].language.empty()) {
-      // These are not the growing block, and the tail is rebuilt from scratch on
-      // every pass, so nothing resumes them: a pass that ran out of budget would
-      // leave the same block part-colored on every snapshot forever. Each is
-      // settled within this pass instead.
-      highlightSettledCodeBlock(lexillaHighlighter(), &blocks[i], &settled, kHighlightBudgetMs, &stats);
+  const size_t shared = document->blocks.sharedSize();
+  for (size_t i = 0; i < last; i++) {
+    Block &block = blocks[i];
+    if (block.kind != BlockKind::CodeBlock || block.language.empty()) {
+      continue;
+    }
+    const size_t absolute = shared + i;
+    if (document_ && absolute < document_->blocks.size() &&
+        reuseCompletedCodeTokens(&block, document_->blocks[absolute])) {
+      continue;
+    }
+    if (i + 1 == last) {
+      highlightCodeBlock(lexillaHighlighter(), &block, &highlight_, kHighlightBudgetMs, &stats);
+    } else {
+      // Earlier blocks cannot grow. A budget cut must be finished now because
+      // no later snapshot can otherwise complete their highlighting.
+      highlightSettledCodeBlock(lexillaHighlighter(), &block, &settled, kHighlightBudgetMs, &stats);
     }
   }
-  highlightCodeBlock(lexillaHighlighter(), &blocks[last - 1], &highlight_, kHighlightBudgetMs, &stats);
   noteHighlight(stats);
 }
 

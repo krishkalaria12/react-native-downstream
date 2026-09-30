@@ -329,14 +329,23 @@ internal class CodeSegment(
       return wrappedHeight
     }
     if (unwrappedHeight == 0) {
-      val layout = StaticLayout.Builder.obtain(text, 0, text.length, paint, Int.MAX_VALUE)
+      // A View's measure spec has 30 size bits. Use that bound only to break
+      // lines, then size the scrollable body to its actual line extents.
+      val maximumWidth = (1 shl 30) - 1
+      val layout = StaticLayout.Builder.obtain(text, 0, text.length, paint, maximumWidth)
         .setIncludePad(false)
         .setBreakStrategy(Layout.BREAK_STRATEGY_HIGH_QUALITY)
         .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
         .setTextDirection(TextDirectionHeuristics.FIRSTSTRONG_LTR)
         .build()
       unwrappedHeight = layout.height
-      unwrappedWidth = layout.width
+      var widestLine = 0f
+      for (line in 0 until layout.lineCount) {
+        // Includes trailing spaces, tabs and paragraph margins, and uses the
+        // layout's own shaping and spans for either text direction.
+        widestLine = max(widestLine, layout.getLineWidth(line))
+      }
+      unwrappedWidth = ceil(widestLine.toDouble()).coerceIn(1.0, maximumWidth.toDouble()).toInt()
     }
     return unwrappedHeight
   }
@@ -380,6 +389,13 @@ internal class TableSegment(
   val rowTops = IntArray(rowHeights.size + 1).also { tops ->
     for (index in rowHeights.indices) tops[index + 1] = tops[index] + rowHeights[index]
   }
+  val columnLefts = IntArray(columnWidths.size).also { lefts ->
+    var left = 0
+    for (column in columnWidths.indices) {
+      lefts[column] = if (rtl) tableWidth - 1 - left - columnWidths[column] else left
+      left += columnWidths[column]
+    }
+  }
   val accessibilityRows: List<String> = cells.mapIndexed { index, row ->
     val label = row.joinToString(", ") { it.text.toString() }
     if (hasHeader && index == 0) "Header: $label" else label
@@ -395,6 +411,8 @@ internal class TableSegment(
 internal class RenderedDocument(
   val documentId: Long,
   val segments: List<Segment>,
+  /** The immutable plan already read while building this snapshot. */
+  val plan: List<PlannedSegment>,
   val paint: TextPaint,
   /** Paints and sizes for one font scale and appearance, shared by the frames. */
   val style: Style,
@@ -620,7 +638,7 @@ internal class RenderedDocument(
           ?: return null
         segments.add(segment)
       }
-      return RenderedDocument(documentId, segments, style.paint, style).also { cache.put(key, it) }
+      return RenderedDocument(documentId, segments, plan, style.paint, style).also { cache.put(key, it) }
     }
 
   /** Paints and metrics for one font scale and appearance. */

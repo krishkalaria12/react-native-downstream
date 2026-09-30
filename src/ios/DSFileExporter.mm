@@ -2,6 +2,8 @@
 
 #import <React/RCTUtils.h>
 
+#include "WorkerPool.h"
+
 @implementation DSFileExporter {
   /// One scratch directory and one completion per export in flight, keyed by
   /// the dialog's token. A second download started before the first dialog
@@ -21,9 +23,14 @@
 }
 
 - (void)dealloc {
-  for (NSURL *directory in _directories.allValues) {
-    [[NSFileManager defaultManager] removeItemAtURL:directory error:nil];
-  }
+  NSArray<NSURL *> *directories = _directories.allValues;
+  downstream::WorkerPool::shared().post([directories] {
+    @autoreleasepool {
+      for (NSURL *directory in directories) {
+        [[NSFileManager defaultManager] removeItemAtURL:directory error:nil];
+      }
+    }
+  });
 }
 
 /// The export's own scratch directory, removed as soon as its result is known.
@@ -32,64 +39,81 @@
   if (directory == nil) {
     return;
   }
-  [[NSFileManager defaultManager] removeItemAtURL:directory error:nil];
   [_directories removeObjectForKey:token];
   [_completions removeObjectForKey:token];
+  downstream::WorkerPool::shared().post([directory] {
+    @autoreleasepool {
+      [[NSFileManager defaultManager] removeItemAtURL:directory error:nil];
+    }
+  });
 }
 
 - (void)saveData:(NSData *)data
        fileName:(NSString *)fileName
+  shouldPresent:(BOOL (^)(void))shouldPresent
      completion:(void (^)(NSURL *_Nullable, NSError *_Nullable))completion {
-  NSError *error = nil;
-  NSString *token = NSUUID.UUID.UUIDString;
-  NSURL *directory =
-      [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:
-                                                      [NSString stringWithFormat:@"downstream-export-%@", token]]];
-  if (![[NSFileManager defaultManager] createDirectoryAtURL:directory
-                               withIntermediateDirectories:YES
-                                                attributes:nil
-                                                     error:&error]) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-      completion(nil, error);
-    });
-    return;
-  }
-  NSURL *file = [directory URLByAppendingPathComponent:fileName];
-  if (![data writeToURL:file options:NSDataWritingAtomic error:&error]) {
-    [[NSFileManager defaultManager] removeItemAtURL:directory error:nil];
-    dispatch_async(dispatch_get_main_queue(), ^{
-      completion(nil, error);
-    });
-    return;
-  }
-
-  UIDocumentPickerViewController *picker =
-      [[UIDocumentPickerViewController alloc] initForExportingURLs:@[file] asCopy:YES];
-  picker.delegate = self;
-  // The dialog carries the token, so a delegate callback knows which export it
-  // belongs to without a second picker or a single shared completion.
-  picker.restorationIdentifier = token;
-  _directories[token] = directory;
-  _completions[token] = [completion copy];
-  // The reader's dialog is presented from whatever the app is presenting, which
-  // is the React helper's whole job.
-  UIViewController *presenter = RCTPresentedViewController();
-  if (presenter == nil) {
-    [self discard:token];
-    dispatch_async(dispatch_get_main_queue(), ^{
-      completion(nil, [NSError errorWithDomain:@"Downstream"
-                                           code:0
-                                       userInfo:@{NSLocalizedDescriptionKey : @"No view controller to present from."}]);
-    });
-    return;
-  }
-  [presenter presentViewController:picker animated:YES completion:nil];
+  __weak DSFileExporter *weakSelf = self;
+  void (^writeFile)(void) = ^{
+    @autoreleasepool {
+      NSError *error = nil;
+      NSString *token = NSUUID.UUID.UUIDString;
+      NSURL *directory =
+          [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:
+                                                          [NSString stringWithFormat:@"downstream-export-%@", token]]];
+      NSURL *file = [directory URLByAppendingPathComponent:fileName];
+      const BOOL created = [[NSFileManager defaultManager] createDirectoryAtURL:directory
+                                                  withIntermediateDirectories:YES
+                                                                   attributes:nil
+                                                                        error:&error];
+      const BOOL written = created && [data writeToURL:file options:NSDataWritingAtomic error:&error];
+      if (!written && created) {
+        [[NSFileManager defaultManager] removeItemAtURL:directory error:nil];
+      }
+      dispatch_async(dispatch_get_main_queue(), ^{
+        DSFileExporter *exporter = weakSelf;
+        if (exporter == nil || !shouldPresent()) {
+          if (written) {
+            downstream::WorkerPool::shared().post([directory] {
+              @autoreleasepool {
+                [[NSFileManager defaultManager] removeItemAtURL:directory error:nil];
+              }
+            });
+          }
+          return;
+        }
+        if (!written) {
+          completion(nil, error);
+          return;
+        }
+        UIDocumentPickerViewController *picker =
+            [[UIDocumentPickerViewController alloc] initForExportingURLs:@[file] asCopy:YES];
+        picker.delegate = exporter;
+        // All picker state belongs to the main thread; workers only write files.
+        picker.restorationIdentifier = token;
+        exporter->_directories[token] = directory;
+        exporter->_completions[token] = [completion copy];
+        UIViewController *presenter = RCTPresentedViewController();
+        if (presenter == nil) {
+          [exporter discard:token];
+          completion(nil, [NSError errorWithDomain:@"Downstream"
+                                             code:0
+                                         userInfo:@{NSLocalizedDescriptionKey : @"No view controller to present from."}]);
+          return;
+        }
+        [presenter presentViewController:picker animated:YES completion:nil];
+      });
+    }
+  };
+  downstream::WorkerPool::shared().post([writeFile] { writeFile(); });
 }
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller
     didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
   NSString *token = controller.restorationIdentifier;
-  void (^completion)(NSURL *_Nullable, NSError *_Nullable) = token != nil ? _completions[token] : nil;
+  void (^completion)(NSURL *_Nullable, NSError *_Nullable) = nil;
+  if (token != nil) {
+    completion = _completions[token];
+  }
   if (token != nil) {
     [self discard:token];
   }

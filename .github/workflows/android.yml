@@ -1,0 +1,80 @@
+name: Android native
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/android/**'
+      - 'src/cpp/**'
+      - '!src/cpp/tests/**'
+      - '!src/cpp/**/*.md'
+      - '!src/cpp/**/*.mjs'
+      - 'src/specs/**'
+      - 'src/Native*.ts'
+      - 'src/*NativeComponent.ts'
+      - 'example/app.json'
+      - 'example/package.json'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.nvmrc'
+      - 'patches/**'
+      - 'react-native.config.js'
+      - '.github/actions/setup/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'src/android/**'
+      - 'src/cpp/**'
+      - '!src/cpp/tests/**'
+      - '!src/cpp/**/*.md'
+      - '!src/cpp/**/*.mjs'
+      - 'src/specs/**'
+      - 'src/Native*.ts'
+      - 'src/*NativeComponent.ts'
+      - 'example/app.json'
+      - 'example/package.json'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.nvmrc'
+      - 'patches/**'
+      - 'react-native.config.js'
+      - '.github/actions/setup/**'
+      - '.github/workflows/android.yml'
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Setup Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+
+      - name: Generate Android project
+        run: pnpm --filter react-native-downstream-example exec expo prebuild --platform android --no-install
+
+      # One ABI checks Kotlin, codegen, JNI and Fabric without an emulator or APK.
+      - name: Compile native library
+        working-directory: example/android
+        run: ./gradlew :react-native-downstream:compileDebugKotlin :app:externalNativeBuildDebug -PreactNativeArchitectures=x86_64 --build-cache --max-workers=2 --no-daemon

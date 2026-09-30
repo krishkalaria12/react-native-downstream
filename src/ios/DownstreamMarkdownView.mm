@@ -15,8 +15,10 @@
 #include "Export.h"
 #include "SegmentPlan.h"
 #include "SessionTrace.h"
+#include "WorkerPool.h"
 
 #include <algorithm>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -25,10 +27,12 @@ using namespace downstream;
 
 namespace {
 
-/// A segment whose text is under this size is serialized on the main thread,
-/// which is well inside a frame. A bigger one goes to the worker pool, so a
-/// table with thousands of cells cannot cost a reader a dropped frame.
+/// Larger exports serialize on the worker pool. Include per-cell overhead in
+/// the estimate so even a large table of empty cells leaves the main thread.
 constexpr size_t kInlineExportBytes = 64 * 1024;
+/// Clipboard writes complete on the main thread. A newer copy press, even in
+/// another Markdown view, supersedes an older worker that is still running.
+uint64_t copyRequestEpoch = 0;
 
 NSString *toNSString(const std::u16string &text) {
   return [NSString stringWithCharacters:reinterpret_cast<const unichar *>(text.data()) length:text.size()];
@@ -106,6 +110,7 @@ NSString *nameForFormat(NSString *format) {
   NSArray<NSString *> *_controlLabels;
   CADisplayLink *_traceDisplayLink;
   uint64_t _traceDocumentId;
+  uint64_t _controlEpoch;
 }
 
 + (ComponentDescriptorProvider)componentDescriptorProvider {
@@ -221,6 +226,7 @@ NSString *nameForFormat(NSString *format) {
   // view's current props are the previous value then.
   const auto &previous = *std::static_pointer_cast<const DownstreamMarkdownViewProps>(oldProps ? oldProps : _props);
   if (newProps.sessionId != previous.sessionId || newProps.generation != previous.generation) {
+    ++_controlEpoch;
     [_documentView resetTableScrollPositions];
   }
   if (newProps.selectable != _selectable) {
@@ -267,6 +273,7 @@ NSString *nameForFormat(NSString *format) {
 }
 
 - (void)prepareForRecycle {
+  ++_controlEpoch;
   if (_traceDocumentId) downstream::SessionTrace::recordDocument(_traceDocumentId, "frame_unavailable");
   _traceDocumentId = 0;
   [_traceDisplayLink invalidate];
@@ -397,68 +404,128 @@ NSString *nameForFormat(NSString *format) {
     return;
   }
   const bool download = [action isEqualToString:@"download"];
+  const uint64_t copyEpoch = download ? 0 : ++copyRequestEpoch;
+  const NSInteger clipboardChangeCount = download ? 0 : UIPasteboard.generalPasteboard.changeCount;
   const char16_t separator = download ? resolveSeparator(_csvSeparator) : kDefaultCsvSeparator;
   // Code always copies the text it shows; a table is copied in the format
   // its menu chose.
   const ExportFormat exportFormat = isCode ? ExportFormat::Text : static_cast<ExportFormat>(formatFor(format));
 
-  // The bytes a reader gets for a settled block cannot change, so a press reads
-  // the snapshot on screen and no later snapshot can make that copy stale.
-  const std::u16string text = exportBlocks(*_document, from, to, exportFormat, separator);
-  NSString *name = @"";
-  if (download) {
-    name = isCode ? toNSString(downloadName(_document->blocks[from].info, _document->blocks[from].language,
-                                            _codeFilename, "file"))
-                  : toNSString(tableDownloadName(_tableFilename, std::string_view(nameForFormat(format).UTF8String)));
-  }
-
-  if (!download) {
-    if (isCode) {
-      UIPasteboard.generalPasteboard.string = toNSString(text);
-    } else {
-      // A table also goes on the clipboard as HTML, so a paste into Notes, Docs,
-      // Sheets, or Mail lands as a table rather than as text.
-      const std::u16string html = exportBlocks(*_document, from, to, ExportFormat::Html, separator);
-      [UIPasteboard.generalPasteboard setItems:@[
-        @{@"public.utf8-plain-text" : toNSString(text), @"public.html" : toNSString(html)},
-      ]];
+  // Retain the immutable snapshot, not the view. Streaming can publish newer
+  // snapshots while this worker serializes the settled range that was pressed.
+  const DocumentHandle document = _document;
+  const uint64_t epoch = _controlEpoch;
+  const std::string codeFilename = _codeFilename;
+  const std::string tableFilename = _tableFilename;
+  __weak DownstreamMarkdownView *weakSelf = self;
+  void (^finish)(NSString *, NSString *, NSData *, NSString *, NSString *) =
+      ^(NSString *text, NSString *html, NSData *data, NSString *name, NSString *failure) {
+    DownstreamMarkdownView *view = weakSelf;
+    if (view == nil || view->_controlEpoch != epoch || !view->_state || !view->_eventEmitter ||
+        (!download && (copyEpoch != copyRequestEpoch ||
+                       UIPasteboard.generalPasteboard.changeCount != clipboardChangeCount))) {
+      return;
     }
-    [self emitControlWithBlock:isCode ? @"code" : @"table"
-                        action:action
-                        format:format
-                      language:language
-                      filename:@""
-                       wrapped:NO];
-    return;
-  }
+    if (failure != nil) {
+      [view emitControlFailureFor:isCode ? @"code" : @"table" action:action message:failure];
+      return;
+    }
+    if (!download) {
+      if (isCode) {
+        UIPasteboard.generalPasteboard.string = text;
+      } else {
+        [UIPasteboard.generalPasteboard setItems:@[
+          @{@"public.utf8-plain-text" : text, @"public.html" : html},
+        ]];
+      }
+      [view emitControlWithBlock:isCode ? @"code" : @"table"
+                          action:action
+                          format:format
+                        language:language
+                        filename:@""
+                         wrapped:NO];
+      return;
+    }
+    [view->_exporter saveData:data
+                    fileName:name
+               shouldPresent:^BOOL {
+      DownstreamMarkdownView *current = weakSelf;
+      return current != nil && current->_controlEpoch == epoch && current->_state && current->_eventEmitter;
+    }
+                   completion:^(NSURL *url, NSError *error) {
+      DownstreamMarkdownView *current = weakSelf;
+      if (current == nil || current->_controlEpoch != epoch || !current->_state || !current->_eventEmitter) {
+        return;
+      }
+      if (error != nil) {
+        [current emitControlFailureFor:isCode ? @"code" : @"table"
+                                action:@"download"
+                               message:error.localizedDescription];
+      } else if (url != nil) {
+        [current emitControlWithBlock:isCode ? @"code" : @"table"
+                               action:action
+                               format:format
+                             language:language
+                             filename:name
+                              wrapped:NO];
+      }
+    }];
+  };
 
-  // Excel on Windows reads a CSV without a byte-order mark as the system
-  // codepage, which mangles anything outside it, so a CSV gets one.
-  NSMutableData *data = [NSMutableData data];
-  if ([format isEqualToString:@"csv"]) {
-    const uint8_t bom[] = {0xEF, 0xBB, 0xBF};
-    [data appendBytes:bom length:sizeof(bom)];
+  size_t estimatedBytes = 0;
+  for (size_t index = from; index < to && estimatedBytes <= kInlineExportBytes; ++index) {
+    const Block &block = document->blocks[index];
+    if (block.text.size() > kInlineExportBytes / sizeof(char16_t) ||
+        block.cells.size() > kInlineExportBytes / 32) {
+      estimatedBytes = kInlineExportBytes + 1;
+      break;
+    }
+    estimatedBytes += block.text.size() * sizeof(char16_t) + block.cells.size() * 32 + 64;
   }
-  [data appendData:[toNSString(text) dataUsingEncoding:NSUTF8StringEncoding]];
-  [_exporter saveData:data
-             fileName:name
-            completion:^(NSURL *url, NSError *error) {
-              if (error != nil) {
-                [self emitControlFailureFor:isCode ? @"code" : @"table" action:@"download" message:error.localizedDescription];
-                return;
-              }
-              // A cancelled dialog reports nothing: it is neither a success nor
-              // a failure.
-              if (url == nil) {
-                return;
-              }
-              [self emitControlWithBlock:isCode ? @"code" : @"table"
-                                  action:action
-                                  format:format
-                                language:language
-                                filename:name
-                                 wrapped:NO];
-            }];
+  const BOOL inlineExport = estimatedBytes <= kInlineExportBytes;
+  void (^serialize)(void) = ^{
+    @autoreleasepool {
+      NSString *text = nil;
+      NSString *html = nil;
+      NSData *data = nil;
+      NSString *name = @"";
+      NSString *failure = nil;
+      try {
+        text = toNSString(exportBlocks(*document, from, to, exportFormat, separator));
+        if (download) {
+          name = isCode ? toNSString(downloadName(document->blocks[from].info, document->blocks[from].language,
+                                                 codeFilename, "file"))
+                        : toNSString(tableDownloadName(tableFilename, std::string_view(nameForFormat(format).UTF8String)));
+          NSMutableData *bytes = [NSMutableData data];
+          // Excel on Windows needs the BOM to identify UTF-8 CSV text.
+          if ([format isEqualToString:@"csv"]) {
+            const uint8_t bom[] = {0xEF, 0xBB, 0xBF};
+            [bytes appendBytes:bom length:sizeof(bom)];
+          }
+          [bytes appendData:[text dataUsingEncoding:NSUTF8StringEncoding]];
+          data = [bytes copy];
+        } else if (!isCode) {
+          html = toNSString(exportBlocks(*document, from, to, ExportFormat::Html, separator));
+        }
+      } catch (const std::exception &error) {
+        failure = toNSString(std::string(error.what()));
+      } catch (...) {
+        failure = @"Could not serialize the block.";
+      }
+      if (inlineExport) {
+        finish(text, html, data, name, failure);
+      } else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          finish(text, html, data, name, failure);
+        });
+      }
+    }
+  };
+  if (inlineExport) {
+    serialize();
+  } else {
+    WorkerPool::shared().post([serialize] { serialize(); });
+  }
 }
 
 - (void)didToggleWrapAtOrdinal:(uint32_t)ordinal language:(NSString *)language wrapped:(BOOL)wrapped {

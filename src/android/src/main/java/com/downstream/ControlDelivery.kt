@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.Build
 import java.text.DecimalFormatSymbols
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * The clipboard and the save dialog, which are the two ways a control delivers
@@ -13,6 +14,22 @@ import java.util.Locale
  * permission, and a save dialog neither needs one nor a manifest entry.
  */
 internal object ControlDelivery {
+  // A clipboard is shared by all Markdown views. A later press supersedes
+  // earlier queued copies even when their serialization completes out of order.
+  private val copyRequestEpoch = AtomicLong()
+
+  fun beginCopy(): Long = copyRequestEpoch.incrementAndGet()
+  fun isCurrentCopy(epoch: Long): Boolean = copyRequestEpoch.get() == epoch
+
+  /** Read only metadata, so queued copies do not overwrite a newer clipboard write. */
+  fun clipboardTimestamp(context: Context): Long? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null
+    return try {
+      (context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)?.primaryClipDescription?.timestamp
+    } catch (error: RuntimeException) {
+      null
+    }
+  }
 
   /** A CSV separator the locale chooses: a comma unless this locale writes decimals with one. */
   fun resolveSeparator(configured: String): Char = when (configured) {

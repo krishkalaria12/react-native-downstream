@@ -300,6 +300,29 @@ void testHtml() {
   checkExport("", "an empty table exports nothing", "", ExportFormat::Html);
 }
 
+void testCellPieces() {
+  Document document;
+  Block row;
+  row.kind = BlockKind::TableRow;
+  row.text = u"aXb\tcYd\tend";
+  row.cells = {{0, 3}, {4, 7}, {8, 11}, {11, 100}, {100, 101}};
+  row.runs = {{1, 2, InlineStyle::Strong}, {4, 6, InlineStyle::Emphasis}};
+  document.blocks.push_back(row);
+  check("| a**X**b | *cY*d | end |  |  |\n| --- | --- | --- | --- | --- |",
+        "binary search keeps styled pieces, gaps, and clamped empty cells",
+        narrow(exportBlocks(document, 0, 1, ExportFormat::Markdown)));
+  check("<table><tbody><tr><td>a<strong>X</strong>b</td><td><em>cY</em>d</td><td>end</td><td></td><td></td></tr>"
+        "</tbody></table>", "HTML visits the same styled pieces and empty cells",
+        narrow(exportBlocks(document, 0, 1, ExportFormat::Html)));
+  Document spanning;
+  row.text = u"ab\tcd";
+  row.cells = {{0, 2}, {3, 5}};
+  row.runs = {{1, 4, InlineStyle::Strong}};
+  spanning.blocks.push_back(row);
+  check("| a**b** | **c**d |\n| --- | --- |", "a run spanning cells is clipped to each cell",
+        narrow(exportBlocks(spanning, 0, 1, ExportFormat::Markdown)));
+}
+
 // --------------------------------------------------------------- file names
 
 void testNames() {
@@ -350,6 +373,7 @@ int main() {
   testDelimited();
   testMarkdown();
   testHtml();
+  testCellPieces();
   testNames();
   return ds_check_result();
 }

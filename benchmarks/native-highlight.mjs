@@ -95,6 +95,8 @@ try {
       'LinkPolicy.cpp',
       'Scan.cpp',
       'Compare.cpp',
+      'Export.cpp',
+      'ExportNames.cpp',
     ].map((name) => join(cpp, 'downstream', name)),
     join(cpp, 'remend', 'Preview.cpp'),
     join(cpp, 'session', 'IncrementalParser.cpp'),

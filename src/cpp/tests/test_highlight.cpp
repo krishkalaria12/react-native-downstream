@@ -448,6 +448,36 @@ void testDocuments() {
   CHECK(!blocks[0].tokens.empty(), "the mutable list is colored");
 }
 
+void testHighlightCache() {
+  const auto parsed = parseMarkdown("```ts\nconst original = compute(1);\n```\n\nprose");
+  const auto colored = highlightSettledCodeBlocks(lexillaHighlighter(), parsed.document, 1e9, nullptr);
+  const uint64_t before = lexillaHighlighter().lexersCreated();
+  const auto same = parseMarkdown("```ts\nconst original = compute(1);\n```\n\nlonger prose");
+  HighlightStats cachedStats;
+  const auto reused = highlightSettledCodeBlocks(lexillaHighlighter(), same.document, 1e9, &cachedStats, colored);
+  CHECK(cachedStats.blocks == 0 && lexillaHighlighter().lexersCreated() == before,
+        "unchanged complete code reuses tokens without creating a lexer");
+  CHECK(sameTokens(reused->blocks[0].tokens, colored->blocks[0].tokens), "cached code keeps every token");
+  CHECK(same.document->blocks[0].tokens.empty(), "cache reuse leaves the original parse immutable");
+  for (const char *changed : {"```ts\nconst rewritten = 'text';\n```", "```py\nconst original = compute(1);\n```"}) {
+    const auto next = parseMarkdown(changed);
+    HighlightStats changedStats;
+    const auto actual = highlightSettledCodeBlocks(lexillaHighlighter(), next.document, 1e9, &changedStats, colored);
+    const auto expected = highlightSettledCodeBlocks(lexillaHighlighter(), next.document, 1e9, nullptr);
+    CHECK(changedStats.blocks == 1, "rewritten text or changed language is highlighted again");
+    CHECK(sameTokens(actual->blocks[0].tokens, expected->blocks[0].tokens), "cache misses equal a fresh highlight");
+  }
+  std::string longSource = "```ts\n";
+  for (int line = 0; line < 100; line++) longSource += "const value = compute(1);\n";
+  longSource += "```";
+  const auto longParsed = parseMarkdown(longSource);
+  const auto partial = highlightCodeBlocks(lexillaHighlighter(), longParsed.document, 0.0, nullptr);
+  CHECK(!partial->blocks[0].highlightComplete, "a budget-cut pass cannot be cached as complete");
+  HighlightStats retryStats;
+  const auto completed = highlightSettledCodeBlocks(lexillaHighlighter(), longParsed.document, 1e9, &retryStats, partial);
+  CHECK(retryStats.blocks == 1 && completed->blocks[0].highlightComplete, "incomplete cached tokens are finished");
+}
+
 /// The controlled path colors on the shared worker pool, so two documents can
 /// be colored at once. Each thread has its own block and its own resume state,
 /// and they must not see each other's tokens.
@@ -507,6 +537,7 @@ int main() {
   testStreaming();
   testIsolation();
   testDocuments();
+  testHighlightCache();
   testConcurrentPasses();
   return ds_check_result();
 }

@@ -34,9 +34,11 @@ void colorOnce(CodeHighlighter &highlighter, Block *block, HighlightState *state
     block->tokens.clear();
     state->clear();
     state->lastStop = HighlightStop::Skipped;
+    block->highlightComplete = true;
     return;
   }
   highlighter.tokenize(block->language, block->text, state, &block->tokens, budgetMs);
+  block->highlightComplete = state->lastStop != HighlightStop::Budget;
 }
 
 } // namespace
@@ -81,6 +83,16 @@ void highlightSettledCodeBlock(CodeHighlighter &highlighter, Block *block, Highl
   stats->blocks++;
   stats->resumes += retries;
   stats->stops[static_cast<size_t>(state->lastStop)]++;
+}
+
+bool reuseCompletedCodeTokens(Block *block, const Block &cached) {
+  if (!cached.highlightComplete || cached.kind != BlockKind::CodeBlock || block->kind != BlockKind::CodeBlock ||
+      cached.language != block->language || cached.text != block->text) {
+    return false;
+  }
+  block->tokens = cached.tokens;
+  block->highlightComplete = true;
+  return true;
 }
 
 void highlightCodeBlocks(CodeHighlighter &highlighter, std::vector<Block> *blocks, double budgetMs,
@@ -132,12 +144,27 @@ DocumentHandle highlightCodeBlocks(CodeHighlighter &highlighter, DocumentHandle 
 }
 
 DocumentHandle highlightSettledCodeBlocks(CodeHighlighter &highlighter, DocumentHandle document, double budgetMs,
-                                          HighlightStats *stats) {
+                                          HighlightStats *stats, const DocumentHandle &previous) {
   if (!document || !anyColorable(document->blocks.tail())) {
     return document;
   }
   auto colored = std::make_shared<Document>(*document);
-  highlightSettledCodeBlocks(highlighter, &colored->blocks.tail(), budgetMs, stats);
+  HighlightState state;
+  auto &blocks = colored->blocks.tail();
+  const size_t shared = colored->blocks.sharedSize();
+  for (size_t index = 0; index < blocks.size(); index++) {
+    Block &block = blocks[index];
+    if (block.kind != BlockKind::CodeBlock || block.language.empty()) {
+      continue;
+    }
+    const size_t absolute = shared + index;
+    if (previous && absolute < previous->blocks.size()) {
+      if (reuseCompletedCodeTokens(&block, previous->blocks[absolute])) {
+        continue;
+      }
+    }
+    highlightSettledCodeBlock(highlighter, &block, &state, budgetMs, stats);
+  }
   return colored;
 }
 
