@@ -54,6 +54,10 @@ class DownstreamMarkdownViewManager :
     view.setSelectable(value)
   }
 
+  override fun setSyntaxHighlighting(view: DownstreamMarkdownView, value: Boolean) {
+    view.setSyntaxHighlighting(value)
+  }
+
   override fun updateState(
     view: DownstreamMarkdownView,
     props: ReactStylesDiffMap,

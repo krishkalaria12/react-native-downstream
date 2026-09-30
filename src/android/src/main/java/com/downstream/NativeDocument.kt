@@ -17,9 +17,11 @@ internal class NativeDocument(
   private val runs: IntArray,
   private val strings: Array<String>,
   private val cells: IntArray,
+  private val tokens: IntArray,
 ) {
   val blockCount: Int get() = blocks.size / BLOCK_STRIDE
   val runCount: Int get() = runs.size / RUN_STRIDE
+  val tokenCount: Int get() = tokens.size / TOKEN_STRIDE
 
   fun blockKind(block: Int) = blocks[block * BLOCK_STRIDE]
   fun headingLevel(block: Int) = blocks[block * BLOCK_STRIDE + 1]
@@ -53,11 +55,16 @@ internal class NativeDocument(
   fun runStyles(run: Int) = runs[run * RUN_STRIDE + 2]
   fun runLink(run: Int) = runs[run * RUN_STRIDE + 3]
 
+  fun tokenStart(token: Int) = tokens[token * TOKEN_STRIDE]
+  fun tokenEnd(token: Int) = tokens[token * TOKEN_STRIDE + 1]
+  fun tokenClass(token: Int) = tokens[token * TOKEN_STRIDE + 2]
+
   companion object {
     private const val BLOCK_STRIDE = 12
     private const val CELL_STRIDE = 3
     private const val CONTAINER_STRIDE = 5
     private const val RUN_STRIDE = 4
+    private const val TOKEN_STRIDE = 3
 
     const val KIND_PARAGRAPH = 0
     const val KIND_HEADING = 1
@@ -86,6 +93,26 @@ internal class NativeDocument(
     const val STYLE_CODE = 1 shl 3
     const val STYLE_IMAGE_ALT = 1 shl 5
     const val STYLE_FOOTNOTE = 1 shl 6
+
+    // Token classes, in the order src/cpp/downstream/Document.h declares them.
+    const val TOKEN_PLAIN = 0
+    const val TOKEN_COMMENT = 1
+    const val TOKEN_KEYWORD = 2
+    const val TOKEN_TYPE = 3
+    const val TOKEN_STRING = 4
+    const val TOKEN_NUMBER = 5
+    const val TOKEN_CONSTANT = 6
+    const val TOKEN_REGEX = 7
+    const val TOKEN_FUNCTION = 8
+    const val TOKEN_PROPERTY = 9
+    const val TOKEN_OPERATOR = 10
+    const val TOKEN_PREPROCESSOR = 11
+    const val TOKEN_TAG = 12
+    const val TOKEN_ATTRIBUTE = 13
+    const val TOKEN_INSERTED = 14
+    const val TOKEN_DELETED = 15
+    const val TOKEN_HEADING = 16
+    const val TOKEN_COUNT = 17
   }
 }
 
@@ -144,6 +171,7 @@ internal object DownstreamNative {
       runs = parts[3] as IntArray,
       strings = parts[4] as Array<String>,
       cells = parts[5] as IntArray,
+      tokens = parts[6] as IntArray,
     )
   }
 

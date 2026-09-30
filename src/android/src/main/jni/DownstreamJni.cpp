@@ -57,6 +57,10 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env, jclass /*cl
   std::vector<jint> containers;
   std::vector<jint> runs;
   std::vector<jint> cells;
+  // Syntax tokens as [start, end, class] per run, with offsets shifted into
+  // the flattened text like the inline runs above. Layout must match
+  // NativeDocument.kt.
+  std::vector<jint> tokens;
   std::vector<std::u16string> strings;
 
   for (auto index = static_cast<size_t>(from); index < static_cast<size_t>(to); index++) {
@@ -106,6 +110,13 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env, jclass /*cl
                                   run.link,
                               });
     }
+    for (const TokenRun &run : block.tokens) {
+      tokens.insert(tokens.end(), {
+                                    start + static_cast<jint>(run.start),
+                                    start + static_cast<jint>(run.end),
+                                    static_cast<jint>(run.token),
+                                });
+    }
   }
 
   jclass objectClass = env->FindClass("java/lang/Object");
@@ -117,13 +128,14 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env, jclass /*cl
     env->DeleteLocalRef(value);
   }
 
-  jobjectArray result = env->NewObjectArray(6, objectClass, nullptr);
+  jobjectArray result = env->NewObjectArray(7, objectClass, nullptr);
   env->SetObjectArrayElement(result, 0, toJavaString(env, text));
   env->SetObjectArrayElement(result, 1, toJavaArray(env, blocks));
   env->SetObjectArrayElement(result, 2, toJavaArray(env, containers));
   env->SetObjectArrayElement(result, 3, toJavaArray(env, runs));
   env->SetObjectArrayElement(result, 4, stringArray);
   env->SetObjectArrayElement(result, 5, toJavaArray(env, cells));
+  env->SetObjectArrayElement(result, 6, toJavaArray(env, tokens));
   return result;
 }
 

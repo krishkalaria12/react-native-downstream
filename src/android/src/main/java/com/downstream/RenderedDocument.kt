@@ -226,13 +226,37 @@ private class BlockSpan(
   }
 }
 
-internal class Palette(night: Boolean) {
+internal class Palette(private val night: Boolean) {
   val text = if (night) 0xFFFFFFFF.toInt() else 0xFF000000.toInt()
   val secondary = if (night) 0x99EBEBF5.toInt() else 0x993C3C43.toInt()
   val link = if (night) 0xFF0A84FF.toInt() else 0xFF007AFF.toInt()
   val codeBackground = if (night) 0x3D767680 else 0x1F767680
   val separator = if (night) 0x99545458.toInt() else 0x4A3C3C43
   val quoteBar = if (night) 0xFF48484A.toInt() else 0xFFC7C7CC.toInt()
+
+  /**
+   * GitHub's Primer "prettylights" colors, the palette behind Shiki's
+   * `github-light` and `github-dark` themes and the same table the engine and
+   * iOS read, so a token cannot drift between platforms. Indexed by
+   * NativeDocument.TOKEN_*; Plain and Operator take the code text color, as
+   * punctuation does in GitHub's themes.
+   */
+  private val tokens = intArrayOf(
+    0xFF1F2328.toInt(), 0xFF6E7781.toInt(), 0xFFCF222E.toInt(), 0xFF8250DF.toInt(), 0xFF0A3069.toInt(),
+    0xFF0550AE.toInt(), 0xFF0550AE.toInt(), 0xFF116329.toInt(), 0xFF8250DF.toInt(), 0xFF0550AE.toInt(),
+    0xFF1F2328.toInt(), 0xFF953800.toInt(), 0xFF116329.toInt(), 0xFF0550AE.toInt(), 0xFF116329.toInt(),
+    0xFF82071E.toInt(), 0xFF0550AE.toInt(),
+  )
+
+  private val tokensNight = intArrayOf(
+    0xFFF0F6FC.toInt(), 0xFF8B949E.toInt(), 0xFFFF7B72.toInt(), 0xFFD2A8FF.toInt(), 0xFFA5D6FF.toInt(),
+    0xFF79C0FF.toInt(), 0xFF79C0FF.toInt(), 0xFF7EE787.toInt(), 0xFFD2A8FF.toInt(), 0xFF79C0FF.toInt(),
+    0xFFF0F6FC.toInt(), 0xFFFFA657.toInt(), 0xFF7EE787.toInt(), 0xFF79C0FF.toInt(), 0xFF7EE787.toInt(),
+    0xFFFFA198.toInt(), 0xFF79C0FF.toInt(),
+  )
+
+  fun token(tokenClass: Int): Int =
+    (if (night) tokensNight else tokens)[tokenClass.coerceIn(0, NativeDocument.TOKEN_COUNT - 1)]
 
   /** GitHub alert colors; other quotes use a neutral bar. */
   fun admonition(type: String?): Int = when (type) {
@@ -412,21 +436,35 @@ internal class RenderedDocument(
       return builder.build()
     }
 
-    /** Returns a cached rendering, or null when the document is gone. */
-    fun obtain(context: Context, documentId: Long, fontScale: Float): RenderedDocument? {
+    /**
+     * Returns a cached rendering, or null when the document is gone.
+     *
+     * `syntaxHighlighting` decides whether code blocks carry token colors.
+     * Tokens are always computed by the engine, so this only chooses the
+     * rendering and it is part of both cache keys. Measurement passes true:
+     * colors do not change metrics, so a measurement is valid either way.
+     */
+    fun obtain(
+      context: Context,
+      documentId: Long,
+      fontScale: Float,
+      syntaxHighlighting: Boolean = true,
+    ): RenderedDocument? {
       val night = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
         Configuration.UI_MODE_NIGHT_YES
-      val key = "$documentId:$fontScale:$night"
+      val key = "$documentId:$fontScale:$night:$syntaxHighlighting"
       cache.get(key)?.let { return it }
       val plan = DownstreamNative.readSegmentPlan(documentId) ?: return null
       val style = Style(fontScale, Palette(night))
       val segments = ArrayList<Segment>(plan.size)
       for (planned in plan) {
         // Only the uncommitted tail and newly committed chunks cross JNI.
-        val segmentKey = "${planned.identity}:${planned.to - planned.from}:$fontScale:$night"
+        val segmentKey = "${planned.identity}:${planned.to - planned.from}:$fontScale:$night:$syntaxHighlighting"
         val segment = (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
           ?: DownstreamNative.readDocument(documentId, planned.from, planned.to)
-            ?.let { buildSegment(it, style, planned.from == 0, planned.followsCode, planned.identity) }
+            ?.let {
+              buildSegment(it, style, planned.from == 0, planned.followsCode, planned.identity, syntaxHighlighting)
+            }
             ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
           ?: return null
         segments.add(segment)
@@ -448,7 +486,14 @@ internal class RenderedDocument(
     }
 
     /** Builds one planned segment from its flattened blocks. */
-    private fun buildSegment(document: NativeDocument, style: Style, first: Boolean, followsCode: Boolean, identity: Long): Segment {
+    private fun buildSegment(
+      document: NativeDocument,
+      style: Style,
+      first: Boolean,
+      followsCode: Boolean,
+      identity: Long,
+      syntaxHighlighting: Boolean,
+    ): Segment {
       val colors = style.colors
       val density = style.density
       val paint = style.paint
@@ -613,6 +658,22 @@ internal class RenderedDocument(
         val link = document.runLink(run)
         if (link >= 0) {
           text.setSpan(LinkSpan(link, colors.link), start, end, flags)
+        }
+      }
+
+      // Tokens are offsets into the block's own text and only set a color, so
+      // selection, copy, and the accessibility text are unchanged. Plain text
+      // has no run, which is why the engine omits it.
+      if (syntaxHighlighting) {
+        for (token in 0 until document.tokenCount) {
+          val tokenClass = document.tokenClass(token)
+          if (tokenClass == NativeDocument.TOKEN_PLAIN) continue
+          text.setSpan(
+            ForegroundColorSpan(colors.token(tokenClass)),
+            document.tokenStart(token),
+            document.tokenEnd(token),
+            flags,
+          )
         }
       }
 

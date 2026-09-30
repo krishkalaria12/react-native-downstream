@@ -55,6 +55,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
   private var fontScale = 1f
   private var rendered: RenderedDocument? = null
   private var selectable = false
+  private var syntaxHighlighting = true
   private var generation = 0
   private var sessionId: String? = null
   private var sourceEpoch = 0
@@ -93,7 +94,11 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
     this.fontScale = fontScale
     val tracing = documentId != 0L && DownstreamNative.isTracingDocument(documentId)
     if (tracing) DownstreamNative.traceDocument(documentId, "apply_start")
-    rendered = if (documentId != 0L) RenderedDocument.obtain(context, documentId, fontScale) else null
+    rendered = if (documentId != 0L) {
+      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting)
+    } else {
+      null
+    }
     syncSegmentViews()
     if (tracing) {
       DownstreamNative.traceDocument(documentId, "apply_end")
@@ -125,6 +130,20 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
     }
   }
 
+  /**
+   * Rebuilds the rendering when the prop changes, because the two renderings
+   * differ only in the code block colors and are cached apart.
+   */
+  fun setSyntaxHighlighting(enabled: Boolean) {
+    if (enabled != syntaxHighlighting) {
+      syntaxHighlighting = enabled
+      if (documentId != 0L) {
+        rendered = RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting)
+        syncSegmentViews()
+      }
+    }
+  }
+
   fun reset() {
     if (pendingTraceDocumentId != 0L) {
       DownstreamNative.traceDocument(pendingTraceDocumentId, "frame_unavailable")
@@ -132,6 +151,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
     }
     documentId = 0L
     rendered = null
+    syntaxHighlighting = true
     generation = 0
     sessionId = null
     sourceEpoch++
@@ -141,7 +161,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context) {
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
     if (documentId != 0L) {
-      RenderedDocument.obtain(context, documentId, fontScale)?.let {
+      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting)?.let {
         rendered = it
         syncSegmentViews()
       }
