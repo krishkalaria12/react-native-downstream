@@ -36,6 +36,9 @@ internal class NativeDocument(
   /** The synthetic title paragraph of an admonition, decided document-wide. */
   fun isAdmonitionTitle(block: Int) = blocks[block * BLOCK_STRIDE + 11] != 0
 
+  /** The fence language as written, or empty for an indented block. */
+  fun blockLanguage(block: Int) = blocks[block * BLOCK_STRIDE + 12].let { if (it >= 0) strings[it] else "" }
+
   private fun cell(block: Int, column: Int) = (blocks[block * BLOCK_STRIDE + 8] + column) * CELL_STRIDE
 
   fun cellStart(block: Int, column: Int) = cells[cell(block, column)]
@@ -60,7 +63,7 @@ internal class NativeDocument(
   fun tokenClass(token: Int) = tokens[token * TOKEN_STRIDE + 2]
 
   companion object {
-    private const val BLOCK_STRIDE = 12
+    private const val BLOCK_STRIDE = 13
     private const val CELL_STRIDE = 3
     private const val CONTAINER_STRIDE = 5
     private const val RUN_STRIDE = 4
@@ -122,11 +125,20 @@ internal class PlannedSegment(
   val to: Int,
   val isTable: Boolean,
   val isCommitted: Boolean,
-  val followsCode: Boolean,
+  val isCode: Boolean,
   val identity: Long,
+  /** Leading blocks of the document no later input can change. */
+  val settledBlocks: Int,
 )
 
 internal class NativeLink(val url: String, val start: Int, val end: Int)
+
+/** Formats `nativeExport` produces, matching `ExportFormat` in the engine. */
+internal const val EXPORT_TEXT = 0
+internal const val EXPORT_CSV = 1
+internal const val EXPORT_TSV = 2
+internal const val EXPORT_MARKDOWN = 3
+internal const val EXPORT_HTML = 4
 
 internal object DownstreamNative {
   init {
@@ -148,12 +160,12 @@ internal object DownstreamNative {
    */
   @JvmStatic
   @DoNotStrip
-  fun prepare(documentId: Long, fontScale: Float, width: Float) {
+  fun prepare(documentId: Long, fontScale: Float, width: Float, chrome: Int) {
     val context = preparationContext?.get() ?: return
     try {
       val rendered = RenderedDocument.obtain(context, documentId, fontScale) ?: return
       if (width.isFinite() && width > 0) {
-        rendered.height(PixelUtil.toPixelFromDIP(width).toInt())
+        rendered.height(PixelUtil.toPixelFromDIP(width).toInt(), chrome)
       }
     } catch (error: RuntimeException) {
       // Measurement builds the rendering again on its own thread.
@@ -187,6 +199,7 @@ internal object DownstreamNative {
         flags and 2 != 0,
         flags and 4 != 0,
         values[it + 3],
+        values[it + 4].toInt(),
       )
     }
   }
@@ -201,7 +214,7 @@ internal object DownstreamNative {
   fun traceDocument(id: Long, event: String) = nativeTraceDocument(id, event)
   fun isTracingDocument(id: Long) = nativeIsTracingDocument(id)
 
-  private const val PLAN_STRIDE = 4
+  private const val PLAN_STRIDE = 5
 
   // Implemented in DownstreamJni.cpp, which links into libappmodules.so.
   @JvmStatic
@@ -209,6 +222,33 @@ internal object DownstreamNative {
 
   @JvmStatic
   private external fun nativeSegmentPlan(id: Long): LongArray?
+
+  /**
+   * Serializes blocks [from, to) of a document. `format` is an `ExportFormat`
+   * and `separator` a UTF-16 unit, so both platforms produce identical bytes.
+   * Returns null when the document is gone or the range is not one.
+   */
+  @JvmStatic
+  fun export(id: Long, from: Int, to: Int, format: Int, separator: Char): String? =
+    nativeExport(id, from, to, format, separator.code)
+
+  /** The file name a code download saves as, extension included. */
+  @JvmStatic
+  fun downloadName(id: Long, block: Int, configured: String, fallback: String): String? =
+    nativeDownloadName(id, block, configured, fallback)
+
+  /** The file name a table download saves as, extension included. */
+  @JvmStatic
+  fun tableName(configured: String, extension: String): String? = nativeTableName(configured, extension)
+
+  @JvmStatic
+  private external fun nativeExport(id: Long, from: Int, to: Int, format: Int, separator: Int): String?
+
+  @JvmStatic
+  private external fun nativeDownloadName(id: Long, block: Int, configured: String, fallback: String): String?
+
+  @JvmStatic
+  private external fun nativeTableName(configured: String, extension: String): String?
 
   @JvmStatic
   private external fun nativeReadLink(id: Long, index: Int): Array<Any>?

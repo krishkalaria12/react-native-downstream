@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Symbols "download", from https://fonts.google.com/icons, licensed under
+  the Apache License 2.0. Drawn as a template so it takes the button's tint.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?android:attr/colorControlNormal">
+  <path
+      android:fillColor="@android:color/white"
+      android:pathData="M19,9h-4V3H9v6H5l7,7 7,-7z M5,18v2h14v-2H5z" />
+</vector>
