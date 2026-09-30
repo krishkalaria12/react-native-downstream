@@ -761,7 +761,11 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
       unconstrainedWidth = std::max(unconstrainedWidth, table.contentLeading + table.tableSize.width);
     }
     const CGFloat top = std::ceil(y);
-    [frames addObject:[NSValue valueWithCGRect:CGRectMake(0, top, 0, std::ceil(y + height) - top)]];
+    // Never shorter than the segment. Rounding both edges up loses up to a
+    // point when y is fractional, and a text view lays out only the lines that
+    // fit its frame, so a segment a fraction short would drop its last line.
+    const CGFloat bottom = std::max(std::ceil(y + height), top + std::ceil(height));
+    [frames addObject:[NSValue valueWithCGRect:CGRectMake(0, top, 0, bottom - top)]];
     y += height;
   }
 
