@@ -91,13 +91,15 @@ inline bool write(const ParseResult &result) {
   }
 
   const Document &document = *result.document;
-  std::printf("{\"blocks\":[");
+  std::printf("{\"settled\":%u,\"blocks\":[", document.settledBlocks);
   for (size_t b = 0; b < document.blocks.size(); b++) {
     const Block &block = document.blocks[b];
     std::printf("%s{\"kind\":%d,\"headingLevel\":%d,\"tableHeader\":%s,\"table\":%u,\"spacing\":%d,\"language\":",
                 b ? "," : "", static_cast<int>(block.kind), block.headingLevel, block.tableHeader ? "true" : "false",
                 block.table, static_cast<int>(block.spacingBefore));
     writeString(block.language);
+    std::printf(",\"info\":");
+    writeString(block.info);
     std::printf(",\"text\":");
     writeString(block.text);
     std::printf(",\"containers\":[");
@@ -143,6 +145,14 @@ inline bool write(const ParseResult &result) {
 /// add prints it in between.
 inline void writeModelClosed() {
   std::printf("}\n");
+}
+
+/// Prints a whole document object, braces included, for nesting inside
+/// another one.
+inline void writeDocument(const ParseResult &result) {
+  if (write(result)) {
+    writeModelClosed();
+  }
 }
 
 } // namespace downstream::testdump
