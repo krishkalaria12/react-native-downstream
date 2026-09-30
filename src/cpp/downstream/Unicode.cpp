@@ -97,8 +97,23 @@ void appendUtf8(std::u16string &out, std::string_view bytes) {
   }
 }
 
-std::u16string utf8ToUtf16(std::string_view bytes) {
-  std::u16string out;
+Utf8Step utf8StepAt(std::string_view bytes, size_t index) {
+  uint32_t codePoint = 0;
+  const size_t bytes_ = decodeUtf8(bytes, index, codePoint);
+  return {bytes_, codePoint >= 0x10000 ? 2u : 1u};
+}
+
+uint32_t utf16Length(std::string_view bytes) {
+  uint32_t units = 0;
+  for (size_t index = 0; index < bytes.size();) {
+    const Utf8Step step = utf8StepAt(bytes, index);
+    units += step.units;
+    index += step.bytes;
+  }
+  return units;
+}
+
+std::u16string utf8ToUtf16(std::string_view bytes) {  std::u16string out;
   out.reserve(bytes.size());
   appendUtf8(out, bytes);
   return out;
