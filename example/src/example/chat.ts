@@ -48,6 +48,9 @@ export async function streamChatReply({
   signal: AbortSignal;
   onDelta: (delta: string) => void;
 }): Promise<void> {
+  // streamText reports a failed request here rather than by rejecting, so
+  // without this a dropped connection would read as an empty, finished answer.
+  const failures: unknown[] = [];
   const result = streamText({
     model: openai(CHAT_MODEL),
     messages,
@@ -61,6 +64,10 @@ export async function streamChatReply({
     onChunk: ({ chunk }) => {
       if (chunk.type === 'text-delta') onDelta(chunk.text);
     },
+    onError: ({ error }) => {
+      failures.push(error);
+    },
   });
   await result.consumeStream();
+  if (failures.length > 0) throw failures[0];
 }
