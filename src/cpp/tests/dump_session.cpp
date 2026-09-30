@@ -103,6 +103,18 @@ int main(int argc, char **argv) {
   if (last.status == ParseStatus::Ok) {
     last.document = parser.document();
   }
-  testdump::write(last);
+  // The highlighting counters ride along so a test can see that a growing code
+  // block resumes from its last complete line instead of being colored again.
+  if (!testdump::write(last)) {
+    return 0;
+  }
+  const IncrementalCounters &counters = parser.counters();
+  std::printf(",\"highlight\":{\"blocks\":%llu,\"resumes\":%llu,\"complete\":%llu,\"skipped\":%llu,\"budget\":%llu}",
+              static_cast<unsigned long long>(counters.blocksHighlighted),
+              static_cast<unsigned long long>(counters.highlightResumes),
+              static_cast<unsigned long long>(counters.highlightCount(HighlightStop::Complete)),
+              static_cast<unsigned long long>(counters.highlightCount(HighlightStop::Skipped)),
+              static_cast<unsigned long long>(counters.highlightCount(HighlightStop::Budget)));
+  testdump::writeModelClosed();
   return 0;
 }
