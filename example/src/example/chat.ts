@@ -1,5 +1,6 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { streamText } from 'ai';
+import { fetch as expoFetch } from 'expo/fetch';
 
 /**
  * The example only needs a fast, short Markdown answer, so it uses the cheapest
@@ -22,7 +23,12 @@ export const chatConfigured = API_KEY.length > 0;
 export const chatSetupHint =
   'Add EXPO_PUBLIC_OPENAI_API_KEY to example/.env, then restart the bundler.';
 
-const openai = createOpenAI({ apiKey: API_KEY });
+const openai = createOpenAI({
+  apiKey: API_KEY,
+  // React Native's own fetch has no streaming body, so the SDK would see an
+  // empty response; expo/fetch streams.
+  fetch: expoFetch as unknown as typeof globalThis.fetch,
+});
 
 export interface ChatTurn {
   role: 'user' | 'assistant';
