@@ -2,17 +2,39 @@
 
 #include "Document.h"
 
+#include <cstdint>
 #include <vector>
 
 namespace downstream {
 
-/// A width and font scale that a view was measured at, in points.
+/// Which control chrome a layout has: a code header, a table toolbar, and code
+/// that wraps rather than scrolls sideways. These are heights, not renderings,
+/// so they are part of a layout key rather than of the text a segment caches.
+enum Chrome : uint32_t {
+  kChromeNone = 0,
+  /// A header row above each code block.
+  kChromeCodeHeader = 1u << 0,
+  /// A toolbar row above each table.
+  kChromeTableToolbar = 1u << 1,
+  /// Code laid out at the card's width, so long lines wrap.
+  kChromeCodeWrap = 1u << 2,
+};
+
+/// A width, font scale, and chrome a view was measured at, in points.
 struct LayoutHint {
   float fontScale{1};
   float width{0};
+  /// See `Chrome`. Height depends on it, so two layouts that differ only here
+  /// are two layouts.
+  uint32_t chrome{kChromeNone};
+  /// A revision of the reader's wrap choices. The choices themselves are not in
+  /// the key: a revision moves whenever they do, which keeps the key a small
+  /// integer that a cached measurement compares in one instruction.
+  uint32_t revision{0};
 
   bool operator==(const LayoutHint &other) const {
-    return fontScale == other.fontScale && width == other.width;
+    return fontScale == other.fontScale && width == other.width && chrome == other.chrome &&
+        revision == other.revision;
   }
 };
 

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <optional>
 
@@ -224,7 +225,7 @@ void IncrementalParser::publish(DocumentHandle document) {
   replaced_ = false;
 }
 
-ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable) {
+ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable, bool settled) {
   const std::string_view source = source_;
   // A stream that is still open previews on every full parse: before a commit
   // boundary, in full mode, after a reset, and past the tail limit. The pass
@@ -263,6 +264,11 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable)
   HighlightStats stats;
   result.document = highlightSettledCodeBlocks(lexillaHighlighter(), result.document, kHighlightBudgetMs, &stats);
   noteHighlight(stats);
+  // A full parse has no proof that any particular block is closed, so nothing
+  // is settled until the stream finishes. Only a finished stream settles; a
+  // controlled document settles in PreparedDocument, the moment it is parsed.
+  const uint32_t count = static_cast<uint32_t>(std::min<size_t>(result.document->blocks.size(), UINT32_MAX));
+  result.document = withSettledBlocks(result.document, settled ? count : 0);
   if (mode_ == ParseMode::FullParse) {
     carryIdentities(result);
     publish(result.document);
@@ -290,6 +296,7 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable)
     shared->id = parsed.id;
     shared->blocks = SharedList<Block>(committedBlocks_, std::vector<Block>(blocks.begin() + committed, blocks.end()));
     shared->links = SharedList<Link>(committedLinks_, std::vector<Link>(links.begin() + committedLinks, links.end()));
+    shared->settledBlocks = result.document->settledBlocks;
     result.document = shared;
     counters_.cacheHits += committed;
   } else if (committed > 0) {
@@ -425,6 +432,9 @@ ParseResult IncrementalParser::parseTail() {
   combined->id = result.document->id;
   combined->blocks = SharedList<Block>(committedBlocks_, std::move(blocks));
   combined->links = SharedList<Link>(committedLinks_, std::move(links));
+  // The committed prefix is exactly what md4c has proved no later input can
+  // change, so it is what a control or a selection may act on.
+  combined->settledBlocks = static_cast<uint32_t>(std::min<size_t>(committed, UINT32_MAX));
   counters_.cacheHits += committed;
   result.document = combined;
   highlightTail(combined.get());
@@ -662,6 +672,7 @@ bool IncrementalParser::appendOpenFence() {
   // Copies only the active tail; committed blocks stay shared.
   auto next = std::make_shared<Document>(*document_);
   next->id = allocateDocumentId();
+  next->settledBlocks = static_cast<uint32_t>(std::min<size_t>(committedCount(), UINT32_MAX));
   std::u16string &text = next->blocks.tail().back().text;
   if (fencePendingNewline_) {
     text.push_back(u'\n');
@@ -681,18 +692,18 @@ bool IncrementalParser::appendOpenFence() {
 ParseResult IncrementalParser::parse(bool finished) {
   counters_.updates++;
   if (source_.size() > kMaxSourceBytes) {
-    return fullParse(ParseFallback::InvalidSource, false);
+    return fullParse(ParseFallback::InvalidSource, false, false);
   }
   // Full mode takes this branch for a finished stream too, so it has to pass
   // the flag itself: the settled document is never previewed.
   if (mode_ == ParseMode::FullParse) {
-    return fullParse(ParseFallback::Count, !finished);
+    return fullParse(ParseFallback::Count, !finished, finished);
   }
   if (replaced_) {
-    return fullParse(ParseFallback::NonAppend, !finished);
+    return fullParse(ParseFallback::NonAppend, !finished, finished);
   }
   if (finished) {
-    return fullParse(ParseFallback::Finished, false);
+    return fullParse(ParseFallback::Finished, false, true);
   }
   ParseResult current;
   // A pending policy change has to be applied to what the reader is looking at,
@@ -706,10 +717,10 @@ ParseResult IncrementalParser::parse(bool finished) {
 
   tryCommit();
   if (source_.size() - committedBytes_ > kMaxRetainedTailBytes) {
-    return fullParse(ParseFallback::TailLimit, true);
+    return fullParse(ParseFallback::TailLimit, true, false);
   }
   if (committedBytes_ == 0) {
-    return fullParse(ParseFallback::InitialOrUnprovenBoundary, true);
+    return fullParse(ParseFallback::InitialOrUnprovenBoundary, true, false);
   }
   return parseTail();
 }

@@ -106,7 +106,9 @@ public:
 private:
   /// `previewable` is false for a finished stream and a rejected source, which
   /// are the documents the provisional-styling pass must never touch.
-  ParseResult fullParse(ParseFallback reason, bool previewable);
+  /// `settled` is true only for a finished stream, whose blocks no later input
+  /// can change.
+  ParseResult fullParse(ParseFallback reason, bool previewable, bool settled);
   /// Full mode: gives leading blocks that are unchanged since the previous
   /// snapshot a stable identity, so platforms reuse their rendering.
   void carryIdentities(ParseResult &result);

@@ -30,19 +30,23 @@ public:
   static void prepare(const downstream::DocumentHandle &document, const std::vector<downstream::LayoutHint> &hints);
 
   /// Returns the content size for the document at the given width. Results
-  /// are cached by document id, font scale, and width; a new source, font
-  /// scale, or width is always measured again.
+  /// are cached by document id, font scale, width, chrome, and the revision of
+  /// the reader's wrap choices; a new source, font scale, width, or chrome is
+  /// always measured again.
   Size measure(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
-               const LayoutConstraints &layoutConstraints, SurfaceId surfaceId) const;
+               const LayoutConstraints &layoutConstraints, SurfaceId surfaceId, uint32_t chrome,
+               uint32_t revision) const;
 
 private:
   Size measurePlatform(const downstream::DocumentHandle &document, Float fontSizeMultiplier, Float maximumWidth,
-                       SurfaceId surfaceId) const;
+                       SurfaceId surfaceId, uint32_t chrome) const;
 
   struct CacheEntry {
     uint64_t documentId;
     Float fontSizeMultiplier;
     Float maximumWidth;
+    uint32_t chrome;
+    uint32_t revision;
     Size size;
   };
 
