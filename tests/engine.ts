@@ -13,18 +13,35 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const CPP = resolve(dirname(fileURLToPath(import.meta.url)), '../src/cpp');
 const MD4C = join(CPP, 'md4c');
+const LEXILLA = join(CPP, 'lexilla');
 
 /** Symbol renames, matching Downstream.podspec and the Android CMakeLists. */
 const SYMBOL_PREFIXES = [
   '-Dmd_parse=downstream_md_parse',
   '-Dentity_lookup=downstream_entity_lookup',
+] as const;
+
+/**
+ * The vendored lexers rename their namespaces too, the way Lexilla and
+ * Scintilla do to keep two copies in one binary apart.
+ */
+const LEXILLA_PREFIXES = [
+  '-DLexilla=downstream_lexilla',
+  '-DScintilla=downstream_scintilla',
 ] as const;
 
 const CFLAGS = ['-std=c11', '-O1', '-DMD4C_USE_UTF8', ...SYMBOL_PREFIXES];
@@ -34,11 +51,15 @@ const CXXFLAGS = [
   '-pthread',
   '-DMD4C_USE_UTF8',
   ...SYMBOL_PREFIXES,
+  ...LEXILLA_PREFIXES,
   `-I${MD4C}`,
   `-I${CPP}`,
   `-I${join(CPP, 'downstream')}`,
   `-I${join(CPP, 'session')}`,
   `-I${join(CPP, 'remend')}`,
+  `-I${join(CPP, 'highlight')}`,
+  `-I${LEXILLA}`,
+  `-I${join(LEXILLA, 'lexlib')}`,
 ];
 
 const ENGINE = [
@@ -50,6 +71,26 @@ const ENGINE = [
     'Compare.cpp',
   ].map((name) => join(CPP, 'downstream', name)),
   join(CPP, 'remend', 'Preview.cpp'),
+];
+
+/**
+ * The highlighter and the vendored lexers, which together are a library the
+ * three binaries below link rather than sources they each recompile.
+ */
+const HIGHLIGHT_SOURCES = [
+  ...['lexers', 'lexlib'].flatMap((directory) =>
+    readdirSync(join(LEXILLA, directory))
+      .filter((name) => name.endsWith('.cxx'))
+      .sort()
+      .map((name) => join(LEXILLA, directory, name))
+  ),
+  ...[
+    'CodeBlocks.cpp',
+    'CodeDocument.cpp',
+    'CodeHighlighter.cpp',
+    'LanguageRegistry.cpp',
+    'LanguageTables.cpp',
+  ].map((name) => join(CPP, 'highlight', name)),
 ];
 
 /** Block kinds, matching `Block::Kind` in the engine. */
@@ -87,6 +128,14 @@ export type InlineRun = [
   link: number
 ];
 
+/** A syntax token, as `[start, end, class, text]` on the wire. */
+export type TokenRun = [
+  start: number,
+  end: number,
+  token: string,
+  text: string
+];
+
 export interface Block {
   kind: number;
   headingLevel: number;
@@ -103,6 +152,7 @@ export interface Block {
     marker: string;
   }[];
   runs: InlineRun[];
+  tokens: TokenRun[];
   cells: [number, number, number][];
 }
 
@@ -111,10 +161,20 @@ export interface Link {
   range: [number, number];
 }
 
+/** What the highlighter did over a session's passes. */
+export interface HighlightCounters {
+  blocks: number;
+  resumes: number;
+  complete: number;
+  skipped: number;
+  budget: number;
+}
+
 export interface RenderModel {
   blocks: Block[];
   links: Link[];
   error?: string;
+  highlight?: HighlightCounters;
 }
 
 let cached: { binary: string; key: string } | undefined;
@@ -203,13 +263,48 @@ function compileObjects(): string[] {
   });
 }
 
+/** The highlighter built once per run and linked by every binary. */
+function highlightArchive(): string {
+  const root = buildRoot();
+  mkdirSync(root, { recursive: true });
+  const objects = HIGHLIGHT_SOURCES.map((source) => {
+    // The source mtime is part of the name for the same reason it is part of a
+    // binary's name: existence then proves the object is current.
+    const object = join(
+      root,
+      `${source.replace(/\//g, '-')}-${String(statSync(source).mtimeMs)}.o`
+    );
+    if (!existsSync(object)) {
+      compileInto(object, process.env.CXX ?? 'c++', [
+        ...CXXFLAGS,
+        '-c',
+        source,
+      ]);
+    }
+    return object;
+  });
+  const key = sourcesKey(objects);
+  const digest = createHash('sha256').update(key).digest('hex').slice(0, 16);
+  const archive = join(root, `downstream-highlight-${digest}.a`);
+  if (!existsSync(archive)) {
+    const pending = `${archive}.${process.pid}.${randomUUID()}`;
+    try {
+      execFileSync('ar', ['rcs', pending, ...objects]);
+      renameSync(pending, archive);
+    } catch (error) {
+      rmSync(pending, { force: true });
+      throw error;
+    }
+  }
+  return archive;
+}
+
 function engineBinary(): string {
-  const objects = compileObjects();
   return compile(
-    [join(CPP, 'tests', 'dump_document.cpp'), ...ENGINE],
+    [join(CPP, 'tests', 'dump_document.cpp'), ...ENGINE, ...compileObjects()],
     'downstream-dump',
     CXXFLAGS,
-    objects
+    [highlightArchive()]
   );
 }
 
@@ -222,16 +317,16 @@ export const PREVIEW_ALL =
   PREVIEW_EMPHASIS | PREVIEW_INLINE_CODE | PREVIEW_LINKS | PREVIEW_IMAGES;
 
 function sessionBinary(): string {
-  const objects = compileObjects();
   return compile(
     [
       join(CPP, 'tests', 'dump_session.cpp'),
       join(CPP, 'session', 'IncrementalParser.cpp'),
       ...ENGINE,
+      ...compileObjects(),
     ],
     'downstream-session',
     CXXFLAGS,
-    objects
+    [highlightArchive()]
   );
 }
 
@@ -301,17 +396,17 @@ export function preview(source: string, features: number): RenderModel {
 }
 
 function incrementalBinary(): string {
-  const objects = compileObjects();
   return compile(
     [
       join(CPP, 'tests', 'test_incremental.cpp'),
       join(CPP, 'session', 'IncrementalParser.cpp'),
       join(CPP, 'downstream', 'SegmentPlan.cpp'),
       ...ENGINE,
+      ...compileObjects(),
     ],
     'downstream-incremental',
     CXXFLAGS,
-    objects
+    [highlightArchive()]
   );
 }
 
