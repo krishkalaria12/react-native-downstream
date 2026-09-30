@@ -3,6 +3,7 @@ package com.downstream
 import android.content.Context
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactContext
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.module.annotations.ReactModule
@@ -32,7 +33,18 @@ class DownstreamMarkdownViewManager :
 
   override fun createViewInstance(context: ThemedReactContext): DownstreamMarkdownView {
     DownstreamNative.preparationContext = WeakReference(context)
-    return DownstreamMarkdownView(context).apply { onLinkPress = ::dispatchLinkPress }
+    val view = DownstreamMarkdownView(context)
+    // The view reports through the view that owns it, so a recycled view has no
+    // emitter and a control that outlives its view reports nothing.
+    view.onLinkPress = { target, url, start, end -> dispatchLinkPress(target, url, start, end) }
+    view.onControl = { target, block, action, format, language, filename ->
+      dispatchControl(target, block, action, format, language, filename)
+    }
+    view.onControlFailure = { target, block, action, message ->
+      dispatchControlFailure(target, block, action, message)
+    }
+    view.onWrapToggle = { target, wrapped -> dispatchWrapToggle(target, wrapped) }
+    return view
   }
 
   // The shadow node parses these props; the view reads the result from state.
@@ -58,12 +70,53 @@ class DownstreamMarkdownViewManager :
     view.setSyntaxHighlighting(value)
   }
 
+  override fun setCodeBlockWrap(view: DownstreamMarkdownView, value: Boolean) {
+    view.setCodeBlockWrap(value)
+  }
+
+  override fun setControls(view: DownstreamMarkdownView, value: Int) {
+    view.setControls(value)
+  }
+
+  override fun setCodeFilename(view: DownstreamMarkdownView, value: String?) {
+    view.setCodeFilename(value ?: "file")
+  }
+
+  override fun setTableFilename(view: DownstreamMarkdownView, value: String?) {
+    view.setTableFilename(value ?: "table")
+  }
+
+  override fun setCsvSeparator(view: DownstreamMarkdownView, value: String?) {
+    view.setCsvSeparator(value ?: ",")
+  }
+
+  override fun setControlLabels(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.setControlLabels(value?.let { array ->
+      List(array.size()) { index -> array.getString(index).orEmpty() }
+    } ?: emptyList())
+  }
+
+  /**
+   * The document, the chrome it lays out with, and the reader's wrap choices
+   * all arrive here, because a Fabric state update is the one path a native
+   * view has for changing its own layout without a React render.
+   */
   override fun updateState(
     view: DownstreamMarkdownView,
     props: ReactStylesDiffMap,
     stateWrapper: StateWrapper,
   ): Any? {
     val state = stateWrapper.stateData ?: return null
+    view.setStateWrapper(stateWrapper)
+    val toggles = state.getArray("wrapToggles")
+    val ordinals = mutableSetOf<Int>()
+    if (toggles != null) {
+      for (index in 0 until toggles.size()) {
+        ordinals.add(toggles.getDouble(index).toInt())
+      }
+    }
+    view.setCodeWrapToggles(ordinals)
+    view.setChrome(state.getDouble("chrome").toInt())
     view.setDocument(state.getDouble("documentId").toLong(), state.getDouble("fontScale").toFloat())
     return null
   }
@@ -87,32 +140,97 @@ class DownstreamMarkdownViewManager :
   ): Long {
     val documentId = localData?.getDouble("documentId")?.toLong() ?: 0L
     val fontScale = localData?.getDouble("fontScale")?.toFloat() ?: 1f
+    val chrome = localData?.getDouble("chrome")?.toInt() ?: 0
     if (DownstreamNative.preparationContext?.get() !== context) {
       DownstreamNative.preparationContext = WeakReference(context)
     }
     val rendered = RenderedDocument.obtain(context, documentId, fontScale)
       ?: return YogaMeasureOutput.make(0f, 0f)
     val layoutWidth = if (widthMode == YogaMeasureMode.UNDEFINED || !width.isFinite()) {
-      rendered.desiredWidth()
+      rendered.desiredWidth(chrome)
     } else {
       width.toInt()
     }
     return YogaMeasureOutput.make(
       PixelUtil.toDIPFromPixel(layoutWidth.toFloat()),
-      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth).toFloat()),
+      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth, chrome).toFloat()),
     )
   }
 
   override fun getExportedCustomDirectEventTypeConstants(): MutableMap<String, Any> = mutableMapOf(
     LinkPressEvent.NAME to mapOf("registrationName" to "onLinkPress"),
     "topMarkdownError" to mapOf("registrationName" to "onMarkdownError"),
+    "topControlAction" to mapOf("registrationName" to "onControlAction"),
   )
+
+  private fun dispatch(view: DownstreamMarkdownView, event: Event<out Event<*>>) {
+    val context = view.context as? ReactContext ?: return
+    UIManagerHelper.getEventDispatcherForReactTag(context, view.id)?.dispatchEvent(event)
+  }
 
   private fun dispatchLinkPress(view: DownstreamMarkdownView, url: String, start: Int, end: Int) {
     val context = view.context as? ReactContext ?: return
     val surfaceId = UIManagerHelper.getSurfaceId(context)
-    UIManagerHelper.getEventDispatcherForReactTag(context, view.id)
-      ?.dispatchEvent(LinkPressEvent(surfaceId, view.id, url, start, end))
+    dispatch(view, LinkPressEvent(surfaceId, view.id, url, start, end))
+  }
+
+  private fun dispatchControl(
+    view: DownstreamMarkdownView,
+    block: String,
+    action: String,
+    format: String,
+    language: String,
+    filename: String,
+  ) {
+    val context = view.context as? ReactContext ?: return
+    dispatch(
+      view,
+      ControlActionEvent(UIManagerHelper.getSurfaceId(context), view.id, block, action, format, language, filename),
+    )
+  }
+
+  /**
+   * A control failure arrives on the existing error path, tagged with the
+   * control it came from, so a per-control onError and the view's own onError
+   * can both find it without a second event.
+   */
+  private fun dispatchControlFailure(view: DownstreamMarkdownView, block: String, action: String, message: String) {
+    val context = view.context as? ReactContext ?: return
+    val generation = view.currentGeneration()
+    dispatch(
+      view,
+      MarkdownErrorEvent(
+        UIManagerHelper.getSurfaceId(context),
+        view.id,
+        "control_failed",
+        "$block $action failed: $message",
+        generation,
+      ),
+    )
+  }
+
+  private fun dispatchWrapToggle(view: DownstreamMarkdownView, wrapped: Boolean) {
+    // The height changed, and only Yoga and the chat list around the message can
+    // know that, so the change goes back through a Fabric state update rather
+    // than a React render: no parse, no JavaScript work, and no re-measure of
+    // the text, which is laid out again only for the block that changed.
+    val ordinal = view.nextUnwrappedOrdinal()
+    if (ordinal < 0) return
+    view.toggleWrap(ordinal)
+    val context = view.context as? ReactContext ?: return
+    dispatch(
+      view,
+      ControlActionEvent(
+        UIManagerHelper.getSurfaceId(context),
+        view.id,
+        "code",
+        "wrap",
+        "",
+        "",
+        "",
+        wrapped,
+      ),
+    )
   }
 
   companion object {
@@ -137,5 +255,53 @@ private class LinkPressEvent(
 
   companion object {
     const val NAME = "topLinkPress"
+  }
+}
+
+private class ControlActionEvent(
+  surfaceId: Int,
+  viewTag: Int,
+  private val block: String,
+  private val action: String,
+  private val format: String,
+  private val language: String,
+  private val filename: String,
+  private val wrapped: Boolean = false,
+) : Event<ControlActionEvent>(surfaceId, viewTag) {
+  override fun getEventName() = NAME
+
+  override fun getEventData(): WritableMap = Arguments.createMap().apply {
+    putString("block", block)
+    putString("action", action)
+    putString("format", format)
+    putString("language", language)
+    putString("filename", filename)
+    putBoolean("wrapped", wrapped)
+  }
+
+  companion object {
+    const val NAME = "topControlAction"
+  }
+}
+
+private class MarkdownErrorEvent(
+  surfaceId: Int,
+  viewTag: Int,
+  private val code: String,
+  private val message: String,
+  private val generation: Int,
+) : Event<MarkdownErrorEvent>(surfaceId, viewTag) {
+  override fun getEventName() = NAME
+
+  override fun getEventData(): WritableMap = Arguments.createMap().apply {
+    putString("code", code)
+    putString("message", message)
+    putInt("generation", generation)
+    putInt("sequence", 0)
+    putBoolean("recoverable", true)
+  }
+
+  companion object {
+    const val NAME = "topMarkdownError"
   }
 }

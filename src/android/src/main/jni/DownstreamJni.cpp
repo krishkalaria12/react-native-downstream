@@ -1,6 +1,7 @@
 // JNI access to parsed documents for com.downstream.DownstreamNative.
 
 #include "DocumentRegistry.h"
+#include "Export.h"
 #include "SegmentPlan.h"
 #include "SessionTrace.h"
 #include "Unicode.h"
@@ -63,6 +64,16 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env, jclass /*cl
   std::vector<jint> tokens;
   std::vector<std::u16string> strings;
 
+  // Block languages are the only UTF-8 fields a platform reads per block, so
+  // they ride in the string table and the blocks point into it.
+  auto intern = [&strings](const std::string &value) -> jint {
+    if (value.empty()) {
+      return -1;
+    }
+    strings.push_back(utf8ToUtf16(value));
+    return static_cast<jint>(strings.size() - 1);
+  };
+
   for (auto index = static_cast<size_t>(from); index < static_cast<size_t>(to); index++) {
     const Block &block = document->blocks[index];
     if (index > static_cast<size_t>(from)) {
@@ -83,6 +94,7 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env, jclass /*cl
                                     static_cast<jint>(block.cells.size()),
                                     static_cast<jint>(block.table),
                                     isAdmonitionTitle(*document, index) ? 1 : 0,
+                                    intern(block.language),
                                 });
     for (const TableCell &cell : block.cells) {
       cells.insert(cells.end(), {start + static_cast<jint>(cell.start), start + static_cast<jint>(cell.end),
@@ -139,9 +151,10 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env, jclass /*cl
   return result;
 }
 
-/// The document's segments as [from, to, flags, identity] per segment, where
-/// flags bit 0 is a table, bit 1 is committed, and bit 2 means the previous
-/// block is a code block. Layout must match NativeDocument.kt.
+/// The document's segments as [from, to, flags, identity, settled] per segment,
+/// where flags bit 0 is a table, bit 1 is committed, and bit 2 is code. The
+/// settled count is the document's, repeated on every segment because there is
+/// one per document. Layout must match NativeDocument.kt.
 extern "C" JNIEXPORT jlongArray JNICALL
 Java_com_downstream_DownstreamNative_nativeSegmentPlan(JNIEnv *env, jclass /*clazz*/, jlong id) {
   const DocumentHandle document = DocumentRegistry::find(static_cast<uint64_t>(id));
@@ -153,11 +166,10 @@ Java_com_downstream_DownstreamNative_nativeSegmentPlan(JNIEnv *env, jclass /*cla
     values.insert(values.end(), {
                                     static_cast<jlong>(segment.from),
                                     static_cast<jlong>(segment.to),
-                                    (segment.table ? 1 : 0) | (segment.committed ? 2 : 0) |
-                                        (segment.from > 0 && document->blocks[segment.from - 1].kind == BlockKind::CodeBlock
-                                             ? 4
-                                             : 0),
+                                    (segment.isTable() ? 1 : 0) | (segment.committed ? 2 : 0) |
+                                        (segment.isCode() ? 4 : 0),
                                     static_cast<jlong>(document->blocks[segment.from].identity),
+                                    static_cast<jlong>(document->settledBlocks),
                                 });
   }
   jlongArray array = env->NewLongArray(static_cast<jsize>(values.size()));
@@ -182,4 +194,62 @@ Java_com_downstream_DownstreamNative_nativeReadLink(JNIEnv *env, jclass /*clazz*
   env->SetObjectArrayElement(result, 1, range);
   env->DeleteLocalRef(range);
   return result;
+}
+
+/// Serializes blocks [from, to) of a document, as a String, or null when the
+/// document is gone. The same call serves a clipboard write and a saved file,
+/// so both platforms can only ever produce identical bytes.
+extern "C" JNIEXPORT jstring JNICALL Java_com_downstream_DownstreamNative_nativeExport(
+    JNIEnv *env, jclass /*clazz*/, jlong id, jint from, jint to, jint format, jint separator) {
+  const DocumentHandle document = DocumentRegistry::find(static_cast<uint64_t>(id));
+  if (!document || from < 0 || to < from || static_cast<size_t>(to) > document->blocks.size()) {
+    return nullptr;
+  }
+  if (format < 0 || format > static_cast<jint>(ExportFormat::Html)) {
+    return nullptr;
+  }
+  const char16_t unit = separator < 0 ? u',' : static_cast<char16_t>(separator);
+  const std::u16string text =
+      exportBlocks(*document, static_cast<size_t>(from), static_cast<size_t>(to), static_cast<ExportFormat>(format), unit);
+  return toJavaString(env, text);
+}
+
+/// The file name a code download saves as, for one block. `configured` is the
+/// caller's base name and `fallback` the one the contract names.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_downstream_DownstreamNative_nativeDownloadName(JNIEnv *env, jclass /*clazz*/, jlong id, jint index,
+                                                         jstring configured, jstring fallback) {
+  const DocumentHandle document = DocumentRegistry::find(static_cast<uint64_t>(id));
+  if (!document || index < 0 || static_cast<size_t>(index) >= document->blocks.size()) {
+    return nullptr;
+  }
+  const Block &block = document->blocks[static_cast<size_t>(index)];
+  const char *configuredText = configured != nullptr ? env->GetStringUTFChars(configured, nullptr) : nullptr;
+  const char *fallbackText = fallback != nullptr ? env->GetStringUTFChars(fallback, nullptr) : nullptr;
+  const std::string name = downloadName(block.info, block.language,
+                                        configuredText != nullptr ? configuredText : "",
+                                        fallbackText != nullptr ? fallbackText : "file");
+  if (configuredText != nullptr) {
+    env->ReleaseStringUTFChars(configured, configuredText);
+  }
+  if (fallbackText != nullptr) {
+    env->ReleaseStringUTFChars(fallback, fallbackText);
+  }
+  return toJavaString(env, utf8ToUtf16(name));
+}
+
+/// The file name a table download saves as.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_downstream_DownstreamNative_nativeTableName(JNIEnv *env, jclass /*clazz*/, jstring configured, jstring extension) {
+  const char *configuredText = configured != nullptr ? env->GetStringUTFChars(configured, nullptr) : nullptr;
+  const char *extensionText = extension != nullptr ? env->GetStringUTFChars(extension, nullptr) : nullptr;
+  const std::string name = tableDownloadName(
+      configuredText != nullptr ? configuredText : "", extensionText != nullptr ? extensionText : "txt");
+  if (configuredText != nullptr) {
+    env->ReleaseStringUTFChars(configured, configuredText);
+  }
+  if (extensionText != nullptr) {
+    env->ReleaseStringUTFChars(extension, extensionText);
+  }
+  return toJavaString(env, utf8ToUtf16(name));
 }

@@ -129,7 +129,6 @@ private fun startsRightToLeft(text: CharSequence, start: Int, end: Int): Boolean
  */
 private class BlockSpan(
   private val spacingBefore: Int,
-  private val codePadding: Int,
   private val contentLeading: Float,
   private val decoration: Int,
   private val containers: List<ContainerDecoration>,
@@ -140,11 +139,6 @@ private class BlockSpan(
 ) : LineHeightSpan, LineBackgroundSpan {
   private fun blockStart(text: CharSequence) = (text as Spanned).getSpanStart(this)
 
-  private fun blockEnd(text: CharSequence): Int {
-    val end = (text as Spanned).getSpanEnd(this)
-    return if (end > 0 && text[end - 1] == '\n') end - 1 else end
-  }
-
   override fun chooseHeight(
     text: CharSequence,
     lineStart: Int,
@@ -154,13 +148,8 @@ private class BlockSpan(
     fm: Paint.FontMetricsInt,
   ) {
     if (lineStart == blockStart(text)) {
-      val extra = spacingBefore + codePadding
-      fm.ascent -= extra
-      fm.top -= extra
-    }
-    if (codePadding > 0 && lineEnd >= blockEnd(text)) {
-      fm.descent += codePadding
-      fm.bottom += codePadding
+      fm.ascent -= spacingBefore
+      fm.top -= spacingBefore
     }
   }
 
@@ -200,18 +189,14 @@ private class BlockSpan(
       }
     }
 
-    val x = if (rtl) left.toFloat() else left + contentLeading
-    val endX = if (rtl) right - contentLeading else right.toFloat()
-    when (decoration) {
-      DECORATION_CODE -> {
-        paint.color = colors.codeBackground
-        canvas.drawRect(x, textTop.toFloat(), endX, bottom.toFloat(), paint)
-      }
-      DECORATION_RULE -> {
-        paint.color = colors.separator
-        val y = ((textTop + bottom) / 2).toFloat()
-        canvas.drawRect(x, y, endX, y + density, paint)
-      }
+    // A code block's background is drawn by its card, not here: a card is a
+    // view, so it can cover the padding a text layout cannot.
+    if (decoration == DECORATION_RULE) {
+      val x = if (rtl) left.toFloat() else left + contentLeading
+      val endX = if (rtl) right - contentLeading else right.toFloat()
+      paint.color = colors.separator
+      val y = ((textTop + bottom) / 2).toFloat()
+      canvas.drawRect(x, y, endX, y + density, paint)
     }
     paint.color = savedColor
     paint.style = savedStyle
@@ -219,8 +204,7 @@ private class BlockSpan(
 
   companion object {
     const val DECORATION_NONE = 0
-    const val DECORATION_CODE = 1
-    const val DECORATION_RULE = 2
+    const val DECORATION_RULE = 1
     const val BAR_WIDTH = 3
     const val MARKER_GAP = 6
   }
@@ -293,6 +277,81 @@ internal class TextSegment(val text: Spanned, val accessibleBlocks: List<Accessi
 }
 
 /**
+ * One code block: a header row above a horizontally scrolling body. The body is
+ * a one-block text segment, so selection, plain-text copy, token colors, and
+ * link hit testing inside the code are the ones a text segment already has.
+ * Code is always laid out left to right, as in Streamdown.
+ */
+internal class CodeSegment(
+  val text: Spanned,
+  val accessibleBlocks: List<AccessibleBlock>,
+  /** The fence language as written, or empty for an indented block. */
+  val language: String,
+  val blockIndex: Int,
+  /**
+   * The block's ordinal among the document's code blocks, which is what a
+   * reader's wrap choice is keyed by. The plan lists one code segment per code
+   * block, so the view counts them as it walks the segments.
+   */
+  var codeOrdinal: Int = 0,
+  val containers: List<ContainerDecoration>,
+  val contentLeading: Int,
+  /** The block's first line, which identifies it while a fence is still growing. */
+  val firstLine: String,
+  /** Padding inside the card, the same on every side. */
+  val padding: Int,
+  val colors: Palette,
+  gapBefore: Int,
+) : Segment(gapBefore) {
+  private var wrappedWidth = -1
+  private var wrappedHeight = 0
+  private var unwrappedHeight = 0
+  private var unwrappedWidth = 0
+
+  /** The width the body lays out at: the card's inner width, or unbounded. */
+  private fun layoutWidth(cardWidth: Int, wrapped: Boolean): Int =
+    if (wrapped) (cardWidth - contentLeading - 2 * padding).coerceAtLeast(0) else Int.MAX_VALUE
+
+  /**
+   * Body height at a card width. Unwrapped, it is the line count times the line
+   * height and does not depend on the width, which is why a rotation does not
+   * lay code out again.
+   */
+  @Synchronized
+  fun bodyHeight(paint: TextPaint, cardWidth: Int, wrapped: Boolean): Int {
+    val width = layoutWidth(cardWidth, wrapped)
+    if (wrapped) {
+      if (width != wrappedWidth) {
+        wrappedHeight = RenderedDocument.buildLayout(text, paint, width, Layout.Alignment.ALIGN_NORMAL).height
+        wrappedWidth = width
+      }
+      return wrappedHeight
+    }
+    if (unwrappedHeight == 0) {
+      val layout = StaticLayout.Builder.obtain(text, 0, text.length, paint, Int.MAX_VALUE)
+        .setIncludePad(false)
+        .setBreakStrategy(Layout.BREAK_STRATEGY_HIGH_QUALITY)
+        .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
+        .setTextDirection(TextDirectionHeuristics.FIRSTSTRONG_LTR)
+        .build()
+      unwrappedHeight = layout.height
+      unwrappedWidth = layout.width
+    }
+    return unwrappedHeight
+  }
+
+  /** Body width at a card width, which is what the horizontal scroll view scrolls. */
+  @Synchronized
+  fun bodyWidth(paint: TextPaint, cardWidth: Int, wrapped: Boolean): Int {
+    if (!wrapped) {
+      bodyHeight(paint, cardWidth, false)
+      return unwrappedWidth
+    }
+    return layoutWidth(cardWidth, true)
+  }
+}
+
+/**
  * One table. Column widths depend only on content, so the table is the same
  * at every view width; wide tables scroll horizontally.
  */
@@ -310,6 +369,9 @@ internal class TableSegment(
   val density: Float,
   val rtl: Boolean,
   val identity: Long,
+  /** The segment's first block, which is what a copy or a download reads. */
+  val blockIndex: Int,
+  val blockCount: Int,
   gapBefore: Int,
 ) : Segment(gapBefore) {
   val tableWidth = columnWidths.sum() + 1
@@ -333,58 +395,86 @@ internal class RenderedDocument(
   val documentId: Long,
   val segments: List<Segment>,
   val paint: TextPaint,
+  /** Paints and sizes for one font scale and appearance, shared by the frames. */
+  val style: Style,
 ) {
   private var cachedWidth = -1
+  private var cachedChrome = -1
   private var cachedFrames = IntArray(0)
 
   fun createTextLayout(segment: TextSegment, width: Int): StaticLayout =
     buildLayout(segment.text, paint, width.coerceAtLeast(1), Layout.Alignment.ALIGN_NORMAL)
 
-  /** Top and height of each segment at a width, as [top0, height0, top1, ...]. */
+  /** The height of one segment at a view width, including its control row. */
+  private fun heightOf(segment: Segment, width: Int, chrome: Int): Int = when (segment) {
+    is TextSegment -> segment.height(width, paint)
+    is CodeSegment ->
+      2 * segment.padding + segment.bodyHeight(paint, width, chrome and CHROME_CODE_WRAP != 0) +
+        (if (chrome and CHROME_CODE_HEADER != 0) style.chromeRowHeight else 0)
+    is TableSegment ->
+      segment.tableHeight + (if (chrome and CHROME_TABLE_TOOLBAR != 0) style.chromeRowHeight else 0)
+  }
+
+  /**
+   * Top and height of each segment at a width, as [top0, height0, top1, ...].
+   *
+   * `chrome` is part of the key rather than the rendering, so a change to it
+   * restacks frames without rebuilding any spans.
+   */
   @Synchronized
-  fun frames(width: Int): IntArray {
-    if (width == cachedWidth) {
+  fun frames(width: Int, chrome: Int = 0): IntArray {
+    if (width == cachedWidth && chrome == cachedChrome) {
       return cachedFrames
     }
     val frames = IntArray(segments.size * 2)
     var y = 0
     segments.forEachIndexed { index, segment ->
       y += segment.gapBefore
-      val height = when (segment) {
-        is TextSegment -> segment.height(width, paint)
-        is TableSegment -> segment.tableHeight
-      }
       frames[index * 2] = y
-      frames[index * 2 + 1] = height
-      y += height
+      frames[index * 2 + 1] = heightOf(segment, width, chrome)
+      y += frames[index * 2 + 1]
     }
     cachedWidth = width
+    cachedChrome = chrome
     cachedFrames = frames
     return frames
   }
 
-  fun height(width: Int): Int {
-    val frames = frames(width)
+  fun height(width: Int, chrome: Int = 0): Int {
+    val frames = frames(width, chrome)
     return if (frames.isEmpty()) 0 else frames[frames.size - 2] + frames[frames.size - 1]
   }
 
-  /** Width for an unconstrained measure. */
-  fun desiredWidth(): Int {
+  /**
+   * Width for an unconstrained measure: the widest thing that does not fit a
+   * view, which is a table's columns or a code line that scrolls sideways.
+   */
+  fun desiredWidth(chrome: Int = 0): Int {
     var width = 0f
     for (segment in segments) {
-      width = max(
-        width,
-        when (segment) {
-          is TextSegment -> Layout.getDesiredWidth(segment.text, paint)
-          is TableSegment -> segment.contentLeading + segment.tableWidth
-        },
-      )
+      val candidate = when (segment) {
+        is TextSegment -> Layout.getDesiredWidth(segment.text, paint)
+        is CodeSegment -> (
+          segment.contentLeading + 2 * segment.padding +
+            segment.bodyWidth(paint, UNCONSTRAINED_WIDTH, chrome and CHROME_CODE_WRAP != 0)
+          ).toFloat()
+        is TableSegment -> (segment.contentLeading + segment.tableWidth).toFloat()
+      }
+      if (candidate > width) {
+        width = candidate
+      }
     }
     return ceil(min(width, MAX_WIDTH)).toInt()
   }
 
   companion object {
     private const val MAX_WIDTH = 100_000f
+    /** The card width an unconstrained measure passes to a code segment. */
+    private const val UNCONSTRAINED_WIDTH = 100_000
+    /// Which control rows a document lays out with. See `Controls.h`.
+    const val CHROME_CODE_HEADER = 1
+    const val CHROME_TABLE_TOOLBAR = 2
+    const val CHROME_CODE_WRAP = 4
     private const val BODY_SIZE = 16f
     private const val CODE_SIZE = 14f
     private val HEADING_SIZES = floatArrayOf(28f, 24f, 20f, 18f, 16f, 15f)
@@ -394,6 +484,7 @@ internal class RenderedDocument(
     private const val QUOTE_INDENT = 16f
     private const val LIST_INDENT = 32f
     private const val CODE_PADDING = 10f
+    private const val CHROME_ROW_HEIGHT_DP = 32f
     private const val MIN_COLUMN_WIDTH = 56f
     private const val MAX_COLUMN_WIDTH = 280f
     private const val CELL_PADDING_HORIZONTAL = 12f
@@ -412,6 +503,7 @@ internal class RenderedDocument(
       override fun sizeOf(key: String, value: Segment) = when (value) {
         // Precomputed text also keeps a width per character.
         is TextSegment -> value.text.length * 24 + 256
+        is CodeSegment -> value.text.length * 24 + 512
         is TableSegment -> value.accessibilityText.length * 32 + 1024
       }
     }
@@ -463,34 +555,38 @@ internal class RenderedDocument(
         val segment = (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
           ?: DownstreamNative.readDocument(documentId, planned.from, planned.to)
             ?.let {
-              buildSegment(it, style, planned.from == 0, planned.followsCode, planned.identity, syntaxHighlighting)
+              buildSegment(it, style, planned.from, planned.isCode, planned.identity, syntaxHighlighting)
             }
             ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
           ?: return null
         segments.add(segment)
       }
-      return RenderedDocument(documentId, segments, style.paint).also { cache.put(key, it) }
+      return RenderedDocument(documentId, segments, style.paint, style).also { cache.put(key, it) }
     }
 
-    /** Paints and metrics for one font scale and appearance. */
-    private class Style(fontScale: Float, val colors: Palette) {
-      val scale = if (fontScale > 0) fontScale else 1f
-      val density = PixelUtil.toPixelFromDIP(1f)
-      val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = px(BODY_SIZE)
-        color = colors.text
-      }
-      val markerPaint = TextPaint(paint).apply { color = colors.secondary }
-
-      fun px(dp: Float) = dp * density * scale
+  /** Paints and metrics for one font scale and appearance. */
+  internal class Style(fontScale: Float, val colors: Palette) {
+    val scale = if (fontScale > 0) fontScale else 1f
+    val density = PixelUtil.toPixelFromDIP(1f)
+    val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+      textSize = px(BODY_SIZE)
+      color = colors.text
     }
+    val markerPaint = TextPaint(paint).apply { color = colors.secondary }
+    /// The row a code block's buttons sit in, and a table's. Fixed in both
+    /// directions so a block does not move when a button appears.
+    val chromeRowHeight = px(CHROME_ROW_HEIGHT_DP).toInt()
+    val codePadding = px(CODE_PADDING).toInt()
+
+    fun px(dp: Float) = (dp * density * scale)
+  }
 
     /** Builds one planned segment from its flattened blocks. */
     private fun buildSegment(
       document: NativeDocument,
       style: Style,
-      first: Boolean,
-      followsCode: Boolean,
+      from: Int,
+      isCode: Boolean,
       identity: Long,
       syntaxHighlighting: Boolean,
     ): Segment {
@@ -501,6 +597,7 @@ internal class RenderedDocument(
       fun px(dp: Float) = style.px(dp)
 
       val text = SpannableStringBuilder(document.text)
+      val textLanguage = document.blockLanguage(0)
       val accessibleBlocks = ArrayList<AccessibleBlock>(document.blockCount)
       val isTable = document.blockKind(0) == NativeDocument.KIND_TABLE_ROW
       val flags = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
@@ -565,17 +662,11 @@ internal class RenderedDocument(
         val previous = block - 1
         val (containers, leading, inQuote) = containersOf(block, previous)
 
-        var gap = 0f
-        if (previous >= 0) {
-          gap = baseGap(block)
-          if (document.blockKind(previous) == NativeDocument.KIND_CODE) gap += px(CODE_PADDING)
-        }
-        val codePadding = if (kind == NativeDocument.KIND_CODE) px(CODE_PADDING) else 0f
-        val decoration = when (kind) {
-          NativeDocument.KIND_CODE -> BlockSpan.DECORATION_CODE
-          NativeDocument.KIND_RULE -> BlockSpan.DECORATION_RULE
-          else -> BlockSpan.DECORATION_NONE
-        }
+        // A code card is its own segment and draws its own padding, so its
+        // block never reserves any here, and the block that follows one starts
+        // from the plain gap the document stack adds.
+        val gap = if (previous >= 0 && !isCode) baseGap(block) else 0f
+        val decoration = if (kind == NativeDocument.KIND_RULE) BlockSpan.DECORATION_RULE else BlockSpan.DECORATION_NONE
 
         var size = px(BODY_SIZE)
         when (kind) {
@@ -597,13 +688,13 @@ internal class RenderedDocument(
         if (color != null) {
           text.setSpan(ForegroundColorSpan(color), start, end, flags)
         }
-        val margin = (leading + codePadding).toInt()
+        val margin = leading.toInt()
         if (margin > 0) {
           text.setSpan(LeadingMarginSpan.Standard(margin), start, spanEnd, Spanned.SPAN_PARAGRAPH)
         }
         text.setSpan(
-          BlockSpan(gap.toInt(), codePadding.toInt(), leading, decoration, containers, markerPaint, colors, density,
-            startsRightToLeft(text, start, end)),
+          BlockSpan(gap.toInt(), leading, decoration, containers, markerPaint, colors, density,
+            isCode || startsRightToLeft(text, start, end)),
           start,
           spanEnd,
           Spanned.SPAN_PARAGRAPH,
@@ -677,17 +768,13 @@ internal class RenderedDocument(
         }
       }
 
-      // A text segment that a committed chunk split off gets the gap it
-      // would have inside one segment, so both stack to the same height.
-      val gapBefore = when {
-        first -> 0
-        followsCode && !isTable -> (baseGap(0) + px(CODE_PADDING)).toInt()
-        else -> baseGap(0).toInt()
-      }
+      // A text segment that a committed chunk split off gets the gap it would
+      // have inside one segment, so both stack to the same height.
+      val gapBefore = if (from == 0) 0 else baseGap(0).toInt()
       if (isTable) {
         return buildTable(
           document, text, 0, document.blockCount, paint, markerPaint, colors, density, ::px, containersOf(0, -1),
-          gapBefore, identity,
+          gapBefore, identity, from,
         )
       }
       val displayText = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -695,7 +782,54 @@ internal class RenderedDocument(
       } else {
         text
       }
+      if (isCode) {
+        return buildCode(
+          text,
+          textLanguage,
+          displayText,
+          accessibleBlocks,
+          style,
+          containersOf(0, -1),
+          from,
+          gapBefore,
+        )
+      }
       return TextSegment(displayText, accessibleBlocks, gapBefore)
+    }
+
+    /**
+     * A code card. The block is laid out left to right however its own
+     * characters read, as in Streamdown, and the card keeps the container margin
+     * beside the body rather than inside it.
+     *
+     * The block's ordinal among the document's code blocks is not decided here:
+     * the plan already lists one code segment per code block, so the view counts
+     * them as it walks the segments.
+     */
+    private fun buildCode(
+      text: SpannableStringBuilder,
+      language: String,
+      displayText: Spanned,
+      accessibleBlocks: List<AccessibleBlock>,
+      style: Style,
+      containers: Triple<List<ContainerDecoration>, Float, Boolean>,
+      blockIndex: Int,
+      gapBefore: Int,
+    ): CodeSegment {
+      val newline = text.indexOfFirst { it == '\n' }
+      val firstLine = text.substring(0, if (newline < 0) text.length else newline).toString()
+      return CodeSegment(
+        text = displayText,
+        accessibleBlocks = accessibleBlocks,
+        language = language,
+        blockIndex = blockIndex,
+        containers = containers.first,
+        contentLeading = containers.second.toInt(),
+        firstLine = firstLine,
+        padding = style.codePadding,
+        colors = style.colors,
+        gapBefore = gapBefore,
+      )
     }
 
     private fun buildTable(
@@ -711,6 +845,7 @@ internal class RenderedDocument(
       containers: Triple<List<ContainerDecoration>, Float, Boolean>,
       gapBefore: Int,
       identity: Long,
+      blockIndex: Int,
     ): TableSegment {
       val cellPaint = TextPaint(paint).apply { if (containers.third) color = colors.secondary }
       val maxWidth = px(MAX_COLUMN_WIDTH)
@@ -755,6 +890,8 @@ internal class RenderedDocument(
         density = density,
         rtl = startsRightToLeft(text, document.blockStart(from), document.blockEnd(from)),
         identity = identity,
+        blockIndex = blockIndex,
+        blockCount = to - from,
         gapBefore = gapBefore,
       )
     }

@@ -49,7 +49,7 @@ Java_com_downstream_DownstreamNative_nativeInstallPreparer(JNIEnv *env, jclass c
   if (javaReady.load(std::memory_order_relaxed)) {
     return;
   }
-  const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JFF)V");
+  const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JFFI)V");
   if (method == nullptr || env->GetJavaVM(&javaVm) != JNI_OK) {
     env->ExceptionClear();
     return;
@@ -67,7 +67,7 @@ namespace facebook::react {
 // StaticLayout configuration the view draws with.
 Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHandle &document,
                                                   Float fontSizeMultiplier, Float maximumWidth,
-                                                  SurfaceId surfaceId) const {
+                                                  SurfaceId surfaceId, uint32_t chrome) const {
   downstream::DocumentRegistry::add(document);
 
   const auto &fabricUIManager = contextContainer_->at<jni::global_ref<jobject>>("FabricUIManager");
@@ -76,8 +76,10 @@ Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHand
           ->getMethod<jlong(jint, jstring, ReadableMap::javaobject, ReadableMap::javaobject, ReadableMap::javaobject,
                             jfloat, jfloat, jfloat, jfloat)>("measure");
 
+  // The chrome travels with the document so the view manager measures at the
+  // height the same chrome produces, which is what the view then lays out.
   folly::dynamic localData = folly::dynamic::object("documentId", static_cast<double>(document->id))(
-      "fontScale", static_cast<double>(fontSizeMultiplier));
+      "fontScale", static_cast<double>(fontSizeMultiplier))("chrome", static_cast<double>(chrome));
   auto localDataMap = ReadableNativeMap::newObjectCxxArgs(std::move(localData));
   auto propsMap = ReadableNativeMap::newObjectCxxArgs(folly::dynamic::object());
   auto componentName = make_jstring("DownstreamMarkdownView");
@@ -104,7 +106,8 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
   downstream::DocumentRegistry::add(document);
   for (const auto &hint : hints) {
     env->CallStaticVoidMethod(nativeClass, prepareMethod, static_cast<jlong>(document->id),
-                              static_cast<jfloat>(hint.fontScale), static_cast<jfloat>(hint.width));
+                              static_cast<jfloat>(hint.fontScale), static_cast<jfloat>(hint.width),
+                              static_cast<jint>(hint.chrome));
     if (env->ExceptionCheck()) {
       env->ExceptionClear();
       return;
