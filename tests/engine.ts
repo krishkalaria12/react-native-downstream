@@ -74,6 +74,8 @@ const ENGINE = [
     'LinkPolicy.cpp',
     'Scan.cpp',
     'Compare.cpp',
+    'Export.cpp',
+    'ExportNames.cpp',
   ].map((name) => join(CPP, 'downstream', name)),
   join(CPP, 'remend', 'Preview.cpp'),
 ];
@@ -148,6 +150,8 @@ export interface Block {
   table: number;
   spacing: number;
   language: string;
+  /** The whole fence info string, which is where a download name can come from. */
+  info: string;
   text: string;
   containers: {
     kind: number;
@@ -178,6 +182,8 @@ export interface HighlightCounters {
 export interface RenderModel {
   blocks: Block[];
   links: Link[];
+  /** Leading blocks no later input can change, as `Document::settledBlocks`. */
+  settled: number;
   error?: string;
   highlight?: HighlightCounters;
 }
@@ -346,6 +352,18 @@ const TARGETS = {
   'downstream-incremental': [
     join(CPP, 'tests', 'test_incremental.cpp'),
     join(CPP, 'session', 'IncrementalParser.cpp'),
+    join(CPP, 'downstream', 'SegmentPlan.cpp'),
+    ...ENGINE,
+    ...MD4C_SOURCES,
+  ],
+  'downstream-export': [
+    join(CPP, 'tests', 'dump_export.cpp'),
+    join(CPP, 'downstream', 'SegmentPlan.cpp'),
+    ...ENGINE,
+    ...MD4C_SOURCES,
+  ],
+  'downstream-export-rules': [
+    join(CPP, 'tests', 'test_export.cpp'),
     join(CPP, 'downstream', 'SegmentPlan.cpp'),
     ...ENGINE,
     ...MD4C_SOURCES,
@@ -584,4 +602,82 @@ export function tableRows(model: RenderModel): string[][] {
 /** The URLs the renderer would allow the user to open. */
 export function linkUrls(model: RenderModel): string[] {
   return model.links.map((link) => link.url);
+}
+
+function exportBinary(): string {
+  return compile(TARGETS['downstream-export'], 'downstream-export');
+}
+
+/** One `dump_export` operation's result. */
+export interface ExportResult {
+  op: 'e' | 'd' | 't' | 'r';
+  text: string;
+  /** Present on a `r` operation: the same document, re-parsed from the export. */
+  reparsed?: RenderModel;
+}
+
+export type ExportOperation =
+  | { op: 'e'; from: number; to: number }
+  | { op: 'd'; block: number }
+  | { op: 't'; extension: string };
+
+/**
+ * Serializes ranges of a source with the exporter that ships in the app.
+ *
+ * The engine tests in `src/cpp/tests/engine.test.mjs` cover the same rules
+ * against a standalone binary; this exists so a suite in this directory can
+ * assert on the real bytes without shelling out to that harness.
+ */
+export function exportSource(
+  source: string,
+  format: 'text' | 'csv' | 'tsv' | 'markdown' | 'html',
+  operations: readonly ExportOperation[],
+  options: { separator?: string; base?: string; fallback?: string } = {}
+): { model: RenderModel; exports: ExportResult[] } {
+  const separator = options.separator ?? ',';
+  const base = options.base ?? '';
+  const fallback = options.fallback ?? 'file';
+  const args = [
+    format,
+    separator,
+    base,
+    fallback,
+    ...operations.map((operation) =>
+      operation.op === 'e'
+        ? `e:${operation.from}:${operation.to}`
+        : operation.op === 'd'
+        ? `d:${operation.block}`
+        : `t:${operation.extension}`
+    ),
+  ];
+  const model: RenderModel & { exports?: ExportResult[] } = JSON.parse(
+    execFileSync(exportBinary(), args, {
+      input: Buffer.from(source, 'utf8'),
+      maxBuffer: 256 << 20,
+    }).toString('utf8')
+  );
+  return { model, exports: model.exports ?? [] };
+}
+
+/** The code text a copy button would put on the clipboard. */
+export function codeText(source: string, block = 0): string {
+  const { exports } = exportSource(source, 'text', [
+    { op: 'e', from: block, to: block + 1 },
+  ]);
+  return exports[0]?.text ?? '';
+}
+
+/** The file name a code download saves as. */
+export function codeDownloadName(
+  source: string,
+  block = 0,
+  options: { base?: string; fallback?: string } = {}
+): string {
+  const { exports } = exportSource(
+    source,
+    'text',
+    [{ op: 'd', block }],
+    options
+  );
+  return exports[0]?.text ?? '';
 }
