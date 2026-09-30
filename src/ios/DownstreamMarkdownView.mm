@@ -16,6 +16,7 @@ using namespace facebook::react;
 
 @interface DownstreamMarkdownView () <RCTDownstreamMarkdownViewViewProtocol, DSLinkDelegate>
 - (void)scheduleTraceFrame;
+- (void)applyRendering;
 @end
 
 @implementation DownstreamMarkdownView {
@@ -23,6 +24,7 @@ using namespace facebook::react;
   DownstreamMarkdownShadowNode::ConcreteState::Shared _state;
   downstream::DocumentHandle _document;
   CGFloat _fontScale;
+  BOOL _syntaxHighlighting;
   CADisplayLink *_traceDisplayLink;
   uint64_t _traceDocumentId;
 }
@@ -36,6 +38,7 @@ using namespace facebook::react;
     static const auto defaultProps = std::make_shared<const DownstreamMarkdownViewProps>();
     _props = defaultProps;
 
+    _syntaxHighlighting = YES;
     _documentView = [[DSDocumentView alloc] initWithFrame:self.bounds];
     _documentView.linkDelegate = self;
     self.contentView = _documentView;
@@ -56,20 +59,13 @@ using namespace facebook::react;
   if (data.document == _document && data.fontSizeMultiplier == _fontScale) {
     return;
   }
-  const uint64_t nextDocumentId = data.document ? data.document->id : 0;
-  if (_traceDocumentId && _traceDocumentId != nextDocumentId) {
-    downstream::SessionTrace::recordDocument(_traceDocumentId, "frame_unavailable");
-    [_traceDisplayLink invalidate];
-    _traceDisplayLink = nil;
-    _traceDocumentId = 0;
-  }
   _document = data.document;
   _fontScale = data.fontSizeMultiplier;
   const uint64_t documentId = _document ? _document->id : 0;
   const BOOL tracing = documentId && downstream::SessionTrace::enabledDocument(documentId);
   if (tracing) downstream::SessionTrace::recordDocument(documentId, "apply_start");
-  _documentView.rendered =
-      _document ? [DSRenderedDocument renderedDocumentFor:_document fontScale:_fontScale] : nil;
+  // applyRendering ends the trace the previous document was waiting on.
+  [self applyRendering];
   if (tracing) {
     downstream::SessionTrace::recordDocument(documentId, "apply_end");
     _traceDocumentId = documentId;
@@ -99,6 +95,31 @@ using namespace facebook::react;
   }
 }
 
+/// A color appearance change resolves every color in a rendering again, so the
+/// cached one is dropped and rebuilt from the document the view already holds.
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+  [super traitCollectionDidChange:previousTraitCollection];
+  if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+    [self applyRendering];
+  }
+}
+
+/// Rebuilds the platform text from the document the view already holds, and
+/// ends any frame trace the old rendering was waiting on.
+- (void)applyRendering {
+  const uint64_t documentId = _document ? _document->id : 0;
+  if (_traceDocumentId && _traceDocumentId != documentId) {
+    downstream::SessionTrace::recordDocument(_traceDocumentId, "frame_unavailable");
+    [_traceDisplayLink invalidate];
+    _traceDisplayLink = nil;
+    _traceDocumentId = 0;
+  }
+  _documentView.rendered = _document ? [DSRenderedDocument renderedDocumentFor:_document
+                                                                 fontScale:_fontScale
+                                                        syntaxHighlighting:_syntaxHighlighting]
+                                     : nil;
+}
+
 - (void)updateProps:(const Props::Shared &)props oldProps:(const Props::Shared &)oldProps {
   const auto &newProps = *std::static_pointer_cast<const DownstreamMarkdownViewProps>(props);
   // Fabric passes no old props when it mounts a new or recycled view; the
@@ -108,6 +129,14 @@ using namespace facebook::react;
     [_documentView resetTableScrollPositions];
   }
   _documentView.selectable = newProps.selectable;
+  // Tokens are always computed, so the prop only chooses the rendering. The
+  // document's own tokens are unchanged, so nothing needs re-parsing.
+  if (newProps.syntaxHighlighting != previous.syntaxHighlighting) {
+    _syntaxHighlighting = newProps.syntaxHighlighting;
+    // Tokens are computed whatever the flag says, so this only picks the
+    // rendering, and the cache keys the two apart.
+    [self applyRendering];
+  }
   [super updateProps:props oldProps:oldProps];
 }
 

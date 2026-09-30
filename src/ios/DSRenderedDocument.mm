@@ -1,6 +1,7 @@
 #import "DSRenderedDocument.h"
 
 #include "SegmentPlan.h"
+#include "TokenPalette.h"
 
 #include <algorithm>
 #include <cmath>
@@ -26,6 +27,31 @@ constexpr CGFloat kMinColumnWidth = 56;
 constexpr CGFloat kMaxColumnWidth = 280;
 constexpr CGFloat kCellPaddingHorizontal = 12;
 constexpr CGFloat kCellPaddingVertical = 8;
+
+/// One dynamic color per token class, so switching appearance needs no
+/// rebuild. Plain and Operator share the code text color, as they do in the
+/// engine's palette.
+UIColor *tokenColor(downstream::TokenClass token) {
+  static NSArray<UIColor *> *colors;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    NSMutableArray<UIColor *> *built = [NSMutableArray arrayWithCapacity:downstream::kTokenColorsCount];
+    for (size_t index = 0; index < downstream::kTokenColorsCount; index++) {
+      const downstream::TokenColors &entry = downstream::kTokenColors[index];
+      const uint32_t light = entry.light;
+      const uint32_t dark = entry.dark;
+      [built addObject:[UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+        const BOOL night = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
+        return [UIColor colorWithRed:((night ? dark : light) >> 16 & 0xff) / 255.0
+                               green:((night ? dark : light) >> 8 & 0xff) / 255.0
+                                blue:((night ? dark : light) & 0xff) / 255.0
+                               alpha:((night ? dark : light) >> 24 & 0xff) / 255.0];
+      }]];
+    }
+    colors = [built copy];
+  });
+  return colors[static_cast<size_t>(token)];
+}
 
 NSString *toNSString(const std::u16string &text) {
   return [NSString stringWithCharacters:reinterpret_cast<const unichar *>(text.data()) length:text.size()];
@@ -145,6 +171,23 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, NSUInteger o
   }
 }
 
+/// Applies a code block's token colors. Tokens are offsets into the block's own
+/// text and only change color, never a character, so selection, copy, and the
+/// accessibility text are untouched.
+void applyTokens(NSMutableAttributedString *text, const Block &block, NSUInteger offset, uint32_t clampStart,
+                 uint32_t clampEnd) {
+  for (const TokenRun &run : block.tokens) {
+    const uint32_t start = std::max(run.start, clampStart);
+    const uint32_t end = std::min(run.end, clampEnd);
+    if (start >= end) {
+      continue;
+    }
+    [text addAttribute:NSForegroundColorAttributeName
+                 value:tokenColor(run.token)
+                 range:NSMakeRange(offset + start - clampStart, end - start)];
+  }
+}
+
 } // namespace
 
 @interface DSContainerInfo ()
@@ -259,7 +302,8 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
                                from:(size_t)from
                                  to:(size_t)to
                               scale:(CGFloat)scale
-                         markerFont:(UIFont *)markerFont {
+                         markerFont:(UIFont *)markerFont
+                  syntaxHighlighting:(BOOL)syntaxHighlighting {
   DSTextSegment *segment = [DSTextSegment new];
   segment->_heightLock = [NSLock new];
   NSMutableAttributedString *text = [NSMutableAttributedString new];
@@ -361,6 +405,9 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
                  range:NSIntersectionRange(firstParagraph, blockRange)];
 
     applyRuns(text, block, start, baseSize, baseWeight, monospaced, 0, static_cast<uint32_t>(block.text.size()));
+    if (isCode && syntaxHighlighting) {
+      applyTokens(text, block, start, 0, static_cast<uint32_t>(block.text.size()));
+    }
     [blocks addObject:info];
     [blockRanges addObject:[NSValue valueWithRange:NSMakeRange(start, blockText.length)]];
   }
@@ -588,10 +635,11 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
                      from:(size_t)from
                        to:(size_t)to
                     scale:(CGFloat)scale
-               markerFont:(UIFont *)markerFont {
+               markerFont:(UIFont *)markerFont
+        syntaxHighlighting:(BOOL)syntaxHighlighting {
   const bool isTable = document.blocks[from].kind == BlockKind::TableRow;
-  NSString *key = [NSString stringWithFormat:@"%llu:%zu:%.4f", (unsigned long long)document.blocks[from].identity,
-                                             to - from, scale];
+  NSString *key = [NSString stringWithFormat:@"%llu:%zu:%.4f:%d", (unsigned long long)document.blocks[from].identity,
+                                             to - from, scale, syntaxHighlighting];
   DSCommittedSegment *cached = [self.committedSegmentCache objectForKey:key];
   bool matches = cached != nil && cached->identities.size() == to - from;
   for (size_t index = from; matches && index < to; index++) {
@@ -608,25 +656,42 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   }
   cached->segment = isTable
       ? (id)[DSTableSegment segmentWithDocument:document from:from to:to scale:scale markerFont:markerFont]
-      : (id)[DSTextSegment segmentWithDocument:document from:from to:to scale:scale markerFont:markerFont];
+      : (id)[DSTextSegment segmentWithDocument:document
+                                           from:from
+                                             to:to
+                                          scale:scale
+                                     markerFont:markerFont
+                              syntaxHighlighting:syntaxHighlighting];
   [self.committedSegmentCache setObject:cached forKey:key cost:cost];
   return cached->segment;
 }
 
-+ (instancetype)renderedDocumentFor:(const DocumentHandle &)document fontScale:(CGFloat)fontScale {
++ (instancetype)renderedDocumentFor:(const DocumentHandle &)document
+                          fontScale:(CGFloat)fontScale
+                 syntaxHighlighting:(BOOL)syntaxHighlighting {
   if (!document) {
-    return [[self alloc] initWithDocument:document fontScale:fontScale];
+    return [[self alloc] initWithDocument:document fontScale:fontScale syntaxHighlighting:syntaxHighlighting];
   }
-  NSString *key = [NSString stringWithFormat:@"%llu:%.4f", (unsigned long long)document->id, fontScale];
+  NSString *key = [NSString stringWithFormat:@"%llu:%.4f:%d", (unsigned long long)document->id, fontScale,
+                                             syntaxHighlighting];
   DSRenderedDocument *rendered = [self.cache objectForKey:key];
   if (rendered == nil) {
-    rendered = [[self alloc] initWithDocument:document fontScale:fontScale];
+    rendered = [[self alloc] initWithDocument:document
+                                    fontScale:fontScale
+                           syntaxHighlighting:syntaxHighlighting];
     [self.cache setObject:rendered forKey:key];
   }
   return rendered;
 }
 
-- (instancetype)initWithDocument:(const DocumentHandle &)documentHandle fontScale:(CGFloat)rawScale {
++ (void)invalidateCaches {
+  [self.cache removeAllObjects];
+  [self.committedSegmentCache removeAllObjects];
+}
+
+- (instancetype)initWithDocument:(const DocumentHandle &)documentHandle
+                       fontScale:(CGFloat)rawScale
+              syntaxHighlighting:(BOOL)syntaxHighlighting {
   if (!(self = [super init])) {
     return nil;
   }
@@ -644,7 +709,8 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
                                                              from:segment.from
                                                                to:segment.to
                                                             scale:scale
-                                                       markerFont:markerFont]];
+                                                       markerFont:markerFont
+                                                syntaxHighlighting:syntaxHighlighting]];
     } else if (segment.table) {
       [segments addObject:[DSTableSegment segmentWithDocument:document
                                                          from:segment.from
@@ -656,7 +722,8 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
                                                         from:segment.from
                                                           to:segment.to
                                                        scale:scale
-                                                  markerFont:markerFont]];
+                                                  markerFont:markerFont
+                                           syntaxHighlighting:syntaxHighlighting]];
     }
     _gaps.push_back(segment.from == 0 ? 0 : baseGap(document.blocks[segment.from], scale));
   }

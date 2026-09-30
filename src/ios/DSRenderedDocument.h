@@ -95,8 +95,21 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 
 #ifdef __cplusplus
 /// Returns a cached rendering. Safe to call from any thread.
-+ (instancetype)renderedDocumentFor:(const downstream::DocumentHandle &)document fontScale:(CGFloat)fontScale;
+///
+/// `syntaxHighlighting` decides whether code blocks carry token colors. Tokens
+/// are always computed, so this only chooses the rendering, and it is part of
+/// the cache key because the two renderings differ. Measurement passes true:
+/// colors do not change metrics, so a measurement is valid either way.
++ (instancetype)renderedDocumentFor:(const downstream::DocumentHandle &)document
+                          fontScale:(CGFloat)fontScale
+                 syntaxHighlighting:(BOOL)syntaxHighlighting;
 #endif
+
+/// Drops every cached rendering. Colors are stored as dynamic UIColors and the
+/// platform resolves them when it draws, so a rendering survives an appearance
+/// switch; this is for the case where a resolved color would be cheaper to
+/// rebuild than to re-resolve, and for tests.
++ (void)invalidateCaches;
 
 /// Segment frames stacked at a width. Safe to call from any thread.
 - (NSArray<NSValue *> *)segmentFramesForWidth:(CGFloat)width;
