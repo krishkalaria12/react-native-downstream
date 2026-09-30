@@ -13,7 +13,8 @@ export type MarkdownErrorCode =
   | 'invalid_state'
   | 'session_bound'
   | 'parse_failed'
-  | 'render_failed';
+  | 'render_failed'
+  | 'control_failed';
 
 export type MarkdownErrorEvent = Readonly<{
   code: MarkdownErrorCode;
@@ -91,8 +92,123 @@ export interface MarkdownStreamController {
   setPreview(options: boolean | MarkdownPreviewOptions): void;
 }
 
+/** What a native control button did, reported to the matching callback. */
+export type MarkdownControlEvent = Readonly<{
+  block: 'code' | 'table';
+  action: 'copy' | 'download' | 'wrap';
+  /** Copy and download only. */
+  format?: 'text' | 'markdown' | 'csv' | 'tsv';
+  /** Wrap only: the block's layout after the press. */
+  wrapped?: boolean;
+  /** Fence language as written, lower-cased; '' for indented code and tables. */
+  language: string;
+  /** Saved file name, for downloads. */
+  filename?: string;
+}>;
+
+export type MarkdownCopyControl =
+  | boolean
+  | Readonly<{
+      onCopy?: (event: MarkdownControlEvent) => void;
+      onError?: (error: MarkdownErrorEvent) => void;
+    }>;
+
+export type MarkdownDownloadControl =
+  | boolean
+  | Readonly<{
+      /** Base name without an extension. The extension comes from the block. */
+      filename?: string;
+      onDownload?: (event: MarkdownControlEvent) => void;
+      onError?: (error: MarkdownErrorEvent) => void;
+    }>;
+
+/**
+ * Streamdown's `controls` shape, so a value written for it works as it is.
+ *
+ * Each key is a boolean or an object, and a missing key means on. `true` is
+ * the default, and `false` removes the code header and the table toolbar
+ * without changing either block's layout.
+ */
+export type MarkdownControls =
+  | boolean
+  | Readonly<{
+      code?:
+        | boolean
+        | Readonly<{
+            copy?: MarkdownCopyControl;
+            download?: MarkdownDownloadControl;
+            /** Per-block wrap button in the code header. */
+            wrap?:
+              | boolean
+              | Readonly<{
+                  onToggle?: (event: MarkdownControlEvent) => void;
+                }>;
+          }>;
+      table?:
+        | boolean
+        | Readonly<{
+            copy?: MarkdownCopyControl;
+            download?: MarkdownDownloadControl;
+            csvSeparator?: ',' | ';' | '\t' | 'auto';
+          }>;
+    }>;
+
+/**
+ * Labels for control buttons and announcements. Streamdown's key names and
+ * English defaults, limited to the keys these controls use.
+ */
+export type MarkdownTranslations = Readonly<{
+  /** Copy the code block. */
+  copyCode: string;
+  /** Save the code block to a file. */
+  downloadFile: string;
+  /** Spoken after a copy succeeds. */
+  copied: string;
+  /** Turn on the code header's wrap button. */
+  wrapCode: string;
+  /** Turn off the code header's wrap button. */
+  unwrapCode: string;
+  /** Open the table's copy menu. */
+  copyTable: string;
+  copyTableAsMarkdown: string;
+  copyTableAsCsv: string;
+  copyTableAsTsv: string;
+  /** Open the table's download menu. */
+  downloadTable: string;
+  downloadTableAsCsv: string;
+  downloadTableAsMarkdown: string;
+  /** Menu item labels in the chosen format. */
+  tableFormatMarkdown: string;
+  tableFormatCsv: string;
+  tableFormatTsv: string;
+}>;
+
+export const defaultTranslations: MarkdownTranslations = {
+  copyCode: 'Copy Code',
+  downloadFile: 'Download file',
+  copied: 'Copied',
+  wrapCode: 'Wrap lines',
+  unwrapCode: "Don't wrap lines",
+  copyTable: 'Copy table',
+  copyTableAsMarkdown: 'Copy table as Markdown',
+  copyTableAsCsv: 'Copy table as CSV',
+  copyTableAsTsv: 'Copy table as TSV',
+  downloadTable: 'Download table',
+  downloadTableAsCsv: 'Download table as CSV',
+  downloadTableAsMarkdown: 'Download table as Markdown',
+  tableFormatMarkdown: 'Markdown',
+  tableFormatCsv: 'CSV',
+  tableFormatTsv: 'TSV',
+};
+
 type MarkdownViewBaseProps = Readonly<{
   style?: StyleProp<ViewStyle>;
+  /**
+   * Native text selection. On by default, applied per settled segment, so
+   * text that is still streaming is never selectable.
+   *
+   * An app that opens its own message menu on a long press passes `false`.
+   */
   selectable?: boolean;
   /**
    * Colors fenced code blocks by their info string. On by default.
@@ -102,6 +218,20 @@ type MarkdownViewBaseProps = Readonly<{
    * code themes; overriding per-token colors is not part of this release.
    */
   syntaxHighlighting?: boolean;
+  /**
+   * Wrap long code lines instead of scrolling them sideways. Off by default,
+   * as in Streamdown and GitHub. Changes layout only, never copied text.
+   */
+  codeBlockWrap?: boolean;
+  /**
+   * Copy and download buttons on code blocks and tables. On by default.
+   *
+   * A control turns on as soon as its own block is settled, so a finished code
+   * block can be copied while the rest of the message is still streaming.
+   */
+  controls?: MarkdownControls;
+  /** Overrides for control labels and spoken announcements. */
+  translations?: Partial<MarkdownTranslations>;
   onLinkPress?: (event: MarkdownLinkPressEvent) => void;
   onError?: (error: MarkdownErrorEvent) => void;
 }>;
