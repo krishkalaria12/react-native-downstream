@@ -85,7 +85,7 @@ Parsing and platform text preparation run on one shared pool of worker threads: 
 
 | Area | Current behavior | Planned |
 | --- | --- | --- |
-| Input | Controlled `markdown` and `createMarkdownStream` with a `stream` prop. The stream buffers up to 64 KiB per native append and 256 KiB of unacknowledged input. Lone surrogates and sources over 1 MiB are rejected in JavaScript. | Device traces will choose the default full or incremental parse mode. |
+| Input | Controlled `markdown` and `createMarkdownStream` with a `stream` prop. Streams use incremental parsing, share completed blocks, and fall back to a full parse at unproven boundaries. The stream buffers up to 64 KiB per native append and 256 KiB of unacknowledged input. Lone surrogates and sources over 1 MiB are rejected in JavaScript. | Real-device performance measurements. |
 | Line breaks | Soft line breaks display as line breaks, as the fixture contract requires. | None |
 | Tables | Columns take their widest cell, clamped to 56–280 points plus padding, with md4c's column alignment. Wide tables scroll horizontally. Cells keep inline styles and links. Completed rows appear during streaming without resetting the scroll position. | None |
 | Admonitions and footnotes | Admonitions render as a quote with a colored bar and title. Footnote references are superscript numbers; definitions follow a rule at the end. | None |

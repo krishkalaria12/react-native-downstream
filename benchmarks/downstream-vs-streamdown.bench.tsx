@@ -1,20 +1,14 @@
 /**
- * Downstream against Streamdown RN, on the same documents.
+ * Test-adapter costs on the same documents.
  *
- * What this measures: the cost each renderer pays to show a document that is
- * still arriving. Both sides run for real here. Downstream's TurboModule is the
- * engine-backed one in `tests/real-engine-module.ts`, so its row includes
- * the actual C++ parse; Streamdown renders through a real React root, so its
- * row includes its whole-document reparse and commit on every update.
+ * Each Downstream flush starts a fresh C++ subprocess and replays every earlier
+ * session operation. Streamdown commits each growing prefix through React DOM.
+ * These adapters have different overhead, so their timings cannot rank the
+ * shipping React Native renderers or measure a warm incremental parser.
  *
- * What this does NOT measure: native layout, paint, or the frame budget. Those
- * need a device, and the example app's Bench and Testing screens measure them.
- * The engine here runs in a subprocess, which is not how it runs on a phone:
- * in the app it is an in-process session with a warm parser. So a win or a loss
- * here is a signal about this harness, not a verdict about the library.
- *
- * Read it as: on the same document, in the same process, how much time does
- * each renderer spend before the text is ready to show.
+ * Use `pnpm bench:native` for an in-process engine stream. Native layout, paint,
+ * and frame latency need release builds on physical devices; the example app's
+ * Bench and Testing screens collect those traces.
  */
 // The TurboModule is backed by the real C++ engine, so a Downstream number
 // includes the parse it would really do.
@@ -29,7 +23,10 @@ import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { StreamdownText } from 'react-native-streamdown';
 
-import { createMarkdownStream } from '../src/createMarkdownStream';
+import {
+  createMarkdownStream,
+  getStreamState,
+} from '../src/createMarkdownStream';
 import { samples, syntheticDocument } from './samples';
 
 /**
@@ -37,22 +34,31 @@ import { samples, syntheticDocument } from './samples';
  * would. Calling the component directly would not work: it uses hooks, and it
  * only does its work on commit.
  */
-function renderGrowth(node: () => React.ReactElement): () => void {
+function renderGrowth(node: () => React.ReactElement) {
   const host = document.createElement('div');
   document.body.append(host);
   const root = createRoot(host);
-  return () => {
-    flushSync(() => {
-      root.render(node());
-    });
+  return {
+    render() {
+      flushSync(() => {
+        root.render(node());
+      });
+    },
+    dispose() {
+      flushSync(() => root.unmount());
+      host.remove();
+    },
   };
 }
 
-/** Feeds chunks to a Downstream session, which parses only the new tail. */
+/** Exercises the controller through the subprocess replay adapter. */
 function downstreamGrow(chunks: readonly string[]): void {
   const stream = createMarkdownStream();
   try {
-    for (const chunk of chunks) stream.append(chunk);
+    for (const chunk of chunks) {
+      stream.append(chunk);
+      getStreamState(stream).flush();
+    }
     stream.finish();
   } finally {
     stream.dispose();
@@ -61,23 +67,27 @@ function downstreamGrow(chunks: readonly string[]): void {
 
 /** Re-renders Streamdown over the growing document, as a chat view would. */
 function streamdownGrow(chunks: readonly string[]): void {
-  const render = renderGrowth(() => (
+  const view = renderGrowth(() => (
     <StreamdownText markdown={source} flavor="github" />
   ));
   let source = '';
-  for (const chunk of chunks) {
-    source += chunk;
-    render();
+  try {
+    for (const chunk of chunks) {
+      source += chunk;
+      view.render();
+    }
+  } finally {
+    view.dispose();
   }
 }
 
-describe('sample documents', () => {
+describe('sample document adapters', () => {
   for (const sample of samples) {
     test(`${sample.id}: ${sample.description}`, async ({ bench }) => {
-      await bench(`downstream, ${sample.chunks.length} chunks`, () => {
+      await bench(`downstream replay, ${sample.chunks.length} chunks`, () => {
         downstreamGrow(sample.chunks);
       }).run();
-      await bench(`streamdown, ${sample.chunks.length} chunks`, () => {
+      await bench(`streamdown DOM, ${sample.chunks.length} chunks`, () => {
         streamdownGrow(sample.chunks);
       }).run();
     });
@@ -86,21 +96,18 @@ describe('sample documents', () => {
 
 describe('synthetic documents', () => {
   // Built rather than stored, so the sizes here are the point.
-  const cases = [
-    ['~10 KiB', 10],
-    ['~50 KiB', 50],
-    ['~200 KiB', 200],
-  ] as const;
+  const cases = [10, 50, 200] as const;
 
-  for (const [label, sections] of cases) {
+  for (const sections of cases) {
     const document = syntheticDocument(sections);
+    const label = `${(document.length / 1024).toFixed(1)} KiB`;
     // One chunk per section: the shape a real answer arrives in.
     const chunks = document.split(/(?=## )/u).filter(Boolean);
     test(label, async ({ bench }) => {
-      await bench(`downstream, ${chunks.length} chunks`, () => {
+      await bench(`downstream replay, ${chunks.length} chunks`, () => {
         downstreamGrow(chunks);
       }).run();
-      await bench(`streamdown, ${chunks.length} chunks`, () => {
+      await bench(`streamdown DOM, ${chunks.length} chunks`, () => {
         streamdownGrow(chunks);
       }).run();
     });
@@ -111,7 +118,7 @@ describe('a document that arrives complete', () => {
   // The non-streaming path: no incremental work to amortise.
   const document = syntheticDocument(50);
   test('single render', async ({ bench }) => {
-    await bench('downstream', () => {
+    await bench('downstream replay', () => {
       const stream = createMarkdownStream();
       try {
         stream.append(document);
@@ -120,10 +127,15 @@ describe('a document that arrives complete', () => {
         stream.dispose();
       }
     }).run();
-    await bench('streamdown', () => {
-      renderGrowth(() => (
+    await bench('streamdown DOM', () => {
+      const view = renderGrowth(() => (
         <StreamdownText markdown={document} flavor="github" />
-      ))();
+      ));
+      try {
+        view.render();
+      } finally {
+        view.dispose();
+      }
     }).run();
   });
 });

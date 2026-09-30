@@ -1,10 +1,10 @@
 /**
- * What a stream costs to feed, end to end, with the real parser.
+ * Stream-controller cost through the subprocess replay adapter.
  *
- * The TurboModule is the engine-backed one, so this includes the C++ parse that
- * a real append triggers. What it does not include is layout or paint, and the
- * engine runs in a subprocess here where it is in-process on a device, so these
- * numbers describe this harness rather than the shipping app.
+ * Every flush starts a fresh native process and replays all earlier operations.
+ * This includes repeated historical parsing and subprocess overhead. It cannot
+ * measure a warm production session, native layout, or paint. Use bench:native
+ * for engine measurements and physical devices for the complete renderer.
  */
 // The TurboModule is backed by the real C++ engine, so a Downstream number
 // includes the parse it would really do.
@@ -15,13 +15,19 @@ vi.mock(
 
 import { describe, test, vi } from 'vitest';
 
-import { createMarkdownStream } from '../src/createMarkdownStream';
+import {
+  createMarkdownStream,
+  getStreamState,
+} from '../src/createMarkdownStream';
 import { samples, syntheticDocument } from './samples';
 
 function appendAll(chunks: readonly string[]): void {
   const stream = createMarkdownStream();
   try {
-    for (const chunk of chunks) stream.append(chunk);
+    for (const chunk of chunks) {
+      stream.append(chunk);
+      getStreamState(stream).flush();
+    }
     stream.finish();
   } finally {
     stream.dispose();
@@ -42,18 +48,23 @@ describe('stream appends', () => {
 });
 
 describe('source size', () => {
-  // A large document re-validated per render is the cost that shows up when a
-  // parent re-renders during a stream.
-  const cases = [
-    ['~4 KiB', syntheticDocument(4)],
-    ['~40 KiB', syntheticDocument(40)],
-    ['~200 KiB', syntheticDocument(200)],
-  ] as const;
+  // A replacement validates and parses the complete source, independently of
+  // the append limit and frame batching.
+  const cases = [4, 40, 200].map((sections) => {
+    const source = syntheticDocument(sections);
+    return [`${(source.length / 1024).toFixed(1)} KiB`, source] as const;
+  });
 
   for (const [label, source] of cases) {
-    test(`append a whole document, ${label}`, async ({ bench }) => {
-      await bench(`${source.length} chars in one chunk`, () => {
-        appendAll([source]);
+    test(`replace a whole document, ${label}`, async ({ bench }) => {
+      await bench(`${source.length} chars in one reset`, () => {
+        const stream = createMarkdownStream();
+        try {
+          stream.reset(source);
+          stream.finish();
+        } finally {
+          stream.dispose();
+        }
       }).run();
     });
   }

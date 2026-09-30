@@ -8,22 +8,24 @@
  * `parse` that returns the real render model, plus an `append` that keeps a
  * real incremental session, so a test can assert the text a user would see.
  *
- * Build cost is paid once per run and cached in a temp directory keyed by the
- * mtime of the sources, so a second run reuses the binary.
+ * Global setup builds shared objects before test workers start. Content keys
+ * include headers, compiler identity, and flags, so later runs reuse the build
+ * without executing stale code after a header or compiler change.
  */
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   renameSync,
   rmSync,
-  statSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { availableParallelism, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 const CPP = resolve(dirname(fileURLToPath(import.meta.url)), '../src/cpp');
 const MD4C = join(CPP, 'md4c');
@@ -48,6 +50,9 @@ const CFLAGS = ['-std=c11', '-O1', '-DMD4C_USE_UTF8', ...SYMBOL_PREFIXES];
 const CXXFLAGS = [
   '-std=c++20',
   '-O1',
+  '-Wall',
+  '-Wextra',
+  '-Werror',
   '-pthread',
   '-DMD4C_USE_UTF8',
   ...SYMBOL_PREFIXES,
@@ -177,135 +182,222 @@ export interface RenderModel {
   highlight?: HighlightCounters;
 }
 
-let cached: { binary: string; key: string } | undefined;
+const binaries = new Map<string, string>();
+const objects = new Map<string, string>();
+const compilerKeys = new Map<string, string>();
+const execFileAsync = promisify(execFile);
+let headersKey: string | undefined;
 
-/** A directory for built binaries, stable across runs so work is reused. */
 function buildRoot(): string {
-  return join(tmpdir(), 'downstream-engine-cache');
+  return (
+    process.env.DOWNSTREAM_ENGINE_CACHE ??
+    join(tmpdir(), 'downstream-engine-cache')
+  );
 }
 
-function sourcesKey(targets: string[]): string {
-  return targets
-    .map((file) => {
-      const stats = statSync(file);
-      return `${file}:${stats.mtimeMs}:${stats.size}`;
-    })
-    .join('|');
+function digest(value: string | Buffer): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 20);
 }
 
-/**
- * Runs a compiler and publishes the result at `target` atomically.
- *
- * Vitest runs test files in parallel processes and every one of them needs the
- * engine, so on a cold cache they all build it at once. Writing straight to
- * `target` would let a second process exec a half-written binary, which shows up
- * as a parse that returns nonsense rather than as a build error. The compiler
- * therefore writes to a name only this process uses, and the result is renamed
- * into place. Two processes building the same target both publish a complete
- * binary, so the last rename simply wins.
- */
+/** Hash headers once per process, rather than scanning them on every parse. */
+function headerKey(): string {
+  if (headersKey !== undefined) return headersKey;
+  const hash = createHash('sha256');
+  function visit(directory: string): void {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort(
+      (a, b) => a.name.localeCompare(b.name)
+    )) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (/\.(h|hpp|hxx|inc)$/.test(entry.name)) {
+        hash.update(path).update(readFileSync(path));
+      }
+    }
+  }
+  visit(CPP);
+  headersKey = hash.digest('hex');
+  return headersKey;
+}
+
+function compilerKey(compiler: string): string {
+  let key = compilerKeys.get(compiler);
+  if (key === undefined) {
+    key = JSON.stringify([
+      compiler,
+      execFileSync(compiler, ['--version']).toString(),
+      process.platform,
+      process.arch,
+      process.env.PATH,
+      process.env.SDKROOT,
+      process.env.CPATH,
+      process.env.C_INCLUDE_PATH,
+      process.env.CPLUS_INCLUDE_PATH,
+      process.env.LIBRARY_PATH,
+    ]);
+    compilerKeys.set(compiler, key);
+  }
+  return key;
+}
+
+function compileCommand(compiler: string, args: string[]): [string, string[]] {
+  const launcher = process.env.DOWNSTREAM_COMPILER_LAUNCHER;
+  return launcher && args.includes('-c')
+    ? [launcher, [compiler, ...args]]
+    : [compiler, args];
+}
+
+/** Publish complete files atomically when separate test runs share the cache. */
 function compileInto(target: string, compiler: string, args: string[]): void {
   const pending = `${target}.${process.pid}.${randomUUID()}`;
   try {
-    execFileSync(compiler, [...args, '-o', pending]);
+    const [command, commandArgs] = compileCommand(compiler, [
+      ...args,
+      '-o',
+      pending,
+    ]);
+    execFileSync(command, commandArgs);
     renameSync(pending, target);
-  } catch (error) {
+  } finally {
     rmSync(pending, { force: true });
-    throw error;
   }
 }
 
-function compile(
-  sources: string[],
-  name: string,
-  flags: string[],
-  linkObjects: string[]
-): string {
-  const key = sourcesKey([...sources, ...linkObjects]);
-  if (cached?.key === key) return cached.binary;
-  const root = buildRoot();
-  mkdirSync(root, { recursive: true });
-  // The key is part of the name, so the file existing proves it was built from
-  // these sources. A separate stamp file could disagree with the binary it
-  // describes if a process died between the two writes.
-  const digest = createHash('sha256').update(key).digest('hex').slice(0, 16);
-  const binary = join(root, `${name}-${digest}`);
-  if (!existsSync(binary)) {
-    compileInto(binary, process.env.CXX ?? 'c++', [
-      ...flags,
-      ...sources,
-      ...linkObjects,
-    ]);
+function objectBuild(source: string): {
+  target: string;
+  compiler: string;
+  args: string[];
+} {
+  const c = source.endsWith('.c');
+  const compiler = c ? process.env.CC ?? 'cc' : process.env.CXX ?? 'c++';
+  const flags = c ? CFLAGS : CXXFLAGS;
+  let target = objects.get(source);
+  if (target === undefined) {
+    const key = digest(
+      JSON.stringify([
+        source,
+        digest(readFileSync(source)),
+        headerKey(),
+        flags,
+        compilerKey(compiler),
+      ])
+    );
+    target = join(buildRoot(), `${key}.o`);
+    objects.set(source, target);
   }
-  cached = { binary, key };
+  return { target, compiler, args: [...flags, '-c', source] };
+}
+
+function compileObject(source: string): string {
+  const { target, compiler, args } = objectBuild(source);
+  if (!existsSync(target)) compileInto(target, compiler, args);
+  return target;
+}
+
+/** Reuse the same engine objects in every binary and in ccache. */
+function compile(sources: string[], name: string): string {
+  const cached = binaries.get(name);
+  if (cached !== undefined) return cached;
+  mkdirSync(buildRoot(), { recursive: true });
+  const linkObjects = sources.map(compileObject);
+  const archive = highlightArchive();
+  const compiler = process.env.CXX ?? 'c++';
+  const key = digest(
+    JSON.stringify([linkObjects, archive, CXXFLAGS, compilerKey(compiler)])
+  );
+  const binary = join(buildRoot(), `${name}-${key}`);
+  if (!existsSync(binary)) {
+    compileInto(binary, compiler, [...CXXFLAGS, ...linkObjects, archive]);
+  }
+  binaries.set(name, binary);
   return binary;
 }
 
-function compileObjects(): string[] {
-  const root = buildRoot();
-  mkdirSync(root, { recursive: true });
-  return ['md4c.c', 'entity.c'].map((source) => {
-    const sourcePath = join(MD4C, source);
-    // The source mtime is part of the name for the same reason it is part of a
-    // binary's name: existence then proves the object is current.
-    const object = join(
-      root,
-      `${source}-${String(statSync(sourcePath).mtimeMs)}.o`
-    );
-    if (!existsSync(object)) {
-      compileInto(object, process.env.CC ?? 'cc', [
-        ...CFLAGS,
-        '-c',
-        sourcePath,
-      ]);
-    }
-    return object;
-  });
-}
-
-/** The highlighter built once per run and linked by every binary. */
 function highlightArchive(): string {
-  const root = buildRoot();
-  mkdirSync(root, { recursive: true });
-  const objects = HIGHLIGHT_SOURCES.map((source) => {
-    // The source mtime is part of the name for the same reason it is part of a
-    // binary's name: existence then proves the object is current.
-    const object = join(
-      root,
-      `${source.replace(/\//g, '-')}-${String(statSync(source).mtimeMs)}.o`
-    );
-    if (!existsSync(object)) {
-      compileInto(object, process.env.CXX ?? 'c++', [
-        ...CXXFLAGS,
-        '-c',
-        source,
-      ]);
-    }
-    return object;
-  });
-  const key = sourcesKey(objects);
-  const digest = createHash('sha256').update(key).digest('hex').slice(0, 16);
-  const archive = join(root, `downstream-highlight-${digest}.a`);
+  const linkObjects = HIGHLIGHT_SOURCES.map(compileObject);
+  const archive = join(
+    buildRoot(),
+    `downstream-highlight-${digest(JSON.stringify(linkObjects))}.a`
+  );
   if (!existsSync(archive)) {
     const pending = `${archive}.${process.pid}.${randomUUID()}`;
     try {
-      execFileSync('ar', ['rcs', pending, ...objects]);
+      execFileSync('ar', ['rcs', pending, ...linkObjects]);
       renameSync(pending, archive);
-    } catch (error) {
+    } finally {
       rmSync(pending, { force: true });
-      throw error;
     }
   }
   return archive;
 }
 
-function engineBinary(): string {
-  return compile(
-    [join(CPP, 'tests', 'dump_document.cpp'), ...ENGINE, ...compileObjects()],
-    'downstream-dump',
-    CXXFLAGS,
-    [highlightArchive()]
+const MD4C_SOURCES = ['md4c.c', 'entity.c'].map((name) => join(MD4C, name));
+const TARGETS = {
+  'downstream-dump': [
+    join(CPP, 'tests', 'dump_document.cpp'),
+    ...ENGINE,
+    ...MD4C_SOURCES,
+  ],
+  'downstream-session': [
+    join(CPP, 'tests', 'dump_session.cpp'),
+    join(CPP, 'session', 'IncrementalParser.cpp'),
+    ...ENGINE,
+    ...MD4C_SOURCES,
+  ],
+  'downstream-incremental': [
+    join(CPP, 'tests', 'test_incremental.cpp'),
+    join(CPP, 'session', 'IncrementalParser.cpp'),
+    join(CPP, 'downstream', 'SegmentPlan.cpp'),
+    ...ENGINE,
+    ...MD4C_SOURCES,
+  ],
+};
+
+/** Vitest global setup runs once before workers can request native binaries. */
+export default async function prepareEngineTests(): Promise<void> {
+  mkdirSync(buildRoot(), { recursive: true });
+  const sources = [
+    ...new Set([...Object.values(TARGETS).flat(), ...HIGHLIGHT_SOURCES]),
+  ];
+  let next = 0;
+  let failed = false;
+  let failure: unknown;
+  await Promise.allSettled(
+    Array.from({ length: Math.min(4, availableParallelism()) }, async () => {
+      try {
+        while (!failed && next < sources.length) {
+          const source = sources[next++]!;
+          const { target, compiler, args } = objectBuild(source);
+          if (existsSync(target)) continue;
+          const pending = `${target}.${process.pid}.${randomUUID()}`;
+          try {
+            const [command, commandArgs] = compileCommand(compiler, [
+              ...args,
+              '-o',
+              pending,
+            ]);
+            await execFileAsync(command, commandArgs);
+            renameSync(pending, target);
+          } finally {
+            rmSync(pending, { force: true });
+          }
+        }
+      } catch (error) {
+        if (!failed) {
+          failed = true;
+          failure = error;
+        }
+        throw error;
+      }
+    })
   );
+  if (failed) throw failure;
+  for (const [name, targetSources] of Object.entries(TARGETS)) {
+    compile(targetSources, name);
+  }
+}
+
+function engineBinary(): string {
+  return compile(TARGETS['downstream-dump'], 'downstream-dump');
 }
 
 /** Feature bitmask for the real provisional-styling pass. */
@@ -317,17 +409,7 @@ export const PREVIEW_ALL =
   PREVIEW_EMPHASIS | PREVIEW_INLINE_CODE | PREVIEW_LINKS | PREVIEW_IMAGES;
 
 function sessionBinary(): string {
-  return compile(
-    [
-      join(CPP, 'tests', 'dump_session.cpp'),
-      join(CPP, 'session', 'IncrementalParser.cpp'),
-      ...ENGINE,
-      ...compileObjects(),
-    ],
-    'downstream-session',
-    CXXFLAGS,
-    [highlightArchive()]
-  );
+  return compile(TARGETS['downstream-session'], 'downstream-session');
 }
 
 /** The parser strategies a native session can be created with. */
@@ -396,18 +478,7 @@ export function preview(source: string, features: number): RenderModel {
 }
 
 function incrementalBinary(): string {
-  return compile(
-    [
-      join(CPP, 'tests', 'test_incremental.cpp'),
-      join(CPP, 'session', 'IncrementalParser.cpp'),
-      join(CPP, 'downstream', 'SegmentPlan.cpp'),
-      ...ENGINE,
-      ...compileObjects(),
-    ],
-    'downstream-incremental',
-    CXXFLAGS,
-    [highlightArchive()]
-  );
+  return compile(TARGETS['downstream-incremental'], 'downstream-incremental');
 }
 
 /** Parses a complete document with the engine that ships in the app. */

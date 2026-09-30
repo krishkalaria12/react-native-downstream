@@ -23,7 +23,7 @@ Run the example on both platforms with a development build. The Example screen n
 1. With VoiceOver or TalkBack, traverse headings, task items, links, and each table row. Check link activation and task state announcements.
 2. Select and copy text, then compare it with the visible text. Compare `getSource()` with the exact appended Markdown after a stream finishes.
 3. Scroll a wide table horizontally while a new row streams in. Its position should stay put. Replay or reset the stream and check that a different table starts at the leading edge.
-4. Replay a code-heavy sample, such as `code-streaming` or `code-languages` in `__benchmarks__/samples.ts`, in both appearances. Colors should follow the system appearance, code should stay selectable and copyable as plain text, and `syntaxHighlighting={false}` should remove every color without changing a character.
+4. Replay a code-heavy sample, such as `code-streaming` or `code-languages` in `benchmarks/samples.ts`, in both appearances. Colors should follow the system appearance, code should stay selectable and copyable as plain text, and `syntaxHighlighting={false}` should remove every color without changing a character.
 4. Rotate the device, enlarge system text, switch light and dark appearance, and revisit the RTL case. Check wrapping, mirrored decorations, and table overflow. On an Android 15 or later image, render a paragraph in an overhanging font such as `cursive` and confirm the last word of every line is painted.
 5. Scroll between active and completed messages. Check that old content does not reappear after a cell is recycled or a session resets.
 

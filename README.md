@@ -87,7 +87,7 @@ value. The other three screens need no key.
 
 ## Markdown implementation plan
 
-Phase 0 defines the [API contract](docs/api.md) and [streaming behavior](docs/streaming-semantics.md). The native display path, stream controller, and conservative incremental-tail parser are implemented. Full parsing remains the default mode while the two modes await device measurements.
+Phase 0 defines the [API contract](docs/api.md) and [streaming behavior](docs/streaming-semantics.md). The native display path, stream controller, and conservative incremental-tail parser are implemented. Streams use incremental parsing by default: completed blocks share their parsed content and rendering, while new input updates the unstable tail. Unproven boundaries fall back to a full parse, and `finish()` always parses the complete canonical source.
 
 ## Tests and benchmarks
 
@@ -103,10 +103,16 @@ golden token fixtures that pin the vendored lexers, and the streaming
 equivalence check that a grown code block ends with the tokens a one-shot pass
 gives it.
 
-`pnpm bench` runs the vitest benchmarks, including a Downstream against
-Streamdown RN comparison. Those numbers describe the harness: the engine runs in
-a subprocess there, where it is in-process on a device. The example app's Bench
-and Testing screens measure a real device.
+`pnpm bench:native` builds a release-mode host engine and measures complete
+highlighting, streaming highlighting, and full versus incremental parsing with
+one parser retained for the stream. See the [PR 15 performance analysis](docs/pr-15-performance.md)
+for workloads, measurements, and the Streamdown source comparison.
+
+`pnpm bench` measures the Vitest adapters. The Downstream adapter starts a fresh
+subprocess and replays earlier operations at every update; the Streamdown RN
+adapter uses React DOM. Their different overhead prevents these timings from
+ranking the native renderers. The example app's Bench and Testing screens
+collect device traces.
 
 ## License
 

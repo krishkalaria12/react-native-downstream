@@ -105,6 +105,29 @@ void testRegistry() {
   }
 }
 
+void testDocumentAppends() {
+  CodeDocument document;
+  document.append("first\r");
+  CHECK(document.lineCount() == 1, "an initial append indexes the first line");
+  document.fillStyles(0, document.length(), 7);
+  document.setLineState(0, 42);
+  document.append("\nsecond\nthird");
+  CHECK(document.lineCount() == 3, "only appended newline positions add lines");
+  CHECK(document.lineStart(1) == 7 && document.lineStart(2) == 14, "split CRLF keeps byte line offsets");
+  CHECK(document.lineState(0) == 42 && document.lineState(1) == 0, "appends preserve existing lexer states");
+  CHECK(document.styleAt(5) == 7 && document.styleAt(6) == 0, "only appended bytes begin without styles");
+  CHECK(document.unstableStart() == 14, "the unfinished final line stays mutable");
+  document.setLineState(2, 99);
+  document.append("\n");
+  document.append("");
+  CHECK(document.lineCount() == 4 && document.lineState(2) == 99, "completing a line keeps its lexer state");
+  CHECK(document.unstableStart() == document.length(), "a terminal newline settles every line");
+  document.reset("new");
+  document.append("\ntext");
+  CHECK(document.lineCount() == 2 && document.lineStart(1) == 4, "reset discards the previous line index");
+  CHECK(document.lineState(0) == 0, "reset clears the previous lexer states");
+}
+
 void testTokens() {
   const std::string typescript = "const x: number = 1;\n";
   const std::vector<TokenRun> runs = tokenize("ts", typescript);
@@ -209,6 +232,15 @@ void testBoundaries() {
   CHECK(state.resumed, "a completed line still resumes");
   lexillaHighlighter().tokenize("ts", utf8ToUtf16("other\n"), &state, &out, kHighlightBudgetMs);
   CHECK(!state.resumed, "text that is not an extension starts over");
+
+  // A chunk may end halfway through a UTF-16 surrogate pair. Encoding the
+  // two halves separately would leave two replacements in the UTF-8 cache.
+  const std::u16string wide = u"const value = \"\U0001F44D\";\n";
+  const size_t high = wide.find(static_cast<char16_t>(0xd83d));
+  lexillaHighlighter().tokenize("ts", std::u16string_view(wide).substr(0, high + 1), &state, &out, 1e9);
+  lexillaHighlighter().tokenize("ts", wide, &state, &out, 1e9);
+  CHECK(state.document.text() == utf16ToUtf8(wide), "a split surrogate pair rebuilds the correct UTF-8 cache");
+  CHECK(sameTokens(out, tokenize("ts", utf16ToUtf8(wide), 1e9)), "split surrogate tokens equal a whole pass");
 }
 
 void testBudget() {
@@ -467,6 +499,7 @@ void testConcurrentPasses() {
 
 int main() {
   testRegistry();
+  testDocumentAppends();
   testTokens();
   testBoundaries();
   testBudget();
