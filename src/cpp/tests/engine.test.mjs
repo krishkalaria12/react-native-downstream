@@ -782,6 +782,32 @@ describe('syntax highlighting', () => {
     assert.deepEqual(links.links, []);
   });
 
+  test('a line comment that ends the block is colored to its last character', () => {
+    // A fenced block's text never ends in a newline, so its last line is the
+    // one a lexer closes at the end of the document. Rust and Bash take a line
+    // comment's end from the lexer's line end, which once stopped a byte short.
+    const comments = {
+      rust: '// A comment',
+      bash: '# A comment',
+      ts: '// A comment',
+      cpp: '// A comment',
+      python: '# A comment',
+      ruby: '# A comment',
+      sql: '-- A comment',
+      lua: '-- A comment',
+      toml: '# A comment',
+      yaml: '# A comment',
+    };
+    for (const [info, comment] of Object.entries(comments)) {
+      const [block] = parse(`\`\`\`${info}\nlet x = 1\n${comment}\n\`\`\`\n`).blocks;
+      assert.deepEqual(
+        block.tokens.at(-1),
+        [block.text.length - comment.length, block.text.length, 'comment', comment],
+        info
+      );
+    }
+  });
+
   test('an unknown language and an empty fence stay plain', () => {
     for (const info of ['brainfuck', '', '   ']) {
       assert.deepEqual(tokens(info, 'const a = 1;\n').runs, [], info);
