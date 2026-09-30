@@ -1,7 +1,13 @@
 import type { ComponentProps } from 'react';
 import type { Ionicons } from '@expo/vector-icons';
 
-export type RouteId = 'example' | 'testing' | 'preview' | 'bench' | 'stress';
+export type RouteId =
+  | 'example'
+  | 'controls'
+  | 'testing'
+  | 'preview'
+  | 'bench'
+  | 'stress';
 
 export interface Route {
   id: RouteId;
@@ -26,6 +32,13 @@ export const ROUTES: readonly Route[] = [
     title: 'Example',
     summary: 'Stream a Markdown answer from a live model.',
     icon: 'chatbubbles-outline',
+  },
+  {
+    id: 'controls',
+    label: 'Controls',
+    title: 'Controls',
+    summary: 'Copy, download, and wrap on code blocks and tables.',
+    icon: 'clipboard-outline',
   },
   {
     id: 'testing',
