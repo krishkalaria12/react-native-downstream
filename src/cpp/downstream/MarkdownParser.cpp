@@ -105,8 +105,7 @@ public:
     switch (type) {
       case MD_BLOCK_QUOTE:
         pushContainer(ContainerKind::Quote, u"", TaskState::None);
-        break;
-      case MD_BLOCK_UL: {
+        break;      case MD_BLOCK_UL: {
         const auto *ul = static_cast<MD_BLOCK_UL_DETAIL *>(detail);
         size_t unorderedDepth = 0;
         for (const auto &list : lists_) {
@@ -173,10 +172,13 @@ public:
         beginLeaf(BlockKind::Heading);
         current_->headingLevel = static_cast<uint8_t>(static_cast<MD_BLOCK_H_DETAIL *>(detail)->level);
         break;
-      case MD_BLOCK_CODE:
+      case MD_BLOCK_CODE: {
+        const auto *code = static_cast<MD_BLOCK_CODE_DETAIL *>(detail);
         beginLeaf(BlockKind::CodeBlock);
-        current_->language = attributeToUtf8(static_cast<MD_BLOCK_CODE_DETAIL *>(detail)->lang);
+        current_->language = attributeToUtf8(code->lang);
+        current_->info = attributeToUtf8(code->info);
         break;
+      }
       case MD_BLOCK_HTML:
         beginLeaf(BlockKind::HtmlBlock);
         break;
@@ -319,6 +321,20 @@ public:
 
   int text(MD_TEXTTYPE type, const MD_CHAR *text, MD_SIZE size) {
     ensureLeaf();
+    // A code block arrives as a counted verbatim line, and md4c reports a NUL
+    // in one both as MD_TEXT_NULLCHAR and as a byte inside the chunk that
+    // follows it. The NULCHAR is the notice; this is the byte, so it is skipped
+    // rather than decoded into a NUL that would truncate every C string it
+    // reached. A NUL in prose never gets here: md4c reports only the notice.
+    if (size > 0 && type != MD_TEXT_NULLCHAR) {
+      while (size > 0 && *text == '\0') {
+        text++;
+        size--;
+      }
+    }
+    if (size == 0) {
+      return 0;
+    }
     noteSourceText(text, size);
 
     std::u16string piece;
