@@ -89,7 +89,100 @@ const playback = [
     description: 'Complete disallowed link never becomes actionable',
     chunks: ['Do not open ', '[trap](', 'javascript:alert', '(1))', '.\n'], // eslint-disable-line no-script-url -- the target a renderer must refuse
   },
+  {
+    id: 'code-streaming',
+    description: 'A long fence arriving in small chunks, the highlighting case',
+    chunks: codeChunks(),
+  },
+  {
+    id: 'code-languages',
+    description: 'One small fence per language the first release colors',
+    chunks: languageChunks(),
+  },
+  {
+    id: 'code-diff',
+    description: 'A unified diff and a shell transcript in one document',
+    chunks: [
+      '```diff\n',
+      '--- a/file.ts\n',
+      '+++ b/file.ts\n',
+      '@@ -1,4 +1,4 @@\n',
+      '-const a = 1;\n',
+      '+const a = 2;\n',
+      '```\n',
+      '\n',
+      '```bash\n',
+      'set -euo pipefail\n',
+      'for f in *.txt; do echo "$f"; done\n',
+      '```\n',
+    ],
+  },
 ] satisfies readonly Omit<Sample, 'source'>[];
+
+/**
+ * A code block split into small chunks. The tail is re-colored on every one, so
+ * this is the sample that shows what resuming from the last complete line buys
+ * against tokenizing the whole block again.
+ */
+function codeChunks(): string[] {
+  const lines = [
+    'export interface User {',
+    '  id: number;',
+    '  name: string;',
+    '}',
+    '',
+    'export async function loadUser(id: number): Promise<User | null> {',
+    '  const res = await fetch(`/api/users/${id}?v=${VERSION}`);',
+    '  if (!res.ok) {',
+    "    throw new Error('failed: ' + res.status);",
+    '  }',
+    '  return (await res.json()) as User;',
+    '}',
+    '',
+    'const total = items',
+    '  .filter((item) => item.active)',
+    '  .reduce((sum, item) => sum + item.price, 0);',
+  ];
+  const chunks = ['```ts\n'];
+  for (const line of lines) {
+    // A few bytes at a time, so the tail is nearly always incomplete.
+    for (let at = 0; at < line.length; at += 7) {
+      chunks.push(line.slice(at, at + 7));
+    }
+    chunks.push('\n');
+  }
+  chunks.push('```\n');
+  return chunks;
+}
+
+/** One small fence per alias group, so a language table change is visible. */
+function languageChunks(): string[] {
+  const snippets: [string, string][] = [
+    ['python', 'def greet(name: str) -> str:\n    return f"hi {name}"\n'],
+    ['bash', 'echo "$HOME" # comment\n'],
+    ['json', '{\n  "name": "x",\n  "n": 1\n}\n'],
+    ['html', '<div class="a"><p>text</p></div>\n'],
+    ['css', '.a > .b { color: red; }\n'],
+    ['sql', 'SELECT a FROM t WHERE b = 1;\n'],
+    ['rust', 'pub fn main() { println!("{}", 1); }\n'],
+    ['yaml', 'key: value\n'],
+    ['toml', 'a = "b"\n'],
+    ['ruby', 'def hi(x)\n  puts x\nend\n'],
+    ['lua', 'local function f() return 1 end\n'],
+    ['diff', '--- a\n+++ b\n-a\n+b\n'],
+    ['go', 'func main() { fmt.Println("hi") }\n'],
+    ['md', '# Title\n\n*em* and `code`\n'],
+  ];
+  const chunks: string[] = [];
+  for (const [info, code] of snippets) {
+    chunks.push('```' + info + '\n');
+    for (const line of code.split('\n').slice(0, -1)) {
+      chunks.push(line + '\n');
+    }
+    chunks.push('```\n\n');
+  }
+  return chunks;
+}
 
 export const samples: readonly Sample[] = playback.map((sample) => ({
   ...sample,
