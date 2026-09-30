@@ -1,5 +1,6 @@
 #import "DSRenderedDocument.h"
 
+#include "Controls.h"
 #include "SegmentPlan.h"
 #include "TokenPalette.h"
 
@@ -22,6 +23,10 @@ constexpr CGFloat kGapHeading = 20;
 constexpr CGFloat kGapTight = 4;
 constexpr CGFloat kQuoteIndent = 16;
 constexpr CGFloat kListIndent = 32;
+/// The row a code block's buttons sit in, and the row a table's sit in. Fixed
+/// in both directions so a block does not move when a button appears.
+constexpr CGFloat kChromeRowHeight = 32;
+/// Padding inside a code card, the same on every side.
 constexpr CGFloat kCodePadding = 10;
 constexpr CGFloat kMinColumnWidth = 56;
 constexpr CGFloat kMaxColumnWidth = 280;
@@ -208,7 +213,6 @@ void applyTokens(NSMutableAttributedString *text, const Block &block, NSUInteger
 @property (nonatomic) NSInteger headingLevel;
 @property (nonatomic) CGFloat spacingBefore;
 @property (nonatomic) CGFloat contentLeading;
-@property (nonatomic) CGFloat codePadding;
 @property (nonatomic) BOOL rightToLeft;
 @property (nonatomic) NSArray<DSContainerInfo *> *containers;
 @property (nonatomic, nullable) NSString *accessibilityPrefix;
@@ -296,16 +300,25 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   CGFloat _heightWidth;
   CGFloat _height;
   BOOL _hasHeight;
+  NSLock *_widthLock;
+  CGFloat _widthWidth;
+  CGFloat _usedWidth;
+  BOOL _hasUsedWidth;
 }
 
+/// `inCard` is true for the one-block body of a code card: the card draws the
+/// background and the padding, and code is laid out left to right however the
+/// block's own characters read.
 + (instancetype)segmentWithDocument:(const Document &)document
                                from:(size_t)from
                                  to:(size_t)to
                               scale:(CGFloat)scale
                          markerFont:(UIFont *)markerFont
-                  syntaxHighlighting:(BOOL)syntaxHighlighting {
+                  syntaxHighlighting:(BOOL)syntaxHighlighting
+                             inCard:(BOOL)inCard {
   DSTextSegment *segment = [DSTextSegment new];
   segment->_heightLock = [NSLock new];
+  segment->_widthLock = [NSLock new];
   NSMutableAttributedString *text = [NSMutableAttributedString new];
   NSMutableArray<DSBlockInfo *> *blocks = [NSMutableArray arrayWithCapacity:to - from];
   NSMutableArray<NSValue *> *blockRanges = [NSMutableArray arrayWithCapacity:to - from];
@@ -318,16 +331,13 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
     DSBlockInfo *info = [DSBlockInfo new];
     info.index = static_cast<NSInteger>(index);
     info.headingLevel = block.headingLevel;
-    info.codePadding = isCode ? kCodePadding * scale : 0;
-    NSWritingDirection direction = writingDirection(block.text);
+    NSWritingDirection direction = inCard ? NSWritingDirectionLeftToRight : writingDirection(block.text);
     if (direction == NSWritingDirectionNatural && blocks.count > 0) {
       direction = blocks.lastObject.rightToLeft ? NSWritingDirectionRightToLeft
                                                  : NSWritingDirectionLeftToRight;
     }
     info.rightToLeft = direction == NSWritingDirectionRightToLeft;
-    info.decoration = isCode ? DSBlockDecorationCode
-        : block.kind == BlockKind::ThematicBreak ? DSBlockDecorationRule
-                                                 : DSBlockDecorationNone;
+    info.decoration = block.kind == BlockKind::ThematicBreak ? DSBlockDecorationRule : DSBlockDecorationNone;
 
     NSMutableArray<DSContainerInfo *> *containers = [NSMutableArray new];
     NSMutableArray<NSString *> *spoken = [NSMutableArray new];
@@ -339,15 +349,12 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
 
     // The segment's first block starts at the segment frame; the document
     // stack owns the gap above it.
+    // A code card is its own segment, so its body never carries the padding
+    // that used to be reserved inside the prose flow, and the block that
+    // follows one starts from the plain gap the document stack adds.
     CGFloat gap = 0;
-    if (previous != nullptr) {
+    if (previous != nullptr && !inCard) {
       gap = baseGap(block, scale);
-      if (previous->kind == BlockKind::CodeBlock) {
-        gap += kCodePadding * scale;
-      }
-      if (isCode) {
-        gap += kCodePadding * scale;
-      }
     }
     info.spacingBefore = gap;
 
@@ -381,9 +388,9 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
     NSMutableParagraphStyle *style = [NSMutableParagraphStyle new];
     style.lineBreakMode = NSLineBreakByWordWrapping;
     style.baseWritingDirection = direction;
-    style.firstLineHeadIndent = info.rightToLeft ? info.codePadding : leading + info.codePadding;
+    style.firstLineHeadIndent = info.rightToLeft ? 0 : leading;
     style.headIndent = style.firstLineHeadIndent;
-    style.tailIndent = -(info.rightToLeft ? leading + info.codePadding : info.codePadding);
+    style.tailIndent = -(info.rightToLeft ? leading : 0);
     NSMutableParagraphStyle *firstStyle = [style mutableCopy];
     firstStyle.paragraphSpacingBefore = gap;
 
@@ -415,9 +422,26 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   segment.attributedString = [text copy];
   segment.blocks = [blocks copy];
   segment.blockRanges = [blockRanges copy];
-  segment.topInset = document.blocks[from].kind == BlockKind::CodeBlock ? kCodePadding * scale : 0;
-  segment.bottomInset = document.blocks[to - 1].kind == BlockKind::CodeBlock ? kCodePadding * scale : 0;
   return segment;
+}
+
+/// Lays the text out once at `width` and hands back the measurements callers
+/// need, so height and used width come from the same layout.
+static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat width, CGFloat *height,
+                       CGFloat *usedWidth) {
+  DSTextKitStack *stack = [[DSTextKitStack alloc] initWithLayoutManager:[NSLayoutManager new]];
+  stack.textContainer.size = CGSizeMake(std::isfinite(width) ? width : CGFLOAT_MAX, CGFLOAT_MAX);
+  [stack.textStorage setAttributedString:text];
+  [stack.layoutManager ensureLayoutForTextContainer:stack.textContainer];
+  const CGRect used = [stack.layoutManager usedRectForTextContainer:stack.textContainer];
+  // Unrounded, so a run split into several segments stacks to the same height
+  // as one segment; the document rounds the segment edges.
+  if (height != nullptr) {
+    *height = CGRectGetMaxY(used);
+  }
+  if (usedWidth != nullptr) {
+    *usedWidth = CGRectGetWidth(used);
+  }
 }
 
 - (CGFloat)heightForWidth:(CGFloat)width {
@@ -432,20 +456,103 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   }
   [_heightLock unlock];
 
-  DSTextKitStack *stack = [[DSTextKitStack alloc] initWithLayoutManager:[NSLayoutManager new]];
-  stack.textContainer.size = CGSizeMake(std::isfinite(width) ? width : CGFLOAT_MAX, CGFLOAT_MAX);
-  [stack.textStorage setAttributedString:_attributedString];
-  [stack.layoutManager ensureLayoutForTextContainer:stack.textContainer];
-  const CGRect used = [stack.layoutManager usedRectForTextContainer:stack.textContainer];
-  // Unrounded, so a run split into several segments stacks to the same
-  // height as one segment; the document rounds the segment edges.
-  const CGFloat height = _topInset + CGRectGetMaxY(used) + _bottomInset;
+  CGFloat measured = 0;
+  layoutText(self, _attributedString, width, &measured, nullptr);
   [_heightLock lock];
   _heightWidth = width;
-  _height = height;
+  _height = measured;
   _hasHeight = YES;
   [_heightLock unlock];
-  return height;
+  return measured;
+}
+
+- (CGFloat)usedWidthForWidth:(CGFloat)width {
+  if (_attributedString.length == 0) {
+    return 0;
+  }
+  [_widthLock lock];
+  if (_hasUsedWidth && _widthWidth == width) {
+    const CGFloat used = _usedWidth;
+    [_widthLock unlock];
+    return used;
+  }
+  [_widthLock unlock];
+
+  CGFloat measured = 0;
+  layoutText(self, _attributedString, width, nullptr, &measured);
+  [_widthLock lock];
+  _widthWidth = width;
+  _usedWidth = measured;
+  _hasUsedWidth = YES;
+  [_widthLock unlock];
+  return measured;
+}
+
+@end
+
+#pragma mark - Code cards
+
+@interface DSCodeSegment ()
+@property (nonatomic) DSTextSegment *text;
+@property (nonatomic) NSString *language;
+@property (nonatomic) NSInteger blockIndex;
+@property (nonatomic) uint32_t codeOrdinal;
+@property (nonatomic) NSArray<DSContainerInfo *> *containers;
+@property (nonatomic) CGFloat contentLeading;
+@property (nonatomic) NSString *firstLine;
+@end
+
+@implementation DSCodeSegment
+
++ (instancetype)segmentWithDocument:(const Document &)document
+                               index:(size_t)index
+                              scale:(CGFloat)scale
+                         markerFont:(UIFont *)markerFont
+                  syntaxHighlighting:(BOOL)syntaxHighlighting {
+  DSCodeSegment *segment = [DSCodeSegment new];
+  const Block &block = document.blocks[index];
+  segment.text = [DSTextSegment segmentWithDocument:document
+                                              from:index
+                                                to:index + 1
+                                             scale:scale
+                                        markerFont:markerFont
+                                 syntaxHighlighting:syntaxHighlighting
+                                            inCard:YES];
+  segment.language = [NSString stringWithUTF8String:block.language.c_str()];
+  segment.blockIndex = static_cast<NSInteger>(index);
+  segment.codeOrdinal = static_cast<uint32_t>(codeBlockOrdinal(document, index));
+  NSMutableArray<DSContainerInfo *> *containers = [NSMutableArray new];
+  NSMutableArray<NSString *> *spoken = [NSMutableArray new];
+  bool inQuote = false;
+  segment.contentLeading = buildContainers(block, nullptr, scale, markerFont, containers, spoken, &inQuote);
+  segment.containers = containers;
+  const size_t newline = block.text.find(u'\n');
+  segment.firstLine = toNSString(block.text.substr(0, newline == std::u16string::npos ? block.text.size() : newline));
+  return segment;
+}
+
+- (CGFloat)headerHeight {
+  return kChromeRowHeight;
+}
+
+/// The width the body is laid out at: the card's inner width when it wraps, and
+/// unbounded when it does not, which is what makes a long line scroll instead
+/// of wrapping. The card's own padding and the container's margin come off the
+/// available width first, so a body never lays out wider than the card.
+- (CGFloat)layoutWidthForWidth:(CGFloat)width wrapped:(BOOL)wrapped {
+  if (!wrapped) {
+    return CGFLOAT_MAX;
+  }
+  const CGFloat inset = self.contentLeading + 2 * kCodePadding;
+  return std::max<CGFloat>(0, width - inset);
+}
+
+- (CGFloat)bodyHeightForWidth:(CGFloat)width wrapped:(BOOL)wrapped {
+  return [self.text heightForWidth:[self layoutWidthForWidth:width wrapped:wrapped]];
+}
+
+- (CGFloat)bodyWidthForWidth:(CGFloat)width wrapped:(BOOL)wrapped {
+  return [self.text usedWidthForWidth:[self layoutWidthForWidth:width wrapped:wrapped]];
 }
 
 @end
@@ -471,6 +578,8 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
 @property (nonatomic) NSArray<NSNumber *> *rowHeights;
 @property (nonatomic) CGSize tableSize;
 @property (nonatomic) UIEdgeInsets cellPadding;
+@property (nonatomic) NSInteger blockIndex;
+@property (nonatomic) uint32_t blockCount;
 @end
 
 @implementation DSTableSegment
@@ -493,6 +602,8 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   segment.rightToLeft = direction == NSWritingDirectionRightToLeft;
   segment.tableIdentifier = first.table;
   segment.firstRowText = toNSString(first.text);
+  segment.blockIndex = static_cast<NSInteger>(from);
+  segment.blockCount = static_cast<uint32_t>(to - from);
   segment.containers = containers;
   segment.hasHeader = first.tableHeader;
   segment.cellPadding = UIEdgeInsetsMake(kCellPaddingVertical * scale, kCellPaddingHorizontal * scale,
@@ -602,9 +713,13 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
 
 @implementation DSRenderedDocument {
   NSArray *_segments;
+  NSArray<NSNumber *> *_segmentBlockIndexes;
+  uint32_t _settledBlocks;
   std::vector<CGFloat> _gaps;
   NSLock *_lock;
   CGFloat _cachedWidth;
+  uint32_t _cachedChrome;
+  bool _hasCachedFrames;
   NSArray<NSValue *> *_cachedFrames;
 }
 
@@ -637,7 +752,7 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
                     scale:(CGFloat)scale
                markerFont:(UIFont *)markerFont
         syntaxHighlighting:(BOOL)syntaxHighlighting {
-  const bool isTable = document.blocks[from].kind == BlockKind::TableRow;
+  const BlockKind kind = document.blocks[from].kind;
   NSString *key = [NSString stringWithFormat:@"%llu:%zu:%.4f:%d", (unsigned long long)document.blocks[from].identity,
                                              to - from, scale, syntaxHighlighting];
   DSCommittedSegment *cached = [self.committedSegmentCache objectForKey:key];
@@ -654,14 +769,31 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
     cached->identities.push_back(document.blocks[index].identity);
     cost += document.blocks[index].text.size() * 16 + 256;
   }
-  cached->segment = isTable
-      ? (id)[DSTableSegment segmentWithDocument:document from:from to:to scale:scale markerFont:markerFont]
-      : (id)[DSTextSegment segmentWithDocument:document
-                                           from:from
-                                             to:to
-                                          scale:scale
-                                     markerFont:markerFont
-                              syntaxHighlighting:syntaxHighlighting];
+  switch (kind) {
+    case BlockKind::TableRow:
+      cached->segment = (id)[DSTableSegment segmentWithDocument:document
+                                                            from:from
+                                                              to:to
+                                                           scale:scale
+                                                      markerFont:markerFont];
+      break;
+    case BlockKind::CodeBlock:
+      cached->segment = (id)[DSCodeSegment segmentWithDocument:document
+                                                         index:from
+                                                        scale:scale
+                                                   markerFont:markerFont
+                                        syntaxHighlighting:syntaxHighlighting];
+      break;
+    default:
+      cached->segment = (id)[DSTextSegment segmentWithDocument:document
+                                                           from:from
+                                                             to:to
+                                                          scale:scale
+                                                     markerFont:markerFont
+                                          syntaxHighlighting:syntaxHighlighting
+                                                         inCard:NO];
+      break;
+  }
   [self.committedSegmentCache setObject:cached forKey:key cost:cost];
   return cached->segment;
 }
@@ -702,32 +834,45 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   const Document &document = documentHandle ? *documentHandle : emptyDocument;
   UIFont *markerFont = [UIFont monospacedDigitSystemFontOfSize:kBodySize * scale weight:UIFontWeightRegular];
   NSMutableArray *segments = [NSMutableArray new];
+  NSMutableArray<NSNumber *> *indexes = [NSMutableArray new];
+  _settledBlocks = document.settledBlocks;
 
   for (const SegmentPlan &segment : planSegments(document)) {
+    id built = nil;
     if (segment.committed) {
-      [segments addObject:[DSRenderedDocument committedSegmentFor:document
-                                                             from:segment.from
-                                                               to:segment.to
-                                                            scale:scale
-                                                       markerFont:markerFont
-                                                syntaxHighlighting:syntaxHighlighting]];
-    } else if (segment.table) {
-      [segments addObject:[DSTableSegment segmentWithDocument:document
-                                                         from:segment.from
-                                                           to:segment.to
-                                                        scale:scale
-                                                   markerFont:markerFont]];
+      built = [DSRenderedDocument committedSegmentFor:document
+                                                 from:segment.from
+                                                   to:segment.to
+                                                scale:scale
+                                           markerFont:markerFont
+                                    syntaxHighlighting:syntaxHighlighting];
+    } else if (segment.isCode()) {
+      built = [DSCodeSegment segmentWithDocument:document
+                                           index:segment.from
+                                          scale:scale
+                                     markerFont:markerFont
+                              syntaxHighlighting:syntaxHighlighting];
+    } else if (segment.isTable()) {
+      built = [DSTableSegment segmentWithDocument:document
+                                             from:segment.from
+                                               to:segment.to
+                                            scale:scale
+                                       markerFont:markerFont];
     } else {
-      [segments addObject:[DSTextSegment segmentWithDocument:document
-                                                        from:segment.from
-                                                          to:segment.to
-                                                       scale:scale
-                                                  markerFont:markerFont
-                                           syntaxHighlighting:syntaxHighlighting]];
+      built = [DSTextSegment segmentWithDocument:document
+                                            from:segment.from
+                                              to:segment.to
+                                           scale:scale
+                                      markerFont:markerFont
+                               syntaxHighlighting:syntaxHighlighting
+                                          inCard:NO];
     }
+    [segments addObject:built];
+    [indexes addObject:@((NSInteger)segment.from)];
     _gaps.push_back(segment.from == 0 ? 0 : baseGap(document.blocks[segment.from], scale));
   }
   _segments = [segments copy];
+  _segmentBlockIndexes = [indexes copy];
   return self;
 }
 
@@ -735,9 +880,48 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   return _segments;
 }
 
-- (NSArray<NSValue *> *)segmentFramesForWidth:(CGFloat)width {
+- (NSArray<NSNumber *> *)segmentBlockIndexes {
+  return _segmentBlockIndexes;
+}
+
+- (uint32_t)settledBlocks {
+  return _settledBlocks;
+}
+
+/// The height of one segment at a view width, including whatever control row
+/// the chrome puts above it.
+- (CGFloat)heightOf:(id)segment atWidth:(CGFloat)width chrome:(uint32_t)chrome {
+  if ([segment isKindOfClass:DSTextSegment.class]) {
+    return [(DSTextSegment *)segment heightForWidth:width];
+  }
+  if ([segment isKindOfClass:DSCodeSegment.class]) {
+    DSCodeSegment *code = segment;
+    const BOOL wrapped = (chrome & kChromeCodeWrap) != 0;
+    const CGFloat body = [code bodyHeightForWidth:width wrapped:wrapped];
+    return 2 * kCodePadding + body + ((chrome & kChromeCodeHeader) != 0 ? [code headerHeight] : 0);
+  }
+  DSTableSegment *table = segment;
+  return table.tableSize.height + ((chrome & kChromeTableToolbar) != 0 ? kChromeRowHeight : 0);
+}
+
+/// The width an unconstrained measure takes: the widest thing that does not
+/// fit a view, which is a table's columns or a code line that scrolls.
+- (CGFloat)unconstrainedWidthOf:(id)segment atWidth:(CGFloat)width chrome:(uint32_t)chrome {
+  if ([segment isKindOfClass:DSCodeSegment.class]) {
+    DSCodeSegment *code = segment;
+    const BOOL wrapped = (chrome & kChromeCodeWrap) != 0;
+    return code.contentLeading + 2 * kCodePadding + [code bodyWidthForWidth:width wrapped:wrapped];
+  }
+  if ([segment isKindOfClass:DSTableSegment.class]) {
+    DSTableSegment *table = segment;
+    return table.contentLeading + table.tableSize.width;
+  }
+  return 0;
+}
+
+- (NSArray<NSValue *> *)segmentFramesForWidth:(CGFloat)width chrome:(uint32_t)chrome {
   [_lock lock];
-  if (_cachedFrames != nil && _cachedWidth == width) {
+  if (_hasCachedFrames && _cachedWidth == width && _cachedChrome == chrome) {
     NSArray *frames = _cachedFrames;
     [_lock unlock];
     return frames;
@@ -752,14 +936,8 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   for (NSUInteger index = 0; index < _segments.count; index++) {
     y += _gaps[index];
     id segment = _segments[index];
-    CGFloat height = 0;
-    if ([segment isKindOfClass:DSTextSegment.class]) {
-      height = [(DSTextSegment *)segment heightForWidth:width];
-    } else {
-      DSTableSegment *table = segment;
-      height = table.tableSize.height;
-      unconstrainedWidth = std::max(unconstrainedWidth, table.contentLeading + table.tableSize.width);
-    }
+    const CGFloat height = [self heightOf:segment atWidth:width chrome:chrome];
+    unconstrainedWidth = std::max(unconstrainedWidth, [self unconstrainedWidthOf:segment atWidth:width chrome:chrome]);
     const CGFloat top = std::ceil(y);
     // Never shorter than the segment. Rounding both edges up loses up to a
     // point when y is fractional, and a text view lays out only the lines that
@@ -770,7 +948,7 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
   }
 
   // Every segment spans the view; an unconstrained measure uses the widest
-  // table as the content width.
+  // segment that does not fit.
   const CGFloat frameWidth = std::isfinite(width) ? width : unconstrainedWidth;
   for (NSUInteger index = 0; index < frames.count; index++) {
     CGRect frame = frames[index].CGRectValue;
@@ -780,18 +958,24 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
 
   [_lock lock];
   _cachedWidth = width;
+  _cachedChrome = chrome;
+  _hasCachedFrames = YES;
   _cachedFrames = frames;
   [_lock unlock];
   return frames;
 }
 
-- (CGSize)sizeForWidth:(CGFloat)width {
-  NSArray<NSValue *> *frames = [self segmentFramesForWidth:width];
+- (CGSize)sizeForWidth:(CGFloat)width chrome:(uint32_t)chrome {
+  NSArray<NSValue *> *frames = [self segmentFramesForWidth:width chrome:chrome];
   if (frames.count == 0) {
     return CGSizeZero;
   }
   const CGRect last = frames.lastObject.CGRectValue;
   return CGSizeMake(std::ceil(CGRectGetWidth(last)), std::ceil(CGRectGetMaxY(last)));
+}
+
+- (uint32_t)chromeForControls:(uint32_t)controls codeBlockWrap:(BOOL)codeBlockWrap {
+  return downstream::chromeForProps(controls, codeBlockWrap, {});
 }
 
 @end
