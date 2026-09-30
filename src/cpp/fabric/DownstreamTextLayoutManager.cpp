@@ -13,7 +13,8 @@ constexpr size_t kMeasurementCacheCapacity = 64;
 } // namespace
 
 Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
-                                          const LayoutConstraints &layoutConstraints, SurfaceId surfaceId) const {
+                                          const LayoutConstraints &layoutConstraints, SurfaceId surfaceId,
+                                          uint32_t chrome, uint32_t revision) const {
   const Float maximumWidth = layoutConstraints.maximumSize.width;
   Size size{0, 0};
   if (document) downstream::SessionTrace::recordDocument(document->id, "measure_start");
@@ -24,7 +25,7 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
       std::lock_guard<std::mutex> lock(cacheMutex_);
       for (const auto &entry : cache_) {
         if (entry.documentId == document->id && entry.fontSizeMultiplier == fontSizeMultiplier &&
-            entry.maximumWidth == maximumWidth) {
+            entry.maximumWidth == maximumWidth && entry.chrome == chrome && entry.revision == revision) {
           size = entry.size;
           cached = true;
           break;
@@ -33,12 +34,12 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
     }
 
     if (!cached) {
-      size = measurePlatform(document, fontSizeMultiplier, maximumWidth, surfaceId);
+      size = measurePlatform(document, fontSizeMultiplier, maximumWidth, surfaceId, chrome);
       std::lock_guard<std::mutex> lock(cacheMutex_);
       if (cache_.size() >= kMeasurementCacheCapacity) {
         cache_.erase(cache_.begin());
       }
-      cache_.push_back({document->id, fontSizeMultiplier, maximumWidth, size});
+      cache_.push_back({document->id, fontSizeMultiplier, maximumWidth, chrome, revision, size});
     } else {
       downstream::SessionTrace::recordDocument(document->id, "measure_cache_hit");
     }

@@ -151,6 +151,10 @@ struct Block {
   std::vector<TableCell> cells;
   /// Fenced code info string language, UTF-8.
   std::string language;
+  /// The whole fence info string, UTF-8, as written after the backticks.
+  /// `language` is its first word; this keeps the rest, so a download can take
+  /// a name from `title="app.ts"` or `ts:src/app.ts` without another parse.
+  std::string info;
   /// CodeBlock only: syntax tokens. Empty when the language is unknown, the
   /// block is over the highlight limit, or highlighting is disabled. Tokens
   /// live here rather than in runs so the open-fence fast path and inline-code
@@ -255,8 +259,34 @@ struct Document {
   uint64_t id{0};
   SharedList<Block> blocks;
   SharedList<Link> links;
+  /// Number of leading blocks that no later input can change. A control, and
+  /// text selection, turn on once the block they belong to is inside this
+  /// prefix, so a finished block is usable while the rest still streams.
+  ///
+  /// It is not the same as `Block::identity`, which in full mode only means
+  /// "unchanged since the previous snapshot", and a controlled source has no
+  /// identities at all even though every one of its blocks is final.
+  uint32_t settledBlocks{0};
+
+  /// True when blocks [0, to) are all settled.
+  bool isSettled(size_t to) const { return to <= settledBlocks; }
 };
 
 using DocumentHandle = std::shared_ptr<const Document>;
+
+/// A copy of `document` whose first `settled` blocks are marked settled.
+///
+/// Copying a Document shares its committed prefix and copies its block tail,
+/// which is what publishing a stream snapshot already does. Returns `document`
+/// itself when the count already matches, so a caller that has nothing to
+/// change pays nothing.
+inline DocumentHandle withSettledBlocks(const DocumentHandle &document, uint32_t settled) {
+  if (!document || document->settledBlocks == settled) {
+    return document;
+  }
+  auto copy = std::make_shared<Document>(*document);
+  copy->settledBlocks = settled;
+  return copy;
+}
 
 } // namespace downstream

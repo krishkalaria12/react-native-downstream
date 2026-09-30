@@ -4,6 +4,8 @@
 #include "CodeHighlighter.h"
 #include "RenderPreparer.h"
 
+#include <algorithm>
+#include <limits>
 #include <list>
 #include <mutex>
 
@@ -36,10 +38,14 @@ void PreparedDocument::prepare() {
   if (result_.status == ParseStatus::Ok) {
     // Highlighting runs here, on the same worker job and so inside the
     // synchronous-layout budget, so the platform text work that follows sees
-    // finished tokens. A controlled source is complete the moment it is parsed
-    // and this result is cached, so a block is settled rather than streaming: no
-    // later pass would ever finish one that ran out of budget.
+    // finished tokens.
     result_.document = highlightSettledCodeBlocks(lexillaHighlighter(), result_.document, kHighlightBudgetMs, nullptr);
+    // A controlled source is complete the moment it is parsed and this result
+    // is cached, so every block settles: a later snapshot would only come from
+    // a different source, and this one will not be parsed again.
+    const auto count = static_cast<uint32_t>(
+        std::min<size_t>(result_.document->blocks.size(), std::numeric_limits<uint32_t>::max()));
+    result_.document = withSettledBlocks(result_.document, count);
     RenderPreparer::prepare(result_.document, RenderPreparer::recentLayouts());
   }
 }

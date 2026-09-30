@@ -34,6 +34,9 @@ DownstreamMarkdownShadowNode::DownstreamMarkdownShadowNode(const ShadowNode &sou
   const auto &previous = source.getConcreteProps();
   const auto &props = getConcreteProps();
   layoutManager_ = source.layoutManager_;
+  // The reader's wrap choices belong to the family, not to one revision of the
+  // node, so a state update that clones the node keeps them.
+  sharedState_ = source.sharedState_;
 
   // Keep the last valid document either way: it is reused when the source is
   // unchanged, and retained as the fallback when a new source fails to parse.
@@ -136,16 +139,26 @@ void DownstreamMarkdownShadowNode::relayoutWhenPrepared() const {
   });
 }
 
+uint32_t DownstreamMarkdownShadowNode::chromeFor(const DownstreamMarkdownState &state) const {
+  const auto &props = getConcreteProps();
+  return chromeForProps(props.controls, props.codeBlockWrap, state.wrapToggles);
+}
+
 Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutContext,
                                                   const LayoutConstraints &layoutConstraints) const {
-  const downstream::LayoutHint hint{static_cast<float>(layoutContext.fontSizeMultiplier),
-                                    static_cast<float>(layoutConstraints.maximumSize.width)};
-  downstream::RenderPreparer::noteLayout(hint);
   const auto &props = getConcreteProps();
+  const auto &state = getStateData();
+  const uint32_t chrome = chromeFor(state);
+  const downstream::LayoutHint hint{static_cast<float>(layoutContext.fontSizeMultiplier),
+                                    static_cast<float>(layoutConstraints.maximumSize.width),
+                                    chrome,
+                                    state.wrapRevision};
+  downstream::RenderPreparer::noteLayout(hint);
   if (!props.sessionId.empty()) {
     downstream::SessionRegistry::noteLayout(props.sessionId, hint);
   }
-  return layoutManager_->measure(getDocument(), layoutContext.fontSizeMultiplier, layoutConstraints, getSurfaceId());
+  return layoutManager_->measure(getDocument(), layoutContext.fontSizeMultiplier, layoutConstraints,
+                                 getSurfaceId(), chrome, state.wrapRevision);
 }
 
 void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
@@ -157,8 +170,17 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
     relayoutWhenPrepared();
   }
   const auto &state = getStateData();
-  if (state.document != document || state.fontSizeMultiplier != layoutContext.fontSizeMultiplier) {
-    setStateData(DownstreamMarkdownState{document, layoutContext.fontSizeMultiplier});
+  const uint32_t chrome = chromeFor(state);
+  if (state.document != document || state.fontSizeMultiplier != layoutContext.fontSizeMultiplier ||
+      state.chrome != chrome) {
+    DownstreamMarkdownState next{state};
+    next.document = document;
+    next.fontSizeMultiplier = layoutContext.fontSizeMultiplier;
+    next.chrome = chrome;
+    // The family keeps the choices, so a later revision of this node still
+    // knows which blocks the reader unwrapped.
+    sharedState_ = std::make_shared<const DownstreamMarkdownState>(next);
+    setStateData(std::move(next));
   }
 
   if (pendingError_) {

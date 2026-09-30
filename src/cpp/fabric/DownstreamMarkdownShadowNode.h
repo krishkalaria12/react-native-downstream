@@ -67,6 +67,11 @@ private:
   /// Asks for a relayout once a preparation that layout did not wait for ends.
   void relayoutWhenPrepared() const;
 
+  /// The chrome a document lays out with, from the props and the reader's
+  /// choices. It is a height, not a rendering, so it is recomputed here rather
+  /// than baked into a segment's text.
+  uint32_t chromeFor(const DownstreamMarkdownState &state) const;
+
   std::shared_ptr<const DownstreamTextLayoutManager> layoutManager_;
   std::shared_ptr<ControlledSource> controlled_;
   mutable downstream::DocumentHandle document_;
@@ -77,6 +82,9 @@ private:
   /// prepared; the next revision collects the result.
   mutable bool awaitingPrepared_{false};
   mutable std::optional<PendingError> pendingError_;
+  /// The reader's wrap choices, in the family rather than in a revision, so
+  /// they outlive the node that first recorded them.
+  std::shared_ptr<const DownstreamMarkdownState> sharedState_;
 };
 
 } // namespace facebook::react
