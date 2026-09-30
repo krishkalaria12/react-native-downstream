@@ -73,6 +73,9 @@ NSString *nameForFormat(NSString *format) {
   if ([format isEqualToString:@"csv"]) {
     return @"csv";
   }
+  if ([format isEqualToString:@"tsv"]) {
+    return @"tsv";
+  }
   if ([format isEqualToString:@"markdown"]) {
     return @"md";
   }
@@ -327,6 +330,11 @@ NSString *nameForFormat(NSString *format) {
   if (emitter == nullptr) {
     return;
   }
+  // The press carries the generation, so a document that has been replaced
+  // since drops it rather than reporting it to the new one's handlers.
+  const int generation = _state
+      ? static_cast<int>(std::static_pointer_cast<const DownstreamMarkdownViewProps>(_props)->generation)
+      : 0;
   emitter->onControlAction({
       .block = std::string(block.UTF8String),
       .action = std::string(action.UTF8String),
@@ -334,6 +342,7 @@ NSString *nameForFormat(NSString *format) {
       .language = std::string(language.UTF8String),
       .filename = std::string(filename.UTF8String),
       .wrapped = static_cast<bool>(wrapped),
+      .generation = generation,
   });
 }
 
@@ -341,8 +350,9 @@ NSString *nameForFormat(NSString *format) {
   if (!_state || _eventEmitter == nullptr) {
     return;
   }
-  // The message names the control, so a per-control onError and the view's own
-  // onError can both find the failure without a second event.
+  // The block and action travel as fields, so routing a failure to its own
+  // onError does not depend on how the message reads and an app is told which
+  // control failed. The message still names it, for a log line.
   std::static_pointer_cast<const DownstreamMarkdownViewEventEmitter>(_eventEmitter)
       ->onMarkdownError({
           .code = "control_failed",
@@ -351,10 +361,13 @@ NSString *nameForFormat(NSString *format) {
           .generation = static_cast<int>(std::static_pointer_cast<const DownstreamMarkdownViewProps>(_props)->generation),
           .sequence = 0,
           .recoverable = true,
+          .block = std::string(block.UTF8String),
+          .action = std::string(action.UTF8String),
       });
 }
 
-- (void)didPressControlOfKind:(NSInteger)blockIndex
+- (void)didPressControlOfKind:(DSBlockKind)kind
+                   blockIndex:(NSInteger)blockIndex
                    blockCount:(uint32_t)blockCount
                      language:(NSString *)language
                       action:(NSString *)action
@@ -363,12 +376,26 @@ NSString *nameForFormat(NSString *format) {
   if (!_document) {
     return;
   }
+  const bool isCode = kind == DSBlockKindCode;
+  // The kind says which block type the range holds and the index says where it
+  // starts, so the range is read from the index and the kind only chooses the
+  // format. A range whose first block is not of that kind is a caller bug, and
+  // reporting it beats copying whatever happens to live at those indexes.
+  if (blockIndex < 0 || static_cast<size_t>(blockIndex) >= _document->blocks.size()) {
+    [self emitControlFailureFor:isCode ? @"code" : @"table" action:action message:@"The block is gone."];
+    return;
+  }
   const size_t from = static_cast<size_t>(blockIndex);
   const size_t to = std::min(from + blockCount, _document->blocks.size());
   if (from >= to) {
     return;
   }
-  const bool isCode = blockIndex == DSBlockKindCode;
+  if ((_document->blocks[from].kind == BlockKind::CodeBlock) != isCode) {
+    [self emitControlFailureFor:isCode ? @"code" : @"table"
+                         action:action
+                        message:@"The control and the block it names disagree."];
+    return;
+  }
   const bool download = [action isEqualToString:@"download"];
   const char16_t separator = download ? resolveSeparator(_csvSeparator) : kDefaultCsvSeparator;
   // Code always copies the text it shows; a table is copied in the format
@@ -442,17 +469,20 @@ NSString *nameForFormat(NSString *format) {
   // The height changes, and only Yoga and the chat list around the message can
   // know that, so the change goes back through a Fabric state update rather
   // than a React render: no parse, no JavaScript work, no re-measure of the
-  // text, which is laid out again only for the block that changed.
-  DownstreamMarkdownState next = _state->getData().toggled(ordinal, _controls, _codeBlockWrap);
+  // text, which is laid out again only for the block that changed. The state
+  // carries the prop's own wrap setting, which is the half of the decision the
+  // toggled set completes, so measurement resolves the same way afterwards.
+  DownstreamMarkdownState next = _state->getData().toggled(ordinal, _controls);
   _state->updateState(std::move(next));
   [self emitControlWithBlock:@"code" action:@"wrap" format:@"" language:language filename:@"" wrapped:wrapped];
 }
 
-- (void)didFailControlOfKind:(NSInteger)blockIndex action:(NSString *)action message:(NSString *)message {
-  [self emitControlFailureFor:blockIndex == DSBlockKindCode ? @"code" : @"table"
-                       action:action
-                      message:message];
+- (void)didFailControlOfKind:(DSBlockKind)kind action:(NSString *)action message:(NSString *)message {
+  [self emitControlFailureFor:kind == DSBlockKindCode ? @"code" : @"table"
+                        action:action
+                       message:message];
 }
+
 
 @end
 

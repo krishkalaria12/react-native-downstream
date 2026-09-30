@@ -3,7 +3,9 @@ export { createMarkdownStream } from './createMarkdownStream';
 export { defaultTranslations } from './types';
 export type { DownstreamMarkdownProps } from './DownstreamMarkdown';
 export type {
+  MarkdownControlAction,
   MarkdownControlEvent,
+  MarkdownControlKind,
   MarkdownControls,
   MarkdownCopyControl,
   MarkdownDownloadControl,

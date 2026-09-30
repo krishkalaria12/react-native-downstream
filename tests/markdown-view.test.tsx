@@ -337,7 +337,11 @@ describe('DownstreamMarkdown controls', () => {
   const SOURCE =
     '```ts title="app.ts"\nconst a = 1;\n```\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n';
 
-  /** The event the native view would send, with everything a control sends. */
+  /**
+   * The event the native view would send, with everything a control sends. The
+   * generation is the mounted document's, so the press is recognised; the tests
+   * that care about a superseded document override it.
+   */
   function controlEvent(
     overrides: Partial<{
       block: string;
@@ -346,6 +350,7 @@ describe('DownstreamMarkdown controls', () => {
       language: string;
       filename: string;
       wrapped: boolean;
+      generation: number;
     }> = {}
   ) {
     return {
@@ -356,7 +361,31 @@ describe('DownstreamMarkdown controls', () => {
         language: 'ts',
         filename: '',
         wrapped: false,
+        // The mounted document's own generation, so a press is recognised; the
+        // tests about a superseded document override it.
+        generation: Number(nativeView.last()?.generation ?? 0),
         ...overrides,
+      },
+    };
+  }
+
+  /** A `control_failed` error, tagged the way native tags it. */
+  function controlError(
+    block: string,
+    action: string,
+    message: string,
+    overrides: { generation?: number; code?: string } = {}
+  ) {
+    return {
+      nativeEvent: {
+        code: overrides.code ?? 'control_failed',
+        message: `${block} ${action} failed: ${message}`,
+        generation:
+          overrides.generation ?? Number(nativeView.last()?.generation ?? 0),
+        sequence: 0,
+        recoverable: true,
+        block,
+        action,
       },
     };
   }
@@ -557,19 +586,21 @@ describe('DownstreamMarkdown controls', () => {
         controls={{ code: { download: { onError } } }}
       />
     );
-    fire('onMarkdownError', {
-      nativeEvent: {
-        code: 'control_failed',
-        message:
-          'code download failed: the clipboard could not take that much text.',
-        generation: 1,
-        sequence: 0,
-        recoverable: true,
-      },
-    });
+    fire(
+      'onMarkdownError',
+      controlError(
+        'code',
+        'download',
+        'the clipboard could not take that much text.'
+      )
+    );
     expect(onError).toHaveBeenCalledTimes(1);
+    // The block and action ride on the event, so the app is told which control
+    // failed without parsing the message.
     expect(onError.mock.calls[0]?.[0]).toMatchObject({
       code: 'control_failed',
+      block: 'code',
+      action: 'download',
     });
     expect(viewError).not.toHaveBeenCalled();
   });
@@ -577,16 +608,31 @@ describe('DownstreamMarkdown controls', () => {
   it('routes a control failure to the view onError when the control has none', () => {
     const onError = vi.fn();
     mount(<DownstreamMarkdown markdown={SOURCE} onError={onError} />);
-    fire('onMarkdownError', {
-      nativeEvent: {
-        code: 'control_failed',
-        message: 'table copy failed: the document is gone.',
-        generation: 1,
-        sequence: 0,
-        recoverable: true,
-      },
-    });
+    fire(
+      'onMarkdownError',
+      controlError('table', 'copy', 'the document is gone.')
+    );
     expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes a control failure by its fields, not by how the message reads', () => {
+    const copyError = vi.fn();
+    const onError = vi.fn();
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        onError={onError}
+        controls={{ code: { copy: { onError: copyError } } }}
+      />
+    );
+    // A message that names the control in prose must not be mistaken for one:
+    // only the fields route a failure.
+    fire(
+      'onMarkdownError',
+      controlError('code', 'copy', 'the clipboard said table copy was refused')
+    );
+    expect(copyError).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it('routes a non-control failure to the view onError', () => {
@@ -606,6 +652,8 @@ describe('DownstreamMarkdown controls', () => {
         generation: 1,
         sequence: 0,
         recoverable: true,
+        block: '',
+        action: '',
       },
     });
     expect(onError).toHaveBeenCalledTimes(1);
@@ -615,15 +663,10 @@ describe('DownstreamMarkdown controls', () => {
   it('drops a control failure from a generation that is gone', () => {
     const onError = vi.fn();
     mount(<DownstreamMarkdown markdown={SOURCE} onError={onError} />);
-    fire('onMarkdownError', {
-      nativeEvent: {
-        code: 'control_failed',
-        message: 'code copy failed: too large.',
-        generation: 99,
-        sequence: 0,
-        recoverable: true,
-      },
-    });
+    fire(
+      'onMarkdownError',
+      controlError('code', 'copy', 'too large.', { generation: 99 })
+    );
     expect(onError).not.toHaveBeenCalled();
   });
 
@@ -643,6 +686,62 @@ describe('DownstreamMarkdown controls', () => {
     );
     fire('onControlAction', controlEvent());
     expect(onCopy).not.toHaveBeenCalled();
+  });
+
+  it('drops a control action from a document that has been replaced', () => {
+    const onCopy = vi.fn();
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        controls={{ code: { copy: { onCopy } } }}
+      />
+    );
+    const stale = Number(nativeView.last()?.generation ?? 0);
+    rerender(
+      <DownstreamMarkdown
+        markdown={`${SOURCE}\n\nA later paragraph.\n`}
+        controls={{ code: { copy: { onCopy } } }}
+      />
+    );
+    // The press happened on the document before this one, so it describes a
+    // block the reader is no longer looking at.
+    fire('onControlAction', controlEvent({ generation: stale }));
+    expect(onCopy).not.toHaveBeenCalled();
+    fire('onControlAction', controlEvent());
+    expect(onCopy).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends nothing new to native when the controls are rebuilt unchanged', () => {
+    mount(<DownstreamMarkdown markdown={SOURCE} controls={{ code: {} }} />);
+    const first = nativeView.last();
+    const firstLabels = first?.controlLabels;
+    const firstHandler = first?.onControlAction;
+    for (let index = 0; index < 3; index++) {
+      // A fresh object literal each render, which is how this prop is written in
+      // practice. Nothing about it changed, so native should be told nothing.
+      rerender(
+        <DownstreamMarkdown markdown={SOURCE} controls={{ code: {} }} />
+      );
+    }
+    expect(nativeView.last()?.controlLabels).toBe(firstLabels);
+    expect(nativeView.last()?.onControlAction).toBe(firstHandler);
+  });
+
+  it('sends a changed label through to native', () => {
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        translations={{ copyCode: 'Copiar' }}
+      />
+    );
+    expect(nativeView.last()?.controlLabels).toContain('Copiar');
+    rerender(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        translations={{ copyCode: 'Kopieren' }}
+      />
+    );
+    expect(nativeView.last()?.controlLabels).toContain('Kopieren');
   });
 
   it('keeps the handlers when the control value is rebuilt each render', () => {

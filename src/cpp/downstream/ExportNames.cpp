@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <string>
 
 namespace downstream {
 namespace {
@@ -34,8 +35,10 @@ struct Entry {
   const char *extension;
 };
 
-// Sorted by language and compared in place, so a lookup is one binary search
-// over a static table rather than a hash built on first use.
+// Sorted by language, lower-cased, and compared in place, so a lookup is one
+// binary search over a static table rather than a hash built on first use. The
+// keys are lower-cased because the lookup folds the fence's language the same
+// way; the generator refuses an entry that is not.
 constexpr Entry kExtensions[] = {
     {"1c", "1c"},
     {"1c-query", "1cq"},
@@ -348,12 +351,21 @@ constexpr Entry kExtensions[] = {
 } // namespace
 
 std::string_view extensionForLanguage(std::string_view language) {
+  // A fence is written by hand, so `TS`, `Ts`, and `ts` all mean TypeScript and
+  // all three are common. Folding ASCII case before the search is what keeps a
+  // capitalised fence from falling back to `txt`; the table is already folded,
+  // so the search stays correct.
+  std::string folded;
+  folded.reserve(language.size());
+  for (const char unit : language) {
+    folded.push_back(unit >= 'A' && unit <= 'Z' ? static_cast<char>(unit - 'A' + 'a') : unit);
+  }
   const auto *found = std::lower_bound(
-      std::begin(kExtensions), std::end(kExtensions), language,
-      [](const Entry &entry, std::string_view key) {
-        return std::string_view(entry.language) < key;
+      std::begin(kExtensions), std::end(kExtensions), folded,
+      [](const Entry &entry, const std::string &key) {
+        return std::string_view(entry.language) < std::string_view(key);
       });
-  if (found == std::end(kExtensions) || std::string_view(found->language) != language) {
+  if (found == std::end(kExtensions) || std::string_view(found->language) != folded) {
     return {};
   }
   return found->extension;

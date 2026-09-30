@@ -17,6 +17,15 @@ type NativeMarkdownErrorEvent = Readonly<{
   generation: CodegenTypes.Int32;
   sequence: CodegenTypes.Int32;
   recoverable: boolean;
+  /**
+   * The control a `control_failed` names, `code` or `table`. Empty for every
+   * other code. Carried as fields rather than parsed out of `message`, so
+   * routing a failure does not depend on how it is worded and an app learns
+   * which control failed.
+   */
+  block: string;
+  /** `copy`, `download`, or `wrap` for a `control_failed`; empty otherwise. */
+  action: string;
 }>;
 
 type NativeControlActionEvent = Readonly<{
@@ -26,6 +35,12 @@ type NativeControlActionEvent = Readonly<{
   language: string;
   filename: string;
   wrapped: boolean;
+  /**
+   * The source generation the press belongs to, so an event from a document
+   * that has since been replaced is dropped rather than delivered to the
+   * handlers of the one that replaced it.
+   */
+  generation: CodegenTypes.Int32;
 }>;
 
 export interface NativeProps extends ViewProps {

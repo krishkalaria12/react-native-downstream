@@ -194,6 +194,24 @@ describe('resolveControls', () => {
     expect(resolveControls({ code: false }).handlers.codeCopy).toBeUndefined();
   });
 
+  it('treats a null controls value as absent rather than throwing', () => {
+    // A value from JSON or a config file can be null even though the type does
+    // not allow it, and every other accessor here treats that as absent.
+    const nothing = null as unknown as MarkdownControls;
+    expect(() => resolveControls(nothing)).not.toThrow();
+    expect(resolveControls(nothing).flags).toBe(CONTROL_ALL);
+    expect(shouldShowCodeWrap(nothing)).toBe(true);
+  });
+
+  it('treats a null section as absent rather than throwing', () => {
+    const odd = {
+      code: null,
+      table: null,
+    } as unknown as MarkdownControls;
+    expect(resolveControls(odd).flags).toBe(CONTROL_ALL);
+    expect(shouldShowCodeWrap(odd)).toBe(true);
+  });
+
   it('does not read callbacks off an unrelated section', () => {
     const onCopy = vi.fn();
     // A table's copy callback must not be found under code, and the other way

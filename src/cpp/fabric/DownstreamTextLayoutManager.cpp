@@ -14,7 +14,8 @@ constexpr size_t kMeasurementCacheCapacity = 64;
 
 Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
                                           const LayoutConstraints &layoutConstraints, SurfaceId surfaceId,
-                                          uint32_t chrome, uint32_t revision) const {
+                                          uint32_t chrome, bool codeBlockWrap,
+                                          const std::vector<uint32_t> &wrapToggles) const {
   const Float maximumWidth = layoutConstraints.maximumSize.width;
   Size size{0, 0};
   if (document) downstream::SessionTrace::recordDocument(document->id, "measure_start");
@@ -25,7 +26,8 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
       std::lock_guard<std::mutex> lock(cacheMutex_);
       for (const auto &entry : cache_) {
         if (entry.documentId == document->id && entry.fontSizeMultiplier == fontSizeMultiplier &&
-            entry.maximumWidth == maximumWidth && entry.chrome == chrome && entry.revision == revision) {
+            entry.maximumWidth == maximumWidth && entry.chrome == chrome &&
+            entry.codeBlockWrap == codeBlockWrap && entry.wrapToggles == wrapToggles) {
           size = entry.size;
           cached = true;
           break;
@@ -34,12 +36,13 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
     }
 
     if (!cached) {
-      size = measurePlatform(document, fontSizeMultiplier, maximumWidth, surfaceId, chrome);
+      size = measurePlatform(document, fontSizeMultiplier, maximumWidth, surfaceId, chrome, codeBlockWrap,
+                             wrapToggles);
       std::lock_guard<std::mutex> lock(cacheMutex_);
       if (cache_.size() >= kMeasurementCacheCapacity) {
         cache_.erase(cache_.begin());
       }
-      cache_.push_back({document->id, fontSizeMultiplier, maximumWidth, chrome, revision, size});
+      cache_.push_back({document->id, fontSizeMultiplier, maximumWidth, chrome, codeBlockWrap, wrapToggles, size});
     } else {
       downstream::SessionTrace::recordDocument(document->id, "measure_cache_hit");
     }

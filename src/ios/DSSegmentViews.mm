@@ -344,6 +344,9 @@ namespace {
   UIScrollView *_scrollView;
   DSTextSegmentView *_body;
   NSArray<NSString *> *_labels;
+  /// The labels the current buttons and menu items were built from, so a changed
+  /// `translations` prop rebuilds them instead of leaving stale strings up.
+  NSArray<NSString *> *_builtLabels;
   BOOL _wrapped;
   BOOL _copied;
   NSTimer *_copiedTimer;
@@ -500,9 +503,14 @@ namespace {
 }
 
 - (void)buildButtonsIfNeeded {
-  if (_buttons.arrangedSubviews.count > 0) {
+  if (_buttons.arrangedSubviews.count > 0 && [_builtLabels isEqualToArray:_labels]) {
     return;
   }
+  for (UIView *view in [_buttons.arrangedSubviews copy]) {
+    [_buttons removeArrangedSubview:view];
+    [view removeFromSuperview];
+  }
+  _builtLabels = [_labels copy];
   UIButton *wrap = makeControlButton(symbolForWrap(NO), [self label:DSControlLabelWrapCode], @"wrap", @"");
   UIButton *download =
       makeControlButton(kSymbolDownload, [self label:DSControlLabelDownloadFile], @"download", @"text");
@@ -556,7 +564,10 @@ namespace {
 }
 
 - (void)updateCopiedSpokenText {
-  UILabel *spoken = (UILabel *)[_buttons viewWithTag:99];
+  // The live region is a sibling of the buttons, not one of them, so it is
+  // found here; looking in the stack would never match and every copy would
+  // leave another hidden label behind.
+  UILabel *spoken = (UILabel *)[self viewWithTag:99];
   if (spoken != nil) {
     [spoken removeFromSuperview];
   }
@@ -588,6 +599,7 @@ namespace {
     [self markCopied];
   }
   [self.controlDelegate didPressControlOfKind:DSBlockKindCode
+                                   blockIndex:_segment.blockIndex
                                    blockCount:1
                                      language:_segment.language
                                       action:button.action
@@ -875,6 +887,9 @@ namespace {
   UIScrollView *_scrollView;
   DSTableGridView *_grid;
   NSArray<NSString *> *_labels;
+  /// The labels the current buttons and menu items were built from, so a changed
+  /// `translations` prop rebuilds them instead of leaving stale strings up.
+  NSArray<NSString *> *_builtLabels;
   BOOL _needsScrollRestore;
   BOOL _preserveScrollPosition;
   BOOL _forceScrollReset;
@@ -950,38 +965,51 @@ namespace {
   [self updateButtons];
 }
 
+/// The formats a table can be copied or saved in. Copy offers every format the
+/// engine serializes; save offers the two the file dialog names well, and both
+/// platforms offer exactly these, so a reader sees one menu on either.
+- (NSArray<NSArray<NSString *> *> *)menuEntriesForAction:(NSString *)action {
+  if ([action isEqualToString:@"copy"]) {
+    return @[
+      @[ [self label:DSControlLabelTableFormatMarkdown], @"markdown" ],
+      @[ [self label:DSControlLabelTableFormatCsv], @"csv" ],
+      @[ [self label:DSControlLabelTableFormatTsv], @"tsv" ],
+    ];
+  }
+  return @[
+    @[ [self label:DSControlLabelTableFormatCsv], @"csv" ],
+    @[ [self label:DSControlLabelTableFormatMarkdown], @"markdown" ],
+  ];
+}
+
 /// A menu button: a glyph that opens a native menu of the formats it can
 /// produce. Built once, because a table's controls do not change shape.
 - (UIButton *)menuButtonWithSymbol:(NSString *)symbol label:(NSString *)label action:(NSString *)action {
   UIButton *button = makeControlButton(symbol, label, action, @"");
-  button.menu = [UIMenu menuWithTitle:@"" children:@[
-    [UIAction actionWithTitle:[self label:DSControlLabelTableFormatMarkdown]
-                       image:nil
-                  identifier:nil
-                     handler:^(__kindof UIAction *_Nonnull inner) {
-                       [self pressFormat:@"markdown" action:action];
-                     }],
-    [UIAction actionWithTitle:[self label:DSControlLabelTableFormatCsv]
-                       image:nil
-                  identifier:nil
-                     handler:^(__kindof UIAction *_Nonnull inner) {
-                       [self pressFormat:@"csv" action:action];
-                     }],
-    [UIAction actionWithTitle:[self label:DSControlLabelTableFormatTsv]
-                       image:nil
-                  identifier:nil
-                     handler:^(__kindof UIAction *_Nonnull inner) {
-                       [self pressFormat:@"tsv" action:action];
-                     }],
-  ]];
+  NSMutableArray<UIMenuElement *> *children = [NSMutableArray array];
+  for (NSArray<NSString *> *entry in [self menuEntriesForAction:action]) {
+    NSString *format = entry[1];
+    [children addObject:[UIAction actionWithTitle:entry[0]
+                                           image:nil
+                                      identifier:nil
+                                         handler:^(__kindof UIAction *_Nonnull inner) {
+                                           [self pressFormat:format action:action];
+                                         }]];
+  }
+  button.menu = [UIMenu menuWithTitle:@"" children:children];
   button.showsMenuAsPrimaryAction = YES;
   return button;
 }
 
 - (void)buildButtonsIfNeeded {
-  if (_buttons.arrangedSubviews.count > 0) {
+  if (_buttons.arrangedSubviews.count > 0 && [_builtLabels isEqualToArray:_labels]) {
     return;
   }
+  for (UIView *view in [_buttons.arrangedSubviews copy]) {
+    [_buttons removeArrangedSubview:view];
+    [view removeFromSuperview];
+  }
+  _builtLabels = [_labels copy];
   UIButton *copy = [self menuButtonWithSymbol:kSymbolCopy
                                         label:[self label:DSControlLabelCopyTable]
                                        action:@"copy"];
@@ -1018,14 +1046,16 @@ namespace {
   }
   if ([action isEqualToString:@"copy"]) {
     [self.controlDelegate didPressControlOfKind:DSBlockKindTableRow
-                                     blockCount:_segment.blockCount
-                                       language:@""
-                                        action:@"copy"
-                                        format:format
-                                      filename:@""];
+                                   blockIndex:_segment.blockIndex
+                                   blockCount:_segment.blockCount
+                                     language:@""
+                                      action:@"copy"
+                                      format:format
+                                    filename:@""];
     return;
   }
   [self.controlDelegate didPressControlOfKind:DSBlockKindTableRow
+                                   blockIndex:_segment.blockIndex
                                    blockCount:_segment.blockCount
                                      language:@""
                                       action:@"download"
@@ -1160,6 +1190,10 @@ namespace {
   /// A code block's ordinals, so a wrap choice can be applied by ordinal
   /// rather than by segment index, which moves as blocks stream in.
   NSMutableArray<NSNumber *> *_codeOrdinals;
+  /// `_codeWrapToggles` sorted, which is the form `downstream::codeWraps` takes.
+  /// Both the card views and the frame stack read this one copy, so a block's
+  /// drawn layout and its measured height are the same decision.
+  std::vector<uint32_t> _wrapToggleOrdinals;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -1203,11 +1237,10 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
     code.controls = _controls;
     code.controlsEnabled = [self isSegmentSettledAtIndex:index];
     if (_codeOrdinals.count > index) {
-      NSNumber *ordinal = _codeOrdinals[index];
-      // A block wraps when it differs from the prop's layout, which is what a
-      // toggle means.
-      const BOOL toggled = [_codeWrapToggles containsObject:ordinal];
-      code.wrapped = toggled != _codeBlockWrap;
+      // The same helper the measurement used, so the frame this card is given
+      // and the layout it draws inside it are one decision.
+      code.wrapped = downstream::codeWraps(_codeBlockWrap, _wrapToggleOrdinals,
+                                           _codeOrdinals[index].unsignedIntValue);
     }
     return;
   }
@@ -1317,6 +1350,12 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
 
 - (void)setCodeWrapToggles:(NSSet<NSNumber *> *)codeWrapToggles {
   _codeWrapToggles = [codeWrapToggles copy];
+  _wrapToggleOrdinals.clear();
+  _wrapToggleOrdinals.reserve(codeWrapToggles.count);
+  for (NSNumber *ordinal in codeWrapToggles) {
+    _wrapToggleOrdinals.push_back(ordinal.unsignedIntValue);
+  }
+  std::sort(_wrapToggleOrdinals.begin(), _wrapToggleOrdinals.end());
   [self reapplyState];
 }
 
@@ -1365,7 +1404,13 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
   if (_rendered == nil) {
     return;
   }
-  NSArray<NSValue *> *frames = [_rendered segmentFramesForWidth:self.bounds.size.width chrome:_chrome];
+  // The frames are measured under the same wrap choices the code cards are
+  // drawn with, so a block's frame and its drawn layout are one decision. The
+  // set is the reader's own, and `codeWraps` is what the card views call too.
+  NSArray<NSValue *> *frames = [_rendered segmentFramesForWidth:self.bounds.size.width
+                                                          chrome:_chrome
+                                                   codeBlockWrap:_codeBlockWrap
+                                                     wrapToggles:_wrapToggleOrdinals];
   for (NSUInteger index = 0; index < _segmentViews.count && index < frames.count; index++) {
     _segmentViews[index].frame = frames[index].CGRectValue;
   }

@@ -133,6 +133,12 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   private var chrome = 0
   private var codeBlockWrap = false
   private var codeWrapToggles = emptySet<Int>()
+  /**
+   * `codeWrapToggles` in the ascending form `RenderedDocument.codeWraps` and the
+   * measurement both read, so the frame a card is given and the layout it draws
+   * inside it are one decision.
+   */
+  private var wrapToggleOrdinals = IntArray(0)
   private var csvSeparator = ","
   private var codeFilename = "file"
   private var tableFilename = "table"
@@ -251,7 +257,9 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   fun setCodeWrapToggles(toggles: Set<Int>) {
     codeWrapToggles = toggles
+    wrapToggleOrdinals = toggles.sorted().toIntArray()
     applySettledState()
+    setNeedsLayout()
   }
 
   /**
@@ -262,23 +270,24 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    */
   private fun applySettledState() {
     val plan = DownstreamNative.readSegmentPlan(documentId) ?: return
-    val ordinals = mutableListOf<Int>()
-    plan.forEach { planned ->
-      if (planned.isCode) ordinals.add(ordinals.size) else ordinals.add(-1)
-    }
     for (index in 0 until minOf(childCount, plan.size)) {
       val planned = plan[index]
       val settled = planned.from + 1 <= planned.settledBlocks
       when (val child = getChildAt(index)) {
         is TextSegmentView -> child.setSelectable(selectable && settled)
         is CodeSegmentView -> {
-          val ordinal = if (index < ordinals.size) ordinals[index] else 0
-          if (ordinal >= 0) child.ordinal = ordinal
+          // The same helper the measurement used, so the frame this card is
+          // given and the layout it draws inside it are one decision.
+          val ordinal = child.ordinal
           child.setControls(controls)
           child.setControlsEnabled(settled)
-          // A block wraps when its layout differs from the prop, which is what
-          // a toggle means.
-          child.setWrapped(if (ordinal >= 0) codeWrapToggles.contains(ordinal) != codeBlockWrap else codeBlockWrap)
+          child.setWrapped(
+            if (ordinal >= 0) {
+              RenderedDocument.codeWraps(codeBlockWrap, wrapToggleOrdinals, ordinal)
+            } else {
+              codeBlockWrap
+            },
+          )
           child.setHeaderVisible(chrome and RenderedDocument.CHROME_CODE_HEADER != 0)
         }
         is TableSegmentView -> {
@@ -462,19 +471,22 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       array.pushInt(value)
     }
     map.putArray("wrapToggles", array)
-    map.putDouble("wrapRevision", (wrapRevision + 1).toDouble())
-    wrapRevision++
+    // The prop's own setting travels beside the set, because together they
+    // decide each block's layout and neither half can be inferred from chrome.
+    map.putDouble("codeBlockWrap", if (codeBlockWrap) 1.0 else 0.0)
     codeWrapToggles = toggles
-    setChrome(map.getDouble("chrome").toInt())
+    wrapToggleOrdinals = toggles.sorted().toIntArray()
+    setChrome(chromeForToggles(toggles))
+    setNeedsLayout()
     wrapper.updateState(map)
   }
 
-  private var wrapRevision = 0
-
   /**
    * The chrome for a set of toggles, with the same rule the shadow node uses:
-   * a header and a toolbar are bits, and wrapping stops being one as soon as
-   * the reader has made any block differ from the prop.
+   * a header and a toolbar are bits, and the wrap bit says every code block
+   * wraps, which stops being true as soon as the reader has made one block
+   * differ from the prop. A mixed document's per-block layout comes from
+   * `codeWraps`, not from a bit.
    */
   private fun chromeForToggles(toggles: Set<Int>): Int {
     var chrome = 0
@@ -548,7 +560,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     if (width <= 0) {
       return
     }
-    val frames = document.frames(width, chrome)
+    val frames = document.frames(width, chrome, codeBlockWrap, wrapToggleOrdinals)
     for (index in 0 until minOf(childCount, frames.size / 2)) {
       val child = getChildAt(index)
       val top = paddingTop + frames[index * 2]
@@ -886,8 +898,12 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   private var restoreScroll = false
   private var controlHost: ControlHost? = null
 
-  /** The block's ordinal among the document's code blocks, which a toggle is keyed by. */
-  var ordinal: Int = 0
+  /**
+   * The block's ordinal among the document's code blocks, which a toggle is
+   * keyed by. It comes from the segment rather than from a count the view walks,
+   * so it is the same number the measurement used.
+   */
+  var ordinal: Int = -1
 
   private val copyButton = controlButton(R.drawable.ds_ic_copy, LABEL_COPY_CODE)
   private val downloadButton = controlButton(R.drawable.ds_ic_download, LABEL_DOWNLOAD_FILE)
@@ -961,6 +977,7 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     val same = this.segment != null && this.segment?.firstLine == segment.firstLine
     savedOffset = if (same) scroll.scrollX else 0
     restoreScroll = true
+    ordinal = segment.codeOrdinal
     this.segment = segment
     this.rendered = rendered
     cardBackground.setColor(segment.colors.codeBackground)

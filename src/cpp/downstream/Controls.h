@@ -2,6 +2,7 @@
 
 #include "RenderPreparer.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -29,6 +30,20 @@ constexpr bool hasTableControls(uint32_t controls) {
   return (controls & (ControlBits::TableCopy | ControlBits::TableDownload)) != 0;
 }
 
+/// The layout of the code block at `ordinal`: laid out at the card's width, so
+/// long lines wrap, or laid out at its own length, so they scroll sideways.
+///
+/// `wrapToggles` holds the ordinals whose layout differs from `codeBlockWrap`,
+/// so the choice is one comparison rather than a per-block rule. This is the
+/// single definition of the decision: the shadow node that measures, the worker
+/// that prepares, and the view that draws all call it, which is what keeps a
+/// block's measured height and its drawn height the same number.
+inline bool codeWraps(bool codeBlockWrap, const std::vector<uint32_t> &wrapToggles, uint32_t ordinal) {
+  const bool toggled =
+      std::binary_search(wrapToggles.begin(), wrapToggles.end(), ordinal);
+  return toggled != codeBlockWrap;
+}
+
 /**
  * The chrome a document lays out with, from the `controls` prop, the
  * `codeBlockWrap` prop, and the reader's own wrap choices.
@@ -36,10 +51,11 @@ constexpr bool hasTableControls(uint32_t controls) {
  * A free function rather than a member so the shadow node that measures, the
  * view that lays out, and the worker that prepares cannot disagree about a
  * height. A header and a toolbar are fixed rows, so they are bits. Wrapping is
- * not: a document where the reader has toggled any block has code at two
- * different heights, so the wrap bit becomes "no code in this document scrolls
- * sideways", and a document with both wrapped and unwrapped code is measured
- * again whenever the set changes.
+ * not a bit: a document where the reader has toggled any block has code at two
+ * different heights, and no single bit says which. `kChromeCodeWrap` therefore
+ * means "every code block in this document wraps", and it is a *cache key*, not
+ * the layout itself; `codeWraps` above decides any one block, and it needs
+ * `codeBlockWrap` and the toggle set, which is why those two travel beside it.
  */
 inline uint32_t chromeForProps(uint32_t controls, bool codeBlockWrap, const std::vector<uint32_t> &wrapToggles) {
   uint32_t chrome = kChromeNone;

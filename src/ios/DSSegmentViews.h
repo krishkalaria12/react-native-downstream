@@ -10,34 +10,13 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)didPressLinkAtIndex:(NSInteger)linkIndex;
 @end
 
-/// Something a control button did, for the view to report to JavaScript.
-@protocol DSControlDelegate <NSObject>
-/// A copy or a download of a code block or a table. `format` and `filename` are
-/// empty when the action did not produce one.
-- (void)didPressControlOfKind:(NSInteger)blockIndex
-                      blockCount:(uint32_t)blockCount
-                        language:(NSString *)language
-                         action:(NSString *)action
-                         format:(NSString *)format
-                       filename:(NSString *)filename;
-/// A per-block wrap toggle. `ordinal` is the block's ordinal among the
-/// document's code blocks, which is what the choice is keyed by.
-- (void)didToggleWrapAtOrdinal:(uint32_t)ordinal language:(NSString *)language wrapped:(BOOL)wrapped;
-/// A copy, a download, or a save that failed.
-- (void)didFailControlOfKind:(NSInteger)blockIndex action:(NSString *)action message:(NSString *)message;
-@end
-
-/// Block kinds, matching `BlockKind` in the engine. A control reads a range of
-/// the document, so it names the kind it is acting on.
+/// Block kinds a control can act on, matching `BlockKind` in the engine. A
+/// control reads a *range* of the document, so the kind says which block type
+/// the range holds and the index says where that range starts; the two are
+/// separate values and neither stands in for the other.
 typedef NS_ENUM(NSInteger, DSBlockKind) {
   DSBlockKindCode = 2,
   DSBlockKindTableRow = 5,
-};
-
-typedef NS_ENUM(NSInteger, DSControlAction) {
-  DSControlActionCopy = 0,
-  DSControlActionDownload = 1,
-  DSControlActionWrap = 2,
 };
 
 /// Formats a control can produce, matching `ExportFormat` in the engine.
@@ -48,6 +27,24 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
   DSExportFormatMarkdown = 3,
   DSExportFormatHtml = 4,
 };
+
+/// Something a control button did, for the view to report to JavaScript.
+@protocol DSControlDelegate <NSObject>
+/// A copy or a download of a code block or a table. `format` and `filename` are
+/// empty when the action did not produce one.
+- (void)didPressControlOfKind:(DSBlockKind)kind
+                   blockIndex:(NSInteger)blockIndex
+                   blockCount:(uint32_t)blockCount
+                     language:(NSString *)language
+                      action:(NSString *)action
+                      format:(NSString *)format
+                    filename:(NSString *)filename;
+/// A per-block wrap toggle. `ordinal` is the block's ordinal among the
+/// document's code blocks, which is what the choice is keyed by.
+- (void)didToggleWrapAtOrdinal:(uint32_t)ordinal language:(NSString *)language wrapped:(BOOL)wrapped;
+/// A copy, a download, or a save that failed.
+- (void)didFailControlOfKind:(DSBlockKind)kind action:(NSString *)action message:(NSString *)message;
+@end
 
 @protocol DSSegmentView <NSObject>
 /// Link index at a point in the view's coordinates, or -1.

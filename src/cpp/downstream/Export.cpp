@@ -98,10 +98,19 @@ void exportDelimited(const Document &document, size_t from, size_t to, std::u16s
 /// the reader sees. Backslash leads because it is the escape character itself.
 constexpr std::u16string_view kMarkdownEscapes = u"\\|*_~`[]<>&";
 
+/// Escapes Markdown syntax, and a line break with it. A line break inside a
+/// table cell would end the row when the export is read back, so it is written
+/// as the `<br>` a Markdown reader renders as one. No GFM table cell can hold
+/// one today, so this is the rule that keeps the export readable if one ever
+/// can, and it costs a comparison per character.
 void appendMarkdownPlain(std::u16string &out, std::u16string_view text) {
   for (const char16_t unit : text) {
     if (kMarkdownEscapes.find(unit) != std::u16string_view::npos) {
       out.push_back(u'\\');
+    }
+    if (unit == u'\n') {
+      out.append(u"<br>");
+      continue;
     }
     out.push_back(unit);
   }
@@ -141,7 +150,8 @@ void appendMarkdownCode(std::u16string &out, std::u16string_view text) {
 
 /// The runs of a cell that overlap it, so the visible text can be written back
 /// with its styles. Runs are sorted and never overlap, and a cell's own range
-/// clamps them.
+/// clamps them to the block's text, so a piece can never address a byte the
+/// block does not have.
 struct CellRun {
   uint32_t start;
   uint32_t end;
@@ -150,10 +160,13 @@ struct CellRun {
 };
 
 std::vector<CellRun> cellRuns(const Block &block, const TableCell &cell) {
+  const auto length = static_cast<uint32_t>(block.text.size());
+  const uint32_t cellStart = std::min<uint32_t>(cell.start, length);
+  const uint32_t cellEnd = std::min<uint32_t>(std::max(cell.start, cell.end), length);
   std::vector<CellRun> runs;
   for (const InlineRun &run : block.runs) {
-    const uint32_t start = std::max(run.start, cell.start);
-    const uint32_t end = std::min(run.end, cell.end);
+    const uint32_t start = std::max(run.start, cellStart);
+    const uint32_t end = std::min(run.end, cellEnd);
     if (start < end) {
       runs.push_back({start, end, run.styles, run.link});
     }
@@ -171,8 +184,9 @@ struct Piece {
 
 std::vector<Piece> pieces(const Block &block, const TableCell &cell) {
   std::vector<Piece> out;
-  const uint32_t start = std::min<uint32_t>(cell.start, block.text.size());
-  const uint32_t end = std::min<uint32_t>(std::max(cell.start, cell.end), block.text.size());
+  const auto length = static_cast<uint32_t>(block.text.size());
+  const uint32_t start = std::min<uint32_t>(cell.start, length);
+  const uint32_t end = std::min<uint32_t>(std::max(cell.start, cell.end), length);
   uint32_t cursor = start;
   for (const CellRun &run : cellRuns(block, cell)) {
     if (run.start > cursor) {

@@ -6,6 +6,7 @@
 
 #include "CodeBlocks.h"
 #include "CodeHighlighter.h"
+#include "Controls.h"
 #include "Export.h"
 #include "MarkdownParser.h"
 #include "SegmentPlan.h"
@@ -109,6 +110,46 @@ void testSegmentPlan() {
   checkPlan("a rule is not a code segment", "a\n\n---\n\nb\n", "t0-3");
   checkPlan("a table and a code block in one document", "| x |\n| - |\n| 1 |\n\n```js\nx\n```\n", "T0-2 C2-3");
   checkPlan("an empty document has no segments", "", "");
+}
+
+// ------------------------------------------------------------- wrap choices
+
+/// A block's layout is one membership test against the toggled set, and both
+/// platforms resolve it through this one rule. The cases below are the whole
+/// table, so a platform's mirror of it can be checked against them.
+void testWrapChoices() {
+  const std::vector<uint32_t> none;
+  const std::vector<uint32_t> third{2};
+
+  // Nothing toggled: every block follows the prop.
+  CHECK(codeWraps(false, none, 0) == false, "an untoggled block does not wrap when the prop is off");
+  CHECK(codeWraps(true, none, 0) == true, "an untoggled block wraps when the prop is on");
+
+  // One block toggled: it is the only one that differs from the prop, and the
+  // rest still follow it. This is the case a single chrome bit cannot express.
+  CHECK(codeWraps(false, third, 2) == true, "a toggled block wraps when the prop is off");
+  CHECK(codeWraps(true, third, 2) == false, "a toggled block stops wrapping when the prop is on");
+  CHECK(codeWraps(false, third, 0) == false, "an untoggled neighbour still follows the prop being off");
+  CHECK(codeWraps(true, third, 0) == true, "an untoggled neighbour still follows the prop being on");
+  CHECK(codeWraps(false, third, 1) == false, "a neighbour before the toggle is unaffected");
+  CHECK(codeWraps(false, third, 3) == false, "a neighbour after the toggle is unaffected");
+
+  // The chrome bit says only whether every block wraps, and the toggle set is
+  // what fills in a mixed document.
+  CHECK((chromeForProps(ControlBits::CodeWrap, true, none) & kChromeCodeWrap) != 0,
+        "no toggles with the prop on is all-wrapping chrome");
+  CHECK((chromeForProps(ControlBits::CodeWrap, true, third) & kChromeCodeWrap) == 0,
+        "any toggle clears the all-wrapping bit");
+  CHECK((chromeForProps(ControlBits::CodeWrap, false, third) & kChromeCodeWrap) == 0,
+        "the prop off is never all-wrapping chrome");
+
+  // The header and the toolbar do not depend on any of this.
+  CHECK((chromeForProps(ControlBits::CodeCopy, false, third) & kChromeCodeHeader) != 0,
+        "a copy control still gives a code block its header");
+  CHECK((chromeForProps(ControlBits::TableDownload, false, none) & kChromeTableToolbar) != 0,
+        "a table download still gives a table its toolbar");
+  CHECK((chromeForProps(0, false, none) & (kChromeCodeHeader | kChromeTableToolbar)) == 0,
+        "no controls means no chrome at all");
 }
 
 // ------------------------------------------------------------- code export
@@ -283,6 +324,12 @@ void testNames() {
   const std::string wenyan = "\xe6\x96\x87\xe8\xa8\x80";
   checkName("a non-ASCII language keeps its own extension", "file.wy", wenyan, wenyan);
   checkName("an unknown language with a configured base", "snippet.txt", "", "", "snippet");
+  // A fence is written by hand, so a capitalised language is ordinary. The
+  // lookup folds ASCII case so it still names the file the writer meant.
+  checkName("a capitalised language still names the right file", "file.ts", "TS", "TS");
+  checkName("a mixed-case language still names the right file", "file.py", "PyThOn", "PyThOn");
+  checkName("a capitalised language keeps a fence title", "app.ts", "TS title=\"app.ts\"", "TS");
+  checkName("a language that is only case still resolves", "file.js", "Js", "Js");
 
   const std::string longName(200, 'a');
   CHECK(downloadName("ts", "ts", longName, "file").size() == 96 + 3, "a long name is capped");
@@ -298,6 +345,7 @@ void testNames() {
 
 int main() {
   testSegmentPlan();
+  testWrapChoices();
   testCodeExport();
   testDelimited();
   testMarkdown();

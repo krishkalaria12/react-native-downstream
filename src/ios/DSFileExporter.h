@@ -10,8 +10,10 @@ NS_ASSUME_NONNULL_BEGIN
 ///
 /// A save dialog needs no permission, no manifest entry, and no FileProvider,
 /// and it is the one path a reader expects to mean "put this somewhere I can
-/// find it". The temporary file is removed in both delegate callbacks and when
-/// the exporter goes away, whichever happens first.
+/// find it". Each export gets its own temporary directory, so two downloads in
+/// flight cannot overwrite one another's file, and each is removed in the
+/// delegate callback for that export or when the exporter goes away, whichever
+/// happens first.
 @interface DSFileExporter : NSObject <UIDocumentPickerDelegate>
 
 - (instancetype)init;

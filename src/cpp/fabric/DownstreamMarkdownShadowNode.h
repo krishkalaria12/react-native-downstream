@@ -82,9 +82,6 @@ private:
   /// prepared; the next revision collects the result.
   mutable bool awaitingPrepared_{false};
   mutable std::optional<PendingError> pendingError_;
-  /// The reader's wrap choices, in the family rather than in a revision, so
-  /// they outlive the node that first recorded them.
-  std::shared_ptr<const DownstreamMarkdownState> sharedState_;
 };
 
 } // namespace facebook::react

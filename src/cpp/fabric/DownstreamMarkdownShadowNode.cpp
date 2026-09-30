@@ -34,9 +34,9 @@ DownstreamMarkdownShadowNode::DownstreamMarkdownShadowNode(const ShadowNode &sou
   const auto &previous = source.getConcreteProps();
   const auto &props = getConcreteProps();
   layoutManager_ = source.layoutManager_;
-  // The reader's wrap choices belong to the family, not to one revision of the
-  // node, so a state update that clones the node keeps them.
-  sharedState_ = source.sharedState_;
+  // The reader's wrap choices are not held here: they live in the state, which
+  // Fabric passes to every clone of this node, so a state update that clones
+  // the node keeps them without a second copy that could fall out of step.
 
   // Keep the last valid document either way: it is reused when the source is
   // unchanged, and retained as the fallback when a new source fails to parse.
@@ -149,16 +149,21 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
   const auto &props = getConcreteProps();
   const auto &state = getStateData();
   const uint32_t chrome = chromeFor(state);
+  // The layout is the prop's default plus the reader's own choices, so a hint
+  // carries both. Measuring reads the prop rather than the state's copy of it,
+  // because a `codeBlockWrap` change lands in props a revision before the state
+  // that records it does.
   const downstream::LayoutHint hint{static_cast<float>(layoutContext.fontSizeMultiplier),
                                     static_cast<float>(layoutConstraints.maximumSize.width),
                                     chrome,
-                                    state.wrapRevision};
+                                    state.wrapToggles,
+                                    props.codeBlockWrap};
   downstream::RenderPreparer::noteLayout(hint);
   if (!props.sessionId.empty()) {
     downstream::SessionRegistry::noteLayout(props.sessionId, hint);
   }
   return layoutManager_->measure(getDocument(), layoutContext.fontSizeMultiplier, layoutConstraints,
-                                 getSurfaceId(), chrome, state.wrapRevision);
+                                 getSurfaceId(), chrome, props.codeBlockWrap, state.wrapToggles);
 }
 
 void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
@@ -169,17 +174,16 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   if (awaitingPrepared_) {
     relayoutWhenPrepared();
   }
+  const auto &props = getConcreteProps();
   const auto &state = getStateData();
   const uint32_t chrome = chromeFor(state);
   if (state.document != document || state.fontSizeMultiplier != layoutContext.fontSizeMultiplier ||
-      state.chrome != chrome) {
+      state.chrome != chrome || state.codeBlockWrap != props.codeBlockWrap) {
     DownstreamMarkdownState next{state};
     next.document = document;
     next.fontSizeMultiplier = layoutContext.fontSizeMultiplier;
     next.chrome = chrome;
-    // The family keeps the choices, so a later revision of this node still
-    // knows which blocks the reader unwrapped.
-    sharedState_ = std::make_shared<const DownstreamMarkdownState>(next);
+    next.codeBlockWrap = props.codeBlockWrap;
     setStateData(std::move(next));
   }
 
@@ -190,6 +194,10 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
         .generation = getConcreteProps().generation,
         .sequence = 0,
         .recoverable = true,
+        // A parse or layout failure names no control, so JavaScript routes it
+        // to the view's own onError.
+        .block = std::string(),
+        .action = std::string(),
     });
     pendingError_.reset();
   }

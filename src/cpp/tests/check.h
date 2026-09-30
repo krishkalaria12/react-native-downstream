@@ -5,9 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Reports the first failed check with its case label and file, then exits.
-   A bare std::abort() says nothing about which case broke; a broken engine
-   test should name itself. */
+/* Reports every failed check with its case label and file, then returns a
+   non-zero result from main. A bare abort() says nothing about which case broke;
+   a broken engine test should name itself. Reporting all of them rather than
+   only the first is what makes one run enough to see a whole class of break. */
 static int ds_check_failures = 0;
 
 #define CHECK(condition, label)                                        \

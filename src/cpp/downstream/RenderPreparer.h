@@ -16,7 +16,9 @@ enum Chrome : uint32_t {
   kChromeCodeHeader = 1u << 0,
   /// A toolbar row above each table.
   kChromeTableToolbar = 1u << 1,
-  /// Code laid out at the card's width, so long lines wrap.
+  /// Every code block in the document is laid out at the card's width, so its
+  /// long lines wrap. This says nothing about a document that has a mix, which
+  /// `Controls.h`'s `codeWraps` decides one block at a time.
   kChromeCodeWrap = 1u << 2,
 };
 
@@ -27,14 +29,33 @@ struct LayoutHint {
   /// See `Chrome`. Height depends on it, so two layouts that differ only here
   /// are two layouts.
   uint32_t chrome{kChromeNone};
-  /// A revision of the reader's wrap choices. The choices themselves are not in
-  /// the key: a revision moves whenever they do, which keeps the key a small
-  /// integer that a cached measurement compares in one instruction.
-  uint32_t revision{0};
+  /// The code blocks whose layout differs from the `codeBlockWrap` prop, by
+  /// ordinal and sorted. This is the reader's own state, not a revision of it:
+  /// a revision would separate two states that lay out identically (a block
+  /// toggled on and back off), and the hint has to be enough on its own for the
+  /// worker to measure the same heights the view draws. Almost always empty, so
+  /// the comparison below is one size check in practice.
+  std::vector<uint32_t> wrapToggles;
+  /// The `codeBlockWrap` prop. It travels beside the toggles because together
+  /// they decide each block's layout: neither half can be inferred from
+  /// `chrome`, which only says whether every block wraps.
+  bool codeBlockWrap{false};
+
+  // Constructors rather than aggregate initialisation, so a caller that names
+  // only a width and a scale says so instead of leaving a vector and a flag to
+  // default, and a caller that names all five cannot leave one out by accident.
+  LayoutHint() = default;
+  LayoutHint(float scale, float at) : fontScale(scale), width(at) {}
+  LayoutHint(float scale, float at, uint32_t chromeIn, std::vector<uint32_t> toggles, bool wrap)
+      : fontScale(scale),
+        width(at),
+        chrome(chromeIn),
+        wrapToggles(std::move(toggles)),
+        codeBlockWrap(wrap) {}
 
   bool operator==(const LayoutHint &other) const {
     return fontScale == other.fontScale && width == other.width && chrome == other.chrome &&
-        revision == other.revision;
+        codeBlockWrap == other.codeBlockWrap && wrapToggles == other.wrapToggles;
   }
 };
 

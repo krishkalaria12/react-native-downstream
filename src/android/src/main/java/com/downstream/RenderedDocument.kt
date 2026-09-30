@@ -290,10 +290,11 @@ internal class CodeSegment(
   val blockIndex: Int,
   /**
    * The block's ordinal among the document's code blocks, which is what a
-   * reader's wrap choice is keyed by. The plan lists one code segment per code
-   * block, so the view counts them as it walks the segments.
+   * reader's wrap choice is keyed by. It is assigned where the rendering is
+   * built rather than by the view, because a measurement needs it and a
+   * measurement can run before any view has walked the segments.
    */
-  var codeOrdinal: Int = 0,
+  val codeOrdinal: Int,
   val containers: List<ContainerDecoration>,
   val contentLeading: Int,
   /** The block's first line, which identifies it while a fence is still growing. */
@@ -400,16 +401,32 @@ internal class RenderedDocument(
 ) {
   private var cachedWidth = -1
   private var cachedChrome = -1
+  private var cachedCodeBlockWrap = false
+  private var cachedWrapToggles = IntArray(0)
   private var cachedFrames = IntArray(0)
 
   fun createTextLayout(segment: TextSegment, width: Int): StaticLayout =
     buildLayout(segment.text, paint, width.coerceAtLeast(1), Layout.Alignment.ALIGN_NORMAL)
 
-  /** The height of one segment at a view width, including its control row. */
-  private fun heightOf(segment: Segment, width: Int, chrome: Int): Int = when (segment) {
+  /**
+   * The height of one segment at a view width, including its control row.
+   *
+   * A code block's own layout comes from the reader's wrap choices rather than
+   * from `chrome`, because a document can hold wrapped and unwrapped code at
+   * once and `chrome` says only whether every block wraps. The decision is the
+   * one in `Controls.h`, mirrored by [codeWraps] here, so a block's measured
+   * height and its drawn height cannot disagree.
+   */
+  private fun heightOf(
+    segment: Segment,
+    width: Int,
+    chrome: Int,
+    codeBlockWrap: Boolean,
+    wrapToggles: IntArray,
+  ): Int = when (segment) {
     is TextSegment -> segment.height(width, paint)
     is CodeSegment ->
-      2 * segment.padding + segment.bodyHeight(paint, width, chrome and CHROME_CODE_WRAP != 0) +
+      2 * segment.padding + segment.bodyHeight(paint, width, codeWraps(codeBlockWrap, wrapToggles, segment.codeOrdinal)) +
         (if (chrome and CHROME_CODE_HEADER != 0) style.chromeRowHeight else 0)
     is TableSegment ->
       segment.tableHeight + (if (chrome and CHROME_TABLE_TOOLBAR != 0) style.chromeRowHeight else 0)
@@ -418,12 +435,20 @@ internal class RenderedDocument(
   /**
    * Top and height of each segment at a width, as [top0, height0, top1, ...].
    *
-   * `chrome` is part of the key rather than the rendering, so a change to it
-   * restacks frames without rebuilding any spans.
+   * `chrome` and the reader's wrap choices are part of the key rather than the
+   * rendering, so a change to either restacks frames without rebuilding any
+   * spans. A measurement only holds for the choices it was made under.
    */
   @Synchronized
-  fun frames(width: Int, chrome: Int = 0): IntArray {
-    if (width == cachedWidth && chrome == cachedChrome) {
+  fun frames(
+    width: Int,
+    chrome: Int = 0,
+    codeBlockWrap: Boolean = false,
+    wrapToggles: IntArray = IntArray(0),
+  ): IntArray {
+    if (width == cachedWidth && chrome == cachedChrome && codeBlockWrap == cachedCodeBlockWrap &&
+      wrapToggles.contentEquals(cachedWrapToggles)
+    ) {
       return cachedFrames
     }
     val frames = IntArray(segments.size * 2)
@@ -431,17 +456,24 @@ internal class RenderedDocument(
     segments.forEachIndexed { index, segment ->
       y += segment.gapBefore
       frames[index * 2] = y
-      frames[index * 2 + 1] = heightOf(segment, width, chrome)
+      frames[index * 2 + 1] = heightOf(segment, width, chrome, codeBlockWrap, wrapToggles)
       y += frames[index * 2 + 1]
     }
     cachedWidth = width
     cachedChrome = chrome
+    cachedCodeBlockWrap = codeBlockWrap
+    cachedWrapToggles = wrapToggles
     cachedFrames = frames
     return frames
   }
 
-  fun height(width: Int, chrome: Int = 0): Int {
-    val frames = frames(width, chrome)
+  fun height(
+    width: Int,
+    chrome: Int = 0,
+    codeBlockWrap: Boolean = false,
+    wrapToggles: IntArray = IntArray(0),
+  ): Int {
+    val frames = frames(width, chrome, codeBlockWrap, wrapToggles)
     return if (frames.isEmpty()) 0 else frames[frames.size - 2] + frames[frames.size - 1]
   }
 
@@ -449,14 +481,18 @@ internal class RenderedDocument(
    * Width for an unconstrained measure: the widest thing that does not fit a
    * view, which is a table's columns or a code line that scrolls sideways.
    */
-  fun desiredWidth(chrome: Int = 0): Int {
+  fun desiredWidth(chrome: Int = 0, codeBlockWrap: Boolean = false, wrapToggles: IntArray = IntArray(0)): Int {
     var width = 0f
     for (segment in segments) {
       val candidate = when (segment) {
         is TextSegment -> Layout.getDesiredWidth(segment.text, paint)
         is CodeSegment -> (
           segment.contentLeading + 2 * segment.padding +
-            segment.bodyWidth(paint, UNCONSTRAINED_WIDTH, chrome and CHROME_CODE_WRAP != 0)
+            segment.bodyWidth(
+              paint,
+              UNCONSTRAINED_WIDTH,
+              codeWraps(codeBlockWrap, wrapToggles, segment.codeOrdinal),
+            )
           ).toFloat()
         is TableSegment -> (segment.contentLeading + segment.tableWidth).toFloat()
       }
@@ -493,6 +529,20 @@ internal class RenderedDocument(
     // Worker threads prepare every document in a commit before Fabric
     // measures them, so this holds at least a screenful of messages.
     private val cache = LruCache<String, RenderedDocument>(128)
+
+    /**
+     * The layout of the code block at [ordinal]: laid out at the card's width,
+     * so long lines wrap, or at its own length, so they scroll sideways.
+     *
+     * [wrapToggles] holds the ordinals whose layout differs from
+     * [codeBlockWrap] in ascending order, so the choice is one membership test.
+     * This mirrors `downstream::codeWraps` in `Controls.h` exactly, and
+     * `testWrapChoices` in `src/cpp/tests/test_export.cpp` is the table of cases
+     * both sides have to agree on.
+     */
+    @JvmStatic
+    fun codeWraps(codeBlockWrap: Boolean, wrapToggles: IntArray, ordinal: Int): Boolean =
+      (wrapToggles.binarySearch(ordinal) >= 0) != codeBlockWrap
 
     /**
      * Committed segments by first block identity, block count, font scale,
@@ -549,13 +599,22 @@ internal class RenderedDocument(
       val plan = DownstreamNative.readSegmentPlan(documentId) ?: return null
       val style = Style(fontScale, Palette(night))
       val segments = ArrayList<Segment>(plan.size)
+      // Each code segment's ordinal is a property of the plan, so a measurement
+      // and the view that draws it read the same number: the ordinal is not
+      // something the view has to count for itself.
       for (planned in plan) {
-        // Only the uncommitted tail and newly committed chunks cross JNI.
-        val segmentKey = "${planned.identity}:${planned.to - planned.from}:$fontScale:$night:$syntaxHighlighting"
+        // The plan counted the code blocks, so the ordinal comes from there
+        // rather than from a second walk of the plan.
+        val ordinal = planned.codeOrdinal
+        // Only the uncommitted tail and newly committed chunks cross JNI. The
+        // ordinal is in the key because a cached segment is reused only where it
+        // would be built identically.
+        val segmentKey =
+          "${planned.identity}:${planned.to - planned.from}:$ordinal:$fontScale:$night:$syntaxHighlighting"
         val segment = (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
           ?: DownstreamNative.readDocument(documentId, planned.from, planned.to)
             ?.let {
-              buildSegment(it, style, planned.from, planned.isCode, planned.identity, syntaxHighlighting)
+              buildSegment(it, style, planned.from, planned.isCode, ordinal, planned.identity, syntaxHighlighting)
             }
             ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
           ?: return null
@@ -587,6 +646,7 @@ internal class RenderedDocument(
       style: Style,
       from: Int,
       isCode: Boolean,
+      codeOrdinal: Int,
       identity: Long,
       syntaxHighlighting: Boolean,
     ): Segment {
@@ -791,6 +851,7 @@ internal class RenderedDocument(
           style,
           containersOf(0, -1),
           from,
+          codeOrdinal,
           gapBefore,
         )
       }
@@ -802,9 +863,10 @@ internal class RenderedDocument(
      * characters read, as in Streamdown, and the card keeps the container margin
      * beside the body rather than inside it.
      *
-     * The block's ordinal among the document's code blocks is not decided here:
-     * the plan already lists one code segment per code block, so the view counts
-     * them as it walks the segments.
+     * `codeOrdinal` is the block's ordinal among the document's code blocks,
+     * which a reader's wrap choice is keyed by. It comes from the plan, which
+     * counts the code blocks as it is built, because a measurement needs it and
+     * a measurement can run before any view has walked the segments.
      */
     private fun buildCode(
       text: SpannableStringBuilder,
@@ -814,6 +876,7 @@ internal class RenderedDocument(
       style: Style,
       containers: Triple<List<ContainerDecoration>, Float, Boolean>,
       blockIndex: Int,
+      codeOrdinal: Int,
       gapBefore: Int,
     ): CodeSegment {
       val newline = text.indexOfFirst { it == '\n' }
@@ -823,6 +886,7 @@ internal class RenderedDocument(
         accessibleBlocks = accessibleBlocks,
         language = language,
         blockIndex = blockIndex,
+        codeOrdinal = codeOrdinal,
         containers = containers.first,
         contentLeading = containers.second.toInt(),
         firstLine = firstLine,
