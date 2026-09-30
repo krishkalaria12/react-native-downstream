@@ -53,6 +53,27 @@ Fenced code is colored by the language in its info string, on the same worker th
 
 `ts`, `tsx`, `js`, `java`, `c`, `cpp`, `cs`, `go`, `swift`, `kt`, `dart`, `scala`, `objc`, `py`, `sh`, `json`, `html`, `xml`, `css`, `sql`, `rs`, `yaml`, `toml`, `rb`, `lua`, `diff`, and `md` are colored; anything else renders plain, as it does in Streamdown. The palette follows GitHub's light and dark code themes and is the same on both platforms. A block with no language, an unknown language, and a block over 64 KiB of code stay plain, and a document with no fenced code never loads a lexer. Highlighting only sets colors, so selection, copy, and accessibility text are unchanged; see [the plan](docs/syntax-highlighting-plan.html) for how a streaming block stays cheap.
 
+### Copy and download controls
+
+Every code block gets a header and every table gets a toolbar, with no setup. `controls` takes Streamdown's shape, so a value written for it works as it is:
+
+```tsx
+<DownstreamMarkdown
+  markdown={message}
+  controls={{
+    code: {
+      copy: { onCopy: (event) => track('code copied', event.format) },
+      download: { filename: 'snippet', onDownload: save },
+    },
+    table: { csvSeparator: ';' },
+  }}
+/>
+```
+
+Code copies as plain text; a table copies as `text/html` first, so pasting into a spreadsheet keeps the rows, columns, and alignment, and falls back to plain text for targets that do not take HTML. A code block's header also has a per-block wrap button, and `codeBlockWrap` sets the starting state for all of them. `controls={false}` removes the header and the toolbar without changing any block's layout.
+
+A download opens the platform's own save dialog and the user picks the location, so the library never writes to a path it chose. `filename` is a base name; the extension comes from the block, not from the name. Every press reaches the matching callback, and a failure reports `control_failed` to that control's `onError` or to the view's. A control turns on as soon as its own block is settled, so a finished code block can be copied while the rest of the answer is still streaming. See [controls](docs/api.md#controls) for the whole shape.
+
 ## Contributing
 
 - [Development workflow](CONTRIBUTING.md#development-workflow)
@@ -61,11 +82,12 @@ Fenced code is colored by the language in its info string, on the same worker th
 
 ## Example app
 
-`example/` has four screens behind a drawer, opened from the app bar or by
+`example/` has five screens behind a drawer, opened from the app bar or by
 dragging in from the left edge. Example streams a live Markdown chat reply from
-OpenAI. Testing replays one source through Streamdown and then Downstream and
-shows the comparison once both runs finish. Bench replays a source through
-Downstream alone and exports a trace for the
+OpenAI. Controls exercises copy, download, and wrap on code blocks and tables,
+and logs what every press reports. Testing replays one source through
+Streamdown and then Downstream and shows the comparison once both runs finish.
+Bench replays a source through Downstream alone and exports a trace for the
 [performance method](docs/performance-methodology.md). Stress streams several
 answers at once to exercise the worker pool. Every screen stays mounted, so a
 run configured on one of them survives a trip through the drawer.
@@ -83,11 +105,11 @@ cp example/.env.example example/.env
 
 Expo compiles `EXPO_PUBLIC_` variables into the bundle, so use a key you can
 revoke and never ship that build. Clear the bundler cache after changing the
-value. The other three screens need no key.
+value. The other four screens need no key.
 
 ## Markdown implementation plan
 
-Phase 0 defines the [API contract](docs/api.md) and [streaming behavior](docs/streaming-semantics.md). The native display path, stream controller, and conservative incremental-tail parser are implemented. Streams use incremental parsing by default: completed blocks share their parsed content and rendering, while new input updates the unstable tail. Unproven boundaries fall back to a full parse, and `finish()` always parses the complete canonical source.
+Phase 0 defines the [API contract](docs/api.md) and [streaming behavior](docs/streaming-semantics.md). The native display path, stream controller, and conservative incremental-tail parser are implemented. Streams use incremental parsing by default: completed blocks share their parsed content and rendering, while new input updates the unstable tail. Unproven boundaries fall back to a full parse, and `finish()` always parses the complete canonical source. Copy and download controls, per-block wrap, and the exports behind them are implemented on both platforms; the plan is [copy and download controls](docs/copy-download-controls-plan.html).
 
 ## Tests and benchmarks
 
@@ -99,9 +121,10 @@ native view by rendering the real parse as DOM.
 
 `pnpm test:native` builds the C++ engine and runs its own suites, including the
 `vendored md4c` digest pins that keep the vendored parser unmodified, the
-golden token fixtures that pin the vendored lexers, and the streaming
+golden token fixtures that pin the vendored lexers, the streaming
 equivalence check that a grown code block ends with the tokens a one-shot pass
-gives it.
+gives it, and the copy and download suites that pin every export format and
+check a Markdown export re-parses to the table it came from.
 
 `pnpm bench:native` builds a release-mode host engine and measures complete
 highlighting, streaming highlighting, and full versus incremental parsing with
@@ -120,6 +143,8 @@ MIT, except for the vendored third-party sources, which keep their own terms:
 `src/cpp/md4c` is BSD (see its `LICENSE.md`) and `src/cpp/lexilla` is HPND
 (see `src/cpp/lexilla/License.txt`, © 1998-2021 Neil Hodgson), which requires
 that notice to travel with every copy. Both notices ship in the package.
+`src/cpp/downstream/export-extensions.json` is Streamdown's language extension
+map, taken under Apache-2.0; see the attribution in that file.
 
 ---
 
