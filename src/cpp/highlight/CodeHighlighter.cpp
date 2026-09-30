@@ -356,6 +356,15 @@ HighlightState::HighlightState(HighlightState &&other) noexcept = default;
 HighlightState &HighlightState::operator=(HighlightState &&other) noexcept = default;
 HighlightState::~HighlightState() = default;
 
+/// True when this state describes a prefix of `next` for the same language, so
+/// the block only grew and a resume is valid.
+///
+/// The comparison is over the whole block, so a pass costs O(block) even when it
+/// only lexes the new tail. That is cheap next to lexing the block again, and it
+/// is what makes the check sound: a same-length rewrite and a shorter text have
+/// to be told apart from a genuine append, and only reading every unit can do
+/// that. Streaming n units in small chunks is therefore O(n^2) in comparison
+/// alone, which is part of why the highlight limit is 64 KiB.
 bool HighlightState::applies(std::string_view alias, std::u16string_view next) const {
   return engine != nullptr && language == alias && text.size() <= next.size() &&
       std::equal(text.begin(), text.end(), next.begin());

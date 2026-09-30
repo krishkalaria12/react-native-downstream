@@ -26,6 +26,12 @@ std::vector<TokenRun> tokenize(std::string_view info, std::string_view code, dou
   return runs;
 }
 
+/// The runs an unbounded single pass gives `code`, which is what a settled block
+/// has to end up with.
+std::vector<TokenRun> wholeRuns(std::string_view code) { return tokenize("ts", code, 1e9); }
+
+size_t wholeRunCount(std::string_view code) { return wholeRuns(code).size(); }
+
 /// Grows `code` `chunk` UTF-16 units at a time and returns the final runs.
 std::vector<TokenRun> stream(std::string_view info, const std::u16string &code, size_t chunk) {
   HighlightState state;
@@ -236,6 +242,87 @@ void testBudget() {
   CHECK(sameTokens(wholeRuns, tokenize("ts", block, 1e9)), "a resumed block equals a one-shot pass");
 }
 
+/// A committed block is colored once and then shared unchanged by every later
+/// snapshot, so a pass that ran out of budget used to leave it part-colored
+/// forever: nothing would ever revisit it. `highlightSettledCodeBlock` keeps
+/// passing until the block is whole, which is what these check.
+void testSettled() {
+  // A block far larger than one 4 ms window, with a zero budget so the first
+  // pass is guaranteed to stop early on any machine.
+  std::string block;
+  while (block.size() < 24 * 1024) {
+    block += "const value = compute(a, b);\n";
+  }
+  Block parsed;
+  parsed.kind = BlockKind::CodeBlock;
+  parsed.language = "ts";
+  parsed.text = utf8ToUtf16(block);
+
+  // One pass, to establish that the block really is over budget.
+  Block streaming;
+  streaming.kind = BlockKind::CodeBlock;
+  streaming.language = "ts";
+  streaming.text = utf8ToUtf16(block);
+  HighlightState streamingState;
+  highlightCodeBlock(lexillaHighlighter(), &streaming, &streamingState, 0.0, nullptr);
+  CHECK(streamingState.lastStop == HighlightStop::Budget, "one zero-budget pass stops early");
+  CHECK(streaming.tokens.size() < wholeRunCount(block), "one pass leaves the block part-colored");
+
+  // The settled entry point finishes it.
+  HighlightState settledState;
+  HighlightStats stats;
+  highlightSettledCodeBlock(lexillaHighlighter(), &parsed, &settledState, 0.0, &stats);
+  CHECK(parsed.tokens.size() == wholeRunCount(block), "a settled block is colored whole");
+  CHECK(settledState.lastStop == HighlightStop::Complete, "a settled block reports Complete");
+  CHECK(sameTokens(parsed.tokens, wholeRuns(block)), "a settled block equals a one-shot pass");
+
+  // The retries are visible to the counters, and the block is still counted once.
+  CHECK(stats.blocks == 1, "a settled block is counted once however many passes it took");
+  CHECK(stats.resumes > 0, "a settled block records the passes it needed");
+
+  // Settling a block that already fits in one pass adds no passes.
+  Block small;
+  small.kind = BlockKind::CodeBlock;
+  small.language = "ts";
+  small.text = utf8ToUtf16("const a = 1;\n");
+  HighlightState smallState;
+  HighlightStats smallStats;
+  highlightSettledCodeBlock(lexillaHighlighter(), &small, &smallState, kHighlightBudgetMs, &smallStats);
+  CHECK(smallState.lastStop == HighlightStop::Complete, "a small settled block completes in one pass");
+  CHECK(smallStats.resumes == 0, "a small settled block needs no retry");
+
+  // A block with no language is still plain, and costs no lexer.
+  const uint64_t before = lexillaHighlighter().lexersCreated();
+  Block plain;
+  plain.kind = BlockKind::CodeBlock;
+  plain.text = utf8ToUtf16(block);
+  HighlightState plainState;
+  highlightSettledCodeBlock(lexillaHighlighter(), &plain, &plainState, 0.0, nullptr);
+  CHECK(plain.tokens.empty(), "a settled block with no language stays plain");
+  CHECK(lexillaHighlighter().lexersCreated() == before, "settling a plain block creates no lexer");
+
+  // An unknown language is skipped rather than retried forever, which is the
+  // case where a resume could never make progress.
+  Block unknown;
+  unknown.kind = BlockKind::CodeBlock;
+  unknown.language = "brainfuck";
+  unknown.text = utf8ToUtf16(block);
+  HighlightState unknownState;
+  HighlightStats unknownStats;
+  highlightSettledCodeBlock(lexillaHighlighter(), &unknown, &unknownState, 0.0, &unknownStats);
+  CHECK(unknown.tokens.empty(), "a settled block with an unknown language stays plain");
+  CHECK(unknownState.lastStop == HighlightStop::Skipped, "an unknown language is skipped, not retried");
+  CHECK(unknownStats.blocks == 1, "a skipped block is counted once");
+
+  // The document-level entry points settle every block they color, which is what
+  // a controlled document and a committed chunk both need.
+  const ParseResult parsedDoc = parseMarkdown("```ts\n" + block + "```\n\nsome prose\n");
+  HighlightStats docStats;
+  const DocumentHandle settledDoc = highlightSettledCodeBlocks(lexillaHighlighter(), parsedDoc.document, 0.0, &docStats);
+  CHECK(settledDoc->blocks[0].tokens.size() == wholeRunCount(block),
+        "a settled document colors its code block whole");
+}
+
 struct StreamingCase {
   const char *id;
   const char *info;
@@ -383,6 +470,7 @@ int main() {
   testTokens();
   testBoundaries();
   testBudget();
+  testSettled();
   testStreaming();
   testIsolation();
   testDocuments();

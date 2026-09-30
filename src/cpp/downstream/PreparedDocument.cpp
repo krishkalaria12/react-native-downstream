@@ -36,8 +36,10 @@ void PreparedDocument::prepare() {
   if (result_.status == ParseStatus::Ok) {
     // Highlighting runs here, on the same worker job and so inside the
     // synchronous-layout budget, so the platform text work that follows sees
-    // finished tokens.
-    result_.document = highlightCodeBlocks(lexillaHighlighter(), result_.document, kHighlightBudgetMs, nullptr);
+    // finished tokens. A controlled source is complete the moment it is parsed
+    // and this result is cached, so a block is settled rather than streaming: no
+    // later pass would ever finish one that ran out of budget.
+    result_.document = highlightSettledCodeBlocks(lexillaHighlighter(), result_.document, kHighlightBudgetMs, nullptr);
     RenderPreparer::prepare(result_.document, RenderPreparer::recentLayouts());
   }
 }

@@ -253,9 +253,15 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable)
   // carry-over and the shared committed prefix. A full parse replaces the whole
   // document, so the tail's resume state no longer describes anything and its
   // lexer is released.
+  //
+  // Every block here is whole, and the committed prefix this result is about to
+  // be compared against is already colored, so each block settles: a block the
+  // budget cannot finish in one pass is finished here. A partially colored
+  // committed block would not equal the same block colored in full, and that
+  // mismatch alone would drop the shared prefix on the next parse.
   highlight_.clear();
   HighlightStats stats;
-  result.document = highlightCodeBlocks(lexillaHighlighter(), result.document, kHighlightBudgetMs, &stats);
+  result.document = highlightSettledCodeBlocks(lexillaHighlighter(), result.document, kHighlightBudgetMs, &stats);
   noteHighlight(stats);
   if (mode_ == ParseMode::FullParse) {
     carryIdentities(result);
@@ -327,7 +333,11 @@ void IncrementalParser::highlightTail(Document *document) {
   HighlightState settled;
   for (size_t i = 0; i + 1 < last; i++) {
     if (blocks[i].kind == BlockKind::CodeBlock && !blocks[i].language.empty()) {
-      highlightCodeBlock(lexillaHighlighter(), &blocks[i], &settled, kHighlightBudgetMs, &stats);
+      // These are not the growing block, and the tail is rebuilt from scratch on
+      // every pass, so nothing resumes them: a pass that ran out of budget would
+      // leave the same block part-colored on every snapshot forever. Each is
+      // settled within this pass instead.
+      highlightSettledCodeBlock(lexillaHighlighter(), &blocks[i], &settled, kHighlightBudgetMs, &stats);
     }
   }
   highlightCodeBlock(lexillaHighlighter(), &blocks[last - 1], &highlight_, kHighlightBudgetMs, &stats);
@@ -516,10 +526,12 @@ bool IncrementalParser::commitRegion(size_t boundary) {
       block.spacingBefore = BlockSpacing::Normal;
     }
     // A committed code block is closed, so it is colored here from its whole
-    // text and then shared, unchanged, by every later snapshot. A local state
-    // keeps this away from the tail's.
+    // text and then shared, unchanged, by every later snapshot. Nothing will
+    // ever revisit it, so it is settled rather than streaming: a pass that ran
+    // out of budget would otherwise leave the rest of the block plain forever.
+    // A local state keeps this away from the tail's.
     if (block.kind == BlockKind::CodeBlock && !block.language.empty()) {
-      highlightCodeBlock(lexillaHighlighter(), &block, &committedHighlight, kHighlightBudgetMs, &stats);
+      highlightSettledCodeBlock(lexillaHighlighter(), &block, &committedHighlight, kHighlightBudgetMs, &stats);
     }
     blocks.push_back(std::move(block));
   }

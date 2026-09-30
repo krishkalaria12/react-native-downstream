@@ -151,3 +151,63 @@ describe('streaming', () => {
     expect(streamed.blocks[0]?.tokens).toEqual(parse(source).blocks[0]?.tokens);
   });
 });
+
+describe('a settled block', () => {
+  // A block that is complete is colored once and then shared unchanged by every
+  // later snapshot, so a pass that ran out of budget used to leave part of it
+  // plain with nothing able to finish the job.
+  //
+  // Whether the budget is actually exhausted depends on the device, so these
+  // check the invariant a settled block owes its reader rather than the budget
+  // itself: a committed block is complete and equals a one-shot parse. On a host
+  // fast enough to color the whole 64 KiB limit inside the budget, every block
+  // is complete either way, so these pass before and after the fix; the budget
+  // behavior itself is pinned in `testSettled` in src/cpp/tests, which drives it
+  // with a zero budget so it is the same on every machine.
+  const big =
+    '```ts\n' + 'const value = compute(a, b);\n'.repeat(1200) + '```\n';
+  const expected = parse(big).blocks[0]?.tokens ?? [];
+  expect(expected.length).toBeGreaterThan(0);
+
+  it('colors a large controlled document whole', () => {
+    const block = parse(big).blocks[0];
+    expect(block?.tokens).toEqual(expected);
+    // Nothing is left plain that a full pass would have colored.
+    const covered =
+      block?.tokens.reduce((sum, [, end]) => sum + (end as number), 0) ?? 0;
+    expect(covered).toBeGreaterThan(0);
+  });
+
+  it('colors a committed block whole, and keeps it whole on later snapshots', () => {
+    // Trailing prose after the fence is what lets the parser commit the block,
+    // which is the path that used to freeze a partial result forever.
+    const streamed = replaySession('incremental', [
+      { op: 'append', chunk: big },
+      { op: 'append', chunk: '\nSome prose after the fence.\n' },
+      { op: 'parse', finished: false },
+      // A later snapshot reuses the committed block rather than re-coloring it.
+      { op: 'append', chunk: '\nMore prose.\n' },
+      { op: 'parse', finished: false },
+      { op: 'parse', finished: true },
+    ]);
+    const block = streamed.blocks[0];
+    expect(block?.kind).toBe(KIND.code);
+    expect(block?.text).toBe(parse(big).blocks[0]?.text);
+    expect(block?.tokens).toEqual(expected);
+    expect(streamed.highlight?.complete).toBeGreaterThan(0);
+  });
+
+  it('agrees with a full-mode session for the same source', () => {
+    const withProse = big + '\nSome prose after the fence.\n';
+    const incremental = replaySession('incremental', [
+      { op: 'append', chunk: withProse },
+      { op: 'parse', finished: true },
+    ]);
+    const full = replaySession('full', [
+      { op: 'append', chunk: withProse },
+      { op: 'parse', finished: true },
+    ]);
+    expect(incremental.blocks[0]?.tokens).toEqual(full.blocks[0]?.tokens);
+    expect(incremental.blocks[0]?.tokens).toEqual(expected);
+  });
+});

@@ -95,17 +95,14 @@ using namespace facebook::react;
   }
 }
 
-/// A color appearance change resolves every color in a rendering again, so the
-/// cached one is dropped and rebuilt from the document the view already holds.
-- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
-  [super traitCollectionDidChange:previousTraitCollection];
-  if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
-    [self applyRendering];
-  }
-}
-
 /// Rebuilds the platform text from the document the view already holds, and
 /// ends any frame trace the old rendering was waiting on.
+///
+/// A color appearance change deliberately does not come through here. Token
+/// colors are dynamic UIColors, which the platform resolves against the trait
+/// collection when it draws, so a cached rendering already follows the
+/// appearance and rebuilding it would only discard warm caches to get the same
+/// objects back.
 - (void)applyRendering {
   const uint64_t documentId = _document ? _document->id : 0;
   if (_traceDocumentId && _traceDocumentId != documentId) {
