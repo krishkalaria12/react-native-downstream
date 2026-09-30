@@ -118,7 +118,7 @@ before(async () => {
   const testSource = (name) => join(CPP, 'tests', name);
   const engine = [
     ...['MarkdownParser.cpp', 'Unicode.cpp', 'LinkPolicy.cpp'].map(downstream),
-    ...['Scan.cpp', 'Compare.cpp'].map(downstream),
+    ...['Scan.cpp', 'Compare.cpp', 'Export.cpp', 'ExportNames.cpp'].map(downstream),
     join(CPP, 'remend', 'Preview.cpp'),
   ];
   const pool = ['WorkerPool.cpp', 'RenderPreparer.cpp'].map(downstream);
@@ -131,6 +131,8 @@ before(async () => {
       [incremental, downstream('SegmentPlan.cpp'), ...engine],
     ],
     ['dump_session', [incremental, ...engine]],
+    ['dump_export', [downstream('SegmentPlan.cpp'), ...engine]],
+    ['test_export', [downstream('SegmentPlan.cpp'), ...engine]],
     ['test_preview', [incremental, ...engine]],
     ['test_session_registry', [registry, incremental, ...pool, ...engine]],
     [
@@ -845,5 +847,246 @@ describe('input', () => {
 
   test('CRLF is normalized in visible text', () => {
     assert.equal(visibleText(parse('a\r\nb\r\n\r\nc\r\n')), 'a\nb\nc');
+  });
+});
+
+/**
+ * Replays a session through the real IncrementalParser and returns the document
+ * its last pass published. `steps` mirror what a stream does, in order.
+ */
+function runSession(mode, steps) {
+  const frame = (op, payload) => {
+    const length = Buffer.alloc(4);
+    length.writeUInt32LE(payload.length);
+    return Buffer.concat([Buffer.from(op, 'latin1'), length, payload]);
+  };
+  const frames = steps
+    .map((step) => {
+      switch (step.op) {
+        case 'append':
+          return frame('a', Buffer.from(step.chunk, 'utf8'));
+        case 'replace':
+          return frame('r', Buffer.from(step.source, 'utf8'));
+        case 'parse':
+          return frame(step.finished ? 'f' : 'u', Buffer.alloc(0));
+        default:
+          throw new Error(`unknown step ${step.op}`);
+      }
+    });
+  return JSON.parse(
+    execFileSync(binary('dump_session'), [mode], {
+      input: Buffer.concat(frames),
+      maxBuffer: 256 << 20,
+    }).toString('utf8')
+  );
+}
+
+describe('copy and download controls', () => {
+  // stderr is inherited, not piped: a failing CHECK names the case it broke.
+  test('export formats, file names, and segment plans', () => {
+    execFileSync(binary('test_export'), { timeout: 30_000, stdio: 'inherit' });
+  });
+
+  /** Runs dump_export over `source` and returns its model plus its exports. */
+  function exportOf(source, format, operations, separator = ',') {
+    const model = JSON.parse(
+      execFileSync(
+        binary('dump_export'),
+        [format, separator, 'snippet', 'file', ...operations],
+        { input: Buffer.from(source, 'utf8'), maxBuffer: 256 << 20 }
+      ).toString('utf8')
+    );
+    return { model, exports: model.exports ?? [] };
+  }
+
+  /**
+   * The table rows in blocks [from, to), as text, alignment, and inline runs.
+   * Runs are per block, so a cell's own styles are read inside it.
+   */
+  function tableShape(model, from = 0, to = Infinity) {
+    return model.blocks
+      .slice(from, to)
+      .filter((block) => block.kind === KIND.table)
+      .map((block) => ({
+        header: block.tableHeader,
+        cells: block.cells.map(([start, end, align]) => [
+          block.text.slice(start, end),
+          align,
+        ]),
+        runs: block.runs.map(([start, end, styles, link]) => [
+          block.text.slice(start, end),
+          styles,
+          link,
+        ]),
+      }));
+  }
+
+  const linkUrls = (model) => model.links.map((link) => link.url);
+
+  test('a Markdown export re-parses to the same table', async (t) => {
+    // The round trip runs through the real parser, so a rule that only looks
+    // right in the exporter cannot pass.
+    const styled = [
+      '| a | b | c | d |',
+      '| :-- | :-: | --: | --- |',
+      '| **x** | *y* | ~~z~~ | `code` |',
+      '| [link](https://example.com) | plain | a_b | x \\| y |',
+      '| <b>&amp;</b> | 1.5 | é 漢 | 👩‍💻 |',
+    ].join('\n');
+
+    const sources = {
+      'a simple table': '| a | b |\n| - | - |\n| 1 | 2 |\n',
+      'every alignment': '| a | b | c |\n| :-- | :-: | --: |\n| 1 | 2 | 3 |\n',
+      'inline styles and a link': styled,
+      // The cases a code span's fence has to be widened for. The bytes are
+      // U+0060 repeated, spelled out because a template literal would read as
+      // the span it is trying to describe.
+      'a code span holding backticks': [
+        '| a | b |',
+        '| - | - |',
+        `| ${'` `'.repeat(2)}${'`'}x${'`'}${'`'.repeat(2)} | ${'`'.repeat(3)}${' '.repeat(1)}${'`'.repeat(2)}y${'`'.repeat(2)}${'`'.repeat(3)} |`,
+      ].join('\n'),
+      'a short row': '| a | b | c |\n| - | - | - |\n| 1 |\n',
+      'a wide table': `| ${'h'.repeat(40)} |\n| - |\n| ${'v'.repeat(80)} |\n`,
+      'a table with a quote around it': '> | a | b |\n> | - | - |\n> | 1 | 2 |\n',
+    };
+
+    for (const [name, source] of Object.entries(sources)) {
+      await t.test(name, () => {
+        const { model, exports } = exportOf(source, 'markdown', ['r:0:8']);
+        const round = exports[0].reparsed;
+        assert.equal(round.error, undefined, 'the export re-parses');
+        assert.deepEqual(tableShape(round), tableShape(model), name);
+        assert.deepEqual(linkUrls(round), linkUrls(model), `${name}: link targets`);
+      });
+    }
+  });
+
+  test('every table in the oracle corpus round trips', async (t) => {
+    for (const testCase of [...cases, ...adversarialCases]) {
+      const source = testCase.source;
+      if (!source.includes('| ---')) continue;
+      await t.test(testCase.id, () => {
+        const first = parse(source).blocks.findIndex(
+          (block) => block.kind === KIND.table
+        );
+        assert.ok(first >= 0, `${testCase.id}: has a table`);
+        const last = parse(source).blocks.findLastIndex(
+          (block) => block.kind === KIND.table
+        );
+        const { model, exports } = exportOf(
+          source,
+          'markdown',
+          [`r:${first}:${last + 1}`]
+        );
+        const round = exports[0].reparsed;
+        assert.equal(round.error, undefined, `${testCase.id}: re-parses`);
+        assert.deepEqual(
+          tableShape(round),
+          tableShape(model, first, last + 1),
+          `${testCase.id}: the table survives`
+        );
+      });
+    }
+  });
+
+  test('copy ignores layout', () => {
+    // A wrap toggle and `codeBlockWrap` change how a block is laid out, never
+    // what a copy puts on the clipboard, so the exporter has no layout input
+    // and cannot drift from the reader's text.
+    const source = '```ts\nconst a = 1;\nconst b: number = 2;\n```\n';
+    const first = exportOf(source, 'text', ['e:0:1']).exports[0].text;
+    const second = exportOf(source, 'text', ['e:0:1']).exports[0].text;
+    assert.equal(first, second);
+    assert.equal(first, 'const a = 1;\nconst b: number = 2;');
+  });
+
+  test('a fence info string is kept whole for a file name', () => {
+    const source =
+      '```ts title="app.ts"\nx\n```\n\n```ts:src/lib.ts\ny\n```\n\n    indented\n';
+    const document = parse(source);
+    assert.equal(document.blocks[0].info, 'ts title="app.ts"');
+    assert.equal(document.blocks[0].language, 'ts');
+    assert.equal(document.blocks[1].info, 'ts:src/lib.ts');
+    // The third block is indented code, which has no language and no name.
+    assert.equal(document.blocks[2].info, '');
+    const { exports } = exportOf(source, 'text', [
+      'd:0',
+      'd:1',
+      'd:2',
+      't:csv',
+      't:md',
+    ]);
+    assert.deepEqual(
+      exports.map((entry) => entry.text),
+      // The configured base is `snippet` and the fallback is `file`.
+      ['app.ts', 'lib.ts', 'snippet.txt', 'snippet.csv', 'snippet.md']
+    );
+  });
+
+  test('a controlled document settles every block', () => {
+    const source = '# One\n\n| a |\n| - |\n| 1 |\n\n```ts\nx\n```\n';
+    const document = parse(source);
+    assert.equal(document.settled, document.blocks.length);
+  });
+
+  test('an open stream settles only what it can prove', () => {
+    // The same source, one chunk at a time, through the real parser. A control
+    // may act on a block inside the settled count and on nothing beyond it.
+    const chunks = [
+      'A first paragraph long enough to be worth committing on its own line.\n\n',
+      '| a | b |\n| --- | --- |\n| 1 | 2 |\n\n',
+      '```ts\nconst a = 1;\n',
+      'const b = 2;\n```\n',
+    ];
+    let source = '';
+    let settled = 0;
+    for (const chunk of chunks) {
+      source += chunk;
+      const model = runSession('incremental', [
+        { op: 'replace', source: '' },
+        { op: 'append', chunk: source },
+        { op: 'parse', finished: false },
+      ]);
+      assert.equal(model.error, undefined);
+      // Settling never goes backwards within a generation.
+      assert.ok(
+        model.settled >= settled,
+        `settled ${model.settled} >= ${settled}`
+      );
+      settled = model.settled;
+      assert.ok(
+        settled <= model.blocks.length,
+        'settled never covers a block that does not exist'
+      );
+      for (let index = 0; index < model.blocks.length; index++) {
+        if (index < model.settled) {
+          continue;
+        }
+        // Anything past the settled prefix is the tail, so nothing there is
+        // claimed to be final.
+        assert.ok(index >= settled);
+      }
+    }
+    const finished = runSession('incremental', [
+      { op: 'replace', source: '' },
+      { op: 'append', chunk: source },
+      { op: 'parse', finished: true },
+    ]);
+    assert.equal(finished.settled, finished.blocks.length);
+  });
+
+  test('full mode settles nothing until the stream finishes', () => {
+    const source = 'A paragraph.\n\nAnother paragraph.\n';
+    const open = runSession('full', [
+      { op: 'append', chunk: source },
+      { op: 'parse', finished: false },
+    ]);
+    assert.equal(open.settled, 0);
+    const done = runSession('full', [
+      { op: 'append', chunk: source },
+      { op: 'parse', finished: true },
+    ]);
+    assert.equal(done.settled, done.blocks.length);
   });
 });

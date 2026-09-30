@@ -380,10 +380,16 @@ bool committedSegmentsAreStable(ParseMode mode) {
       const SegmentPlan &segment = plan[i];
       if (!segment.committed) continue;
       committedSegments++;
-      // Text chunks also end where a table starts; any other end is top-level.
+      // Text chunks also end where a table or a code block starts; any other
+      // end is top-level.
       const bool beforeTable = segment.to < document.blocks.size() &&
           document.blocks[segment.to].kind == BlockKind::TableRow;
-      if (!segment.table && !beforeTable && !document.blocks[segment.to - 1].containers.empty()) return false;
+      if (!segment.isTable() && !beforeTable && !document.blocks[segment.to - 1].containers.empty()) return false;
+      // A code block is a segment of its own, so nothing else shares its range.
+      if (segment.isCode() &&
+          (segment.to - segment.from != 1 || document.blocks[segment.from].kind != BlockKind::CodeBlock)) {
+        return false;
+      }
       for (size_t block = segment.from; block < segment.to; block++) {
         if (document.blocks[block].identity == 0) return false;
       }
