@@ -132,8 +132,28 @@ std::vector<std::string> splitChunks(const std::string &text, uint32_t seed) {
 
 /// A raw parse plus the highlighting a session does, so the oracle is what a
 /// reader would actually see rather than an uncolored intermediate.
-DocumentHandle colored(ParseResult result) {
-  return highlightCodeBlocks(lexillaHighlighter(), result.document, kHighlightBudgetMs, nullptr);
+DocumentHandle colored(ParseResult result, double budgetMs = kHighlightBudgetMs) {
+  // Full-mode and controlled documents settle their code before publishing.
+  // A single budgeted pass is an oracle for an unfinished streaming tail,
+  // whose tokens may still be partial under CPU load.
+  return highlightSettledCodeBlocks(lexillaHighlighter(), result.document, budgetMs, nullptr);
+}
+
+bool fullParseOracleSettles() {
+  std::string source = "```ts\n";
+  for (int line = 0; line < 80; line++) {
+    source += "const value = compute(42);\n";
+  }
+  source += "```\n\nSettled prose.\n";
+  const ParseResult parsed = parseMarkdown(source);
+  IncrementalParser parser(ParseMode::FullParse);
+  parser.append(source);
+  const ParseResult actual = parser.parse(false);
+  // A zero budget guarantees a stop after the first window, even on a fast
+  // host. A raw full-parse oracle must settle its tokens just as full mode does.
+  const DocumentHandle partial = highlightCodeBlocks(lexillaHighlighter(), parsed.document, 0.0, nullptr);
+  return actual.status == ParseStatus::Ok && !equal(*partial, *actual.document) &&
+      equal(*colored(parsed, 0.0), *actual.document);
 }
 
 bool check(const std::vector<std::string> &chunks, const char *label) {
@@ -573,5 +593,6 @@ int main(int argc, char **argv) {
   CHECK(identitiesAreGlobal(), "identities are global");
   CHECK(realisticAnswer(), "realistic answer");
   CHECK(fullModeKeepsIdentities(), "full mode keeps identities");
+  CHECK(fullParseOracleSettles(), "the full-parse oracle settles code with a zero highlight budget");
   return ds_check_result();
 }

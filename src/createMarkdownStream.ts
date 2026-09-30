@@ -448,7 +448,7 @@ function stopListeningIfUnused(): void {
 export function createMarkdownStream(
   options: MarkdownStreamOptions = {}
 ): MarkdownStreamController {
-  return createMarkdownStreamWithMode(options, 'full');
+  return createMarkdownStreamWithMode(options, 'incremental');
 }
 
 /** Internal switch for comparing both native parsers in one build. */

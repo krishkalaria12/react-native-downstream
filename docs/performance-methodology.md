@@ -105,4 +105,6 @@ tail only when it improves end-to-end results without correctness regressions.
 If Downstream misses a budget that the baseline meets, profile the dominant cost
 before changing the renderer. Record any unmet budget as a known limit.
 
-No mode decision or physical-device result has been recorded yet.
+Streams now default to incremental parsing based on host engine benchmarks and
+prefix parity tests. This is a runtime setting, not evidence that these device
+budgets have been met. No physical-device result has been recorded yet.

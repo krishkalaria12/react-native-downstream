@@ -18,7 +18,7 @@ int main() {
   // The controlled path colors after the parse and before the platform text
   // work, so the driver colors here too and its JSON is what a view receives.
   if (result.status == ParseStatus::Ok) {
-    result.document = highlightCodeBlocks(lexillaHighlighter(), result.document, kHighlightBudgetMs, nullptr);
+    result.document = highlightSettledCodeBlocks(lexillaHighlighter(), result.document, kHighlightBudgetMs, nullptr);
   }
   if (testdump::write(result)) {
     testdump::writeModelClosed();

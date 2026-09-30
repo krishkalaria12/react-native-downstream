@@ -236,11 +236,22 @@ void CodeDocument::append(std::string_view utf8) {
   if (utf8.empty()) {
     return;
   }
+  const size_t previousLength = text_.size();
   text_.append(utf8);
   // New bytes have no style, which is what a lexer expects for text it has not
   // reached. Everything before keeps the style its last pass gave it.
   styles_.resize(text_.size(), 0);
-  indexLines();
+  // Appends cannot move an existing line start. Scan only the new bytes and
+  // retain the states the lexer wrote for all previous lines.
+  if (lineStarts_.empty()) {
+    lineStarts_.push_back(0);
+  }
+  for (size_t index = previousLength; index < text_.size(); index++) {
+    if (text_[index] == '\n') {
+      lineStarts_.push_back(index + 1);
+    }
+  }
+  lineStates_.resize(lineStarts_.size(), 0);
 }
 
 void CodeDocument::indexLines() {

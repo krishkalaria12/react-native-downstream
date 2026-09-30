@@ -18,6 +18,7 @@ import { parse, visibleText } from './engine';
 import {
   nativeWork,
   resetEngine,
+  snapshotOf,
   sourceForSession,
 } from './real-engine-module';
 
@@ -60,6 +61,57 @@ afterEach(() => {
 });
 
 describe('the source a stream accumulates', () => {
+  it('reuses the incremental parser and settles to the canonical document', () => {
+    const session = stream();
+    const binding = getStreamState(session).binding();
+    expect(binding.mode).toBe('incremental');
+    const chunks = [
+      'A completed paragraph long enough to prove a stable boundary. '.repeat(
+        3
+      ) + '\n\n',
+      '```typescript\nconst answer = 42;\n',
+      'console.log(answer);\n```\n\n',
+      'A **finished** answer with [a link](https://example.com).',
+    ];
+    let source = '';
+    for (const part of chunks) {
+      source += part;
+      session.append(part);
+      getStreamState(session).flush();
+      const snapshot = snapshotOf(binding.sessionId)!;
+      const expected = parse(source);
+      expect(snapshot.blocks).toEqual(expected.blocks);
+      expect(snapshot.links).toEqual(expected.links);
+    }
+    session.finish();
+    const settled = snapshotOf(binding.sessionId)!;
+    expect(settled.blocks).toEqual(parse(source).blocks);
+    expect(settled.links).toEqual(parse(source).links);
+  });
+
+  it('resets a committed stream and drops provisional styles on finish', () => {
+    const session = stream();
+    const id = getStreamState(session).binding().sessionId;
+    session.append(
+      'A completed paragraph with a proven boundary. '.repeat(4) + '\n\n'
+    );
+    getStreamState(session).flush();
+    session.append('```ts\nconst answer = 42;\n```\n\nNext paragraph.');
+    getStreamState(session).flush();
+    session.setPreview(true);
+    session.reset('A **draft');
+    expect(snapshotOf(id)!.blocks).toEqual(parse('A **draft**').blocks);
+    session.append('** and *tail');
+    getStreamState(session).flush();
+    expect(snapshotOf(id)!.blocks).toEqual(
+      parse('A **draft** and *tail*').blocks
+    );
+    session.finish();
+    const canonical = parse('A **draft** and *tail');
+    expect(snapshotOf(id)!.blocks).toEqual(canonical.blocks);
+    expect(snapshotOf(id)!.links).toEqual(canonical.links);
+  });
+
   it('is the concatenation of its chunks', async () => {
     const session = stream();
     session.append('hello ');

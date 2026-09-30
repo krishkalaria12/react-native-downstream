@@ -2,12 +2,16 @@
 
 #include "Unicode.h"
 
+// CatalogueModules.h calls strcmp without including its declaration.
+#include <cstring>
+
 #include "ILexer.h"
 #include "LexerModule.h"
 // Lexilla's catalogue expects both of the above.
 #include "CatalogueModules.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 
@@ -36,6 +40,7 @@ namespace downstream {
 /// a lexer keep the cross-line state it built while a stream grows.
 struct HighlightEngine {
   Scintilla::ILexer5 *lexer{nullptr};
+  std::array<TokenClass, 64> classes{};
   HighlightEngine() = default;
   HighlightEngine(const HighlightEngine &) = delete;
   HighlightEngine &operator=(const HighlightEngine &) = delete;
@@ -87,21 +92,15 @@ std::unique_ptr<HighlightEngine> createEngine(const LanguageTable &language) {
     for (int set = 0; language.words[set] != nullptr && language.words[set][0] != '\0'; set++) {
       engine->lexer->WordListSet(set, language.words[set]);
     }
+    for (const int32_t *entry = language.styles; *entry >= 0; entry += 2) {
+      if (entry[0] <= kStyleMask) {
+        engine->classes[entry[0]] = static_cast<TokenClass>(entry[1]);
+      }
+    }
     gLexersCreated.fetch_add(1, std::memory_order_relaxed);
     return engine;
   }
   return nullptr;
-}
-
-TokenClass tokenClass(const LanguageTable &language, int style) {
-  // A short sorted array of style and class pairs, so a scan beats a binary
-  // search at this size and keeps the generated table readable.
-  for (const int32_t *entry = language.styles; *entry >= 0; entry += 2) {
-    if (entry[0] == style) {
-      return static_cast<TokenClass>(entry[1]);
-    }
-  }
-  return TokenClass::Plain;
 }
 
 bool isHorizontalSpace(char value) {
@@ -177,8 +176,9 @@ void appendRuns(std::vector<TokenRun> *runs, const std::vector<TokenRun> &fresh)
 /// identifier span, which carries no run of its own, is classified as it closes
 /// and appended then: every run already in `fresh` ends at or before the span,
 /// and the next one starts at or after it, so the list stays sorted.
-void buildRuns(std::string_view utf8, const CodeDocument &document, const LanguageTable &language, size_t from,
-               size_t to, uint32_t baseUtf16, std::vector<TokenRun> *fresh) {
+void buildRuns(std::string_view utf8, const CodeDocument &document, const LanguageTable &language,
+               const std::array<TokenClass, 64> &classes, size_t from, size_t to, uint32_t baseUtf16,
+               std::vector<TokenRun> *fresh) {
   const std::vector<char> &styles = document.styles();
   fresh->clear();
   const bool promote = language.identifier >= 0 && language.marks != MarkNone;
@@ -214,7 +214,7 @@ void buildRuns(std::string_view utf8, const CodeDocument &document, const Langua
       }
     }
 
-    const TokenClass token = tokenClass(language, style);
+    const TokenClass token = classes[style];
     if (token != open) {
       if (open != TokenClass::Plain) {
         fresh->push_back({openStart, offset, open});
@@ -294,7 +294,7 @@ public:
     // The last line is rebuilt every pass, so what the previous pass made of it
     // goes before the new runs are added.
     dropRunsFrom(&state->runs, baseUtf16);
-    buildRuns(utf8, state->document, *language, from, styledEnd, baseUtf16, &scratch());
+    buildRuns(utf8, state->document, *language, state->engine->classes, from, styledEnd, baseUtf16, &scratch());
     appendRuns(&state->runs, scratch());
     state->finalEnd = stable;
     state->finalUtf16 = baseUtf16 + utf16Length(utf8.substr(from, stable - from));
@@ -366,6 +366,12 @@ HighlightState::~HighlightState() = default;
 /// that. Streaming n units in small chunks is therefore O(n^2) in comparison
 /// alone, which is part of why the highlight limit is 64 KiB.
 bool HighlightState::applies(std::string_view alias, std::u16string_view next) const {
+  // A previously unmatched high surrogate was encoded as U+FFFD. When the
+  // append supplies its low surrogate, that byte prefix must be rebuilt.
+  if (!text.empty() && text.size() < next.size() && text.back() >= 0xd800 && text.back() <= 0xdbff &&
+      next[text.size()] >= 0xdc00 && next[text.size()] <= 0xdfff) {
+    return false;
+  }
   return engine != nullptr && language == alias && text.size() <= next.size() &&
       std::equal(text.begin(), text.end(), next.begin());
 }

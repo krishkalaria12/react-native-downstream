@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { availableParallelism, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +64,31 @@ function lexillaSources() {
 let buildDir;
 const binary = (name) => join(buildDir, name);
 
+// Keep compiler processes within the host's CPU budget. A cold build used to
+// launch every lexer at once and compile the shared engine for each executable.
+async function mapConcurrent(values, operation) {
+  const results = new Array(values.length);
+  let next = 0;
+  let failed = false;
+  const jobs = Math.min(availableParallelism(), 4, values.length);
+  const workers = await Promise.allSettled(
+    Array.from({ length: jobs }, async () => {
+      while (!failed && next < values.length) {
+        const index = next++;
+        try {
+          results[index] = await operation(values[index], index);
+        } catch (error) {
+          failed = true;
+          throw error;
+        }
+      }
+    })
+  );
+  const failure = workers.find((worker) => worker.status === 'rejected');
+  if (failure) throw failure.reason;
+  return results;
+}
+
 before(async () => {
   buildDir = mkdtempSync(join(tmpdir(), 'downstream-engine-'));
   const cc = process.env.CC ?? 'cc';
@@ -88,138 +113,86 @@ before(async () => {
     `-I${LEXILLA}`,
     `-I${join(LEXILLA, 'lexlib')}`,
   ];
-  const [md4c, entity] = await Promise.all(
-    ['md4c.c', 'entity.c'].map(async (source) => {
-      const object = binary(`${source}.o`);
-      await execFileAsync(cc, [
-        ...cFlags,
-        '-c',
-        join(MD4C, source),
-        '-o',
-        object,
-      ]);
-      return object;
-    })
-  );
-  // One archive for the vendored lexers and the highlighter, so the six test
-  // binaries below do not each compile thirty translation units.
-  const highlightObjects = await Promise.all(
-    lexillaSources()
-      .concat(HIGHLIGHT.map((name) => join(CPP, 'highlight', name)))
-      .map(async (source) => {
-        const object = binary(`${basename(source)}.o`);
-        await execFileAsync(cxx, [...cxxFlags, '-c', source, '-o', object]);
-        return object;
-      })
-  );
-  await execFileAsync('ar', ['rcs', binary('libhighlight.a'), ...highlightObjects]);
-
   const downstream = (name) => join(CPP, 'downstream', name);
   const session = (name) => join(CPP, 'session', name);
-  const highlight = (name) => join(CPP, 'highlight', name);
   const testSource = (name) => join(CPP, 'tests', name);
   const engine = [
     ...['MarkdownParser.cpp', 'Unicode.cpp', 'LinkPolicy.cpp'].map(downstream),
     ...['Scan.cpp', 'Compare.cpp'].map(downstream),
-    // The preview pass the session runs on its unstable tail.
     join(CPP, 'remend', 'Preview.cpp'),
   ];
   const pool = ['WorkerPool.cpp', 'RenderPreparer.cpp'].map(downstream);
-  // Every binary links the highlighter: parsing colors code blocks now, so the
-  // existing suites cover it too.
-  const lexilla = binary('libhighlight.a');
-  await Promise.all([
-    execFileAsync(cxx, [
-      ...cxxFlags,
-      testSource('dump_document.cpp'),
-      ...engine,
-      md4c,
-      entity,
-      lexilla,
-      '-o',
-      binary('dump_document'),
+  const incremental = session('IncrementalParser.cpp');
+  const registry = session('SessionRegistry.cpp');
+  const executables = [
+    ['dump_document', engine],
+    [
+      'test_incremental',
+      [incremental, downstream('SegmentPlan.cpp'), ...engine],
+    ],
+    ['dump_session', [incremental, ...engine]],
+    ['test_preview', [incremental, ...engine]],
+    ['test_session_registry', [registry, incremental, ...pool, ...engine]],
+    [
+      'test_worker_pool',
+      [
+        registry,
+        incremental,
+        downstream('PreparedDocument.cpp'),
+        ...pool,
+        ...engine,
+      ],
+    ],
+    ['test_highlight', engine],
+    ['dump_tokens', [downstream('Unicode.cpp')]],
+  ];
+  const highlightSources = lexillaSources().concat(
+    HIGHLIGHT.map((name) => join(CPP, 'highlight', name))
+  );
+  const cSources = ['md4c.c', 'entity.c'].map((name) => join(MD4C, name));
+  const sources = [
+    ...new Set([
+      ...cSources,
+      ...highlightSources,
+      ...executables.flatMap(([name, dependencies]) => [
+        testSource(`${name}.cpp`),
+        ...dependencies,
+      ]),
     ]),
-    execFileAsync(cxx, [
-      ...cxxFlags,
-      testSource('test_incremental.cpp'),
-      session('IncrementalParser.cpp'),
-      downstream('SegmentPlan.cpp'),
-      ...engine,
-      md4c,
-      entity,
-      lexilla,
+  ];
+  const objects = new Map();
+  await mapConcurrent(sources, async (source) => {
+    const object = binary(`${basename(source)}.o`);
+    const isC = source.endsWith('.c');
+    const compiler = isC ? cc : cxx;
+    const launcher = process.env.DOWNSTREAM_COMPILER_LAUNCHER;
+    await execFileAsync(launcher ?? compiler, [
+      ...(launcher ? [compiler] : []),
+      ...(isC ? cFlags : cxxFlags),
+      '-c',
+      source,
       '-o',
-      binary('test_incremental'),
-    ]),
-    execFileAsync(cxx, [
-      ...cxxFlags,
-      testSource('dump_session.cpp'),
-      session('IncrementalParser.cpp'),
-      ...engine,
-      md4c,
-      entity,
-      lexilla,
-      '-o',
-      binary('dump_session'),
-    ]),
-    execFileAsync(cxx, [
-      ...cxxFlags,
-      testSource('test_preview.cpp'),
-      session('IncrementalParser.cpp'),
-      ...engine,
-      md4c,
-      entity,
-      lexilla,
-      '-o',
-      binary('test_preview'),
-    ]),
-    execFileAsync(cxx, [
-      ...cxxFlags,
-      testSource('test_session_registry.cpp'),
-      session('SessionRegistry.cpp'),
-      session('IncrementalParser.cpp'),
-      ...pool,
-      ...engine,
-      md4c,
-      entity,
-      lexilla,
-      '-o',
-      binary('test_session_registry'),
-    ]),
-    execFileAsync(cxx, [
-      ...cxxFlags,
-      testSource('test_worker_pool.cpp'),
-      session('SessionRegistry.cpp'),
-      session('IncrementalParser.cpp'),
-      downstream('PreparedDocument.cpp'),
-      ...pool,
-      ...engine,
-      md4c,
-      entity,
-      lexilla,
-      '-o',
-      binary('test_worker_pool'),
-    ]),
-    // The highlighter on its own, and the tokens a parse produced.
-    execFileAsync(cxx, [
-      ...cxxFlags,
-      testSource('test_highlight.cpp'),
-      ...engine,
-      md4c,
-      entity,
-      lexilla,
-      '-o',
-      binary('test_highlight'),
-    ]),
-    execFileAsync(cxx, [
-      ...cxxFlags,
-      testSource('dump_tokens.cpp'),
-      downstream('Unicode.cpp'),
-      lexilla,
-      '-o',
-      binary('dump_tokens'),
-    ]),
+      object,
+    ]);
+    objects.set(source, object);
+  });
+  const highlightArchive = binary('libhighlight.a');
+  await execFileAsync('ar', [
+    'rcs',
+    highlightArchive,
+    ...highlightSources.map((source) => objects.get(source)),
   ]);
+  await mapConcurrent(executables, async ([name, dependencies]) => {
+    await execFileAsync(cxx, [
+      '-pthread',
+      objects.get(testSource(`${name}.cpp`)),
+      ...dependencies.map((source) => objects.get(source)),
+      ...cSources.map((source) => objects.get(source)),
+      highlightArchive,
+      '-o',
+      binary(name),
+    ]);
+  });
 });
 
 after(() => {

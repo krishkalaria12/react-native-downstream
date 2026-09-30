@@ -50,6 +50,7 @@
     "test:coverage": "vitest run --coverage",
     "test:native": "node --test src/cpp/tests/engine.test.mjs",
     "bench": "vitest bench --run",
+    "bench:native": "node benchmarks/native-highlight.mjs",
     "release": "release-it --only-version"
   },
   "keywords": [

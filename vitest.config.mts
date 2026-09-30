@@ -20,7 +20,8 @@ function resolveLooseImports(): Plugin {
       if (existsSync(fileURLToPath(new URL(source, from)))) return null;
       for (const extension of ['.js', '.mjs', '.cjs', '.ts', '.tsx']) {
         const candidate = new URL(`${source}${extension}`, from);
-        if (existsSync(fileURLToPath(candidate))) return fileURLToPath(candidate);
+        if (existsSync(fileURLToPath(candidate)))
+          return fileURLToPath(candidate);
       }
       return null;
     },
@@ -55,7 +56,10 @@ export default defineConfig({
         new URL('./benchmarks/worklets-stub.ts', import.meta.url)
       ),
       'react-native-enriched-markdown': fileURLToPath(
-        new URL('./node_modules/react-native-enriched-markdown/lib/module/index.js', import.meta.url)
+        new URL(
+          './node_modules/react-native-enriched-markdown/lib/module/index.js',
+          import.meta.url
+        )
       ),
     },
   },
@@ -66,14 +70,17 @@ export default defineConfig({
   test: {
     server: {
       deps: {
-        inline: [/react-native-streamdown/, /react-native-enriched-markdown/, /remend/],
+        inline: [
+          /react-native-streamdown/,
+          /react-native-enriched-markdown/,
+          /remend/,
+        ],
       },
     },
+    globalSetup: ['./tests/engine.ts'],
     environment: 'happy-dom',
     globals: true,
-    // The first parse compiles the C++ engine, which takes about a second here
-    // and longer on a loaded CI runner. Every other test is far under the
-    // default, so only the compile needs the headroom.
+    // Native binaries are built once in global setup before test workers start.
     testTimeout: 30_000,
     hookTimeout: 60_000,
     include: [
