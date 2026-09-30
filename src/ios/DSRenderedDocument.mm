@@ -296,14 +296,14 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
 @end
 
 @implementation DSTextSegment {
-  NSLock *_heightLock;
-  CGFloat _heightWidth;
-  CGFloat _height;
-  BOOL _hasHeight;
-  NSLock *_widthLock;
-  CGFloat _widthWidth;
-  CGFloat _usedWidth;
-  BOOL _hasUsedWidth;
+  /// One lock and one cached layout per width, so asking for the height and the
+  /// used width of the same width costs one `NSLayoutManager` pass rather than
+  /// two. A code card asks for both.
+  NSLock *_measurementLock;
+  CGFloat _measuredWidth;
+  CGFloat _measuredHeight;
+  CGFloat _measuredUsedWidth;
+  BOOL _hasMeasurement;
 }
 
 /// `inCard` is true for the one-block body of a code card: the card draws the
@@ -317,8 +317,7 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
                   syntaxHighlighting:(BOOL)syntaxHighlighting
                              inCard:(BOOL)inCard {
   DSTextSegment *segment = [DSTextSegment new];
-  segment->_heightLock = [NSLock new];
-  segment->_widthLock = [NSLock new];
+  segment->_measurementLock = [NSLock new];
   NSMutableAttributedString *text = [NSMutableAttributedString new];
   NSMutableArray<DSBlockInfo *> *blocks = [NSMutableArray arrayWithCapacity:to - from];
   NSMutableArray<NSValue *> *blockRanges = [NSMutableArray arrayWithCapacity:to - from];
@@ -444,48 +443,64 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   }
 }
 
-- (CGFloat)heightForWidth:(CGFloat)width {
+/// Measures at `width` if this width has not been measured yet, and hands back
+/// whichever of the two values the caller needs. One layout answers both, which
+/// is what a code card asks for on every measure and every unconstrained width.
+- (void)measureAtWidth:(CGFloat)width height:(CGFloat *)height usedWidth:(CGFloat *)usedWidth {
   if (_attributedString.length == 0) {
-    return 0;
+    if (height != nullptr) {
+      *height = 0;
+    }
+    if (usedWidth != nullptr) {
+      *usedWidth = 0;
+    }
+    return;
   }
-  [_heightLock lock];
-  if (_hasHeight && _heightWidth == width) {
-    const CGFloat height = _height;
-    [_heightLock unlock];
-    return height;
+  [_measurementLock lock];
+  if (_hasMeasurement && _measuredWidth == width) {
+    if (height != nullptr) {
+      *height = _measuredHeight;
+    }
+    if (usedWidth != nullptr) {
+      *usedWidth = _measuredUsedWidth;
+    }
+    [_measurementLock unlock];
+    return;
   }
-  [_heightLock unlock];
+  [_measurementLock unlock];
 
-  CGFloat measured = 0;
-  layoutText(self, _attributedString, width, &measured, nullptr);
-  [_heightLock lock];
-  _heightWidth = width;
-  _height = measured;
-  _hasHeight = YES;
-  [_heightLock unlock];
-  return measured;
+  CGFloat measuredHeight = 0;
+  CGFloat measuredUsedWidth = 0;
+  layoutText(self, _attributedString, width, &measuredHeight, &measuredUsedWidth);
+
+  // Two threads can measure the same width at once. The text and the width are
+  // the same, so both passes produce the same numbers, and the later write is
+  // as good as the first; each caller answers from its own pass either way.
+  [_measurementLock lock];
+  _measuredWidth = width;
+  _measuredHeight = measuredHeight;
+  _measuredUsedWidth = measuredUsedWidth;
+  _hasMeasurement = YES;
+  [_measurementLock unlock];
+
+  if (height != nullptr) {
+    *height = measuredHeight;
+  }
+  if (usedWidth != nullptr) {
+    *usedWidth = measuredUsedWidth;
+  }
+}
+
+- (CGFloat)heightForWidth:(CGFloat)width {
+  CGFloat height = 0;
+  [self measureAtWidth:width height:&height usedWidth:nullptr];
+  return height;
 }
 
 - (CGFloat)usedWidthForWidth:(CGFloat)width {
-  if (_attributedString.length == 0) {
-    return 0;
-  }
-  [_widthLock lock];
-  if (_hasUsedWidth && _widthWidth == width) {
-    const CGFloat used = _usedWidth;
-    [_widthLock unlock];
-    return used;
-  }
-  [_widthLock unlock];
-
-  CGFloat measured = 0;
-  layoutText(self, _attributedString, width, nullptr, &measured);
-  [_widthLock lock];
-  _widthWidth = width;
-  _usedWidth = measured;
-  _hasUsedWidth = YES;
-  [_widthLock unlock];
-  return measured;
+  CGFloat usedWidth = 0;
+  [self measureAtWidth:width height:nullptr usedWidth:&usedWidth];
+  return usedWidth;
 }
 
 @end
@@ -520,7 +535,6 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
                                             inCard:YES];
   segment.language = [NSString stringWithUTF8String:block.language.c_str()];
   segment.blockIndex = static_cast<NSInteger>(index);
-  segment.codeOrdinal = static_cast<uint32_t>(codeBlockOrdinal(document, index));
   NSMutableArray<DSContainerInfo *> *containers = [NSMutableArray new];
   NSMutableArray<NSString *> *spoken = [NSMutableArray new];
   bool inQuote = false;
@@ -719,6 +733,10 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   NSLock *_lock;
   CGFloat _cachedWidth;
   uint32_t _cachedChrome;
+  /// The wrap choices the cached frames were measured under, so a measurement
+  /// is only reused for the choices it was made with.
+  BOOL _cachedCodeBlockWrap;
+  std::vector<uint32_t> _cachedWrapToggles;
   bool _hasCachedFrames;
   NSArray<NSValue *> *_cachedFrames;
 }
@@ -867,6 +885,12 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
                                syntaxHighlighting:syntaxHighlighting
                                           inCard:NO];
     }
+    // The plan counted the code blocks, so the ordinal comes from there rather
+    // than from a walk of the blocks. It is assigned here so a committed segment
+    // taken from the cache gets it too, and cannot carry a stale one.
+    if ([built isKindOfClass:DSCodeSegment.class] && segment.codeOrdinal >= 0) {
+      ((DSCodeSegment *)built).codeOrdinal = static_cast<uint32_t>(segment.codeOrdinal);
+    }
     [segments addObject:built];
     [indexes addObject:@((NSInteger)segment.from)];
     _gaps.push_back(segment.from == 0 ? 0 : baseGap(document.blocks[segment.from], scale));
@@ -890,13 +914,23 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 
 /// The height of one segment at a view width, including whatever control row
 /// the chrome puts above it.
-- (CGFloat)heightOf:(id)segment atWidth:(CGFloat)width chrome:(uint32_t)chrome {
+///
+/// A code block's own layout comes from the reader's wrap choices rather than
+/// from `chrome`, because a document can hold wrapped and unwrapped code at
+/// once and `chrome` says only whether every block wraps. The decision is
+/// `downstream::codeWraps`, the same function the view and the worker use, so a
+/// block's measured height and its drawn height cannot disagree.
+- (CGFloat)heightOf:(id)segment
+            atWidth:(CGFloat)width
+             chrome:(uint32_t)chrome
+       codeBlockWrap:(BOOL)codeBlockWrap
+         wrapToggles:(const std::vector<uint32_t> &)wrapToggles {
   if ([segment isKindOfClass:DSTextSegment.class]) {
     return [(DSTextSegment *)segment heightForWidth:width];
   }
   if ([segment isKindOfClass:DSCodeSegment.class]) {
     DSCodeSegment *code = segment;
-    const BOOL wrapped = (chrome & kChromeCodeWrap) != 0;
+    const BOOL wrapped = codeWraps(codeBlockWrap, wrapToggles, code.codeOrdinal);
     const CGFloat body = [code bodyHeightForWidth:width wrapped:wrapped];
     return 2 * kCodePadding + body + ((chrome & kChromeCodeHeader) != 0 ? [code headerHeight] : 0);
   }
@@ -906,10 +940,13 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 
 /// The width an unconstrained measure takes: the widest thing that does not
 /// fit a view, which is a table's columns or a code line that scrolls.
-- (CGFloat)unconstrainedWidthOf:(id)segment atWidth:(CGFloat)width chrome:(uint32_t)chrome {
+- (CGFloat)unconstrainedWidthOf:(id)segment
+                        atWidth:(CGFloat)width
+                  codeBlockWrap:(BOOL)codeBlockWrap
+                    wrapToggles:(const std::vector<uint32_t> &)wrapToggles {
   if ([segment isKindOfClass:DSCodeSegment.class]) {
     DSCodeSegment *code = segment;
-    const BOOL wrapped = (chrome & kChromeCodeWrap) != 0;
+    const BOOL wrapped = codeWraps(codeBlockWrap, wrapToggles, code.codeOrdinal);
     return code.contentLeading + 2 * kCodePadding + [code bodyWidthForWidth:width wrapped:wrapped];
   }
   if ([segment isKindOfClass:DSTableSegment.class]) {
@@ -919,9 +956,16 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   return 0;
 }
 
-- (NSArray<NSValue *> *)segmentFramesForWidth:(CGFloat)width chrome:(uint32_t)chrome {
+- (NSArray<NSValue *> *)segmentFramesForWidth:(CGFloat)width
+                                     chrome:(uint32_t)chrome
+                              codeBlockWrap:(BOOL)codeBlockWrap
+                                wrapToggles:(const std::vector<uint32_t> &)wrapToggles {
+  // A measurement only holds for the wrap choices it was made under, so those
+  // are part of the key. The set is empty in every document the reader has not
+  // toggled, so this is one size comparison in practice.
   [_lock lock];
-  if (_hasCachedFrames && _cachedWidth == width && _cachedChrome == chrome) {
+  if (_hasCachedFrames && _cachedWidth == width && _cachedChrome == chrome &&
+      _cachedCodeBlockWrap == codeBlockWrap && _cachedWrapToggles == wrapToggles) {
     NSArray *frames = _cachedFrames;
     [_lock unlock];
     return frames;
@@ -936,8 +980,15 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   for (NSUInteger index = 0; index < _segments.count; index++) {
     y += _gaps[index];
     id segment = _segments[index];
-    const CGFloat height = [self heightOf:segment atWidth:width chrome:chrome];
-    unconstrainedWidth = std::max(unconstrainedWidth, [self unconstrainedWidthOf:segment atWidth:width chrome:chrome]);
+    const CGFloat height = [self heightOf:segment
+                                               atWidth:width
+                                                chrome:chrome
+                                          codeBlockWrap:codeBlockWrap
+                                            wrapToggles:wrapToggles];
+    unconstrainedWidth = std::max(unconstrainedWidth, [self unconstrainedWidthOf:segment
+                                                                        atWidth:width
+                                                                  codeBlockWrap:codeBlockWrap
+                                                                    wrapToggles:wrapToggles]);
     const CGFloat top = std::ceil(y);
     // Never shorter than the segment. Rounding both edges up loses up to a
     // point when y is fractional, and a text view lays out only the lines that
@@ -959,14 +1010,22 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   [_lock lock];
   _cachedWidth = width;
   _cachedChrome = chrome;
+  _cachedCodeBlockWrap = codeBlockWrap;
+  _cachedWrapToggles = wrapToggles;
   _hasCachedFrames = YES;
   _cachedFrames = frames;
   [_lock unlock];
   return frames;
 }
 
-- (CGSize)sizeForWidth:(CGFloat)width chrome:(uint32_t)chrome {
-  NSArray<NSValue *> *frames = [self segmentFramesForWidth:width chrome:chrome];
+- (CGSize)sizeForWidth:(CGFloat)width
+                chrome:(uint32_t)chrome
+         codeBlockWrap:(BOOL)codeBlockWrap
+           wrapToggles:(const std::vector<uint32_t> &)wrapToggles {
+  NSArray<NSValue *> *frames = [self segmentFramesForWidth:width
+                                                    chrome:chrome
+                                             codeBlockWrap:codeBlockWrap
+                                               wrapToggles:wrapToggles];
   if (frames.count == 0) {
     return CGSizeZero;
   }

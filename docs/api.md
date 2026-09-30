@@ -55,6 +55,10 @@ previewed.append('hello **wor');
 
 // Every long line wraps, and the code header gains a per-block wrap button.
 <DownstreamMarkdown markdown={message} codeBlockWrap />;
+
+// `selectable` is on by default. An app that opens its own message menu on a
+// long press turns it off, or the platform's selection menu wins the gesture.
+<DownstreamMarkdown markdown={message} selectable={false} />;
 ```
 
 The examples describe the runtime API. A view receives exactly one of `markdown` or `stream`. TypeScript rejects both or neither. A controlled string replacement starts a new generation when its value changes. An unchanged value, including a React rerender, does not reset work. `stream` identity changes unbind the previous controller and bind the new one; they do not copy source between controllers.
@@ -108,9 +112,11 @@ type MarkdownControls =
 
 A code block's header shows copy, download, and wrap. A table shows a toolbar whose copy and download buttons open a format menu: Markdown, CSV, and TSV for copy, CSV and Markdown for download. A control turns on as soon as its own block is settled, so a finished code block can be copied while the rest of the message is still streaming. A block that is still being written shows no control, because its content can still change.
 
-Copying is native and needs no permission. A code block copies its plain text, with a zero-width placeholder removed, so an empty fence copies as an empty string. A table copies as a `text/html` flavor first, so pasting into a spreadsheet or a document keeps the rows, columns, and alignment, and falls back to plain text for targets that do not take HTML. CSV and TSV quoting follows RFC 4180, and `csvSeparator: 'auto'` picks the separator that does not appear inside any cell, preferring `,` then `;` then tab, falling back to `,`.
+Copying is native and needs no permission. A code block copies its plain text, with a zero-width placeholder removed, so an empty fence copies as an empty string. A table copies as a `text/html` flavor first, so pasting into a spreadsheet or a document keeps the rows, columns, and alignment, and falls back to plain text for targets that do not take HTML. A value is quoted in CSV only when it holds the separator, a quote, or a line break, and an inner quote is doubled, which is what Streamdown's web component does; a value in TSV is never quoted, because a tab inside a cell would read as a new column, so a tab, a newline, and a carriage return become the two-character escapes `\t`, `\n`, and `\r` that a spreadsheet shows as text.
 
-`filename` is a base name. The extension comes from the block, not from the name: a fenced block uses the language's extension from a vendored map, an unknown or absent language gets `.txt`, and a table gets `.csv` or `.md`. A table's download menu is CSV and Markdown, matching the formats the plan defines.
+`csvSeparator` applies to a download. `csvSeparator: 'auto'` picks the separator the current locale's numbers suggest: `;` where the locale writes decimals with a comma, and `,` everywhere else. The engine is not given a locale database, so the platform resolves this before the call and the two platforms resolve it the same way.
+
+`filename` is a base name. The extension comes from the block, not from the name: a fenced block uses the language's extension from a vendored map, matched without regard to case so `TS` names a `.ts` file, an unknown or absent language gets `.txt`, and a table gets `.csv` or `.md`. A table's download menu is CSV and Markdown, matching the formats the plan defines.
 
 Downloading opens the platform's own save dialog: `UIDocumentPickerViewController` for exporting on iOS, and a `CreateDocument` `ActivityResultContract` on Android. The user chooses the location, and the library never picks one. A cancelled dialog is not an error and reports nothing.
 
@@ -124,14 +130,16 @@ type MarkdownControlEvent = {
   action: 'copy' | 'download' | 'wrap';
   format?: 'text' | 'markdown' | 'csv' | 'tsv';
   wrapped?: boolean; // wrap only
-  language: string; // fence language as written, lower-cased; '' for tables
+  language: string; // fence language as written; '' for tables
   filename?: string; // downloads
 };
 ```
 
-`onCopy` and `onDownload` observe a press the library has already carried out, so an app can log, toast, or undo. `onToggle` on `wrap` reports the block's layout after the press and takes over nothing: the button still changes the layout, and the event is a report. `codeBlockWrap` sets the starting state for every code block; the button changes one block and does not change the prop.
+`language` is the fence's language in the case the writer used: `ts`, `TS`, and `Ts` all come back as written, so compare it case-insensitively. The download name is the one that is case-insensitive, not this field.
 
-A control that fails reports `control_failed` to that control's own `onError`, and to the view's `onError` when the control has none, so an app can watch every failure in one place without giving up per-control handling.
+`onCopy` and `onDownload` observe a press the library has already carried out, so an app can log, toast, or undo. `onToggle` on `wrap` reports the block's layout after the press and takes over nothing: the button still changes the layout, and the event is a report. `codeBlockWrap` sets the starting state for every code block; the button changes one block and does not change the prop. A press on a document that has since been replaced is dropped, so a handler never sees an event for content the reader is no longer looking at.
+
+A control that fails reports `control_failed` to that control's own `onError`, and to the view's `onError` when the control has none, so an app can watch every failure in one place without giving up per-control handling. The error carries `block` and `action` naming the control that failed, so nothing has to be parsed out of the message.
 
 ## Events and failures
 
@@ -174,7 +182,7 @@ Parsing and platform text preparation run on one shared pool of worker threads: 
 | Tables | Columns take their widest cell, clamped to 56–280 points plus padding, with md4c's column alignment. Wide tables scroll horizontally. Cells keep inline styles and links. Completed rows appear during streaming without resetting the scroll position. A toolbar copies the table as HTML, Markdown, CSV, or TSV and saves it as CSV or Markdown. | None |
 | Admonitions and footnotes | Admonitions render as a quote with a colored bar and title. Footnote references are superscript numbers; definitions follow a rule at the end. | None |
 | Links | Tap hit testing emits `onLinkPress` with a validated URL and the UTF-16 range of its Markdown occurrence, in text and table cells. VoiceOver and TalkBack expose each link as a focusable link role. | Long press actions in a later release. |
-| Selection | `selectable` enables native selection and copy in text segments. Copy is plain visible text; `getSource()` returns the complete canonical stream source. Selection cannot span a table or completed segment boundary. `controls` adds a per-block copy and download, described under [controls](#controls). | None |
+| Selection | `selectable` enables native selection and copy in text segments. **It is on by default**, applied per settled segment, so text that is still streaming is never selectable. Copy is plain visible text; `getSource()` returns the complete canonical stream source. Selection cannot span a table or completed segment boundary. `controls` adds a per-block copy and download, described under [controls](#controls). | An app that opens its own message menu on a long press must pass `selectable={false}`. |
 | Accessibility | VoiceOver and TalkBack expose reading stops for text blocks, table rows, and links, with heading and link roles and spoken task state. | Rich table navigation if needed. |
 | RTL | Text uses natural writing direction. List markers, quote bars, code backgrounds, rules, and table columns mirror for RTL content. | None |
 | Code blocks | Fenced blocks are colored from a shared token palette modeled on GitHub's light and dark code themes, so iOS and Android agree. A streaming block is colored from the text it has, and its settled tokens are the same whether it arrived in one piece or a thousand. Selection and copy return the plain code text. Each fenced block also gets a header with copy, download, and a per-block wrap button; `codeBlockWrap` sets the starting state for all of them. | A theme that can override token colors. |

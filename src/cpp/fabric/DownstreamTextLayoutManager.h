@@ -30,23 +30,30 @@ public:
   static void prepare(const downstream::DocumentHandle &document, const std::vector<downstream::LayoutHint> &hints);
 
   /// Returns the content size for the document at the given width. Results
-  /// are cached by document id, font scale, width, chrome, and the revision of
-  /// the reader's wrap choices; a new source, font scale, width, or chrome is
-  /// always measured again.
+  /// are cached by document id, font scale, width, chrome, and the reader's
+  /// wrap choices; a new source, font scale, width, chrome, or set of choices
+  /// is always measured again.
+  ///
+  /// The wrap choices are part of the key and part of the call because a
+  /// document can hold wrapped and unwrapped code at once, and a block's height
+  /// depends on which it is. The platform decides each block through
+  /// `downstream::codeWraps`, the same function the view draws with.
   Size measure(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
-               const LayoutConstraints &layoutConstraints, SurfaceId surfaceId, uint32_t chrome,
-               uint32_t revision) const;
+               const LayoutConstraints &layoutConstraints, SurfaceId surfaceId, uint32_t chrome, bool codeBlockWrap,
+               const std::vector<uint32_t> &wrapToggles) const;
 
 private:
   Size measurePlatform(const downstream::DocumentHandle &document, Float fontSizeMultiplier, Float maximumWidth,
-                       SurfaceId surfaceId, uint32_t chrome) const;
+                       SurfaceId surfaceId, uint32_t chrome, bool codeBlockWrap,
+                       const std::vector<uint32_t> &wrapToggles) const;
 
   struct CacheEntry {
     uint64_t documentId;
     Float fontSizeMultiplier;
     Float maximumWidth;
     uint32_t chrome;
-    uint32_t revision;
+    bool codeBlockWrap;
+    std::vector<uint32_t> wrapToggles;
     Size size;
   };
 

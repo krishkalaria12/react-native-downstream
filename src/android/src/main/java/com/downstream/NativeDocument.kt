@@ -129,6 +129,12 @@ internal class PlannedSegment(
   val identity: Long,
   /** Leading blocks of the document no later input can change. */
   val settledBlocks: Int,
+  /**
+   * The code block's ordinal among the document's code blocks, which a reader's
+   * wrap choice is keyed by, or -1 for any other segment. The plan counts them
+   * as it is built, so a wrap choice resolves without walking the document.
+   */
+  val codeOrdinal: Int,
 )
 
 internal class NativeLink(val url: String, val start: Int, val end: Int)
@@ -160,12 +166,17 @@ internal object DownstreamNative {
    */
   @JvmStatic
   @DoNotStrip
-  fun prepare(documentId: Long, fontScale: Float, width: Float, chrome: Int) {
+  fun prepare(documentId: Long, fontScale: Float, width: Float, chrome: Int, codeBlockWrap: Boolean, wrapToggles: IntArray) {
     val context = preparationContext?.get() ?: return
     try {
       val rendered = RenderedDocument.obtain(context, documentId, fontScale) ?: return
       if (width.isFinite() && width > 0) {
-        rendered.height(PixelUtil.toPixelFromDIP(width).toInt(), chrome)
+        rendered.height(
+          PixelUtil.toPixelFromDIP(width).toInt(),
+          chrome,
+          codeBlockWrap,
+          wrapToggles,
+        )
       }
     } catch (error: RuntimeException) {
       // Measurement builds the rendering again on its own thread.
@@ -200,6 +211,7 @@ internal object DownstreamNative {
         flags and 4 != 0,
         values[it + 3],
         values[it + 4].toInt(),
+        values[it + 5].toInt(),
       )
     }
   }
@@ -214,7 +226,7 @@ internal object DownstreamNative {
   fun traceDocument(id: Long, event: String) = nativeTraceDocument(id, event)
   fun isTracingDocument(id: Long) = nativeIsTracingDocument(id)
 
-  private const val PLAN_STRIDE = 5
+  private const val PLAN_STRIDE = 6
 
   // Implemented in DownstreamJni.cpp, which links into libappmodules.so.
   @JvmStatic

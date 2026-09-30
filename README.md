@@ -74,6 +74,8 @@ Code copies as plain text; a table copies as `text/html` first, so pasting into 
 
 A download opens the platform's own save dialog and the user picks the location, so the library never writes to a path it chose. `filename` is a base name; the extension comes from the block, not from the name. Every press reaches the matching callback, and a failure reports `control_failed` to that control's `onError` or to the view's. A control turns on as soon as its own block is settled, so a finished code block can be copied while the rest of the answer is still streaming. See [controls](docs/api.md#controls) for the whole shape.
 
+`selectable` is on by default: a long press on settled text starts a text selection, and text that is still streaming is never selectable. An app that opens its own message menu on a long press — react, reply, delete — passes `selectable={false}`.
+
 ## Contributing
 
 - [Development workflow](CONTRIBUTING.md#development-workflow)

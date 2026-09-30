@@ -8,14 +8,20 @@ namespace facebook::react {
 // thread, so measurement runs on the layout thread without blocking UIKit.
 Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHandle &document,
                                                   Float fontSizeMultiplier, Float maximumWidth,
-                                                  SurfaceId /*surfaceId*/, uint32_t chrome) const {
+                                                  SurfaceId /*surfaceId*/, uint32_t chrome, bool codeBlockWrap,
+                                                  const std::vector<uint32_t> &wrapToggles) const {
   @autoreleasepool {
     // Colors do not change metrics, so a measurement is valid whether or not
     // the view turns them on; the view builds the rendering it draws.
     DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:document
                                                                  fontScale:fontSizeMultiplier
                                                         syntaxHighlighting:YES];
-    const CGSize size = [rendered sizeForWidth:maximumWidth chrome:chrome];
+    // The wrap choices come along, because a code block's height depends on
+    // whether it wraps and a document can hold both kinds at once.
+    const CGSize size = [rendered sizeForWidth:maximumWidth
+                                        chrome:chrome
+                                 codeBlockWrap:codeBlockWrap
+                                   wrapToggles:wrapToggles];
     return {static_cast<Float>(size.width), static_cast<Float>(size.height)};
   }
 }
@@ -27,7 +33,10 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
       DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:document
                                                                    fontScale:hint.fontScale
                                                       syntaxHighlighting:YES];
-      [rendered sizeForWidth:hint.width chrome:hint.chrome];
+      [rendered sizeForWidth:hint.width
+                     chrome:hint.chrome
+              codeBlockWrap:hint.codeBlockWrap
+                wrapToggles:hint.wrapToggles];
     }
   }
 }

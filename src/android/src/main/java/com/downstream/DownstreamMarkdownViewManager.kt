@@ -115,6 +115,9 @@ class DownstreamMarkdownViewManager :
         ordinals.add(toggles.getDouble(index).toInt())
       }
     }
+    // The prop's own wrap setting travels beside the set, because together they
+    // decide each block's layout and neither half can be inferred from `chrome`.
+    view.setCodeBlockWrap((state.getDouble("codeBlockWrap") ?: 0.0) != 0.0)
     view.setCodeWrapToggles(ordinals)
     view.setChrome(state.getDouble("chrome").toInt())
     view.setDocument(state.getDouble("documentId").toLong(), state.getDouble("fontScale").toFloat())
@@ -141,19 +144,32 @@ class DownstreamMarkdownViewManager :
     val documentId = localData?.getDouble("documentId")?.toLong() ?: 0L
     val fontScale = localData?.getDouble("fontScale")?.toFloat() ?: 1f
     val chrome = localData?.getDouble("chrome")?.toInt() ?: 0
+    // The reader's wrap choices travel in the state beside the document, because
+    // a code block's height depends on whether it wraps and a document can hold
+    // both kinds at once. Measuring without them would measure a different
+    // layout from the one the view draws.
+    val codeBlockWrap = (localData?.getDouble("codeBlockWrap") ?: 0.0) != 0.0
+    val toggles = localData?.getArray("wrapToggles")
+    val wrapToggles = if (toggles == null) {
+      IntArray(0)
+    } else {
+      IntArray(toggles.size()) { toggles.getDouble(it).toInt() }
+    }
     if (DownstreamNative.preparationContext?.get() !== context) {
       DownstreamNative.preparationContext = WeakReference(context)
     }
     val rendered = RenderedDocument.obtain(context, documentId, fontScale)
       ?: return YogaMeasureOutput.make(0f, 0f)
     val layoutWidth = if (widthMode == YogaMeasureMode.UNDEFINED || !width.isFinite()) {
-      rendered.desiredWidth(chrome)
+      rendered.desiredWidth(chrome, codeBlockWrap, wrapToggles)
     } else {
       width.toInt()
     }
     return YogaMeasureOutput.make(
       PixelUtil.toDIPFromPixel(layoutWidth.toFloat()),
-      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth, chrome).toFloat()),
+      PixelUtil.toDIPFromPixel(
+        rendered.height(layoutWidth, chrome, codeBlockWrap, wrapToggles).toFloat(),
+      ),
     )
   }
 
@@ -185,14 +201,24 @@ class DownstreamMarkdownViewManager :
     val context = view.context as? ReactContext ?: return
     dispatch(
       view,
-      ControlActionEvent(UIManagerHelper.getSurfaceId(context), view.id, block, action, format, language, filename),
+      ControlActionEvent(
+        UIManagerHelper.getSurfaceId(context),
+        view.id,
+        block,
+        action,
+        format,
+        language,
+        filename,
+        false,
+        view.currentGeneration(),
+      ),
     )
   }
 
   /**
-   * A control failure arrives on the existing error path, tagged with the
-   * control it came from, so a per-control onError and the view's own onError
-   * can both find it without a second event.
+   * A control failure arrives on the existing error path, tagged with the block
+   * and action it came from, so a per-control onError and the view's own onError
+   * can both find it without a second event and without reading the message.
    */
   private fun dispatchControlFailure(view: DownstreamMarkdownView, block: String, action: String, message: String) {
     val context = view.context as? ReactContext ?: return
@@ -205,6 +231,8 @@ class DownstreamMarkdownViewManager :
         "control_failed",
         "$block $action failed: $message",
         generation,
+        block,
+        action,
       ),
     )
   }
@@ -229,6 +257,7 @@ class DownstreamMarkdownViewManager :
         "",
         "",
         wrapped,
+        view.currentGeneration(),
       ),
     )
   }
@@ -267,6 +296,7 @@ private class ControlActionEvent(
   private val language: String,
   private val filename: String,
   private val wrapped: Boolean = false,
+  private val generation: Int,
 ) : Event<ControlActionEvent>(surfaceId, viewTag) {
   override fun getEventName() = NAME
 
@@ -277,6 +307,7 @@ private class ControlActionEvent(
     putString("language", language)
     putString("filename", filename)
     putBoolean("wrapped", wrapped)
+    putInt("generation", generation)
   }
 
   companion object {
@@ -290,6 +321,8 @@ private class MarkdownErrorEvent(
   private val code: String,
   private val message: String,
   private val generation: Int,
+  private val block: String = "",
+  private val action: String = "",
 ) : Event<MarkdownErrorEvent>(surfaceId, viewTag) {
   override fun getEventName() = NAME
 
@@ -299,6 +332,8 @@ private class MarkdownErrorEvent(
     putInt("generation", generation)
     putInt("sequence", 0)
     putBoolean("recoverable", true)
+    putString("block", block)
+    putString("action", action)
   }
 
   companion object {

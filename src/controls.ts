@@ -102,6 +102,10 @@ function sectionEnabled(
   key: 'code' | 'table'
 ): boolean {
   if (typeof controls === 'boolean') return controls;
+  // `null` is not one of the shapes `MarkdownControls` allows, but a value from
+  // JSON or a config file can be one, and reading a key off it would throw where
+  // every other accessor here treats it as absent.
+  if (typeof controls !== 'object' || controls === null) return true;
   return (controls as Section)[key] !== false;
 }
 

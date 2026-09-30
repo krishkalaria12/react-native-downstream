@@ -105,7 +105,8 @@ public:
     switch (type) {
       case MD_BLOCK_QUOTE:
         pushContainer(ContainerKind::Quote, u"", TaskState::None);
-        break;      case MD_BLOCK_UL: {
+        break;
+      case MD_BLOCK_UL: {
         const auto *ul = static_cast<MD_BLOCK_UL_DETAIL *>(detail);
         size_t unorderedDepth = 0;
         for (const auto &list : lists_) {
@@ -321,11 +322,14 @@ public:
 
   int text(MD_TEXTTYPE type, const MD_CHAR *text, MD_SIZE size) {
     ensureLeaf();
-    // A code block arrives as a counted verbatim line, and md4c reports a NUL
-    // in one both as MD_TEXT_NULLCHAR and as a byte inside the chunk that
-    // follows it. The NULCHAR is the notice; this is the byte, so it is skipped
-    // rather than decoded into a NUL that would truncate every C string it
-    // reached. A NUL in prose never gets here: md4c reports only the notice.
+    // A code block arrives as a counted verbatim line, and md4c's own NUL
+    // splitter hands back the chunk that follows a NUL starting *at* that NUL:
+    // it reports `text(MD_TEXT_NULLCHAR, "", 1)` and then calls back with the
+    // pointer it has not advanced past the NUL and a length that still counts
+    // it. The notice is the first callback, so this byte is a duplicate of it
+    // rather than a new one, and skipping it leaves the chunk holding exactly
+    // the code that follows. A NUL in prose is only ever the notice, and a code
+    // span goes through the same splitter, so both arrive the same way.
     if (size > 0 && type != MD_TEXT_NULLCHAR) {
       while (size > 0 && *text == '\0') {
         text++;

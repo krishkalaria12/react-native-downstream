@@ -49,7 +49,7 @@ Java_com_downstream_DownstreamNative_nativeInstallPreparer(JNIEnv *env, jclass c
   if (javaReady.load(std::memory_order_relaxed)) {
     return;
   }
-  const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JFFI)V");
+  const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JFFIZI[I)V");
   if (method == nullptr || env->GetJavaVM(&javaVm) != JNI_OK) {
     env->ExceptionClear();
     return;
@@ -67,7 +67,8 @@ namespace facebook::react {
 // StaticLayout configuration the view draws with.
 Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHandle &document,
                                                   Float fontSizeMultiplier, Float maximumWidth,
-                                                  SurfaceId surfaceId, uint32_t chrome) const {
+                                                  SurfaceId surfaceId, uint32_t chrome, bool codeBlockWrap,
+                                                  const std::vector<uint32_t> &wrapToggles) const {
   downstream::DocumentRegistry::add(document);
 
   const auto &fabricUIManager = contextContainer_->at<jni::global_ref<jobject>>("FabricUIManager");
@@ -76,10 +77,18 @@ Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHand
           ->getMethod<jlong(jint, jstring, ReadableMap::javaobject, ReadableMap::javaobject, ReadableMap::javaobject,
                             jfloat, jfloat, jfloat, jfloat)>("measure");
 
-  // The chrome travels with the document so the view manager measures at the
-  // height the same chrome produces, which is what the view then lays out.
+  // The chrome and the reader's wrap choices travel with the document, so the
+  // view manager measures at the height the same layout produces, which is what
+  // the view then lays out. A code block's height depends on whether it wraps,
+  // and a document can hold wrapped and unwrapped code at once, so the choices
+  // are part of the measurement rather than something the view resolves later.
+  folly::dynamic toggleArray = folly::dynamic::array();
+  for (const uint32_t ordinal : wrapToggles) {
+    toggleArray.push_back(static_cast<double>(ordinal));
+  }
   folly::dynamic localData = folly::dynamic::object("documentId", static_cast<double>(document->id))(
-      "fontScale", static_cast<double>(fontSizeMultiplier))("chrome", static_cast<double>(chrome));
+      "fontScale", static_cast<double>(fontSizeMultiplier))("chrome", static_cast<double>(chrome))(
+      "codeBlockWrap", codeBlockWrap ? 1.0 : 0.0)("wrapToggles", std::move(toggleArray));
   auto localDataMap = ReadableNativeMap::newObjectCxxArgs(std::move(localData));
   auto propsMap = ReadableNativeMap::newObjectCxxArgs(folly::dynamic::object());
   auto componentName = make_jstring("DownstreamMarkdownView");
@@ -105,9 +114,18 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
   }
   downstream::DocumentRegistry::add(document);
   for (const auto &hint : hints) {
+    // The wrap choices come with the hint, because a prepared height is only
+    // the height of the layout the reader actually has.
+    jintArray toggles = env->NewIntArray(static_cast<jsize>(hint.wrapToggles.size()));
+    if (toggles != nullptr && !hint.wrapToggles.empty()) {
+      std::vector<jint> values(hint.wrapToggles.begin(), hint.wrapToggles.end());
+      env->SetIntArrayRegion(toggles, 0, static_cast<jsize>(values.size()), values.data());
+    }
     env->CallStaticVoidMethod(nativeClass, prepareMethod, static_cast<jlong>(document->id),
                               static_cast<jfloat>(hint.fontScale), static_cast<jfloat>(hint.width),
-                              static_cast<jint>(hint.chrome));
+                              static_cast<jint>(hint.chrome),
+                              static_cast<jboolean>(hint.codeBlockWrap ? JNI_TRUE : JNI_FALSE), toggles);
+    env->DeleteLocalRef(toggles);
     if (env->ExceptionCheck()) {
       env->ExceptionClear();
       return;

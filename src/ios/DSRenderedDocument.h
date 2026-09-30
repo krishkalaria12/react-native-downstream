@@ -154,10 +154,17 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 
 /// Segment frames stacked at a width. Safe to call from any thread.
 ///
-/// `chrome` is part of the key rather than the rendering, so a change to it
-/// restacks frames without rebuilding any attributed text.
-- (NSArray<NSValue *> *)segmentFramesForWidth:(CGFloat)width chrome:(uint32_t)chrome;
-- (CGSize)sizeForWidth:(CGFloat)width chrome:(uint32_t)chrome;
+/// `chrome` and the reader's wrap choices are part of the key rather than the
+/// rendering, so a change to either restacks frames without rebuilding any
+/// attributed text.
+- (NSArray<NSValue *> *)segmentFramesForWidth:(CGFloat)width
+                                     chrome:(uint32_t)chrome
+                              codeBlockWrap:(BOOL)codeBlockWrap
+                                wrapToggles:(const std::vector<uint32_t> &)wrapToggles;
+- (CGSize)sizeForWidth:(CGFloat)width
+                chrome:(uint32_t)chrome
+         codeBlockWrap:(BOOL)codeBlockWrap
+           wrapToggles:(const std::vector<uint32_t> &)wrapToggles;
 /// The chrome a view lays out with for the props it has.
 - (uint32_t)chromeForControls:(uint32_t)controls codeBlockWrap:(BOOL)codeBlockWrap;
 

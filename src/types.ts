@@ -22,6 +22,14 @@ export type MarkdownErrorEvent = Readonly<{
   generation: number;
   sequence: number;
   recoverable: boolean;
+  /**
+   * The control a `control_failed` names. Present only for that code, so an
+   * app can route a failure to the control that reported it and can tell an app
+   * *which* control failed without parsing the message.
+   */
+  block?: MarkdownControlKind;
+  /** The action that failed; present only alongside `block`. */
+  action?: MarkdownControlAction;
 }>;
 
 /** Thrown by rejected synchronous stream operations. */
@@ -92,15 +100,25 @@ export interface MarkdownStreamController {
   setPreview(options: boolean | MarkdownPreviewOptions): void;
 }
 
+/** Which kind of block a control acted on. */
+export type MarkdownControlKind = 'code' | 'table';
+
+/** What a control button did. */
+export type MarkdownControlAction = 'copy' | 'download' | 'wrap';
+
 /** What a native control button did, reported to the matching callback. */
 export type MarkdownControlEvent = Readonly<{
-  block: 'code' | 'table';
-  action: 'copy' | 'download' | 'wrap';
+  block: MarkdownControlKind;
+  action: MarkdownControlAction;
   /** Copy and download only. */
   format?: 'text' | 'markdown' | 'csv' | 'tsv';
   /** Wrap only: the block's layout after the press. */
   wrapped?: boolean;
-  /** Fence language as written, lower-cased; '' for indented code and tables. */
+  /**
+   * Fence language as written, in the case the writer used: `ts`, `TS`, and
+   * `Ts` all come back as written. It is not a normalized key, so compare
+   * case-insensitively.
+   */
   language: string;
   /** Saved file name, for downloads. */
   filename?: string;

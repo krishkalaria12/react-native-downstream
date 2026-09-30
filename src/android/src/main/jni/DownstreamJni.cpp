@@ -151,10 +151,11 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env, jclass /*cl
   return result;
 }
 
-/// The document's segments as [from, to, flags, identity, settled] per segment,
-/// where flags bit 0 is a table, bit 1 is committed, and bit 2 is code. The
-/// settled count is the document's, repeated on every segment because there is
-/// one per document. Layout must match NativeDocument.kt.
+/// The document's segments as [from, to, flags, identity, settled, codeOrdinal]
+/// per segment, where flags bit 0 is a table, bit 1 is committed, and bit 2 is
+/// code. The settled count is the document's, repeated on every segment because
+/// there is one per document, and the ordinal is the code block's own, or -1.
+/// Layout must match NativeDocument.kt.
 extern "C" JNIEXPORT jlongArray JNICALL
 Java_com_downstream_DownstreamNative_nativeSegmentPlan(JNIEnv *env, jclass /*clazz*/, jlong id) {
   const DocumentHandle document = DocumentRegistry::find(static_cast<uint64_t>(id));
@@ -170,6 +171,7 @@ Java_com_downstream_DownstreamNative_nativeSegmentPlan(JNIEnv *env, jclass /*cla
                                         (segment.isCode() ? 4 : 0),
                                     static_cast<jlong>(document->blocks[segment.from].identity),
                                     static_cast<jlong>(document->settledBlocks),
+                                    static_cast<jlong>(segment.codeOrdinal),
                                 });
   }
   jlongArray array = env->NewLongArray(static_cast<jsize>(values.size()));

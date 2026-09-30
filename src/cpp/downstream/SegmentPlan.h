@@ -26,6 +26,11 @@ struct SegmentPlan {
   size_t from{0};
   size_t to{0};
   SegmentKind kind{SegmentKind::Text};
+  /// Code segments only: the block's ordinal among the document's code blocks.
+  /// It is counted as the plan is built, so a platform resolves a reader's wrap
+  /// choice for a block in constant time however many code blocks precede it.
+  /// -1 for every other segment.
+  int32_t codeOrdinal{-1};
   /// Every block is committed. Committed blocks never change under their
   /// identity, so a committed segment is keyed by its first block's identity
   /// and its block count, and can be reused by later snapshots.
@@ -42,11 +47,5 @@ std::vector<SegmentPlan> planSegments(const Document &document);
 
 /// The synthetic title paragraph is the first block inside an admonition.
 bool isAdmonitionTitle(const Document &document, size_t index);
-
-/// The block's ordinal among the document's code blocks, or -1 when it is not
-/// one. A reader's wrap choice is keyed by this rather than by the block index,
-/// because ordinals are stable across append-only snapshots and so a choice
-/// survives the blocks before it being rewritten.
-int32_t codeBlockOrdinal(const Document &document, size_t index);
 
 } // namespace downstream
