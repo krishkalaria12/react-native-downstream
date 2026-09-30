@@ -14,4 +14,8 @@ minimumReleaseAgeExclude:
   - '@ai-sdk/provider@4.0.19'
   - ai@7.0.122
 patchedDependencies:
+  # SDK 55 links libworklets.so from intermediates/cmake/, which AGP 8 no longer
+  # writes, so the example's Android build fails in Debug and Release. This
+  # backports SDK 56's lookup through worklets' prefab package; drop it with 56.
+  expo-modules-core@55.0.26: patches/expo-modules-core@55.0.26.patch
   metro@0.83.8: patches/metro@0.83.8.patch
