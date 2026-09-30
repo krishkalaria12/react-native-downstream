@@ -60,6 +60,11 @@ const PARSE_MODES: ChipOption<ParseMode>[] = [
   { value: 'incremental', label: 'Incremental tail' },
 ];
 
+const HIGHLIGHTING: ChipOption<'on' | 'off'>[] = [
+  { value: 'on', label: 'On' },
+  { value: 'off', label: 'Off' },
+];
+
 const SIZES: ChipOption<WorkloadSize>[] = [
   { value: 'fixture', label: 'Fixture' },
   { value: 10, label: '10 KiB' },
@@ -93,12 +98,14 @@ function Pane({
   liveSource,
   liveStream,
   running,
+  syntaxHighlighting,
 }: {
   candidate: ComparisonCandidate;
   run: ComparisonRun | null;
   liveSource: string;
   liveStream: MarkdownStreamController | null;
   running: boolean;
+  syntaxHighlighting: boolean;
 }) {
   const t = useTheme();
   const source = run ? run.metrics.source : liveSource;
@@ -121,7 +128,10 @@ function Pane({
       {candidate === 'streamdown' ? (
         <StreamdownMarkdown markdown={source} />
       ) : stream ? (
-        <DownstreamMarkdown stream={stream} />
+        <DownstreamMarkdown
+          stream={stream}
+          syntaxHighlighting={syntaxHighlighting}
+        />
       ) : (
         // An empty view keeps the Downstream pane mounted, and in the same
         // place in the tree, while Streamdown is the candidate under test.
@@ -208,6 +218,7 @@ export function CompareScreen() {
   const [workloadSize, setWorkloadSize] = useState<WorkloadSize>('fixture');
   const [schedule, setSchedule] = useState<ScheduleKind>('manifest');
   const [parseMode, setParseMode] = useState<ParseMode>('full');
+  const [highlighting, setHighlighting] = useState<'on' | 'off'>('on');
   const scroll = useScreenScroll();
   const bottom = useBottomInset();
   const t = useTheme();
@@ -317,6 +328,15 @@ export function CompareScreen() {
             />
           </Group>
 
+          <Group title="Downstream code colors">
+            <ChipRow
+              inset
+              options={HIGHLIGHTING}
+              value={highlighting}
+              onChange={setHighlighting}
+            />
+          </Group>
+
           <ButtonRow>
             <Button
               label={running ? 'Running' : 'Run comparison'}
@@ -380,6 +400,7 @@ export function CompareScreen() {
               liveSource={view.active === index ? view.liveSource : ''}
               liveStream={view.active === index ? view.liveStream : null}
               running={view.active === index}
+              syntaxHighlighting={highlighting === 'on'}
             />
           ))}
 

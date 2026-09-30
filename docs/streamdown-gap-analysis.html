@@ -75,6 +75,7 @@
       td:nth-child(2) { width: 18%; color: var(--ink-soft); }
       .tag { display: inline-block; font: 700 0.7rem/1 var(--mono); padding: 0.28rem 0.42rem; border-radius: 3px; margin: 0.1rem 0.25rem 0.1rem 0; white-space: nowrap; }
       .tag.planned { background: var(--accent-soft); color: var(--accent); }
+      .tag.done { background: var(--accent-soft); color: var(--accent); }
       .tag.new { background: var(--tail-soft); color: var(--tail); }
       .tag.scope { background: var(--risk-soft); color: var(--risk); }
       .legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; font-size: 0.85rem; color: var(--ink-soft); margin: 0.4rem 0 0; }
@@ -117,6 +118,7 @@
         </div>
         <div class="legend">
           <span><span class="tag planned">planned</span>listed as a later release in <code>docs/api.md</code></span>
+          <span><span class="tag done">shipped</span>in this build</span>
           <span><span class="tag new">not planned</span>not mentioned in the contract yet</span>
           <span><span class="tag scope">contract change</span>the contract rules it out today</span>
         </div>
@@ -132,9 +134,9 @@
             <thead><tr><th>Streamdown feature</th><th>Downstream today</th><th>Notes</th></tr></thead>
             <tbody>
               <tr>
-                <td>Syntax highlighting<br /><span class="tag planned">planned</span></td>
-                <td>Plain monospace</td>
-                <td><code>plugins.code</code> uses Shiki with a light and dark theme pair and delivers tokens asynchronously. Natively this needs a highlighter that runs without a web view, or a JS tokenizer that returns style runs. The contract already caps highlighting at 64 KiB of code.</td>
+                <td>Syntax highlighting<br /><span class="tag done">shipped</span></td>
+                <td>Colored native code, on by default, with <code>syntaxHighlighting={'{false}'}</code> to turn it off</td>
+                <td>Shipped in <a href="syntax-highlighting-plan.html">the syntax highlighting plan</a>: vendored Lexilla lexers in <code>src/cpp/lexilla/</code> tokenize on the shared worker pool, iOS and Android read one GitHub-themed palette, and the 64 KiB cap and no-auto-detect rule are kept. Fidelity is Notepad++-like rather than Shiki's: a per-line post-pass promotes a call, a property, and a PascalCase type, and JSX tags are the weakest case.</td>
               </tr>
               <tr>
                 <td>Code block header, line numbers, max height<br /><span class="tag new">not planned</span></td>
@@ -261,7 +263,7 @@
         <ol class="order">
           <li><b>Theme and style prop</b><span>Unblocks adoption; every later feature needs styling hooks anyway.</span></li>
           <li><b>Code block header, copy, meta string, max height</b><span>Keep the fence meta string in the parser and add a code segment with its own chrome.</span></li>
-          <li><b>Syntax highlighting</b><span>Builds on the code segment; respect the 64 KiB cap.</span></li>
+          <li><b>Syntax highlighting</b><span>Shipped. Kept here so the order reads as it was planned.</span></li>
           <li><b>Streaming caret and fade-in</b><span>The biggest perceived-quality gap in chat.</span></li>
           <li><b>Fence-language renderers</b><span>Needs a contract change and a React-hosting segment; opens the door to diagrams without core dependencies.</span></li>
           <li><b>Images</b><span>Already specified in the contract.</span></li>
@@ -269,7 +271,7 @@
           <li><b>Sub, sup and line breaks</b><span>Through the safe HTML subset or md4c's syntax flags.</span></li>
         </ol>
         <div class="callout">
-          <p>This keeps the rule from <a href="feature-matrix.md">the feature matrix</a>: plain prose stays independent of the heavier paths. Highlighting, images, math and diagrams must load only when a document uses them.</p>
+          <p>This keeps the rule from <a href="feature-matrix.md">the feature matrix</a>: plain prose stays independent of the heavier paths. Highlighting, images, math and diagrams must load only when a document uses them, and a document with no fenced code never loads a lexer.</p>
         </div>
       </section>
     </main>

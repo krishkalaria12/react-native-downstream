@@ -124,8 +124,9 @@
     <div class="shell">
       <aside class="rail">
         <p class="rail-title">Syntax highlighting</p>
-        <p class="rail-subtitle">Implementation plan · first item from the Streamdown gap analysis</p>
+        <p class="rail-subtitle">Implementation plan and outcome · first item from the Streamdown gap analysis</p>
         <nav aria-label="Sections">
+          <a href="#built">What was built</a>
           <a href="#constraints">Constraints</a>
           <a href="#options">Options surveyed</a>
           <a href="#measurements">Measurements</a>
@@ -353,7 +354,10 @@ struct Block {
             <h3>Where it runs</h3>
             <ul>
               <li><b>Controlled <code>markdown</code>.</b> <code>PreparedDocument::prepare</code> tokenizes each code block after the parse, on the same worker job. The 16 KiB synchronous-layout threshold includes this time.</li>
-              <li><b>Streams.</b> <code>IncrementalParser</code> owns a <code>HighlightCache</code> and tokenizes the tail's code block while building each snapshot. Committed blocks are tokenized once, when they commit.</li>
+              <li><b>Streams.</b> <code>IncrementalParser</code> owns a <code>HighlightCache</code> and tokenizes the tail's code blocks while building each snapshot. The last one is the only block that can still grow, so it resumes from the previous snapshot. Committed blocks are tokenized once, when they commit.</li>
+              <li>
+                <b>Every code block in the tail is colored on every snapshot.</b> Each pass rebuilds the tail from scratch, so a settled code block inside it starts with no tokens and would publish uncolored every time. The blocks before the growing one share one throwaway state, so they share a lexer without disturbing the resume state. Committing is what makes a block's coloring permanent, and the commit region is what keeps the tail short.
+              </li>
               <li><b>Limits.</b> A block over 64 KiB of UTF-8 gets no tokens. A per-snapshot budget (initial value 4 ms, tuned from Bench traces) stops tokenizing a single snapshot early; the rest of the block stays plain until the next snapshot resumes it.</li>
             </ul>
           </section>
@@ -436,7 +440,125 @@ struct Block {
             <p>More lexers (PowerShell, Perl, R, Makefile, Kotlin- or Swift-specific rules) are additions to the table plus one vendored file each, gated on the size check in Phase 1.</p>
           </section>
 
-          <section id="phases">
+          <section id="built">
+          <div class="section-head">
+            <h2 id="built-anchor">What was built</h2>
+            <p>The plan above is the design record. This is where it landed, and the three places it did not.</p>
+          </div>
+          <p>
+            All five phases are in the tree. The engine is in <code>src/cpp/highlight/</code> and the vendored lexers in <code>src/cpp/lexilla/</code>, both built as their own targets with the same namespace renames the vendored md4c uses. A controlled document is colored in
+            <code>PreparedDocument::prepare</code>; a stream colors a committed block once, when it commits, and its growing tail from a
+            <code>HighlightState</code> that resumes at the last complete line. iOS and Android read one palette from
+            <code>TokenPalette.h</code>, and <code>syntaxHighlighting</code> only chooses which rendering they build.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Phase</th><th>Where it landed</th><th>What proved it</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td>1 · Engine core</td>
+                  <td><code>src/cpp/lexilla/</code>, <code>src/cpp/highlight/</code>, <code>generate-tables.mjs</code></td>
+                  <td>Golden token fixtures for every alias group; a stripped arm64 build of the lexers and the highlighter is 288&nbsp;KB, of which 22&nbsp;KB is the generated table, so the size delta is inside the 400&nbsp;KB budget.</td>
+                </tr>
+                <tr>
+                  <td>2 · Wire into parsing</td>
+                  <td><code>PreparedDocument.cpp</code>, <code>IncrementalParser.cpp</code></td>
+                  <td>Every existing incremental case now compares tokens as well as text, and a dedicated sweep streams each code sample in chunks of 1, 3, 7, 40, and 512 bytes in both parse modes.</td>
+                </tr>
+                <tr>
+                  <td>3 · Platform rendering and prop</td>
+                  <td><code>DSRenderedDocument.mm</code>, <code>DownstreamJni.cpp</code>, <code>RenderedDocument.kt</code></td>
+                  <td>The <code>dump_session</code> counters show a growing block resuming rather than restarting; the Testing screen has an on/off control for the prop.</td>
+                </tr>
+                <tr>
+                  <td>4 · Fidelity pass</td>
+                  <td><code>buildRuns</code> in <code>CodeHighlighter.cpp</code></td>
+                  <td>The post-pass promotes a call, a property, and a PascalCase type, and the golden fixtures pin the result for every language. Template interpolation needed no pass: <code>lexer.cpp.backquoted.strings</code> already splits <code>${&hellip;}</code> out for JavaScript and TypeScript.</td>
+                </tr>
+                <tr>
+                  <td>5 · Docs</td>
+                  <td><code>docs/api.md</code>, <code>docs/feature-matrix.md</code>, the gap analysis, the README</td>
+                  <td>&nbsp;</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <h3>Where it differs from the plan</h3>
+          <ul>
+            <li>
+              <b>The prop is a view prop, not part of the mounting state.</b> Measurement does not read it. Colors do not change metrics, so a
+              measurement is valid whether they are on or off, and the layout manager warms the rendering with them on. The view builds the one it
+              draws, and the flag is part of both platforms' rendering cache keys as planned.
+            </li>
+            <li>
+              <b>Counters live in <code>IncrementalCounters</code> only.</b> There is no counter readout to add them to: the example's Bench screen
+              shows timings from a JavaScript trace and the engine's counters never crossed the TurboModule. They are readable from
+              <code>dump_session</code>, which is what the tests assert on. Wiring them to the example's screens is a separate piece of work.
+            </li>
+            <li>
+              <b>A lexer is created per block, not reused across them.</b> Lexilla's lexers keep cross-line state that is not safe to carry from one
+              document to the next, so each block gets its own and the keyword tables are parsed once per block. The cost is far below lexing
+              itself, and a prose document creates none.
+            </li>
+            <li>
+              <b>One highlighter serves the whole worker pool, so it holds no per-pass state.</b> Controlled highlighting runs on the pool, so two
+              documents can be colored at the same moment. The highlighter is shared and stateless; the only scratch buffer, the one a pass
+              builds its runs into, is <code>thread_local</code>. <code>testConcurrentPasses</code> colors eight languages on eight threads
+              against a single-threaded baseline, and it fails if that buffer is shared.
+            </li>
+            <li>
+              <b>iOS rebuilds its rendering on an appearance change.</b> Token colors are dynamic <code>UIColor</code>s, which TextKit resolves
+              from the platform's token table at draw time, so a switch needs no rebuild on that path. The cached rendering is still dropped and
+              rebuilt from the document the view already holds, because a manually driven <code>NSLayoutManager</code> may resolve colors when
+              it lays out rather than when it draws. That makes the switch correct on both paths, and it fixes the same latent issue for the
+              system colors the renderer already used. Android needed nothing new here: <code>onConfigurationChanged</code> already refetches, and
+              its cache key carries the flag.
+            </li>
+          </ul>
+
+          <h3>What the code samples cost end to end</h3>
+          <p>
+            The engine-level numbers above measure the tokenizer. These measure the whole render, JS included, from
+            <code>pnpm bench</code> on a host machine, so they carry React and the jsdom harness too. They are a record,
+            not a gate: timings from the host do not predict a phone.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Sample</th><th>downstream</th><th>streamdown</th><th>Note</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><code>code-streaming</code> · 80 chunks</td>
+                  <td>3.48 ms mean, 4.04 ms p99</td>
+                  <td>3.90 ms mean, 5.51 ms p99</td>
+                  <td>Downstream is ahead on both, while also producing tokens that streamdown never emits.</td>
+                </tr>
+                <tr>
+                  <td><code>code-languages</code> · 53 chunks, a small fence per language</td>
+                  <td>3.92 ms mean, 4.58 ms p99</td>
+                  <td>2.63 ms mean, 4.10 ms p99</td>
+                  <td>About 1.5&times; the parse cost. This is the price of fifteen lexers running on every fence, and it is the sample to watch.</td>
+                </tr>
+                <tr>
+                  <td><code>code-diff</code> · 12 chunks</td>
+                  <td>3.37 ms mean, 3.95 ms p99</td>
+                  <td>0.67 ms mean, 1.98 ms p99</td>
+                  <td>Streamdown is far quicker here, and far more variable: its p99 is 3&times; its mean.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            <b>Read those numbers carefully.</b> They are not a like-for-like comparison, because streamdown does not
+            highlight code at all. Downstream is doing lexer work that the comparison never does, and it is still within
+            the same order of magnitude on two of the three samples. The third sample shows the honest downside: a short
+            document of colored code pays for the lexers it uses. If that cost ever shows up on a device, the levers in
+            order are the 64&nbsp;KiB limit, the per-snapshot budget, and dropping lexers from the table, all of which are
+            already in place. Turning <code>syntaxHighlighting</code> off removes the token cost entirely without touching
+            the parse path.
+          </p>
+        </section>
+
+        <section id="phases">
             <div class="section-head">
               <h2>Phases</h2>
               <p>Implementation comes first. Each phase is shippable on its own and leaves the default rendering unchanged until Phase 3.</p>
