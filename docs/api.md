@@ -11,7 +11,7 @@ This is the Phase 0 contract for the native Markdown component. `src/types.ts` h
 | GFM task lists                      | Readable checkbox state and accessibility label; display only                  | Interactive toggling                                                   | Mutation of Markdown by tapping                            |
 | Raw HTML                            | Escaped, visible source text                                                   | None planned                                                           | HTML rendering, scripts, embedded content                  |
 | Images                              | Alt text remains readable; no network request                                  | HTTPS images after complete URL validation, placeholders, cancellation | `data:`, `file:`, and custom schemes                       |
-| Code                                | Inline code and progressively visible fenced/indented blocks, plain monospace  | Syntax highlighting and copy button                                    | Executing code                                             |
+| Code                                | Inline code, progressively visible fenced/indented blocks, and syntax highlighting by the fence's language | Code block header and copy button                                     | Executing code, and highlighting above 64 KiB of code       |
 | Math                                | Literal delimiter/source text                                                  | Native math layout after separate review                               | Executing macros or loading remote math content            |
 | Links                               | Valid complete `https:`, `http:`, and `mailto:` links; press callback          | Long press actions                                                     | Automatic opening of custom schemes                        |
 | Custom renderers                    | None                                                                           | None planned                                                           | Per-node React render callbacks in the native display path |
@@ -34,9 +34,14 @@ stream.finish();
 // An open span previews as bold instead of showing its markers.
 const previewed = createMarkdownStream({ preview: true });
 previewed.append('hello **wor');
+
+// Fenced code is colored by its language. `false` keeps it plain monospace.
+<DownstreamMarkdown markdown={message} syntaxHighlighting={false} />;
 ```
 
 The examples describe the runtime API. A view receives exactly one of `markdown` or `stream`. TypeScript rejects both or neither. A controlled string replacement starts a new generation when its value changes. An unchanged value, including a React rerender, does not reset work. `stream` identity changes unbind the previous controller and bind the new one; they do not copy source between controllers.
+
+`syntaxHighlighting` is on by default and decides only whether the platform applies the colors the engine computed. A fenced block is colored when its info string names a language the engine has a lexer for; the info string is trimmed, lower-cased, and cut at the first space and at a `:`, so ```TypeScript and ```ts title="a.ts" are TypeScript. A block with no language, an unknown language, and a block over 64 KiB of code stay plain either way. `syntaxHighlighting` only changes colors, never a character, so selection, copy, accessibility text, and link ranges are the same with it on or off. The default palette follows GitHub's light and dark code themes on both platforms; overriding individual token colors is not part of this release. An indented code block has no language and stays plain. A document with no fenced code never loads a lexer, and a fence with a language but no lexer is not auto-detected.
 
 `createMarkdownStream(options?)` creates an active, empty controller. `append(chunk)` adds a nonempty chunk in call order and increments its sequence. An empty chunk is a no-op. `reset(source = '')` starts a new generation, clears pending work and preview state, and allows appends even after `finish()`. It validates the replacement before discarding the previous source. `finish()` flushes queued chunks, marks the generation complete, and requests an ordinary full-source parse with no synthetic preview. Repeated `finish()` is a no-op. `append()` after finish throws `invalid_state`; the caller must reset first. `dispose()` is idempotent and terminal. Other methods after disposal throw `invalid_state`. `getSource()` returns the canonical raw string on demand; it does not subscribe to every update. It rejects after disposal.
 
@@ -86,4 +91,5 @@ Parsing and platform text preparation run on one shared pool of worker threads: 
 | Selection | `selectable` enables native selection and copy in text segments. Copy is plain visible text; `getSource()` returns the complete canonical stream source. Selection cannot span a table or completed segment boundary. | Per-block copy controls. |
 | Accessibility | VoiceOver and TalkBack expose reading stops for text blocks, table rows, and links, with heading and link roles and spoken task state. | Rich table navigation if needed. |
 | RTL | Text uses natural writing direction. List markers, quote bars, code backgrounds, rules, and table columns mirror for RTL content. | None |
+| Code blocks | Fenced blocks are colored from a shared token palette modeled on GitHub's light and dark code themes, so iOS and Android agree. A streaming block is colored from the text it has, and its settled tokens are the same whether it arrived in one piece or a thousand. Selection and copy return the plain code text. | The code block header and copy control, and a theme that can override token colors. |
 | Colors | System colors follow light and dark appearance on both platforms. | Style customization after the feature set is fixed. |

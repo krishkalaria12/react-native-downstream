@@ -45,6 +45,14 @@ const stream = createMarkdownStream({ preview: true });
 
 The pass only ever repairs the stream's unstable tail, and only when reparsing proves the repair changed nothing but the block it aimed at. It never touches `getSource()` or source ranges, and `finish()` drops it, so the settled document is always a parse of the bytes you appended; see [provisional styling](docs/streaming-semantics.md#provisional-styling).
 
+Fenced code is colored by the language in its info string, on the same worker that parses it, from the vendored [Lexilla](https://github.com/ScintillaOrg/lexilla) lexers:
+
+```tsx
+<DownstreamMarkdown markdown={message} syntaxHighlighting={false} />
+```
+
+`ts`, `tsx`, `js`, `java`, `c`, `cpp`, `cs`, `go`, `swift`, `kt`, `dart`, `scala`, `objc`, `py`, `sh`, `json`, `html`, `xml`, `css`, `sql`, `rs`, `yaml`, `toml`, `rb`, `lua`, `diff`, and `md` are colored; anything else renders plain, as it does in Streamdown. The palette follows GitHub's light and dark code themes and is the same on both platforms. A block with no language, an unknown language, and a block over 64 KiB of code stay plain, and a document with no fenced code never loads a lexer. Highlighting only sets colors, so selection, copy, and accessibility text are unchanged; see [the plan](docs/syntax-highlighting-plan.html) for how a streaming block stays cheap.
+
 ## Contributing
 
 - [Development workflow](CONTRIBUTING.md#development-workflow)
@@ -90,7 +98,10 @@ rather than on a mock's call log. `tests/native-view.ts` stands in for the
 native view by rendering the real parse as DOM.
 
 `pnpm test:native` builds the C++ engine and runs its own suites, including the
-`vendored md4c` digest pins that keep the vendored parser unmodified.
+`vendored md4c` digest pins that keep the vendored parser unmodified, the
+golden token fixtures that pin the vendored lexers, and the streaming
+equivalence check that a grown code block ends with the tokens a one-shot pass
+gives it.
 
 `pnpm bench` runs the vitest benchmarks, including a Downstream against
 Streamdown RN comparison. Those numbers describe the harness: the engine runs in
@@ -99,7 +110,10 @@ and Testing screens measure a real device.
 
 ## License
 
-MIT
+MIT, except for the vendored third-party sources, which keep their own terms:
+`src/cpp/md4c` is BSD (see its `LICENSE.md`) and `src/cpp/lexilla` is HPND
+(see `src/cpp/lexilla/License.txt`, © 1998-2021 Neil Hodgson), which requires
+that notice to travel with every copy. Both notices ship in the package.
 
 ---
 
