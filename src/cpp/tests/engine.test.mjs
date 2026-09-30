@@ -54,8 +54,10 @@ before(async () => {
     '-DMD4C_USE_UTF8',
     ...SYMBOL_PREFIXES,
     `-I${MD4C}`,
+    `-I${CPP}`,
     `-I${join(CPP, 'downstream')}`,
     `-I${join(CPP, 'session')}`,
+    `-I${join(CPP, 'remend')}`,
   ];
   const [md4c, entity] = await Promise.all(
     ['md4c.c', 'entity.c'].map(async (source) => {
@@ -73,9 +75,12 @@ before(async () => {
   const downstream = (name) => join(CPP, 'downstream', name);
   const session = (name) => join(CPP, 'session', name);
   const testSource = (name) => join(CPP, 'tests', name);
-  const engine = ['MarkdownParser.cpp', 'Unicode.cpp', 'LinkPolicy.cpp'].map(
-    downstream
-  );
+  const engine = [
+    ...['MarkdownParser.cpp', 'Unicode.cpp', 'LinkPolicy.cpp'].map(downstream),
+    ...['Scan.cpp', 'Compare.cpp'].map(downstream),
+    // The preview pass the session runs on its unstable tail.
+    join(CPP, 'remend', 'Preview.cpp'),
+  ];
   const pool = ['WorkerPool.cpp', 'RenderPreparer.cpp'].map(downstream);
   await Promise.all([
     execFileAsync(cxx, [
@@ -97,6 +102,26 @@ before(async () => {
       entity,
       '-o',
       binary('test_incremental'),
+    ]),
+    execFileAsync(cxx, [
+      ...cxxFlags,
+      testSource('dump_session.cpp'),
+      session('IncrementalParser.cpp'),
+      ...engine,
+      md4c,
+      entity,
+      '-o',
+      binary('dump_session'),
+    ]),
+    execFileAsync(cxx, [
+      ...cxxFlags,
+      testSource('test_preview.cpp'),
+      session('IncrementalParser.cpp'),
+      ...engine,
+      md4c,
+      entity,
+      '-o',
+      binary('test_preview'),
     ]),
     execFileAsync(cxx, [
       ...cxxFlags,
@@ -600,6 +625,13 @@ describe('input', () => {
 
   test('worker pool prepares and shares sessions', () => {
     execFileSync(binary('test_worker_pool'), { timeout: 30_000 });
+  });
+
+  test('provisional styling for the unstable tail', () => {
+    // Off by default, so nothing in the suites above exercises it. Its cases are
+    // the ported remend corpus plus the session integration that proves a repair
+    // cannot reach a committed block.
+    execFileSync(binary('test_preview'), { timeout: 15_000 });
   });
 
   test('rejects malformed UTF-8', () => {

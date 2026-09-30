@@ -35,11 +35,22 @@ const CXXFLAGS = [
   '-DMD4C_USE_UTF8',
   ...SYMBOL_PREFIXES,
   `-I${MD4C}`,
+  `-I${CPP}`,
   `-I${join(CPP, 'downstream')}`,
   `-I${join(CPP, 'session')}`,
+  `-I${join(CPP, 'remend')}`,
 ];
 
-const ENGINE = ['MarkdownParser.cpp', 'Unicode.cpp', 'LinkPolicy.cpp'];
+const ENGINE = [
+  ...[
+    'MarkdownParser.cpp',
+    'Unicode.cpp',
+    'LinkPolicy.cpp',
+    'Scan.cpp',
+    'Compare.cpp',
+  ].map((name) => join(CPP, 'downstream', name)),
+  join(CPP, 'remend', 'Preview.cpp'),
+];
 
 /** Block kinds, matching `Block::Kind` in the engine. */
 export const KIND = {
@@ -195,14 +206,98 @@ function compileObjects(): string[] {
 function engineBinary(): string {
   const objects = compileObjects();
   return compile(
-    [
-      join(CPP, 'tests', 'dump_document.cpp'),
-      ...ENGINE.map((f) => join(CPP, 'downstream', f)),
-    ],
+    [join(CPP, 'tests', 'dump_document.cpp'), ...ENGINE],
     'downstream-dump',
     CXXFLAGS,
     objects
   );
+}
+
+/** Feature bitmask for the real provisional-styling pass. */
+export const PREVIEW_EMPHASIS = 1 << 0;
+export const PREVIEW_INLINE_CODE = 1 << 1;
+export const PREVIEW_LINKS = 1 << 2;
+export const PREVIEW_IMAGES = 1 << 3;
+export const PREVIEW_ALL =
+  PREVIEW_EMPHASIS | PREVIEW_INLINE_CODE | PREVIEW_LINKS | PREVIEW_IMAGES;
+
+function sessionBinary(): string {
+  const objects = compileObjects();
+  return compile(
+    [
+      join(CPP, 'tests', 'dump_session.cpp'),
+      join(CPP, 'session', 'IncrementalParser.cpp'),
+      ...ENGINE,
+    ],
+    'downstream-session',
+    CXXFLAGS,
+    objects
+  );
+}
+
+/** The parser strategies a native session can be created with. */
+export type SessionMode = 'full' | 'incremental';
+
+/** One step a native session's worker applies to its parser, in order. */
+export type SessionOp =
+  | { op: 'append'; chunk: string }
+  | { op: 'replace'; source: string }
+  | { op: 'preview'; features: number }
+  | { op: 'parse'; finished: boolean };
+
+function frame(op: string, payload: Buffer): Buffer {
+  const header = Buffer.alloc(5);
+  header.write(op, 0, 'latin1');
+  header.writeUInt32LE(payload.length, 1);
+  return Buffer.concat([header, payload]);
+}
+
+function encodeOp(step: SessionOp): Buffer {
+  switch (step.op) {
+    case 'append':
+      return frame('a', Buffer.from(step.chunk, 'utf8'));
+    case 'replace':
+      return frame('r', Buffer.from(step.source, 'utf8'));
+    case 'preview': {
+      const mask = Buffer.alloc(4);
+      mask.writeUInt32LE(step.features >>> 0);
+      return frame('p', mask);
+    }
+    case 'parse':
+      return frame(step.finished ? 'f' : 'u', Buffer.alloc(0));
+  }
+}
+
+/**
+ * Replays a session through the real `IncrementalParser` and returns the
+ * document its last pass published.
+ *
+ * This is the parser the native worker owns, in the mode the stream asked for,
+ * so the finish rule, the preview policy, and the commit path are the engine's
+ * own rather than a restatement of them in the test.
+ */
+export function replaySession(
+  mode: SessionMode,
+  steps: readonly SessionOp[]
+): RenderModel {
+  return JSON.parse(
+    execFileSync(sessionBinary(), [mode], {
+      input: Buffer.concat(steps.map(encodeOp)),
+      maxBuffer: 256 << 20,
+    }).toString('utf8')
+  );
+}
+
+/**
+ * The first frame of a stream that previews: `source` arrives in one chunk of
+ * an unfinished full-mode session with `features` enabled.
+ */
+export function preview(source: string, features: number): RenderModel {
+  return replaySession('full', [
+    { op: 'preview', features },
+    { op: 'append', chunk: source },
+    { op: 'parse', finished: false },
+  ]);
 }
 
 function incrementalBinary(): string {
@@ -212,7 +307,7 @@ function incrementalBinary(): string {
       join(CPP, 'tests', 'test_incremental.cpp'),
       join(CPP, 'session', 'IncrementalParser.cpp'),
       join(CPP, 'downstream', 'SegmentPlan.cpp'),
-      ...ENGINE.map((f) => join(CPP, 'downstream', f)),
+      ...ENGINE,
     ],
     'downstream-incremental',
     CXXFLAGS,

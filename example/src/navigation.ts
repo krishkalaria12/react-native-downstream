@@ -1,7 +1,7 @@
 import type { ComponentProps } from 'react';
 import type { Ionicons } from '@expo/vector-icons';
 
-export type RouteId = 'example' | 'testing' | 'bench' | 'stress';
+export type RouteId = 'example' | 'testing' | 'preview' | 'bench' | 'stress';
 
 export interface Route {
   id: RouteId;
@@ -15,9 +15,9 @@ export interface Route {
 }
 
 /**
- * Order is the drawer's reading order: the everyday screen first, then the two
- * measurement screens, then the one that is only useful when something is
- * already wrong.
+ * Order is the drawer's reading order: the everyday screen first, then the
+ * screens that compare and measure, then the one that is only useful when
+ * something is already wrong.
  */
 export const ROUTES: readonly Route[] = [
   {
@@ -33,6 +33,13 @@ export const ROUTES: readonly Route[] = [
     title: 'Streamdown vs Downstream',
     summary: 'Replay one source through both renderers and compare.',
     icon: 'git-compare-outline',
+  },
+  {
+    id: 'preview',
+    label: 'Preview',
+    title: 'Provisional styling',
+    summary: 'Half-written spans against Streamdown, held mid-stream.',
+    icon: 'eye-outline',
   },
   {
     id: 'bench',

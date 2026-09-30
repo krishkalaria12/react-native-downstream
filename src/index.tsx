@@ -5,6 +5,7 @@ export type {
   MarkdownErrorCode,
   MarkdownErrorEvent,
   MarkdownLinkPressEvent,
+  MarkdownPreviewOptions,
   MarkdownSourceRange,
   MarkdownStreamController,
   MarkdownStreamOptions,

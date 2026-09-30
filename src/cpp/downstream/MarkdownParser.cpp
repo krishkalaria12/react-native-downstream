@@ -1,6 +1,7 @@
 #include "MarkdownParser.h"
 
 #include "LinkPolicy.h"
+#include "Scan.h"
 #include "Unicode.h"
 
 #include <md4c.h>
@@ -571,59 +572,20 @@ private:
   /// real one, since `\](` is an escaped literal bracket followed by a paren
   /// and leaves a URL in prose.
   bool isUnfinishedDestination(size_t at) const {
-    return at >= 2 && source_[at - 1] == '(' && source_[at - 2] == ']' && !isEscaped(at - 2);
+    return scan::isUnfinishedDestination(source_, at);
   }
 
   bool isEscaped(size_t index) const {
-    size_t backslashes = 0;
-    while (index > backslashes && source_[index - backslashes - 1] == '\\') {
-      backslashes++;
-    }
-    return backslashes % 2 == 1;
+    return scan::isEscaped(source_, index);
   }
 
   size_t findUnescaped(char needle, size_t from) const {
-    for (size_t i = from; i < source_.size(); i++) {
-      if (source_[i] == needle && !isEscaped(i)) {
-        return i;
-      }
-    }
-    return kUnknownOffset;
+    return scan::findUnescaped(source_, needle, from);
   }
 
   /// `open` points at '('. Returns the offset after the matching ')'.
   size_t skipInlineDestination(size_t open) const {
-    size_t depth = 0;
-    char quote = 0;
-    for (size_t i = open; i < source_.size(); i++) {
-      const char c = source_[i];
-      if (c == '\\') {
-        i++;
-        continue;
-      }
-      if (quote != 0) {
-        if (c == quote) {
-          quote = 0;
-        }
-        continue;
-      }
-      if (c == '<' && depth == 1) {
-        const size_t close = findUnescaped('>', i + 1);
-        if (close == kUnknownOffset) {
-          return kUnknownOffset;
-        }
-        i = close;
-      } else if (c == '"' || c == '\'') {
-        quote = c;
-      } else if (c == '(') {
-        depth++;
-      } else if (c == ')') {
-        if (--depth == 0) {
-          return i + 1;
-        }
-      }
-    }
-    return kUnknownOffset;
+    return scan::skipInlineDestination(source_, open);
   }
 
   std::optional<std::pair<size_t, size_t>> spanRange(const SpanFrame &span) const {
@@ -797,6 +759,34 @@ ParseResult parseMarkdown(std::string_view source) {
   result.containerCount = builder.containerCount();
   result.tableCount = builder.tableCount();
   result.blockSource = builder.takeBlockSource();
+  return result;
+}
+
+ParseResult parseMarkdownAt(std::string_view region, size_t origin) {
+  const uint32_t pad = static_cast<uint32_t>(origin % 256);
+  if (pad == 0) {
+    return parseMarkdown(region);
+  }
+  std::string padded(pad, '\n');
+  padded.append(region);
+  ParseResult result = parseMarkdown(padded);
+  if (result.status != ParseStatus::Ok) {
+    return result;
+  }
+  for (ByteRange &range : result.blockSource) {
+    range.start = range.start > pad ? range.start - pad : 0;
+    range.end = range.end > pad ? range.end - pad : 0;
+  }
+  if (!result.document->links.empty()) {
+    auto shifted = std::make_shared<Document>(*result.document);
+    for (Link &link : shifted->links.tail()) {
+      if (link.range.end > link.range.start) {
+        link.range.start -= pad;
+        link.range.end -= pad;
+      }
+    }
+    result.document = shifted;
+  }
   return result;
 }
 

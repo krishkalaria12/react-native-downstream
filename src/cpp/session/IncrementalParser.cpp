@@ -1,5 +1,7 @@
 #include "IncrementalParser.h"
 
+#include "Compare.h"
+#include "Scan.h"
 #include "Unicode.h"
 
 #include <algorithm>
@@ -10,111 +12,25 @@
 namespace downstream {
 namespace {
 
+using scan::closesFence;
+using scan::fenceOpener;
+using scan::Fence;
+using scan::isBlankLine;
+using scan::isFenceLine;
+using scan::kNoOffset;
+using scan::sameBlock;
+using scan::startsWith;
+
 constexpr size_t kMaxRetainedTailBytes = 64 * 1024;
 constexpr size_t kMaxCommittedBlocks = 8192;
 constexpr size_t kMinAttemptGap = 64;
 // Smaller regions reparse cheaply as tail, so a commit attempt costs more
 // than it saves.
 constexpr size_t kMinCommitBytes = 128;
-constexpr size_t kNoOffset = std::string_view::npos;
 // md4c rewrites these inside code text: line endings, NUL, and tab expansion.
 constexpr std::string_view kVerbatimBreakers("\r\0\t", 3);
 
 std::atomic<uint64_t> nextBlockIdentity{1};
-
-/// Parses text that starts at `origin` in the canonical source. md4c's check
-/// that a list item cannot begin with two blank lines reads the last line
-/// record as a block record, so its result depends on each line's byte
-/// offset modulo 256. Blank padding gives a partial parse the same offsets
-/// as the full parse, and the results are shifted back.
-ParseResult parseAt(std::string_view text, size_t origin) {
-  const uint32_t pad = static_cast<uint32_t>(origin % 256);
-  if (pad == 0) {
-    return parseMarkdown(text);
-  }
-  std::string padded(pad, '\n');
-  padded.append(text);
-  ParseResult result = parseMarkdown(padded);
-  if (result.status != ParseStatus::Ok) {
-    return result;
-  }
-  for (ByteRange &range : result.blockSource) {
-    range.start = range.start > pad ? range.start - pad : 0;
-    range.end = range.end > pad ? range.end - pad : 0;
-  }
-  if (!result.document->links.empty()) {
-    auto shifted = std::make_shared<Document>(*result.document);
-    for (Link &link : shifted->links.tail()) {
-      if (link.range.end > link.range.start) {
-        link.range.start -= pad;
-        link.range.end -= pad;
-      }
-    }
-    result.document = shifted;
-  }
-  return result;
-}
-
-bool isBlankLine(std::string_view line) {
-  return line.find_first_not_of(" \t\r") == kNoOffset;
-}
-
-/// Offset after at most three leading spaces, or kNoOffset when the line is
-/// indented far enough to be code.
-size_t afterIndent(std::string_view line) {
-  size_t index = 0;
-  while (index < 3 && index < line.size() && line[index] == ' ') {
-    index++;
-  }
-  return index < line.size() && line[index] == ' ' ? kNoOffset : index;
-}
-
-bool startsWith(std::string_view line, char marker) {
-  const size_t start = afterIndent(line);
-  return start != kNoOffset && start < line.size() && line[start] == marker;
-}
-
-struct Fence {
-  char marker;
-  size_t length;
-  size_t indent;
-  std::string_view info;
-};
-
-std::optional<Fence> fenceOpener(std::string_view line) {
-  const size_t start = afterIndent(line);
-  if (start == kNoOffset || start >= line.size() || (line[start] != '`' && line[start] != '~')) {
-    return std::nullopt;
-  }
-  const char marker = line[start];
-  size_t end = start;
-  while (end < line.size() && line[end] == marker) {
-    end++;
-  }
-  const std::string_view info = line.substr(end);
-  if (end - start < 3 || (marker == '`' && info.find('`') != kNoOffset)) {
-    return std::nullopt;
-  }
-  return Fence{marker, end - start, start, info};
-}
-
-bool closesFence(std::string_view line, char marker, size_t length) {
-  const size_t start = afterIndent(line);
-  if (start == kNoOffset) {
-    return false;
-  }
-  size_t end = start;
-  while (end < line.size() && line[end] == marker) {
-    end++;
-  }
-  return end - start >= length && isBlankLine(line.substr(end));
-}
-
-bool isFenceLine(std::string_view line) {
-  const size_t start = afterIndent(line);
-  return start != kNoOffset && start < line.size() && (line[start] == '`' || line[start] == '~') &&
-      closesFence(line, line[start], 3);
-}
 
 /// The region's last line that is not blank, without its line ending.
 std::string_view lastNonBlankLine(std::string_view region) {
@@ -159,38 +75,6 @@ bool hasUnresolvedBracket(const Block &block) {
     }
   }
   return false;
-}
-
-bool sameBlock(const Block &a, const Block &b) {
-  if (a.kind != b.kind || a.headingLevel != b.headingLevel || a.tableHeader != b.tableHeader ||
-      a.table != b.table || a.spacingBefore != b.spacingBefore || a.text != b.text || a.language != b.language ||
-      a.runs.size() != b.runs.size() || a.cells.size() != b.cells.size() ||
-      a.containers.size() != b.containers.size()) {
-    return false;
-  }
-  for (size_t i = 0; i < a.runs.size(); i++) {
-    const InlineRun &x = a.runs[i];
-    const InlineRun &y = b.runs[i];
-    if (x.start != y.start || x.end != y.end || x.styles != y.styles || x.link != y.link) {
-      return false;
-    }
-  }
-  for (size_t i = 0; i < a.cells.size(); i++) {
-    const TableCell &x = a.cells[i];
-    const TableCell &y = b.cells[i];
-    if (x.start != y.start || x.end != y.end || x.align != y.align) {
-      return false;
-    }
-  }
-  for (size_t i = 0; i < a.containers.size(); i++) {
-    const Container &x = a.containers[i];
-    const Container &y = b.containers[i];
-    if (x.kind != y.kind || x.id != y.id || x.showsMarker != y.showsMarker || x.task != y.task ||
-        x.marker != y.marker) {
-      return false;
-    }
-  }
-  return true;
 }
 
 /// Checks that md4c has closed everything the region opened, so parsing any
@@ -305,6 +189,7 @@ void IncrementalParser::reset() {
   replaced_ = false;
   clearCommitted();
   openFence_ = false;
+  previewStats_ = {};
   counters_ = {};
 }
 
@@ -336,11 +221,23 @@ void IncrementalParser::publish(DocumentHandle document) {
   replaced_ = false;
 }
 
-ParseResult IncrementalParser::fullParse(ParseFallback reason) {
+ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable) {
   const std::string_view source = source_;
-  ParseResult result = parseMarkdown(source);
+  // A stream that is still open previews on every full parse: before a commit
+  // boundary, in full mode, after a reset, and past the tail limit. The pass
+  // parses the source itself, so this is one parse when nothing is repaired.
+  // Committed blocks lead the parse and are frozen, so a repair cannot restyle
+  // one even though this parse covers them.
+  ParseResult result;
+  if (previewable) {
+    const remend::PreviewResult preview = preview_.apply(source, 0, committedCount());
+    notePreview(preview);
+    result = preview.parsed;
+  } else {
+    result = parseMarkdown(source);
+    counters_.bytesParsed += source.size();
+  }
   counters_.fullParses++;
-  counters_.bytesParsed += source.size();
   if (reason != ParseFallback::Count) {
     counters_.fallback[static_cast<size_t>(reason)]++;
   }
@@ -388,6 +285,13 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason) {
   return result;
 }
 
+void IncrementalParser::notePreview(const remend::PreviewResult &preview) {
+  previewStats_.probes += preview.stats.probes;
+  previewStats_.applied += preview.stats.applied;
+  previewStats_.refused += preview.stats.refused;
+  counters_.bytesParsed += preview.bytesParsed;
+}
+
 void IncrementalParser::carryIdentities(ParseResult &result) {
   // Identities describe append-only history; a replaced source starts over.
   const DocumentHandle previous = replaced_ ? nullptr : document_;
@@ -431,9 +335,15 @@ void IncrementalParser::carryIdentities(ParseResult &result) {
 ParseResult IncrementalParser::parseTail() {
   const std::string_view source = source_;
   const std::string_view tail = source.substr(committedBytes_);
-  ParseResult result = parseAt(tail, committedBytes_);
+
+  // The preview sees only the tail, which is exactly the region this parse
+  // rebuilds from scratch. Everything below committedBytes_ lives in storage
+  // the repair cannot reach, so no repair can restyle a block a reader has
+  // already seen settled.
+  const remend::PreviewResult preview = preview_.apply(tail, committedBytes_);
+  notePreview(preview);
+  ParseResult result = preview.parsed;
   counters_.tailParses++;
-  counters_.bytesParsed += tail.size();
   if (result.status != ParseStatus::Ok) {
     return result;
   }
@@ -518,7 +428,7 @@ bool IncrementalParser::commitRegion(size_t boundary) {
   const std::string_view region = std::string_view(source_).substr(committedBytes_, boundary - committedBytes_);
   counters_.commitAttempts++;
   counters_.bytesParsed += region.size();
-  const ParseResult parsed = parseAt(region, committedBytes_);
+  const ParseResult parsed = parseMarkdownAt(region, committedBytes_);
   bool closed = provesClosed(region, parsed) &&
       committedCount() + parsed.document->blocks.size() <= kMaxCommittedBlocks;
   if (closed && !parsed.document->blocks.empty()) {
@@ -528,7 +438,7 @@ bool IncrementalParser::commitRegion(size_t boundary) {
       std::string probe(region);
       probe += "x\n";
       counters_.bytesParsed += probe.size();
-      closed = splitsBefore(parsed, parseAt(probe, committedBytes_));
+      closed = splitsBefore(parsed, parseMarkdownAt(probe, committedBytes_));
     }
   }
   if (!closed) {
@@ -637,7 +547,7 @@ void IncrementalParser::watchOpenFence(std::string_view source, size_t from, siz
   std::string probe(source.substr(from));
   probe.push_back('x');
   counters_.bytesParsed += probe.size();
-  const ParseResult probed = parseAt(probe, from);
+  const ParseResult probed = parseMarkdownAt(probe, from);
   if (pendingNewline) {
     projected.push_back(u'\n');
   }
@@ -697,29 +607,35 @@ bool IncrementalParser::appendOpenFence() {
 ParseResult IncrementalParser::parse(bool finished) {
   counters_.updates++;
   if (source_.size() > kMaxSourceBytes) {
-    return fullParse(ParseFallback::InvalidSource);
+    return fullParse(ParseFallback::InvalidSource, false);
   }
+  // Full mode takes this branch for a finished stream too, so it has to pass
+  // the flag itself: the settled document is never previewed.
   if (mode_ == ParseMode::FullParse) {
-    return fullParse(ParseFallback::Count);
+    return fullParse(ParseFallback::Count, !finished);
   }
   if (replaced_) {
-    return fullParse(ParseFallback::NonAppend);
+    return fullParse(ParseFallback::NonAppend, !finished);
   }
   if (finished) {
-    return fullParse(ParseFallback::Finished);
+    return fullParse(ParseFallback::Finished, false);
   }
   ParseResult current;
-  if (document_ && (source_.size() == parsedBytes_ || appendOpenFence())) {
+  // A pending policy change has to be applied to what the reader is looking at,
+  // so it skips the "nothing new arrived" shortcut below and reparses the tail.
+  const bool repaint = previewDirty_;
+  previewDirty_ = false;
+  if (!repaint && document_ && (source_.size() == parsedBytes_ || appendOpenFence())) {
     current.document = document_;
     return current;
   }
 
   tryCommit();
   if (source_.size() - committedBytes_ > kMaxRetainedTailBytes) {
-    return fullParse(ParseFallback::TailLimit);
+    return fullParse(ParseFallback::TailLimit, true);
   }
   if (committedBytes_ == 0) {
-    return fullParse(ParseFallback::InitialOrUnprovenBoundary);
+    return fullParse(ParseFallback::InitialOrUnprovenBoundary, true);
   }
   return parseTail();
 }

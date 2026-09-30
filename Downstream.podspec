@@ -20,6 +20,7 @@ Pod::Spec.new do |s|
     "src/cpp/downstream/*.{h,cpp}",
     "src/cpp/session/*.{h,cpp}",
     "src/cpp/fabric/*.{h,cpp}",
+    "src/cpp/remend/*.{h,cpp}",
     "src/cpp/md4c/md4c.{c,h}",
     "src/cpp/md4c/entity.{c,h}",
   ]
@@ -31,6 +32,7 @@ Pod::Spec.new do |s|
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/session\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/fabric\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/md4c\"",
+      "\"$(PODS_TARGET_SRCROOT)/src/cpp/remend\"",
     ].join(" "),
     # Other libraries, such as Enriched Markdown, link their own md4c. Prefixing
     # ours keeps the linker from binding our calls to theirs.

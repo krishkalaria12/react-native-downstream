@@ -21,6 +21,7 @@ export interface TurboModuleStub {
   finish(sessionId: string, generation: number, sequence: number): void;
   dispose(sessionId: string): void;
   setTracing(sessionId: string, enabled: boolean): void;
+  setPreview(sessionId: string, features: number): void;
   onSnapshotReady(callback: (event: object) => void): { remove(): void };
   onSessionError(callback: (event: object) => void): { remove(): void };
   onTrace(callback: (event: object) => void): { remove(): void };
@@ -38,6 +39,7 @@ export const TurboModuleRegistry: {
     finish: vi.fn(),
     dispose: vi.fn(),
     setTracing: vi.fn(),
+    setPreview: vi.fn(),
     onSnapshotReady: vi.fn(() => ({ remove: vi.fn() })),
     onSessionError: vi.fn(() => ({ remove: vi.fn() })),
     onTrace: vi.fn(() => ({ remove: vi.fn() })),

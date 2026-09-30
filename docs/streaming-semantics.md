@@ -16,6 +16,22 @@ The canonical source is the exact concatenation of accepted chunks since the las
 
 Temporary closing markers, when used for emphasis or other preview syntax, exist only in the parser's preview buffer. They have no source offsets and cannot enter copy or error events. A preview is allowed to restyle the active tail when new input arrives. Text order is preserved, and accepted characters never disappear from the canonical source. Completed output must match a fresh full parse of canonical source under the chosen md4c options.
 
+## Provisional styling
+
+The prefix policy above allows a provisional style when an opener is unambiguous. The engine implements that branch in `src/cpp/remend/`, ported from Vercel's `remend`, and **leaves it off by default**: with no options set, every open span renders literally.
+
+When enabled, the pass sees only the unstable tail. In incremental mode that is `source[committedBytes_ .. end]`, and committed blocks live in shared immutable storage the pass cannot reach, so no repair can restyle a block a reader has already seen. Before any commit boundary exists the whole document is the tail, and in full mode the whole document is the tail on every update. A reset or a tail past the retained limit falls back to a full parse, which still previews, with the committed blocks frozen. `finish()` never repairs, in either mode.
+
+A block md4c has already closed is never repaired, because no later input can close a span inside it: a paragraph after a blank line, and a heading or table row after its line ends. A styled preview there would be retracted when the next block starts. A span whose chunk ended on whitespace still previews, with the closer placed before the whitespace.
+
+A candidate repair is kept only when reparsing proves it changed nothing but the block it aimed at: the block count is unchanged, every earlier block is identical down to run ranges and container identity, the last block's text is the original text minus exactly the marker run that was closed, and inline style coverage strictly increased. A repair that cannot be proven is discarded, so the literal reading is always the fallback. A repair that would style nothing is also discarded, which is what keeps a bare `**` or `text ***` literal.
+
+Every open run closes, innermost first, so `**bold *ital` reads as bold and italic and the closers nest the way the writer's will. Each closer is proven on its own; one that fails, such as an escaped star, is skipped rather than hiding the opener before it. Math delimiters, raw HTML, and list and thematic-break markers are never openers: a repair there would invent syntax the writer did not type.
+
+A single tilde never opens a span. md4c's GitHub dialect reads `~x~` as strikethrough, so closing one would invent a span the writer did not ask for.
+
+An unfinished link or image previews as its text, the way Streamdown shows it. `[text` and `[text](https://exa` read as `text`, and `![alt](https://exa` as `alt`, which is how a finished image renders. The partial target is dropped rather than followed, so nothing is tappable until the link's own `)` arrives, and a stream that finishes first shows the syntax as typed. `[note](which is long` stays literal: a space ends a bare destination, so it is prose that will never be a link.
+
 ## Classification and ordering
 
 A newline alone never commits a block. A following setext underline, table separator, list continuation, reference definition, quote continuation, or fence close may change earlier classification. Until the native implementation proves a safe boundary, it reparses the full source. A later tail optimization must fall back to full parse when context is uncertain and pass every prefix case in the parser oracle.

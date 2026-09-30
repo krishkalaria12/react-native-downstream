@@ -15,7 +15,8 @@ file(GLOB LIB_CODEGEN_SRCS CONFIGURE_DEPENDS
 file(GLOB LIB_ENGINE_SRCS CONFIGURE_DEPENDS
   ${LIB_CPP_DIR}/downstream/*.cpp
   ${LIB_CPP_DIR}/session/*.cpp
-  ${LIB_CPP_DIR}/fabric/*.cpp)
+  ${LIB_CPP_DIR}/fabric/*.cpp
+  ${LIB_CPP_DIR}/remend/*.cpp)
 file(GLOB LIB_JNI_SRCS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
 
 # Other libraries, such as Enriched Markdown, link their own md4c. Prefixed,
@@ -43,6 +44,7 @@ target_include_directories(${LIB_TARGET_NAME} PUBLIC
   ${LIB_CPP_DIR}/downstream
   ${LIB_CPP_DIR}/session
   ${LIB_CPP_DIR}/fabric
+  ${LIB_CPP_DIR}/remend
   ${LIB_GENERATED_JNI_DIR}
   ${LIB_GENERATED_COMPONENTS_DIR})
 

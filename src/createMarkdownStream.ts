@@ -1,3 +1,4 @@
+/* eslint-disable no-bitwise -- the preview feature mask is a bitmask */
 import NativeDownstreamSession, {
   type SessionErrorEvent,
   type SnapshotReadyEvent,
@@ -8,12 +9,52 @@ import type {
   MarkdownErrorCode,
   MarkdownErrorEvent,
   MarkdownOperationError,
+  MarkdownPreviewOptions,
   MarkdownStreamController,
   MarkdownStreamOptions,
 } from './types';
 
 const MAX_CHUNK_BYTES = 64 * 1024;
 const MAX_QUEUED_BYTES = 256 * 1024;
+
+/**
+ * Bits for the native provisional-styling pass, mirroring
+ * `remend::PreviewFeature`. Keep in step with `src/cpp/remend/Preview.h`: a
+ * bit that the native side does not define is masked off and does nothing, so
+ * adding one is a change on both sides rather than a silent no-op here.
+ */
+const PREVIEW_EMPHASIS = 1 << 0;
+const PREVIEW_INLINE_CODE = 1 << 1;
+const PREVIEW_LINKS = 1 << 2;
+const PREVIEW_IMAGES = 1 << 3;
+const PREVIEW_ALL =
+  PREVIEW_EMPHASIS | PREVIEW_INLINE_CODE | PREVIEW_LINKS | PREVIEW_IMAGES;
+
+/**
+ * Resolves the public `preview` option to a bitmask.
+ *
+ * `true` is every feature, `false` and `undefined` are none, and an object
+ * enables only what it names. An option that is neither throws rather than
+ * falling back to a default, because a typo here would otherwise silently
+ * change what a reader sees mid-stream.
+ */
+function previewFeatures(options: boolean | MarkdownPreviewOptions): number {
+  if (typeof options === 'boolean') {
+    return options ? PREVIEW_ALL : 0;
+  }
+  if (typeof options !== 'object' || options === null) {
+    throw operationError(
+      'invalid_input',
+      'preview must be a boolean or an options object.'
+    );
+  }
+  let features = 0;
+  if (options.emphasis) features |= PREVIEW_EMPHASIS;
+  if (options.inlineCode) features |= PREVIEW_INLINE_CODE;
+  if (options.links) features |= PREVIEW_LINKS;
+  if (options.images) features |= PREVIEW_IMAGES;
+  return features;
+}
 const controllers = new Map<string, StreamState>();
 let nextSession = 0;
 let removeSnapshotListener: (() => void) | undefined;
@@ -52,6 +93,7 @@ class StreamState implements MarkdownStreamController {
   private disposed = false;
   private bound = false;
   private tracing = false;
+  private previewFeatures = 0;
   private subscribers = new Set<() => void>();
 
   constructor(options: MarkdownStreamOptions, mode: ParseMode) {
@@ -59,6 +101,10 @@ class StreamState implements MarkdownStreamController {
     this.mode = mode;
     this.onError = options.onError;
     NativeDownstreamSession.create(this.sessionId, mode);
+    // Set after create, so a session always exists before it is configured.
+    if (options.preview !== undefined) {
+      this.setPreview(options.preview);
+    }
     controllers.set(this.sessionId, this);
     listenForNativeEvents();
   }
@@ -228,6 +274,14 @@ class StreamState implements MarkdownStreamController {
     this.assertActive();
     NativeDownstreamSession.setTracing(this.sessionId, enabled);
     this.tracing = enabled;
+  }
+
+  setPreview(options: boolean | MarkdownPreviewOptions): void {
+    this.assertActive();
+    const features = previewFeatures(options);
+    if (features === this.previewFeatures) return;
+    this.previewFeatures = features;
+    NativeDownstreamSession.setPreview(this.sessionId, features);
   }
 
   private trace(event: string, sequence: number): void {

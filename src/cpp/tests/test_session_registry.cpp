@@ -125,6 +125,78 @@ int main() {
     return 1;
   }
 
+  // A provisional-styling policy can be set on a running session, takes effect
+  // without any new input, and leaves the canonical source alone. Turning it
+  // back off restores the literal markers.
+  //
+  // Waiting is by content rather than by event count: a policy change publishes
+  // under the sequence already in flight, and the pass can finish before a
+  // waiter has looked. The callback runs under the session lock, so the
+  // snapshot is read from here rather than from inside it.
+  const auto shows = [](const std::string &session, uint64_t generation, uint64_t sequence,
+                        const std::u16string &text) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    for (;;) {
+      const auto snapshot = SessionRegistry::snapshot(session, generation, sequence);
+      if (snapshot && !snapshot->blocks.empty() && snapshot->blocks.back().text == text) {
+        return snapshot;
+      }
+      if (std::chrono::steady_clock::now() >= deadline) {
+        return DocumentHandle{};
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+  };
+  const auto ignore = [](const SessionEvent &) {};
+
+  const std::string previewId = "preview-session";
+  CHECK(SessionRegistry::create(previewId, ParseMode::IncrementalTail, ignore), "create a session to preview on");
+  CHECK(SessionRegistry::append(previewId, "hello **bold wor", 0, 1), "append to the preview session");
+  CHECK(shows(previewId, 0, 1, u"hello **bold wor"), "an unset policy leaves the markers literal");
+
+  // Unknown features are masked to what the pass defines, so a stale caller
+  // cannot ask for something that does not exist and appear to succeed.
+  remend::PreviewOptions options;
+  options.features = remend::PreviewOptions::allFeatures() | 0x80000000u;
+  CHECK(SessionRegistry::setPreview(previewId, options), "set a policy on a running session");
+  const auto styled = shows(previewId, 0, 1, u"hello bold wor");
+  CHECK(styled, "the policy restyles the tail with no new input");
+  CHECK(styled && !styled->blocks.back().runs.empty(), "the restyled tail is styled");
+  CHECK(styled && styled->blocks.back().runs.front().styles == InlineStyle::Strong, "the span is strong");
+
+  CHECK(SessionRegistry::setPreview(previewId, remend::PreviewOptions{}), "turn the policy back off");
+  CHECK(shows(previewId, 0, 1, u"hello **bold wor"), "turning the policy off restores the literal markers");
+  SessionRegistry::dispose(previewId);
+
+  // A finished stream ignores the policy entirely, so the settled document is
+  // a parse of the bytes the writer sent. An unclosed span is the case that
+  // tells the two apart: previewed it would read as bold, settled it is
+  // literal. Full mode is what createMarkdownStream uses, and it reaches the
+  // parser by its own branch, so both modes are asked.
+  for (const ParseMode mode : {ParseMode::FullParse, ParseMode::IncrementalTail}) {
+    const std::string settledId = mode == ParseMode::FullParse ? "settled-full" : "settled-incremental";
+    CHECK(SessionRegistry::create(settledId, mode, ignore), "create a session to settle");
+    CHECK(SessionRegistry::setPreview(settledId, remend::PreviewOptions::all()),
+          "enable the policy before any input");
+    CHECK(SessionRegistry::append(settledId, "hello **bold wor", 0, 1), "append an open span");
+    CHECK(shows(settledId, 0, 1, u"hello bold wor"), "the open span previews as bold while the stream runs");
+
+    CHECK(SessionRegistry::finish(settledId, 0, 1), "finish with the span still open");
+    const auto settled = shows(settledId, 0, 1, u"hello **bold wor");
+    CHECK(settled, "a finished stream is never repaired");
+    CHECK(settled && settled->blocks.back().runs.empty(), "a finished stream leaves the open span unstyled");
+
+    // Asking again after the stream settled changes nothing a reader can see.
+    CHECK(SessionRegistry::setPreview(settledId, remend::PreviewOptions::all()),
+          "a settled session accepts a policy");
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    CHECK(SessionRegistry::snapshot(settledId, 0, 1) == settled, "a settled session is not reparsed");
+    SessionRegistry::dispose(settledId);
+  }
+
+  CHECK(!SessionRegistry::setPreview("no-such-session", remend::PreviewOptions::all()),
+        "an unknown session rejects a policy change");
+
   // Dispose returns while a large parse is in flight and no event follows it.
   const std::string busy = "busy-session";
   std::atomic<int> busyEvents{0};

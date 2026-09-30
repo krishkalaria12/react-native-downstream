@@ -11,18 +11,33 @@
  */
 import { vi } from 'vitest';
 
-import { parse, type RenderModel } from './engine';
+import {
+  replaySession,
+  type RenderModel,
+  type SessionMode,
+  type SessionOp,
+} from './engine';
 
 type SnapshotListener = (event: object) => void;
 type ErrorListener = (event: object) => void;
 type TraceListener = (event: object) => void;
 
 interface Session {
+  mode: SessionMode;
   source: string;
   generation: number;
   sequence: number;
   finished: boolean;
   model: RenderModel | undefined;
+  /** Provisional-styling features, as the native bitmask. */
+  preview: number;
+  /**
+   * Everything the worker has applied to this session's parser, in order.
+   * Each pass replays it through the real `IncrementalParser`, so what the
+   * parser does with a finished stream or a preview policy is the engine's
+   * answer, not this file's.
+   */
+  steps: SessionOp[];
 }
 
 const sessions = new Map<string, Session>();
@@ -43,6 +58,11 @@ export function sourceForSession(sessionId: string): string {
 
 /** How many times native was handed work, for asserting a batch count. */
 export const nativeWork = { appends: 0, parses: 0 };
+
+/** The provisional-styling features a session is configured with. */
+export function previewFeaturesOf(sessionId: string): number {
+  return sessions.get(sessionId)?.preview ?? 0;
+}
 
 function nowNs(): string {
   return String(Math.round(performance.now() * 1e6));
@@ -67,11 +87,12 @@ function emitTrace(
   }
 }
 
-/** Parses the session's source and reports a snapshot, like the worker does. */
+/** Runs one worker pass and reports a snapshot, like the worker does. */
 function publish(session: Session, sessionId: string): void {
   emitTrace(sessionId, session.generation, session.sequence, 'append_received');
   nativeWork.parses += 1;
-  const model = parse(session.source);
+  session.steps.push({ op: 'parse', finished: session.finished });
+  const model = replaySession(session.mode, session.steps);
   session.model = model;
   emitTrace(sessionId, session.generation, session.sequence, 'parse_start');
   emitTrace(sessionId, session.generation, session.sequence, 'parse_end');
@@ -102,14 +123,16 @@ export const realEngineModule = {
   default: {
     create(sessionId: string, mode: string) {
       sessions.set(sessionId, {
+        // The TurboModule treats anything but `incremental` as full mode.
+        mode: mode === 'incremental' ? 'incremental' : 'full',
         source: '',
         generation: 0,
         sequence: 0,
         finished: false,
         model: undefined,
+        preview: 0,
+        steps: [],
       });
-      // The mode selects a parse strategy inside the real engine.
-      mode;
     },
 
     append(
@@ -122,6 +145,7 @@ export const realEngineModule = {
       const session = sessions.get(sessionId);
       if (!session || session.generation !== generation) return;
       session.source += chunk;
+      session.steps.push({ op: 'append', chunk });
       session.sequence = sequence;
       publish(session, sessionId);
     },
@@ -130,6 +154,7 @@ export const realEngineModule = {
       const session = sessions.get(sessionId);
       if (!session) return;
       session.source = source;
+      session.steps.push({ op: 'replace', source });
       session.generation = generation;
       session.sequence = 0;
       session.finished = false;
@@ -152,6 +177,17 @@ export const realEngineModule = {
     setTracing(sessionId: string, enabled: boolean) {
       if (enabled) nativeTraceEnabled.add(sessionId);
       else nativeTraceEnabled.delete(sessionId);
+    },
+
+    setPreview(sessionId: string, features: number) {
+      const session = sessions.get(sessionId);
+      if (!session) return;
+      session.preview = features;
+      session.steps.push({ op: 'preview', features });
+      // The native side queues a pass so a policy change reaches the reader
+      // without new input, unless the stream has settled and there is nothing
+      // left to repaint. The policy still reaches the parser either way.
+      if (!session.finished) publish(session, sessionId);
     },
 
     onSnapshotReady(callback: SnapshotListener) {

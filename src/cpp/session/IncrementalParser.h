@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MarkdownParser.h"
+#include "Preview.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -71,11 +72,36 @@ public:
   IncrementalCounters counters() const { return counters_; }
   size_t committedBytes() const { return committedBytes_; }
 
+  /// Opts the unstable tail into provisional styling. Off by default, which is
+  /// why every open span renders literally unless a caller asks for this.
+  ///
+  /// Only the tail is ever repaired, and a repair is applied only when parsing
+  /// it proves the repair changed nothing but the block it aimed at. Committed
+  /// blocks and the canonical source are never touched, and `finished` ignores
+  /// the policy entirely, so the settled document is always a parse of the
+  /// bytes the writer actually sent.
+  ///
+  /// Safe to call at any time, including while a stream is open. It forces one
+  /// more parse, because otherwise a session with no pending input would
+  /// publish the snapshot it already has and the new policy would not appear.
+  void setPreview(remend::PreviewOptions options) {
+    preview_ = remend::Preview(options);
+    previewDirty_ = true;
+  }
+  bool previewEnabled() const { return preview_.enabled(); }
+  /// Cumulative across every parse since the last reset, so a caller can see
+  /// how often the pass fired without instrumenting each snapshot.
+  remend::PreviewStats previewStats() const { return previewStats_; }
+
 private:
-  ParseResult fullParse(ParseFallback reason);
+  /// `previewable` is false for a finished stream and a rejected source, which
+  /// are the documents the provisional-styling pass must never touch.
+  ParseResult fullParse(ParseFallback reason, bool previewable);
   /// Full mode: gives leading blocks that are unchanged since the previous
   /// snapshot a stable identity, so platforms reuse their rendering.
   void carryIdentities(ParseResult &result);
+  /// Adds one preview pass to the stats and counters, probes included.
+  void notePreview(const remend::PreviewResult &preview);
   ParseResult parseTail();
   void publish(DocumentHandle document);
   void tryCommit();
@@ -112,6 +138,12 @@ private:
   // A trailing open fence accepts plain content without reparsing.
   bool openFence_{false};
   bool fencePendingNewline_{false};
+
+  // Provisional styling for the tail. Inert until a caller sets it.
+  remend::Preview preview_;
+  remend::PreviewStats previewStats_{};
+  // A new policy has to reach the reader even if no new input arrived.
+  bool previewDirty_{false};
 
   IncrementalCounters counters_;
 };
