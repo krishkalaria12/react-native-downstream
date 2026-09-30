@@ -58,6 +58,7 @@ function ControlledMarkdown({
   markdown,
   style,
   selectable = false,
+  syntaxHighlighting = true,
   onLinkPress,
   onError,
 }: Extract<MarkdownViewProps, { markdown: string }>) {
@@ -113,6 +114,7 @@ function ControlledMarkdown({
       markdown={current.source}
       generation={generation}
       selectable={selectable}
+      syntaxHighlighting={syntaxHighlighting}
       onLinkPress={onLinkPress ? handleLinkPress : undefined}
       onMarkdownError={handleError}
     />
@@ -123,6 +125,7 @@ function StreamMarkdown({
   stream,
   style,
   selectable = false,
+  syntaxHighlighting = true,
   onLinkPress,
   onError,
 }: Extract<
@@ -170,6 +173,7 @@ function StreamMarkdown({
       sessionSequence={binding.readySequence}
       sessionRevision={revision}
       selectable={selectable}
+      syntaxHighlighting={syntaxHighlighting}
       onLinkPress={onLinkPress ? handleLinkPress : undefined}
       onMarkdownError={handleError}
     />

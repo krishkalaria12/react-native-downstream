@@ -94,6 +94,14 @@ export interface MarkdownStreamController {
 type MarkdownViewBaseProps = Readonly<{
   style?: StyleProp<ViewStyle>;
   selectable?: boolean;
+  /**
+   * Colors fenced code blocks by their info string. On by default.
+   *
+   * A block whose language the engine has no lexer for, and one over 64 KiB,
+   * stay plain either way. The default palette follows GitHub's light and dark
+   * code themes; overriding per-token colors is not part of this release.
+   */
+  syntaxHighlighting?: boolean;
   onLinkPress?: (event: MarkdownLinkPressEvent) => void;
   onError?: (error: MarkdownErrorEvent) => void;
 }>;
