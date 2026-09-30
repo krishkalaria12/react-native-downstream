@@ -75,6 +75,38 @@ struct InlineRun {
   int32_t link{-1};
 };
 
+/// The class of a code token. Platform palettes map these to colors, so the
+/// classes are shared between iOS and Android while the colors are not.
+enum class TokenClass : uint8_t {
+  Plain = 0,
+  Comment,
+  Keyword,
+  Type,
+  String,
+  Number,
+  Constant,
+  Regex,
+  Function,
+  Property,
+  Operator,
+  Preprocessor,
+  Tag,
+  Attribute,
+  Inserted,
+  Deleted,
+  Heading,
+  Count,
+};
+
+/// A run of code text in one token class. Offsets are UTF-16 code units into
+/// Block::text, as with InlineRun. Runs are sorted and never overlap, and
+/// Plain text has no run, so a document with no tokens is a plain one.
+struct TokenRun {
+  uint32_t start{0};
+  uint32_t end{0};
+  TokenClass token{TokenClass::Plain};
+};
+
 /// One level of block nesting around a leaf block, outermost first.
 struct Container {
   ContainerKind kind{ContainerKind::Quote};
@@ -119,6 +151,11 @@ struct Block {
   std::vector<TableCell> cells;
   /// Fenced code info string language, UTF-8.
   std::string language;
+  /// CodeBlock only: syntax tokens. Empty when the language is unknown, the
+  /// block is over the highlight limit, or highlighting is disabled. Tokens
+  /// live here rather than in runs so the open-fence fast path and inline-code
+  /// semantics stay untouched.
+  std::vector<TokenRun> tokens;
 };
 
 /// An actionable link. Links that fail the URL policy are plain text and are
