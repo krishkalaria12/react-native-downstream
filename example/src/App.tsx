@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { BenchScreen } from './bench/BenchScreen';
 import { StressScreen } from './bench/StressScreen';
 import { ChatScreen } from './example/ChatScreen';
+import { ControlsScreen } from './controls/ControlsScreen';
 import { ROUTES, routeById, type RouteId } from './navigation';
 import { CompareScreen } from './testing/CompareScreen';
 import { PreviewScreen, type PreviewLaunch } from './testing/PreviewScreen';
@@ -116,6 +117,8 @@ function Navigation() {
           >
             {route.id === 'example' ? (
               <ChatScreen />
+            ) : route.id === 'controls' ? (
+              <ControlsScreen />
             ) : route.id === 'testing' ? (
               <CompareScreen />
             ) : route.id === 'bench' ? (
