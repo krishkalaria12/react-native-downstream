@@ -8,13 +8,14 @@
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import { fencedCases, highlightCases } from './highlight_fixtures.mjs';
 import { adversarialCases, cases } from './oracle.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -22,6 +23,7 @@ const execFileAsync = promisify(execFile);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const CPP = join(ROOT, 'src', 'cpp');
 const MD4C = join(CPP, 'md4c');
+const LEXILLA = join(CPP, 'lexilla');
 
 const KIND = { paragraph: 0, heading: 1, code: 2, html: 3, hr: 4, table: 5 };
 const LIST_ITEM = 1;
@@ -35,6 +37,29 @@ const SYMBOL_PREFIXES = [
   '-Dmd_parse=downstream_md_parse',
   '-Dentity_lookup=downstream_entity_lookup',
 ];
+
+// The vendored lexers and everything that reaches them are built with the
+// namespace renames Lexilla and Scintilla use to keep two copies apart.
+const LEXILLA_PREFIXES = [
+  '-DLexilla=downstream_lexilla',
+  '-DScintilla=downstream_scintilla',
+];
+
+const HIGHLIGHT = ['CodeBlocks.cpp', 'CodeDocument.cpp', 'CodeHighlighter.cpp', 'LanguageRegistry.cpp', 'LanguageTables.cpp'];
+
+/** The vendored lexer sources, compiled once into an archive every test links. */
+function lexillaSources() {
+  const sources = [];
+  for (const directory of ['lexers', 'lexlib']) {
+    const path = join(LEXILLA, directory);
+    for (const name of readdirSync(path).sort()) {
+      if (name.endsWith('.cxx')) {
+        sources.push(join(path, name));
+      }
+    }
+  }
+  return sources;
+}
 
 let buildDir;
 const binary = (name) => join(buildDir, name);
@@ -53,11 +78,15 @@ before(async () => {
     '-pthread',
     '-DMD4C_USE_UTF8',
     ...SYMBOL_PREFIXES,
+    ...LEXILLA_PREFIXES,
     `-I${MD4C}`,
     `-I${CPP}`,
     `-I${join(CPP, 'downstream')}`,
     `-I${join(CPP, 'session')}`,
     `-I${join(CPP, 'remend')}`,
+    `-I${join(CPP, 'highlight')}`,
+    `-I${LEXILLA}`,
+    `-I${join(LEXILLA, 'lexlib')}`,
   ];
   const [md4c, entity] = await Promise.all(
     ['md4c.c', 'entity.c'].map(async (source) => {
@@ -72,8 +101,22 @@ before(async () => {
       return object;
     })
   );
+  // One archive for the vendored lexers and the highlighter, so the six test
+  // binaries below do not each compile thirty translation units.
+  const highlightObjects = await Promise.all(
+    lexillaSources()
+      .concat(HIGHLIGHT.map((name) => join(CPP, 'highlight', name)))
+      .map(async (source) => {
+        const object = binary(`${basename(source)}.o`);
+        await execFileAsync(cxx, [...cxxFlags, '-c', source, '-o', object]);
+        return object;
+      })
+  );
+  await execFileAsync('ar', ['rcs', binary('libhighlight.a'), ...highlightObjects]);
+
   const downstream = (name) => join(CPP, 'downstream', name);
   const session = (name) => join(CPP, 'session', name);
+  const highlight = (name) => join(CPP, 'highlight', name);
   const testSource = (name) => join(CPP, 'tests', name);
   const engine = [
     ...['MarkdownParser.cpp', 'Unicode.cpp', 'LinkPolicy.cpp'].map(downstream),
@@ -82,6 +125,9 @@ before(async () => {
     join(CPP, 'remend', 'Preview.cpp'),
   ];
   const pool = ['WorkerPool.cpp', 'RenderPreparer.cpp'].map(downstream);
+  // Every binary links the highlighter: parsing colors code blocks now, so the
+  // existing suites cover it too.
+  const lexilla = binary('libhighlight.a');
   await Promise.all([
     execFileAsync(cxx, [
       ...cxxFlags,
@@ -89,6 +135,7 @@ before(async () => {
       ...engine,
       md4c,
       entity,
+      lexilla,
       '-o',
       binary('dump_document'),
     ]),
@@ -100,6 +147,7 @@ before(async () => {
       ...engine,
       md4c,
       entity,
+      lexilla,
       '-o',
       binary('test_incremental'),
     ]),
@@ -110,6 +158,7 @@ before(async () => {
       ...engine,
       md4c,
       entity,
+      lexilla,
       '-o',
       binary('dump_session'),
     ]),
@@ -120,6 +169,7 @@ before(async () => {
       ...engine,
       md4c,
       entity,
+      lexilla,
       '-o',
       binary('test_preview'),
     ]),
@@ -132,6 +182,7 @@ before(async () => {
       ...engine,
       md4c,
       entity,
+      lexilla,
       '-o',
       binary('test_session_registry'),
     ]),
@@ -145,8 +196,28 @@ before(async () => {
       ...engine,
       md4c,
       entity,
+      lexilla,
       '-o',
       binary('test_worker_pool'),
+    ]),
+    // The highlighter on its own, and the tokens a parse produced.
+    execFileAsync(cxx, [
+      ...cxxFlags,
+      testSource('test_highlight.cpp'),
+      ...engine,
+      md4c,
+      entity,
+      lexilla,
+      '-o',
+      binary('test_highlight'),
+    ]),
+    execFileAsync(cxx, [
+      ...cxxFlags,
+      testSource('dump_tokens.cpp'),
+      downstream('Unicode.cpp'),
+      lexilla,
+      '-o',
+      binary('dump_tokens'),
     ]),
   ]);
 });
@@ -154,6 +225,16 @@ before(async () => {
 after(() => {
   if (buildDir) rmSync(buildDir, { recursive: true, force: true });
 });
+
+/** Tokenizes one code block and returns dump_tokens' JSON. */
+function tokens(info, source) {
+  return JSON.parse(
+    execFileSync(binary('dump_tokens'), {
+      input: Buffer.from(`${info}\n${source}`, 'utf8'),
+      maxBuffer: 64 << 20,
+    }).toString('utf8')
+  );
+}
 
 /** Parses a string or byte buffer and returns dump_document's JSON. */
 function parse(source) {
@@ -613,6 +694,74 @@ describe('links', () => {
       document.links.map((link) => link.url),
       ['https://d']
     );
+  });
+});
+
+describe('syntax highlighting', () => {
+  // The engine's own tests: the language table, the offsets, the limits, the
+  // budget, and the streaming equivalence that a finished block's tokens equal
+  // a one-shot pass's.
+  test('engine invariants', () => {
+    execFileSync(binary('test_highlight'), { timeout: 30_000, stdio: 'inherit' });
+  });
+
+  // One golden snapshot per alias group. A diff here is a diff in what a reader
+  // sees, because a run's class is the only thing that decides its color.
+  test('golden tokens', async (t) => {
+    for (const testCase of highlightCases) {
+      await t.test(testCase.id, (sub) => {
+        sub.assert.snapshot(tokens(testCase.info, testCase.source).runs);
+      });
+    }
+  });
+
+  test('a parse colors the fenced blocks in the document', async (t) => {
+    for (const testCase of fencedCases) {
+      await t.test(testCase.id, (sub) => {
+        sub.assert.snapshot(parse(testCase.source).blocks.map((block) => block.tokens));
+      });
+    }
+  });
+
+  test('a code block keeps its text and its link ranges', () => {
+    // Highlighting changes colors, never text, so selection and copy are the
+    // bytes the writer sent.
+    const document = parse('```ts\nconst a: number = 1;\n```\n');
+    assert.equal(document.blocks[0].text, 'const a: number = 1;');
+    assert.ok(document.blocks[0].tokens.length > 0);
+    assert.equal(document.blocks[0].runs.length, 0);
+    const links = parse('```ts\n// see https://example.com\n```\n');
+    assert.deepEqual(links.links, []);
+  });
+
+  test('an unknown language and an empty fence stay plain', () => {
+    for (const info of ['brainfuck', '', '   ']) {
+      assert.deepEqual(tokens(info, 'const a = 1;\n').runs, [], info);
+    }
+  });
+
+  test('every run lands inside the block on a code point boundary', () => {
+    for (const testCase of highlightCases) {
+      const { text, runs } = tokens(testCase.info, testCase.source);
+      let previous = 0;
+      for (const [start, end, token, slice] of runs) {
+        assert.ok(start < end && end <= text.length, `${testCase.id}: run inside the block`);
+        assert.notEqual(token, 'plain', `${testCase.id}: plain text has no run`);
+        assert.ok(start >= previous, `${testCase.id}: runs are sorted and do not overlap`);
+        assert.equal(text.slice(start, end), slice, `${testCase.id}: the slice matches its offsets`);
+        const before = start > 0 ? text.codePointAt(start - 2) : undefined;
+        const after = end < text.length ? text.codePointAt(end) : undefined;
+        assert.ok(
+          !(before >= 0xd800 && before <= 0xdbff),
+          `${testCase.id}: a run does not start between a surrogate pair`
+        );
+        assert.ok(
+          !(after >= 0xdc00 && after <= 0xdfff),
+          `${testCase.id}: a run does not end between a surrogate pair`
+        );
+        previous = end;
+      }
+    }
   });
 });
 

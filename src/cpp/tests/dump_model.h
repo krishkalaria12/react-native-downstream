@@ -15,6 +15,32 @@
 
 namespace downstream::testdump {
 
+/// The name a token class is reported under. A platform palette keys on the
+/// class, so the name is the contract the golden fixtures pin.
+inline const char *tokenName(TokenClass token) {
+  switch (token) {
+    case TokenClass::Plain: return "plain";
+    case TokenClass::Comment: return "comment";
+    case TokenClass::Keyword: return "keyword";
+    case TokenClass::Type: return "type";
+    case TokenClass::String: return "string";
+    case TokenClass::Number: return "number";
+    case TokenClass::Constant: return "constant";
+    case TokenClass::Regex: return "regex";
+    case TokenClass::Function: return "function";
+    case TokenClass::Property: return "property";
+    case TokenClass::Operator: return "operator";
+    case TokenClass::Preprocessor: return "preprocessor";
+    case TokenClass::Tag: return "tag";
+    case TokenClass::Attribute: return "attribute";
+    case TokenClass::Inserted: return "inserted";
+    case TokenClass::Deleted: return "deleted";
+    case TokenClass::Heading: return "heading";
+    case TokenClass::Count: break;
+  }
+  return "unknown";
+}
+
 inline void writeString(std::string_view text) {
   std::putchar('"');
   for (const char c : text) {
@@ -54,13 +80,14 @@ inline void writeError(const char *code) {
   std::printf("}\n");
 }
 
-/// Prints the document, or the error when the parse failed. Identity and
-/// sourceRange are left out: they describe where a block came from, and every
-/// parse mints new ones.
-inline void write(const ParseResult &result) {
+/// Prints the document, or the error when the parse failed, and reports which
+/// it printed. Identity and sourceRange are left out: they describe where a
+/// block came from, and every parse mints new ones. When it printed a document
+/// the closing brace is left to the caller, which may have counters to add.
+inline bool write(const ParseResult &result) {
   if (result.status != ParseStatus::Ok || !result.document) {
     writeError(errorCode(result.status));
-    return;
+    return false;
   }
 
   const Document &document = *result.document;
@@ -87,6 +114,13 @@ inline void write(const ParseResult &result) {
       const InlineRun &run = block.runs[r];
       std::printf("%s[%u,%u,%u,%d]", r ? "," : "", run.start, run.end, run.styles, run.link);
     }
+    std::printf("],\"tokens\":[");
+    for (size_t t = 0; t < block.tokens.size(); t++) {
+      const TokenRun &run = block.tokens[t];
+      std::printf("%s[%u,%u,\"%s\",", t ? "," : "", run.start, run.end, tokenName(run.token));
+      writeString(block.text.substr(run.start, run.end - run.start));
+      std::printf("]");
+    }
     std::printf("],\"cells\":[");
     for (size_t c = 0; c < block.cells.size(); c++) {
       const TableCell &cell = block.cells[c];
@@ -101,7 +135,14 @@ inline void write(const ParseResult &result) {
     writeString(link.url);
     std::printf(",\"range\":[%u,%u]}", link.range.start, link.range.end);
   }
-  std::printf("]}\n");
+  std::printf("]");
+  return true;
+}
+
+/// Closes what write left open and ends the line. A driver that has more to
+/// add prints it in between.
+inline void writeModelClosed() {
+  std::printf("}\n");
 }
 
 } // namespace downstream::testdump

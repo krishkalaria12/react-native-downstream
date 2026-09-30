@@ -1,3 +1,5 @@
+#include "CodeBlocks.h"
+#include "CodeHighlighter.h"
 #include "IncrementalParser.h"
 #include "SegmentPlan.h"
 #include "check.h"
@@ -37,10 +39,18 @@ bool equalBlock(const Block &x, const Block &y) {
   if (x.kind != y.kind || x.headingLevel != y.headingLevel || x.tableHeader != y.tableHeader ||
       x.table != y.table || x.spacingBefore != y.spacingBefore || x.text != y.text ||
       x.language != y.language || x.runs.size() != y.runs.size() ||
-      x.cells.size() != y.cells.size() || x.containers.size() != y.containers.size()) return false;
+      x.cells.size() != y.cells.size() || x.containers.size() != y.containers.size() ||
+      x.tokens.size() != y.tokens.size()) return false;
   for (size_t j = 0; j < x.runs.size(); j++) {
     const auto &p = x.runs[j], &q = y.runs[j];
     if (p.start != q.start || p.end != q.end || p.styles != q.styles || p.link != q.link) return false;
+  }
+  // Tokens are part of what a reader sees, so a block whose colors changed is a
+  // changed block: a streamed document has to reach the same tokens as a full
+  // parse of the same bytes.
+  for (size_t j = 0; j < x.tokens.size(); j++) {
+    const auto &p = x.tokens[j], &q = y.tokens[j];
+    if (p.start != q.start || p.end != q.end || p.token != q.token) return false;
   }
   for (size_t j = 0; j < x.cells.size(); j++) {
     const auto &p = x.cells[j], &q = y.cells[j];
@@ -120,6 +130,12 @@ std::vector<std::string> splitChunks(const std::string &text, uint32_t seed) {
   return chunks;
 }
 
+/// A raw parse plus the highlighting a session does, so the oracle is what a
+/// reader would actually see rather than an uncolored intermediate.
+DocumentHandle colored(ParseResult result) {
+  return highlightCodeBlocks(lexillaHighlighter(), result.document, kHighlightBudgetMs, nullptr);
+}
+
 bool check(const std::vector<std::string> &chunks, const char *label) {
   IncrementalParser incremental(ParseMode::IncrementalTail);
   IncrementalParser full(ParseMode::FullParse);
@@ -140,8 +156,10 @@ bool check(const std::vector<std::string> &chunks, const char *label) {
       return false;
     }
     if (expected.status == ParseStatus::Ok) {
-      const auto oracle = parseMarkdown(source);
-      if (!equal(*expected.document, *oracle.document) ||
+      // The oracle is a raw parse, so it is colored the way the full-mode
+      // parser colors before it compares anything.
+      const auto oracle = colored(parseMarkdown(source));
+      if (!equal(*expected.document, *oracle) ||
           !carriedIdentities(*expected.document, fullIdentities)) {
         std::cerr << "Full-mode identity broke in " << label << " at " << source.size() << " bytes\n";
         return false;
@@ -149,9 +167,8 @@ bool check(const std::vector<std::string> &chunks, const char *label) {
     }
   }
   const auto actual = feed(incremental, source, true);
-  const auto expected = parseMarkdown(source);
-  if (actual.status != expected.status ||
-      (actual.status == ParseStatus::Ok && !equal(*actual.document, *expected.document))) {
+  const auto expected = colored(parseMarkdown(source));
+  if (actual.status != ParseStatus::Ok || !equal(*actual.document, *expected)) {
     std::cerr << "Finish mismatch in " << label << "\n";
     return false;
   }

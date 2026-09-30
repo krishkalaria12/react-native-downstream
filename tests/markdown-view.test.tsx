@@ -301,6 +301,16 @@ describe('DownstreamMarkdown props', () => {
     expect(nativeView.last()?.selectable).toBe(true);
   });
 
+  it('highlights code by default', () => {
+    mount(<DownstreamMarkdown markdown="x" />);
+    expect(nativeView.last()?.syntaxHighlighting).toBe(true);
+  });
+
+  it('passes syntaxHighlighting through to the native view', () => {
+    mount(<DownstreamMarkdown markdown="x" syntaxHighlighting={false} />);
+    expect(nativeView.last()?.syntaxHighlighting).toBe(false);
+  });
+
   it('starts a controlled source at generation 1', () => {
     mount(<DownstreamMarkdown markdown="x" />);
     expect(nativeView.last()?.generation).toBe(1);
