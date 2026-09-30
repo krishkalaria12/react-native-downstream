@@ -251,9 +251,10 @@ void CodeDocument::indexLines() {
       lineStarts_.push_back(index + 1);
     }
   }
-  if (lineStarts_.back() != text_.size()) {
-    lineStarts_.push_back(text_.size());
-  }
+  // No entry past a last line that has no newline. Scintilla has no such line,
+  // and a lexer that asks for that line's end, as Rust and Bash do to close a
+  // line comment, would be told it stops one byte short. `lineStart` already
+  // answers the text's length for any line past the last.
   lineStates_.resize(lineStarts_.size(), 0);
 }
 
