@@ -3,6 +3,9 @@ require "json"
 package = JSON.parse(File.read(File.join(__dir__, "package.json")))
 
 MD4C_SYMBOL_PREFIXES = "md_parse=downstream_md_parse entity_lookup=downstream_entity_lookup"
+# An app may link its own Scintilla or Lexilla, and both projects rename their
+# namespaces with a preprocessor define, so our vendored copy does too.
+LEXILLA_SYMBOL_PREFIXES = "Lexilla=downstream_lexilla Scintilla=downstream_scintilla"
 
 Pod::Spec.new do |s|
   s.name         = "Downstream"
@@ -21,8 +24,14 @@ Pod::Spec.new do |s|
     "src/cpp/session/*.{h,cpp}",
     "src/cpp/fabric/*.{h,cpp}",
     "src/cpp/remend/*.{h,cpp}",
+    "src/cpp/highlight/*.{h,cpp}",
+    "src/cpp/lexilla/*.{h,cxx}",
+    "src/cpp/lexilla/lexers/*.cxx",
+    "src/cpp/lexilla/lexlib/*.{h,cxx}",
     "src/cpp/md4c/md4c.{c,h}",
     "src/cpp/md4c/entity.{c,h}",
+    # The vendored lexers are HPND-licensed and their notice has to ship.
+    "src/cpp/lexilla/License.txt",
   ]
   s.private_header_files = "src/ios/**/*.h", "src/cpp/**/*.h"
 
@@ -33,10 +42,15 @@ Pod::Spec.new do |s|
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/fabric\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/md4c\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/remend\"",
+      "\"$(PODS_TARGET_SRCROOT)/src/cpp/highlight\"",
+      "\"$(PODS_TARGET_SRCROOT)/src/cpp/lexilla\"",
+      "\"$(PODS_TARGET_SRCROOT)/src/cpp/lexilla/lexlib\"",
     ].join(" "),
-    # Other libraries, such as Enriched Markdown, link their own md4c. Prefixing
-    # ours keeps the linker from binding our calls to theirs.
-    "GCC_PREPROCESSOR_DEFINITIONS" => "$(inherited) MD4C_USE_UTF8=1 #{MD4C_SYMBOL_PREFIXES}",
+    # Other libraries, such as Enriched Markdown, link their own md4c, and an
+    # app may link its own Scintilla. Prefixing ours keeps the linker from
+    # binding our calls to theirs.
+    "GCC_PREPROCESSOR_DEFINITIONS" =>
+      "$(inherited) MD4C_USE_UTF8=1 #{MD4C_SYMBOL_PREFIXES} #{LEXILLA_SYMBOL_PREFIXES}",
     "CLANG_CXX_LANGUAGE_STANDARD" => "c++20",
   }
 
