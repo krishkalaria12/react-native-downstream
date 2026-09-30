@@ -6,6 +6,7 @@ bool sameBlock(const Block &a, const Block &b) {
   if (a.kind != b.kind || a.headingLevel != b.headingLevel || a.tableHeader != b.tableHeader ||
       a.table != b.table || a.spacingBefore != b.spacingBefore || a.text != b.text || a.language != b.language ||
       a.runs.size() != b.runs.size() || a.cells.size() != b.cells.size() ||
+      a.tokens.size() != b.tokens.size() ||
       a.containers.size() != b.containers.size()) {
     return false;
   }
@@ -13,6 +14,13 @@ bool sameBlock(const Block &a, const Block &b) {
     const InlineRun &x = a.runs[i];
     const InlineRun &y = b.runs[i];
     if (x.start != y.start || x.end != y.end || x.styles != y.styles || x.link != y.link) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < a.tokens.size(); i++) {
+    const TokenRun &x = a.tokens[i];
+    const TokenRun &y = b.tokens[i];
+    if (x.start != y.start || x.end != y.end || x.token != y.token) {
       return false;
     }
   }

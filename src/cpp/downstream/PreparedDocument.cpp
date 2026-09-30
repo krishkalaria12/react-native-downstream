@@ -1,5 +1,7 @@
 #include "PreparedDocument.h"
 
+#include "CodeBlocks.h"
+#include "CodeHighlighter.h"
 #include "RenderPreparer.h"
 
 #include <list>
@@ -32,6 +34,10 @@ PreparedDocument::PreparedDocument(std::string source) : source_(std::move(sourc
 void PreparedDocument::prepare() {
   result_ = parseMarkdown(source_);
   if (result_.status == ParseStatus::Ok) {
+    // Highlighting runs here, on the same worker job and so inside the
+    // synchronous-layout budget, so the platform text work that follows sees
+    // finished tokens.
+    result_.document = highlightCodeBlocks(lexillaHighlighter(), result_.document, kHighlightBudgetMs, nullptr);
     RenderPreparer::prepare(result_.document, RenderPreparer::recentLayouts());
   }
 }

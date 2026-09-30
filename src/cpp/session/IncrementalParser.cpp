@@ -1,5 +1,6 @@
 #include "IncrementalParser.h"
 
+#include "CodeBlocks.h"
 #include "Compare.h"
 #include "Scan.h"
 #include "Unicode.h"
@@ -180,6 +181,7 @@ void IncrementalParser::replace(std::string_view source) {
   source_.assign(source);
   replaced_ = true;
   openFence_ = false;
+  highlight_.clear();
 }
 
 void IncrementalParser::reset() {
@@ -189,6 +191,7 @@ void IncrementalParser::reset() {
   replaced_ = false;
   clearCommitted();
   openFence_ = false;
+  highlight_.clear();
   previewStats_ = {};
   counters_ = {};
 }
@@ -244,6 +247,16 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable)
   if (result.status != ParseStatus::Ok) {
     return result;
   }
+  // Color before anything compares blocks. sameBlock reads a block's tokens, and
+  // a freshly parsed block has none until the highlighter has seen it, so
+  // comparing first would find every block changed and defeat both the identity
+  // carry-over and the shared committed prefix. A full parse replaces the whole
+  // document, so the tail's resume state no longer describes anything and its
+  // lexer is released.
+  highlight_.clear();
+  HighlightStats stats;
+  result.document = highlightCodeBlocks(lexillaHighlighter(), result.document, kHighlightBudgetMs, &stats);
+  noteHighlight(stats);
   if (mode_ == ParseMode::FullParse) {
     carryIdentities(result);
     publish(result.document);
@@ -283,6 +296,42 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable)
   publish(result.document);
   watchOpenFence(source, committedBytes_, committedCount());
   return result;
+}
+
+void IncrementalParser::noteHighlight(const HighlightStats &stats) {
+  counters_.blocksHighlighted += stats.blocks;
+  counters_.highlightResumes += stats.resumes;
+  for (size_t index = 0; index < kHighlightStopCount; index++) {
+    counters_.highlight[index] += stats.stops[index];
+  }
+}
+
+void IncrementalParser::highlightTail(Document *document) {
+  HighlightStats stats;
+  std::vector<Block> &blocks = document->blocks.tail();
+  // Every pass rebuilds the tail from scratch, so every code block in it has to
+  // be colored again: only a committed block keeps its tokens between
+  // snapshots. The last one is the only block that can still grow, so it gets
+  // the state that resumes where the previous snapshot stopped.
+  size_t last = blocks.size();
+  while (last > 0 &&
+         !(blocks[last - 1].kind == BlockKind::CodeBlock && !blocks[last - 1].language.empty())) {
+    last--;
+  }
+  if (last == 0) {
+    highlight_.clear();
+    return;
+  }
+  // A local state for the settled blocks in front of it: they share a lexer with
+  // each other, and never disturb the growing block's.
+  HighlightState settled;
+  for (size_t i = 0; i + 1 < last; i++) {
+    if (blocks[i].kind == BlockKind::CodeBlock && !blocks[i].language.empty()) {
+      highlightCodeBlock(lexillaHighlighter(), &blocks[i], &settled, kHighlightBudgetMs, &stats);
+    }
+  }
+  highlightCodeBlock(lexillaHighlighter(), &blocks[last - 1], &highlight_, kHighlightBudgetMs, &stats);
+  noteHighlight(stats);
 }
 
 void IncrementalParser::notePreview(const remend::PreviewResult &preview) {
@@ -368,6 +417,7 @@ ParseResult IncrementalParser::parseTail() {
   combined->links = SharedList<Link>(committedLinks_, std::move(links));
   counters_.cacheHits += committed;
   result.document = combined;
+  highlightTail(combined.get());
   publish(combined);
   watchOpenFence(source, committedBytes_, committed);
   return result;
@@ -450,6 +500,10 @@ bool IncrementalParser::commitRegion(size_t boundary) {
   const size_t committed = committedCount();
   const size_t committedLinks = committedLinks_ ? committedLinks_->size() : 0;
   Utf16OffsetMap offsets(region);
+  // Reused across the region's blocks, so consecutive ones of the same
+  // language share a configured lexer.
+  HighlightState committedHighlight;
+  HighlightStats stats;
   std::vector<Block> blocks;
   blocks.reserve(parsedBlocks.size());
   for (size_t i = 0; i < parsedBlocks.size(); i++) {
@@ -460,6 +514,12 @@ bool IncrementalParser::commitRegion(size_t boundary) {
     offsetIds(block, committedContainers_, committedTables_, committedLinks);
     if (i == 0 && committed > 0) {
       block.spacingBefore = BlockSpacing::Normal;
+    }
+    // A committed code block is closed, so it is colored here from its whole
+    // text and then shared, unchanged, by every later snapshot. A local state
+    // keeps this away from the tail's.
+    if (block.kind == BlockKind::CodeBlock && !block.language.empty()) {
+      highlightCodeBlock(lexillaHighlighter(), &block, &committedHighlight, kHighlightBudgetMs, &stats);
     }
     blocks.push_back(std::move(block));
   }
@@ -473,6 +533,7 @@ bool IncrementalParser::commitRegion(size_t boundary) {
     }
     committedLinks_ = SharedList<Link>::Prefix::extend(committedLinks_, std::move(links));
   }
+  noteHighlight(stats);
   committedBytes_ = boundary;
   committedUtf16_ += offsets.toUtf16(region.size());
   committedContainers_ += parsed.containerCount;
@@ -599,6 +660,7 @@ bool IncrementalParser::appendOpenFence() {
   if (fencePendingNewline_) {
     text.pop_back();
   }
+  highlightTail(next.get());
   publish(next);
   counters_.openFenceFastUpdates++;
   return true;

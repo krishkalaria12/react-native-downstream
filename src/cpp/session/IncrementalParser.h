@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CodeBlocks.h"
 #include "MarkdownParser.h"
 #include "Preview.h"
 
@@ -33,6 +34,15 @@ struct IncrementalCounters {
   uint64_t rejectedCommits{0};
   uint64_t committedBlocks{0};
   uint64_t cacheHits{0};
+  /// Code blocks a highlighting pass colored, and how many of those passes
+  /// continued the previous one instead of starting the block over.
+  uint64_t blocksHighlighted{0};
+  uint64_t highlightResumes{0};
+  uint64_t highlight[kHighlightStopCount]{};
+
+  uint64_t highlightCount(HighlightStop reason) const {
+    return highlight[static_cast<size_t>(reason)];
+  }
   uint64_t fallback[static_cast<size_t>(ParseFallback::Count)]{};
 
   uint64_t fallbackCount(ParseFallback reason) const {
@@ -102,7 +112,12 @@ private:
   void carryIdentities(ParseResult &result);
   /// Adds one preview pass to the stats and counters, probes included.
   void notePreview(const remend::PreviewResult &preview);
+  /// Adds one set of highlighting passes to the counters.
+  void noteHighlight(const HighlightStats &stats);
   ParseResult parseTail();
+  /// Colors the tail code block, resuming from the last pass. A tail that is
+  /// not code clears the state, which is what releases its lexer.
+  void highlightTail(Document *document);
   void publish(DocumentHandle document);
   void tryCommit();
   bool commitRegion(size_t boundary);
@@ -138,6 +153,10 @@ private:
   // A trailing open fence accepts plain content without reparsing.
   bool openFence_{false};
   bool fencePendingNewline_{false};
+
+  // The tail code block's highlighting resume state, released on commit, on a
+  // full parse, and whenever the tail is no longer code.
+  HighlightState highlight_;
 
   // Provisional styling for the tail. Inert until a caller sets it.
   remend::Preview preview_;
