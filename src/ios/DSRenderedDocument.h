@@ -105,10 +105,12 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
                  syntaxHighlighting:(BOOL)syntaxHighlighting;
 #endif
 
-/// Drops every cached rendering. Colors are stored as dynamic UIColors and the
-/// platform resolves them when it draws, so a rendering survives an appearance
-/// switch; this is for the case where a resolved color would be cheaper to
-/// rebuild than to re-resolve, and for tests.
+/// Drops every cached rendering. For tests and for a caller that wants to force
+/// every rendering to be rebuilt rather than reused.
+///
+/// A color appearance change does not need this: token colors are dynamic
+/// UIColors, which the platform resolves against the trait collection when it
+/// draws, so a cached rendering already follows the appearance.
 + (void)invalidateCaches;
 
 /// Segment frames stacked at a width. Safe to call from any thread.
