@@ -11,11 +11,11 @@ This is the Phase 0 contract for the native Markdown component. `src/types.ts` h
 | GFM task lists                      | Readable checkbox state and accessibility label; display only                  | Interactive toggling                                                   | Mutation of Markdown by tapping                            |
 | Raw HTML                            | Escaped, visible source text                                                   | None planned                                                           | HTML rendering, scripts, embedded content                  |
 | Images                              | Alt text remains readable; no network request                                  | HTTPS images after complete URL validation, placeholders, cancellation | `data:`, `file:`, and custom schemes                       |
-| Code                                | Inline code, progressively visible fenced/indented blocks, and syntax highlighting by the fence's language | Code block header and copy button                                     | Executing code, and highlighting above 64 KiB of code       |
+| Code                                | Inline code, progressively visible fenced/indented blocks, syntax highlighting by the fence's language, and a header with copy, download, and wrap controls | A theme that can override token colors | Executing code, and highlighting above 64 KiB of code       |
 | Math                                | Literal delimiter/source text                                                  | Native math layout after separate review                               | Executing macros or loading remote math content            |
 | Links                               | Valid complete `https:`, `http:`, and `mailto:` links; press callback          | Long press actions                                                     | Automatic opening of custom schemes                        |
 | Custom renderers                    | None                                                                           | None planned                                                           | Per-node React render callbacks in the native display path |
-| Selection                           | Select/copy visible text and complete canonical source                         | Block-specific copy controls                                           | Editing inside the display view                            |
+| Selection                           | Select/copy visible text and complete canonical source, plus per-block copy and download on code and table blocks | Long press actions                                            | Editing inside the display view                            |
 | Accessibility                       | Text reading order, heading and link roles, task state, font scaling, RTL text | Rich table navigation if needed                                        | Platform-specific semantics that change source meaning     |
 
 The same feature matrix applies on iOS and Android. See the [platform behavior matrix](feature-matrix.md) for rendering and device checks. The first release is not complete until the first-release cells work on both. A native renderer may show unsupported syntax as literal text; it must never silently execute it. For oracle fixtures, md4c's parsed HTML records syntax interpretation. The display policy above is a separate projection of that parse.
@@ -37,6 +37,24 @@ previewed.append('hello **wor');
 
 // Fenced code is colored by its language. `false` keeps it plain monospace.
 <DownstreamMarkdown markdown={message} syntaxHighlighting={false} />;
+
+// Controls are on by default. A callback replaces the default silently.
+<DownstreamMarkdown
+  markdown={message}
+  controls={{
+    code: {
+      copy: { onCopy: (event) => track('code', event.format) },
+      download: { filename: 'snippet', onDownload: save },
+    },
+    table: { csvSeparator: ';' },
+  }}
+/>;
+
+// `false` removes the code header and table toolbar. Layout is unchanged.
+<DownstreamMarkdown markdown={message} controls={false} />;
+
+// Every long line wraps, and the code header gains a per-block wrap button.
+<DownstreamMarkdown markdown={message} codeBlockWrap />;
 ```
 
 The examples describe the runtime API. A view receives exactly one of `markdown` or `stream`. TypeScript rejects both or neither. A controlled string replacement starts a new generation when its value changes. An unchanged value, including a React rerender, does not reset work. `stream` identity changes unbind the previous controller and bind the new one; they do not copy source between controllers.
@@ -50,6 +68,70 @@ A block that is still growing may be colored only in part while it streams, and 
 A stream controller owns its source and native session even when its view unmounts. Remounting with the same live controller rebinds and shows the newest snapshot. At most one view may bind a controller at a time; a second binding reports `session_bound`. Unmount does not call `finish()` or `dispose()`; the app disposes when the message is no longer needed. Completed sessions remain bindable until disposal. Controlled views own no stream controller.
 
 `preview` is off by default, so an open span renders as the literal text the writer sent. `true` enables every repair and `{ emphasis, inlineCode, links, images }` enables the ones named, as remend's options do. An unfinished link or image previews as its text with the partial target dropped, so it is never tappable before its own `)` arrives. The policy applies only to the stream's unstable tail, is proven by reparsing before it takes effect, never touches `getSource()` or source ranges, and is dropped entirely by `finish()`. `setPreview(options)` changes it mid-stream and restyles the current tail without waiting for new input. The settled document is always a parse of the canonical source; see [provisional styling](streaming-semantics.md#provisional-styling).
+
+## Controls
+
+`controls` takes Streamdown's shape, so a value written for it works as it is. It is `true` by default. Each key is a boolean or an object, and a missing key means on, so `controls={{ table: false }}` keeps the code header and drops the table toolbar without changing any block's layout. `controls={false}` removes both.
+
+```ts
+type MarkdownControls =
+  | boolean
+  | {
+      code?:
+        | boolean
+        | {
+            copy?: boolean | { onCopy?: (e) => void; onError?: (e) => void };
+            download?:
+              | boolean
+              | {
+                  filename?: string;
+                  onDownload?: (e) => void;
+                  onError?: (e) => void;
+                };
+            wrap?: boolean | { onToggle?: (e) => void };
+          };
+      table?:
+        | boolean
+        | {
+            copy?: boolean | { onCopy?: (e) => void; onError?: (e) => void };
+            download?:
+              | boolean
+              | {
+                  filename?: string;
+                  onDownload?: (e) => void;
+                  onError?: (e) => void;
+                };
+            csvSeparator?: ',' | ';' | '\t' | 'auto';
+          };
+    };
+```
+
+A code block's header shows copy, download, and wrap. A table shows a toolbar whose copy and download buttons open a format menu: Markdown, CSV, and TSV for copy, CSV and Markdown for download. A control turns on as soon as its own block is settled, so a finished code block can be copied while the rest of the message is still streaming. A block that is still being written shows no control, because its content can still change.
+
+Copying is native and needs no permission. A code block copies its plain text, with a zero-width placeholder removed, so an empty fence copies as an empty string. A table copies as a `text/html` flavor first, so pasting into a spreadsheet or a document keeps the rows, columns, and alignment, and falls back to plain text for targets that do not take HTML. CSV and TSV quoting follows RFC 4180, and `csvSeparator: 'auto'` picks the separator that does not appear inside any cell, preferring `,` then `;` then tab, falling back to `,`.
+
+`filename` is a base name. The extension comes from the block, not from the name: a fenced block uses the language's extension from a vendored map, an unknown or absent language gets `.txt`, and a table gets `.csv` or `.md`. A table's download menu is CSV and Markdown, matching the formats the plan defines.
+
+Downloading opens the platform's own save dialog: `UIDocumentPickerViewController` for exporting on iOS, and a `CreateDocument` `ActivityResultContract` on Android. The user chooses the location, and the library never picks one. A cancelled dialog is not an error and reports nothing.
+
+`translations` overrides the button labels, the menu items, and the spoken announcements, using Streamdown's key names (`copyCode`, `downloadFile`, `copied`, `wrapCode`, `unwrapCode`, `copyTable`, `copyTableAsCsv`, and the rest). `defaultTranslations` holds the English defaults. Unknown keys are ignored.
+
+Every press reaches the matching callback as one `MarkdownControlEvent`:
+
+```ts
+type MarkdownControlEvent = {
+  block: 'code' | 'table';
+  action: 'copy' | 'download' | 'wrap';
+  format?: 'text' | 'markdown' | 'csv' | 'tsv';
+  wrapped?: boolean; // wrap only
+  language: string; // fence language as written, lower-cased; '' for tables
+  filename?: string; // downloads
+};
+```
+
+`onCopy` and `onDownload` observe a press the library has already carried out, so an app can log, toast, or undo. `onToggle` on `wrap` reports the block's layout after the press and takes over nothing: the button still changes the layout, and the event is a report. `codeBlockWrap` sets the starting state for every code block; the button changes one block and does not change the prop.
+
+A control that fails reports `control_failed` to that control's own `onError`, and to the view's `onError` when the control has none, so an app can watch every failure in one place without giving up per-control handling.
 
 ## Events and failures
 
@@ -73,7 +155,9 @@ The first release targets iOS and Android with the New Architecture enabled. The
 
 The native display path renders complete documents on iOS and Android. Parsing, measurement, and drawing are native.
 
-A document is a vertical stack of segments. A text segment is a run of non-table blocks in one platform text view. A table segment is one table in a horizontal scroll view. In a stream, completed blocks are grouped into text segments of about 16 blocks that later snapshots reuse, so only the active tail is rebuilt. Incremental mode commits blocks once md4c proves them closed. Full mode reparses the whole source but gives a block that is unchanged since the previous snapshot a stable identity, so both modes rebuild and lay out only the tail.
+A document is a vertical stack of segments. A text segment is a run of non-table, non-code blocks in one platform text view. A code segment is one fenced or indented block with its own header. A table segment is one table in a horizontal scroll view. In a stream, completed blocks are grouped into text segments of about 16 blocks that later snapshots reuse, so only the active tail is rebuilt. Incremental mode commits blocks once md4c proves them closed. Full mode reparses the whole source but gives a block that is unchanged since the previous snapshot a stable identity, so both modes rebuild and lay out only the tail.
+
+A control turns on as soon as its own block is settled. A controlled document settles every block; a stream settles the blocks it has proven closed, and settles the rest when it finishes. So a finished code block in a still-streaming answer can be copied immediately, and a block that is still being written shows no control. Settling is a property of the parse, not of the controls, and no control button ever changes whether a block is settled.
 
 ### Threading
 
@@ -87,11 +171,11 @@ Parsing and platform text preparation run on one shared pool of worker threads: 
 | --- | --- | --- |
 | Input | Controlled `markdown` and `createMarkdownStream` with a `stream` prop. Streams use incremental parsing, share completed blocks, and fall back to a full parse at unproven boundaries. The stream buffers up to 64 KiB per native append and 256 KiB of unacknowledged input. Lone surrogates and sources over 1 MiB are rejected in JavaScript. | Real-device performance measurements. |
 | Line breaks | Soft line breaks display as line breaks, as the fixture contract requires. | None |
-| Tables | Columns take their widest cell, clamped to 56–280 points plus padding, with md4c's column alignment. Wide tables scroll horizontally. Cells keep inline styles and links. Completed rows appear during streaming without resetting the scroll position. | None |
+| Tables | Columns take their widest cell, clamped to 56–280 points plus padding, with md4c's column alignment. Wide tables scroll horizontally. Cells keep inline styles and links. Completed rows appear during streaming without resetting the scroll position. A toolbar copies the table as HTML, Markdown, CSV, or TSV and saves it as CSV or Markdown. | None |
 | Admonitions and footnotes | Admonitions render as a quote with a colored bar and title. Footnote references are superscript numbers; definitions follow a rule at the end. | None |
 | Links | Tap hit testing emits `onLinkPress` with a validated URL and the UTF-16 range of its Markdown occurrence, in text and table cells. VoiceOver and TalkBack expose each link as a focusable link role. | Long press actions in a later release. |
-| Selection | `selectable` enables native selection and copy in text segments. Copy is plain visible text; `getSource()` returns the complete canonical stream source. Selection cannot span a table or completed segment boundary. | Per-block copy controls. |
+| Selection | `selectable` enables native selection and copy in text segments. Copy is plain visible text; `getSource()` returns the complete canonical stream source. Selection cannot span a table or completed segment boundary. `controls` adds a per-block copy and download, described under [controls](#controls). | None |
 | Accessibility | VoiceOver and TalkBack expose reading stops for text blocks, table rows, and links, with heading and link roles and spoken task state. | Rich table navigation if needed. |
 | RTL | Text uses natural writing direction. List markers, quote bars, code backgrounds, rules, and table columns mirror for RTL content. | None |
-| Code blocks | Fenced blocks are colored from a shared token palette modeled on GitHub's light and dark code themes, so iOS and Android agree. A streaming block is colored from the text it has, and its settled tokens are the same whether it arrived in one piece or a thousand. Selection and copy return the plain code text. | The code block header and copy control, and a theme that can override token colors. |
+| Code blocks | Fenced blocks are colored from a shared token palette modeled on GitHub's light and dark code themes, so iOS and Android agree. A streaming block is colored from the text it has, and its settled tokens are the same whether it arrived in one piece or a thousand. Selection and copy return the plain code text. Each fenced block also gets a header with copy, download, and a per-block wrap button; `codeBlockWrap` sets the starting state for all of them. | A theme that can override token colors. |
 | Colors | System colors follow light and dark appearance on both platforms. | Style customization after the feature set is fixed. |
