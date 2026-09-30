@@ -1,0 +1,312 @@
+{
+  "baseline_commit": "fece47f4bbc53453aea5c0f10e5da08a4393193f",
+  "environment": {
+    "os": "Darwin",
+    "os_release": "27.0.0",
+    "machine": "arm64",
+    "cpu": "Apple M5",
+    "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
+    "node": "v24.15.0"
+  },
+  "compiler_flags": {
+    "c": [
+      "-std=c11",
+      "-O3",
+      "-DNDEBUG",
+      "-DMD4C_USE_UTF8",
+      "-Dmd_parse=downstream_md_parse",
+      "-Dentity_lookup=downstream_entity_lookup"
+    ],
+    "cxx": [
+      "-std=c++20",
+      "-O3",
+      "-DNDEBUG",
+      "-pthread",
+      "-DMD4C_USE_UTF8",
+      "-Dmd_parse=downstream_md_parse",
+      "-Dentity_lookup=downstream_entity_lookup",
+      "-DLexilla=downstream_lexilla",
+      "-DScintilla=downstream_scintilla",
+      "-I<tree>/src/cpp",
+      "-I<tree>/src/cpp/downstream",
+      "-I<tree>/src/cpp/session",
+      "-I<tree>/src/cpp/remend",
+      "-I<tree>/src/cpp/highlight",
+      "-I<tree>/src/cpp/md4c",
+      "-I<tree>/src/cpp/lexilla",
+      "-I<tree>/src/cpp/lexilla/lexlib"
+    ],
+    "include_tree": "<tree> is the isolated baseline copy or optimized workspace; include paths otherwise identical."
+  },
+  "method": {
+    "harness": "src/cpp/tests/bench_highlight.cpp",
+    "runner": "benchmarks/native-highlight.mjs",
+    "harness_sha256": "9078e856e6206f62d39253daa25a5530992260a657a358887c6d5cb9cefb5fdd",
+    "warmup_runs": 1,
+    "samples_per_workload": 7,
+    "summary": "median",
+    "order": "baseline then optimized, separate processes",
+    "baseline": "Isolated C++ tree copy with Document.h, Export.cpp, CodeBlocks.cpp, CodeBlocks.h and IncrementalParser.cpp restored from baseline_commit; both runs use identical added benchmark harness and compiler settings.",
+    "limitations": [
+      "Host engine timings do not measure mobile frame latency.",
+      "Thermal state and other host processes can affect medians.",
+      "Samples include parser finish/full-parse validation cost."
+    ]
+  },
+  "variant": "optimized",
+  "recorded_at": "2026-09-30T18:25:37.719265+00:00",
+  "measurements": [
+    {
+      "name": "document_append_16",
+      "median_ms": 2.513167,
+      "count": 24580,
+      "samples_ms": [
+        2.692084,
+        2.513167,
+        2.313208,
+        2.355125,
+        2.239375,
+        2.722083,
+        2.604375
+      ]
+    },
+    {
+      "name": "highlight_whole",
+      "median_ms": 17.312792,
+      "count": 245600,
+      "samples_ms": [
+        21.45125,
+        18.752834,
+        17.312792,
+        16.938791,
+        17.049709,
+        17.095542,
+        17.377083
+      ]
+    },
+    {
+      "name": "highlight_stream_16",
+      "median_ms": 11.047166,
+      "count": 12280,
+      "samples_ms": [
+        10.975458,
+        11.050667,
+        11.055916,
+        11.21625,
+        11.047166,
+        10.937,
+        10.944042
+      ]
+    },
+    {
+      "name": "parser_stream_16",
+      "median_ms": 23.422708,
+      "count": 12280,
+      "samples_ms": [
+        23.72025,
+        23.462959,
+        23.422708,
+        23.468958,
+        23.366583,
+        23.186,
+        23.335417
+      ]
+    },
+    {
+      "name": "export_wide_markdown",
+      "median_ms": 2.731417,
+      "count": 1228860,
+      "samples_ms": [
+        2.792041,
+        2.731334,
+        2.733875,
+        2.70225,
+        2.731417,
+        2.755417,
+        2.624708
+      ]
+    },
+    {
+      "name": "export_wide_html",
+      "median_ms": 2.338833,
+      "count": 1762060,
+      "samples_ms": [
+        2.29425,
+        2.371792,
+        2.333375,
+        2.338833,
+        2.324042,
+        2.358875,
+        2.36175
+      ]
+    },
+    {
+      "name": "mixed_full_32",
+      "median_ms": 44.798125,
+      "count": 408,
+      "samples_ms": [
+        45.104959,
+        44.550291,
+        44.798167,
+        44.567834,
+        44.830083,
+        44.63625,
+        44.798125
+      ]
+    },
+    {
+      "name": "mixed_incremental_32",
+      "median_ms": 2.948667,
+      "count": 408,
+      "samples_ms": [
+        2.977584,
+        2.948667,
+        2.934792,
+        2.958625,
+        3.029584,
+        2.923459,
+        2.887209
+      ]
+    },
+    {
+      "name": "mixed_full_128",
+      "median_ms": 11.736791,
+      "count": 408,
+      "samples_ms": [
+        11.751125,
+        11.972791,
+        11.736791,
+        11.700125,
+        11.729,
+        11.6945,
+        11.838583
+      ]
+    },
+    {
+      "name": "mixed_incremental_128",
+      "median_ms": 1.451583,
+      "count": 408,
+      "samples_ms": [
+        1.4825,
+        1.4495,
+        1.429291,
+        1.451583,
+        1.427833,
+        1.532667,
+        1.475167
+      ]
+    },
+    {
+      "name": "fences_full_32",
+      "median_ms": 30.99475,
+      "count": 205,
+      "samples_ms": [
+        31.305041,
+        30.99475,
+        31.004459,
+        30.790958,
+        30.961292,
+        31.007708,
+        30.839417
+      ]
+    },
+    {
+      "name": "fences_incremental_32",
+      "median_ms": 3.16275,
+      "count": 205,
+      "samples_ms": [
+        3.16275,
+        3.214375,
+        3.175875,
+        3.112041,
+        3.066583,
+        3.062916,
+        3.228167
+      ]
+    },
+    {
+      "name": "fences_full_128",
+      "median_ms": 8.277833,
+      "count": 205,
+      "samples_ms": [
+        8.263792,
+        8.334375,
+        8.374,
+        8.228542,
+        8.277833,
+        8.270208,
+        8.422666
+      ]
+    },
+    {
+      "name": "fences_incremental_128",
+      "median_ms": 1.811292,
+      "count": 205,
+      "samples_ms": [
+        1.806042,
+        1.811292,
+        1.792084,
+        1.825125,
+        1.796166,
+        1.857167,
+        1.877208
+      ]
+    },
+    {
+      "name": "references_full_32",
+      "median_ms": 31.903208,
+      "count": 207,
+      "samples_ms": [
+        31.771625,
+        31.919958,
+        31.675542,
+        31.820167,
+        31.923209,
+        31.903208,
+        32.033583
+      ]
+    },
+    {
+      "name": "references_incremental_32",
+      "median_ms": 31.238542,
+      "count": 207,
+      "samples_ms": [
+        31.206917,
+        31.25675,
+        31.155833,
+        31.238542,
+        31.134792,
+        31.530333,
+        31.439958
+      ]
+    },
+    {
+      "name": "references_full_128",
+      "median_ms": 8.627625,
+      "count": 207,
+      "samples_ms": [
+        8.627625,
+        8.547833,
+        8.651625,
+        8.582083,
+        8.632208,
+        8.572417,
+        8.650375
+      ]
+    },
+    {
+      "name": "references_incremental_128",
+      "median_ms": 16.2035,
+      "count": 207,
+      "samples_ms": [
+        16.206292,
+        16.147083,
+        16.19775,
+        16.34725,
+        16.235709,
+        16.2035,
+        16.145458
+      ]
+    }
+  ]
+}

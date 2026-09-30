@@ -977,6 +977,7 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   // whole points without rounding error accumulating across segments.
   CGFloat y = 0;
   CGFloat unconstrainedWidth = 0;
+  const BOOL constrained = std::isfinite(width);
   for (NSUInteger index = 0; index < _segments.count; index++) {
     y += _gaps[index];
     id segment = _segments[index];
@@ -985,26 +986,29 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
                                                 chrome:chrome
                                           codeBlockWrap:codeBlockWrap
                                             wrapToggles:wrapToggles];
-    unconstrainedWidth = std::max(unconstrainedWidth, [self unconstrainedWidthOf:segment
+    if (!constrained) {
+      unconstrainedWidth = std::max(unconstrainedWidth, [self unconstrainedWidthOf:segment
                                                                         atWidth:width
                                                                   codeBlockWrap:codeBlockWrap
                                                                     wrapToggles:wrapToggles]);
+    }
     const CGFloat top = std::ceil(y);
     // Never shorter than the segment. Rounding both edges up loses up to a
     // point when y is fractional, and a text view lays out only the lines that
     // fit its frame, so a segment a fraction short would drop its last line.
     const CGFloat bottom = std::max(std::ceil(y + height), top + std::ceil(height));
-    [frames addObject:[NSValue valueWithCGRect:CGRectMake(0, top, 0, bottom - top)]];
+    [frames addObject:[NSValue valueWithCGRect:CGRectMake(0, top, constrained ? width : 0, bottom - top)]];
     y += height;
   }
 
   // Every segment spans the view; an unconstrained measure uses the widest
   // segment that does not fit.
-  const CGFloat frameWidth = std::isfinite(width) ? width : unconstrainedWidth;
-  for (NSUInteger index = 0; index < frames.count; index++) {
-    CGRect frame = frames[index].CGRectValue;
-    frame.size.width = frameWidth;
-    frames[index] = [NSValue valueWithCGRect:frame];
+  if (!constrained) {
+    for (NSUInteger index = 0; index < frames.count; index++) {
+      CGRect frame = frames[index].CGRectValue;
+      frame.size.width = unconstrainedWidth;
+      frames[index] = [NSValue valueWithCGRect:frame];
+    }
   }
 
   [_lock lock];

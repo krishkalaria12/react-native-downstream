@@ -5,6 +5,7 @@
 #include "SegmentPlan.h"
 #include "SessionTrace.h"
 #include "Unicode.h"
+#include "WorkerPool.h"
 
 #include <jni.h>
 
@@ -23,6 +24,54 @@ jintArray toJavaArray(JNIEnv *env, const std::vector<jint> &values) {
   jintArray array = env->NewIntArray(static_cast<jsize>(values.size()));
   env->SetIntArrayRegion(array, 0, static_cast<jsize>(values.size()), values.data());
   return array;
+}
+
+constexpr size_t kInlineExportBytes = 64 * 1024;
+
+// The pool is shared with preparation, which may already have attached this
+// thread. Attach new workers as daemons and detach if a pool thread ever exits.
+JNIEnv *exportWorkerEnv(JavaVM *vm) {
+  JNIEnv *env = nullptr;
+  if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) == JNI_OK) return env;
+  JavaVMAttachArgs args{JNI_VERSION_1_6, const_cast<char *>("ds-export"), nullptr};
+  if (vm->AttachCurrentThreadAsDaemon(&env, &args) != JNI_OK) return nullptr;
+  thread_local struct Detach {
+    JavaVM *vm;
+    ~Detach() { vm->DetachCurrentThread(); }
+  } detach{vm};
+  (void)detach;
+  return env;
+}
+
+void deliverControlExport(JNIEnv *env, jobject callback, jmethodID method, const DocumentHandle &document,
+                          size_t from, size_t to, ExportFormat format, char16_t separator, bool includeHtml,
+                          const char *failure = nullptr) {
+  if (env->PushLocalFrame(4) < 0) {
+    env->ExceptionClear();
+    return;
+  }
+  jstring text = nullptr;
+  jstring html = nullptr;
+  try {
+    if (!failure) {
+      text = toJavaString(env, exportBlocks(*document, from, to, format, separator));
+      if (includeHtml && !env->ExceptionCheck()) {
+        html = toJavaString(env, exportBlocks(*document, from, to, ExportFormat::Html, separator));
+      }
+    }
+  } catch (...) {
+    failure = "The block could not be exported.";
+  }
+  if (env->ExceptionCheck()) {
+    env->ExceptionClear();
+    failure = "There was not enough memory to export the block.";
+  }
+  jstring error = failure ? env->NewStringUTF(failure) : nullptr;
+  if (!env->ExceptionCheck()) env->CallVoidMethod(callback, method, text, html, error);
+  // A worker has no Java caller to receive a callback exception. Always clear
+  // it before returning this thread to the shared pool.
+  if (env->ExceptionCheck()) env->ExceptionClear();
+  env->PopLocalFrame(nullptr);
 }
 
 } // namespace
@@ -214,6 +263,65 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_downstream_DownstreamNative_native
   const std::u16string text =
       exportBlocks(*document, static_cast<size_t>(from), static_cast<size_t>(to), static_cast<ExportFormat>(format), unit);
   return toJavaString(env, text);
+}
+
+/// Captures a strong snapshot on the caller before any asynchronous work. The
+/// registry itself is weak, so looking it up later on a worker is unsafe.
+extern "C" JNIEXPORT void JNICALL Java_com_downstream_DownstreamNative_nativeExportControl(
+    JNIEnv *env, jclass /*clazz*/, jlong id, jint from, jint to, jint kind, jint format, jint separator,
+    jboolean includeHtml, jobject callback) {
+  jclass callbackClass = env->GetObjectClass(callback);
+  const jmethodID method = env->GetMethodID(callbackClass, "onResult",
+                                          "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
+  env->DeleteLocalRef(callbackClass);
+  if (!method) return;
+  const DocumentHandle document = DocumentRegistry::find(static_cast<uint64_t>(id));
+  if (!document || from < 0 || to <= from || static_cast<size_t>(to) > document->blocks.size()) {
+    deliverControlExport(env, callback, method, document, 0, 0, ExportFormat::Text, u',', false,
+                         "The block is gone.");
+    return;
+  }
+  if (format < 0 || format > static_cast<jint>(ExportFormat::Html) ||
+      static_cast<jint>(document->blocks[from].kind) != kind) {
+    deliverControlExport(env, callback, method, document, 0, 0, ExportFormat::Text, u',', false,
+                         "The control and the block it names disagree.");
+    return;
+  }
+  size_t estimatedBytes = 0;
+  for (size_t index = static_cast<size_t>(from); index < static_cast<size_t>(to) && estimatedBytes <= kInlineExportBytes;
+       ++index) {
+    const Block &block = document->blocks[index];
+    if (block.text.size() > kInlineExportBytes / sizeof(char16_t) || block.cells.size() > kInlineExportBytes / 32) {
+      estimatedBytes = kInlineExportBytes + 1;
+      break;
+    }
+    estimatedBytes += block.text.size() * sizeof(char16_t) + block.cells.size() * 32 + 64;
+  }
+  const auto exportFormat = static_cast<ExportFormat>(format);
+  const char16_t unit = separator < 0 ? u',' : static_cast<char16_t>(separator);
+  if (estimatedBytes <= kInlineExportBytes) {
+    deliverControlExport(env, callback, method, document, from, to, exportFormat, unit, includeHtml);
+    return;
+  }
+  JavaVM *vm = nullptr;
+  if (env->GetJavaVM(&vm) != JNI_OK) return;
+  jobject retainedCallback = env->NewGlobalRef(callback);
+  if (!retainedCallback) return;
+  try {
+    WorkerPool::shared().post([document, vm, retainedCallback, method, from, to, exportFormat, unit, includeHtml] {
+      JNIEnv *worker = exportWorkerEnv(vm);
+      // VM attachment failure leaves no legal JNIEnv for notification or
+      // DeleteGlobalRef. Releasing this reference then requires an already
+      // attached dispatcher; the normal completion path below releases it once.
+      if (!worker) return;
+      deliverControlExport(worker, retainedCallback, method, document, from, to, exportFormat, unit, includeHtml);
+      worker->DeleteGlobalRef(retainedCallback);
+    });
+  } catch (...) {
+    env->DeleteGlobalRef(retainedCallback);
+    deliverControlExport(env, callback, method, document, 0, 0, exportFormat, unit, false,
+                         "The export could not be queued.");
+  }
 }
 
 /// The file name a code download saves as, for one block. `configured` is the

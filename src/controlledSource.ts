@@ -10,7 +10,7 @@ export type SourceProblem = Pick<MarkdownErrorEvent, 'code' | 'message'>;
  * receives UTF-8, where a lone surrogate can no longer be detected, so the
  * check has to happen here.
  */
-export function checkSource(source: string): SourceProblem | null {
+export function checkedUtf8Bytes(source: string): number | SourceProblem {
   let bytes = 0;
   for (let i = 0; i < source.length; i++) {
     const unit = source.charCodeAt(i);
@@ -37,7 +37,12 @@ export function checkSource(source: string): SourceProblem | null {
       };
     }
   }
-  return null;
+  return bytes;
+}
+
+export function checkSource(source: string): SourceProblem | null {
+  const result = checkedUtf8Bytes(source);
+  return typeof result === 'number' ? null : result;
 }
 
 function loneSurrogate(index: number): SourceProblem {

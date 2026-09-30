@@ -3,7 +3,7 @@ import NativeDownstreamSession, {
   type SessionErrorEvent,
   type SnapshotReadyEvent,
 } from './NativeDownstreamSession';
-import { checkSource, MAX_SOURCE_BYTES } from './controlledSource';
+import { checkedUtf8Bytes, MAX_SOURCE_BYTES } from './controlledSource';
 import { emitJsStreamTrace } from './streamTrace';
 import type {
   MarkdownErrorCode,
@@ -121,9 +121,10 @@ class StreamState implements MarkdownStreamController {
       throw operationError('invalid_input', 'Markdown chunk must be a string.');
     }
     if (chunk.length === 0) return;
-    const problem = checkSource(chunk);
-    if (problem) throw operationError(problem.code, problem.message);
-    const bytes = utf8Bytes(chunk);
+    const bytes = checkedUtf8Bytes(chunk);
+    if (typeof bytes !== 'number') {
+      throw operationError(bytes.code, bytes.message);
+    }
     if (bytes > MAX_CHUNK_BYTES) {
       throw operationError(
         'input_limit',
@@ -202,14 +203,16 @@ class StreamState implements MarkdownStreamController {
         'Markdown source must be a string.'
       );
     }
-    const problem = checkSource(source);
-    if (problem) throw operationError(problem.code, problem.message);
+    const bytes = checkedUtf8Bytes(source);
+    if (typeof bytes !== 'number') {
+      throw operationError(bytes.code, bytes.message);
+    }
     const generation = this.generation + 1;
     NativeDownstreamSession.reset(this.sessionId, source, generation);
     if (this.frame !== undefined) cancelAnimationFrame(this.frame);
     this.frame = undefined;
     this.source = source;
-    this.sourceBytes = utf8Bytes(source);
+    this.sourceBytes = bytes;
     this.generation = generation;
     this.sequence = 0;
     this.readySequence = 0;
@@ -387,20 +390,6 @@ class StreamState implements MarkdownStreamController {
         'Markdown stream has been disposed.'
       );
   }
-}
-
-function utf8Bytes(source: string): number {
-  let bytes = 0;
-  for (let i = 0; i < source.length; i++) {
-    const unit = source.charCodeAt(i);
-    if (unit < 0x80) bytes++;
-    else if (unit < 0x800) bytes += 2;
-    else if (unit >= 0xd800 && unit <= 0xdbff) {
-      bytes += 4;
-      i++;
-    } else bytes += 3;
-  }
-  return bytes;
 }
 
 function operationError(

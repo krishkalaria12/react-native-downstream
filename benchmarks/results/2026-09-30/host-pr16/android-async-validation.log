@@ -1,0 +1,1 @@
+PASS: 9 async export checks. Small inline; large off-main; snapshot retained while queued and released after completion; empty-cell tables off-main; cross-view newest copy wins; source generation/reset/release suppress stale callbacks; external clipboard and TextView selection copies win; independent download failures both deliver.

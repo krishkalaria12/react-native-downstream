@@ -33,10 +33,27 @@ import android.widget.PopupMenu
 import android.widget.TextView
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeProvider
+import java.lang.ref.WeakReference
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.uimanager.StateWrapper
 
 private const val HIT_SLOP = 8f
+private val controlHandler = Handler(Looper.getMainLooper())
+
+private class ControlExportRequest(
+  val sourceEpoch: Int,
+  val generation: Int,
+  val sessionId: String?,
+  val copyEpoch: Long,
+  val clipboardTimestamp: Long?,
+  val isCode: Boolean,
+  val download: Boolean,
+  val action: String,
+  val format: String,
+  val language: String,
+  val filename: String,
+  val mime: String,
+)
 
 // Block kinds, matching `BlockKind` in the engine, so a control names the kind
 // it acts on rather than a platform-local enum.
@@ -259,7 +276,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     codeWrapToggles = toggles
     wrapToggleOrdinals = toggles.sorted().toIntArray()
     applySettledState()
-    setNeedsLayout()
+    requestLayout()
   }
 
   /**
@@ -269,7 +286,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    * and keeps its selection.
    */
   private fun applySettledState() {
-    val plan = DownstreamNative.readSegmentPlan(documentId) ?: return
+    val plan = rendered?.plan ?: return
     for (index in 0 until minOf(childCount, plan.size)) {
       val planned = plan[index]
       val settled = planned.from + 1 <= planned.settledBlocks
@@ -323,58 +340,93 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       else -> EXPORT_TEXT
     }
 
-    // A block's bytes cannot change once it is settled, so a press reads the
-    // snapshot on screen and no later snapshot can make that copy stale.
-    val text = DownstreamNative.export(documentId, blockIndex, to, exportFormat, separator)
-    if (text == null) {
-      onControlFailure?.invoke(this, if (isCode) "code" else "table", action, "The document is gone.")
-      return
-    }
-
-    if (!download) {
-      val copied = if (isCode) {
-        ControlDelivery.copyText(context, language.ifEmpty { "Code" }, text)
-      } else {
-        val html = DownstreamNative.export(documentId, blockIndex, to, EXPORT_HTML, separator) ?: ""
-        ControlDelivery.copyTable(context, text, html)
-      }
-      if (!copied) {
-        onControlFailure?.invoke(
-          this,
-          if (isCode) "code" else "table",
-          action,
-          "The clipboard could not take that much text. Saving it to a file has no such limit.",
-        )
-        return
-      }
-      onControl?.invoke(this, if (isCode) "code" else "table", action, format, language, "")
-      return
-    }
-
-    val name = if (isCode) {
-      DownstreamNative.downloadName(documentId, blockIndex, codeFilename, "file")
-        ?: "$codeFilename.txt"
+    val name = if (!download) {
+      ""
+    } else if (isCode) {
+      DownstreamNative.downloadName(documentId, blockIndex, codeFilename, "file") ?: "$codeFilename.txt"
     } else {
       DownstreamNative.tableName(tableFilename, if (format == "markdown") "md" else "csv")
         ?: "$tableFilename.${if (format == "markdown") "md" else "csv"}"
     }
-    // Excel reads a CSV without a byte-order mark as the system codepage, which
-    // mangles anything outside it, so a CSV gets one.
-    val bytes = if (format == "csv") {
-      byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) + text.toByteArray(Charsets.UTF_8)
-    } else {
-      text.toByteArray(Charsets.UTF_8)
-    }
-    val mime = if (isCode) exporter.mimeTypeFor(name, "text/plain") else "text/csv"
-    exporter.save(name, mime, bytes) { url, error ->
-      if (error != null) {
-        onControlFailure?.invoke(this, if (isCode) "code" else "table", "download", error)
-        return@save
+    val request = ControlExportRequest(
+      sourceEpoch, generation, sessionId, if (download) 0L else ControlDelivery.beginCopy(),
+      if (download) null else ControlDelivery.clipboardTimestamp(context),
+      isCode, download, action, format, language, name,
+      if (isCode) exporter.mimeTypeFor(name, "text/plain") else "text/csv",
+    )
+    val weakView = WeakReference(this)
+    // Native captures a strong immutable snapshot before queuing. Its callback
+    // holds only a weak view, so streaming can replace state without invalidating
+    // the pressed block or keeping a recycled view alive.
+    DownstreamNative.exportControl(
+      documentId, blockIndex, to, kind, exportFormat, separator, !download && !isCode,
+    ) { text, html, failure ->
+      var error = failure
+      var bytes: ByteArray? = null
+      if (download && text != null && error == null) {
+        try {
+          // Large exports invoke this on the native worker, including UTF-8
+          // encoding; the UI thread only presents the system save dialog.
+          bytes = if (format == "csv") {
+            byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) + text.toByteArray(Charsets.UTF_8)
+          } else {
+            text.toByteArray(Charsets.UTF_8)
+          }
+        } catch (exception: RuntimeException) {
+          error = "The block could not be encoded for download."
+        }
       }
-      // A cancelled dialog reports nothing: it is neither a success nor a
-      // failure.
-      if (url == null) return@save
-      onControl?.invoke(this, if (isCode) "code" else "table", action, format, language, name)
+      val exportedBytes = bytes
+      val exportError = error
+      val finish = Runnable { weakView.get()?.finishControlExport(request, text, html, exportedBytes, exportError) }
+      if (Looper.myLooper() == Looper.getMainLooper()) finish.run() else controlHandler.post(finish)
+    }
+  }
+
+  private fun acceptsControlExport(request: ControlExportRequest): Boolean =
+    request.sourceEpoch == sourceEpoch && request.generation == generation && request.sessionId == sessionId &&
+      documentId != 0L && (request.download ||
+        (ControlDelivery.isCurrentCopy(request.copyEpoch) &&
+          ControlDelivery.clipboardTimestamp(context) == request.clipboardTimestamp))
+
+  private fun finishControlExport(
+    request: ControlExportRequest,
+    text: String?,
+    html: String?,
+    bytes: ByteArray?,
+    error: String?,
+  ) {
+    if (!acceptsControlExport(request)) return
+    val block = if (request.isCode) "code" else "table"
+    if (error != null || text == null) {
+      onControlFailure?.invoke(this, block, request.action, error ?: "The block could not be exported.")
+      return
+    }
+    if (!request.download) {
+      val copied = if (request.isCode) {
+        ControlDelivery.copyText(context, request.language.ifEmpty { "Code" }, text)
+      } else {
+        ControlDelivery.copyTable(context, text, html.orEmpty())
+      }
+      if (!copied) {
+        onControlFailure?.invoke(
+          this, block, request.action,
+          "The clipboard could not take that much text. Saving it to a file has no such limit.",
+        )
+        return
+      }
+      onControl?.invoke(this, block, request.action, request.format, request.language, "")
+      return
+    }
+    val weakView = WeakReference(this)
+    exporter.save(request.filename, request.mime, bytes ?: ByteArray(0)) { url, failure ->
+      val view = weakView.get() ?: return@save
+      if (!view.acceptsControlExport(request)) return@save
+      if (failure != null) {
+        view.onControlFailure?.invoke(view, block, "download", failure)
+      } else if (url != null) {
+        view.onControl?.invoke(view, block, request.action, request.format, request.language, request.filename)
+      }
     }
   }
 
@@ -415,14 +467,16 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     onControl = null
     onControlFailure = null
     onWrapToggle = null
-    // A recycled view has no emitter any more, so a save that is still open
-    // finishes and reports nothing.
+    // A recycled view has no emitter any more. Already opened saves finish,
+    // while their callbacks drop events belonging to the previous source.
+    exporter.release()
     exporter = DocumentExporter(context)
     removeAllViews()
   }
 
-  /** Releases the exporter's threads when the view goes away for good. */
+  /** Invalidates pending exports and picker results when the view goes away. */
   fun release() {
+    sourceEpoch++
     exporter.release()
   }
 
@@ -476,8 +530,9 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     map.putDouble("codeBlockWrap", if (codeBlockWrap) 1.0 else 0.0)
     codeWrapToggles = toggles
     wrapToggleOrdinals = toggles.sorted().toIntArray()
-    setChrome(chromeForToggles(toggles))
-    setNeedsLayout()
+    chrome = chromeForToggles(toggles)
+    applySettledState()
+    requestLayout()
     wrapper.updateState(map)
   }
 
@@ -651,12 +706,20 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     }
   }
 
+  override fun onTextContextMenuItem(id: Int): Boolean {
+    val handled = super.onTextContextMenuItem(id)
+    if (handled && (id == android.R.id.copy || id == android.R.id.cut)) ControlDelivery.beginCopy()
+    return handled
+  }
+
   fun setSegment(segment: TextSegment, rendered: RenderedDocument) {
     if (segment === this.segment) {
       return
     }
-    this.segment = segment
     setContent(segment.text, segment.accessibleBlocks, rendered)
+    // setContent also serves code bodies and clears this field. Retain the
+    // identity afterwards so settled text keeps its layout and selection.
+    this.segment = segment
   }
 
   /**
@@ -972,6 +1035,8 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   }
 
   fun setSegment(segment: CodeSegment, rendered: RenderedDocument) {
+    this.rendered = rendered
+    if (segment === this.segment) return
     // The tail block is rebuilt on every snapshot while its fence is open, so
     // the offset is kept only while the block still looks like the same one.
     val same = this.segment != null && this.segment?.firstLine == segment.firstLine
@@ -979,7 +1044,6 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     restoreScroll = true
     ordinal = segment.codeOrdinal
     this.segment = segment
-    this.rendered = rendered
     cardBackground.setColor(segment.colors.codeBackground)
     body.setContent(segment.text, segment.accessibleBlocks, rendered)
     language.text = segment.language
@@ -1403,10 +1467,8 @@ private class TableGridView(context: Context) : View(context) {
   }
 
   private fun cellOrigin(segment: TableSegment, row: Int, column: Int): Pair<Int, Int> {
-    var x = 0
-    for (i in 0 until column) x += segment.columnWidths[i]
-    if (segment.rtl) x = segment.tableWidth - 1 - x - segment.columnWidths[column]
-    return Pair(x + segment.paddingHorizontal, segment.rowTops[row] + segment.paddingVertical)
+    return Pair(segment.columnLefts[column] + segment.paddingHorizontal,
+      segment.rowTops[row] + segment.paddingVertical)
   }
 
   override fun onDraw(canvas: Canvas) {

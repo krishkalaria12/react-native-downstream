@@ -44,6 +44,10 @@ void highlightCodeBlock(CodeHighlighter &highlighter, Block *block, HighlightSta
 void highlightSettledCodeBlock(CodeHighlighter &highlighter, Block *block, HighlightState *state, double budgetMs,
                                HighlightStats *stats);
 
+/// Copies completed tokens when both code blocks have identical language and
+/// text. Returns false for a changed block or an unfinished highlighting pass.
+bool reuseCompletedCodeTokens(Block *block, const Block &cached);
+
 /// Colors every fenced code block in `blocks`. One state is reused across the
 /// blocks, so consecutive blocks of the same language share a configured lexer
 /// and its word lists are parsed once. One pass per block, so a block too large
@@ -65,7 +69,9 @@ DocumentHandle highlightCodeBlocks(CodeHighlighter &highlighter, DocumentHandle 
                                    HighlightStats *stats);
 
 /// As `highlightCodeBlocks`, with each block settled within this call.
+/// Completed tokens from `previous` are reused for code at the same position
+/// with identical language and text. Budget-cut tokens are always retried.
 DocumentHandle highlightSettledCodeBlocks(CodeHighlighter &highlighter, DocumentHandle document, double budgetMs,
-                                          HighlightStats *stats);
+                                          HighlightStats *stats, const DocumentHandle &previous = {});
 
 } // namespace downstream

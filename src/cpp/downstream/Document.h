@@ -160,6 +160,9 @@ struct Block {
   /// live here rather than in runs so the open-fence fast path and inline-code
   /// semantics stay untouched.
   std::vector<TokenRun> tokens;
+  /// True when highlighting finished or deliberately skipped this exact text.
+  /// A later full parse may reuse its tokens; a budget-cut pass must retry.
+  bool highlightComplete{false};
 };
 
 /// An actionable link. Links that fail the URL policy are plain text and are

@@ -21,9 +21,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// Presents the save dialog for `data` under `filename`. The completion runs
 /// on the main thread with the URL the reader chose, or with nil and no error
 /// when the dialog was cancelled: a cancel is neither a success nor a failure,
-/// so it reports nothing.
+/// so it reports nothing. File creation runs on the worker pool. The
+/// `shouldPresent` predicate runs on the main thread before showing the dialog,
+/// so a recycled view can cancel a pending file without presenting stale UI.
 - (void)saveData:(NSData *)data
        fileName:(NSString *)fileName
+  shouldPresent:(BOOL (^)(void))shouldPresent
     completion:(void (^)(NSURL *_Nullable url, NSError *_Nullable error))completion;
 
 @end

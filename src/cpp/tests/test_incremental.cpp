@@ -487,6 +487,31 @@ That's it -- you now have a streaming renderer that stays responsive even for lo
 
 // Full mode reparses everything, but a platform should lay out only the
 // changed tail: nearly every finished block keeps the identity it first got.
+bool unchangedTailCodeIsCached() {
+  for (const ParseMode mode : {ParseMode::FullParse, ParseMode::IncrementalTail}) {
+    IncrementalParser parser(mode);
+    std::string source = std::string(200, 'p') + "\n\n";
+    if (feed(parser, source, false).status != ParseStatus::Ok) return false;
+    // An unresolved reference prevents this region from committing, so its
+    // closed code fence stays in the active tail while the prose grows.
+    source += "[ref]\n\n```ts\nconst value = compute(42);\n```\n\nprose";
+    const auto first = feed(parser, source, false);
+    if (first.status != ParseStatus::Ok || !first.document->blocks[2].highlightComplete) return false;
+    const auto before = parser.counters();
+    for (int update = 0; update < 30; update++) {
+      source += " more prose";
+      if (feed(parser, source, false).status != ParseStatus::Ok) return false;
+    }
+    const auto after = parser.counters();
+    if (before.blocksHighlighted == 0 || after.blocksHighlighted != before.blocksHighlighted ||
+        (mode == ParseMode::IncrementalTail && after.tailParses <= before.tailParses)) return false;
+    source += "\n\n[ref]: https://example.com\n";
+    const auto finished = feed(parser, source, true);
+    if (finished.status != ParseStatus::Ok || !equal(*finished.document, *colored(parseMarkdown(source)))) return false;
+  }
+  return true;
+}
+
 bool fullModeKeepsIdentities() {
   std::string text;
   for (int i = 0; i < 30; i++) {
@@ -598,6 +623,7 @@ int main(int argc, char **argv) {
         "committed segments are stable (full)");
   CHECK(identitiesAreGlobal(), "identities are global");
   CHECK(realisticAnswer(), "realistic answer");
+  CHECK(unchangedTailCodeIsCached(), "unchanged tail code is cached in both parse modes");
   CHECK(fullModeKeepsIdentities(), "full mode keeps identities");
   CHECK(fullParseOracleSettles(), "the full-parse oracle settles code with a zero highlight budget");
   return ds_check_result();

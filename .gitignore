@@ -83,3 +83,6 @@ src/android/generated
 
 # React Native Nitro Modules
 nitrogen/
+
+# Host C++ test objects cached by CI
+.native-test-build-cache/

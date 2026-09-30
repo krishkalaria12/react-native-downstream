@@ -722,6 +722,8 @@ namespace {
 
 @implementation DSTableGridView {
   NSArray *_cachedAccessibilityElements;
+  std::vector<CGFloat> _rowOffsets;
+  std::vector<CGFloat> _columnOffsets;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -734,7 +736,20 @@ namespace {
 }
 
 - (void)setSegment:(DSTableSegment *)segment {
+  if (segment == _segment) {
+    return;
+  }
   _segment = segment;
+  _rowOffsets.assign(1, 0);
+  _rowOffsets.reserve(segment.rowHeights.count + 1);
+  for (NSNumber *height in segment.rowHeights) {
+    _rowOffsets.push_back(_rowOffsets.back() + height.doubleValue);
+  }
+  _columnOffsets.assign(1, 0);
+  _columnOffsets.reserve(segment.columnWidths.count + 1);
+  for (NSNumber *width in segment.columnWidths) {
+    _columnOffsets.push_back(_columnOffsets.back() + width.doubleValue);
+  }
   invalidateAccessibleLinks(_cachedAccessibilityElements);
   _cachedAccessibilityElements = nil;
   [self setNeedsDisplay];
@@ -747,20 +762,10 @@ namespace {
 }
 
 - (CGRect)contentRectForRow:(NSUInteger)row column:(NSUInteger)column {
-  CGFloat x = 0;
-  if (_segment.rightToLeft) {
-    for (NSUInteger i = column + 1; i < _segment.columnWidths.count; i++) {
-      x += _segment.columnWidths[i].doubleValue;
-    }
-  } else {
-    for (NSUInteger i = 0; i < column; i++) {
-      x += _segment.columnWidths[i].doubleValue;
-    }
-  }
-  CGFloat y = 0;
-  for (NSUInteger i = 0; i < row; i++) {
-    y += _segment.rowHeights[i].doubleValue;
-  }
+  const CGFloat x = _segment.rightToLeft
+      ? _columnOffsets.back() - _columnOffsets[column + 1]
+      : _columnOffsets[column];
+  const CGFloat y = _rowOffsets[row];
   const UIEdgeInsets padding = _segment.cellPadding;
   return CGRectMake(x + padding.left, y + padding.top,
                     _segment.columnWidths[column].doubleValue - padding.left - padding.right,
@@ -781,8 +786,18 @@ namespace {
   }
 
   [_segment.rows enumerateObjectsUsingBlock:^(NSArray<DSTableCell *> *row, NSUInteger rowIndex, BOOL *stop) {
+    if (self->_rowOffsets[rowIndex] > CGRectGetMaxY(rect)) {
+      *stop = YES;
+      return;
+    }
+    if (self->_rowOffsets[rowIndex + 1] < CGRectGetMinY(rect)) {
+      return;
+    }
     [row enumerateObjectsUsingBlock:^(DSTableCell *cell, NSUInteger column, BOOL *innerStop) {
-      [cell.text drawWithRect:[self contentRectForRow:rowIndex column:column] options:options context:nil];
+      const CGRect content = [self contentRectForRow:rowIndex column:column];
+      if (CGRectIntersectsRect(content, rect)) {
+        [cell.text drawWithRect:content options:options context:nil];
+      }
     }];
   }];
 
@@ -1349,6 +1364,9 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
 }
 
 - (void)setCodeWrapToggles:(NSSet<NSNumber *> *)codeWrapToggles {
+  if ([_codeWrapToggles isEqualToSet:codeWrapToggles]) {
+    return;
+  }
   _codeWrapToggles = [codeWrapToggles copy];
   _wrapToggleOrdinals.clear();
   _wrapToggleOrdinals.reserve(codeWrapToggles.count);

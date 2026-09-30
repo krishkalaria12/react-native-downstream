@@ -1,11 +1,28 @@
 import {
   acceptControlledSource,
   checkSource,
+  checkedUtf8Bytes,
   initialControlledSource,
   MAX_SOURCE_BYTES,
 } from '../src/controlledSource';
 
 describe('checkSource', () => {
+  it('counts validated UTF-8 bytes across Unicode boundaries', () => {
+    for (const source of [
+      '',
+      '\u0000\u007f',
+      '\u0080\u07ff',
+      '\u0800\ud7ff\ue000\uffff',
+      '\ud800\udc00\udbff\udfff',
+      'Hello 👩‍💻 é 漢字 שלום\r\n',
+    ]) {
+      expect(checkedUtf8Bytes(source)).toBe(
+        new TextEncoder().encode(source).length
+      );
+    }
+    expect(checkedUtf8Bytes('a\ud800')).toEqual(checkSource('a\ud800'));
+  });
+
   it('accepts well-formed text, including astral characters', () => {
     expect(checkSource('Hello 👩‍💻 é 漢字 שלום\r\n')).toBeNull();
     expect(checkSource('')).toBeNull();

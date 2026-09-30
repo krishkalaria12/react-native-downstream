@@ -146,6 +146,13 @@ internal const val EXPORT_TSV = 2
 internal const val EXPORT_MARKDOWN = 3
 internal const val EXPORT_HTML = 4
 
+/** JNI calls this on the caller for small exports, or on a worker for large ones. */
+@DoNotStrip
+internal fun interface NativeControlExportCallback {
+  @DoNotStrip
+  fun onResult(text: String?, html: String?, error: String?)
+}
+
 internal object DownstreamNative {
   init {
     nativeInstallPreparer()
@@ -244,6 +251,18 @@ internal object DownstreamNative {
   fun export(id: Long, from: Int, to: Int, format: Int, separator: Char): String? =
     nativeExport(id, from, to, format, separator.code)
 
+  /** Captures the snapshot before returning; newer streaming states cannot expire it. */
+  fun exportControl(
+    id: Long,
+    from: Int,
+    to: Int,
+    kind: Int,
+    format: Int,
+    separator: Char,
+    includeHtml: Boolean,
+    callback: NativeControlExportCallback,
+  ) = nativeExportControl(id, from, to, kind, format, separator.code, includeHtml, callback)
+
   /** The file name a code download saves as, extension included. */
   @JvmStatic
   fun downloadName(id: Long, block: Int, configured: String, fallback: String): String? =
@@ -255,6 +274,12 @@ internal object DownstreamNative {
 
   @JvmStatic
   private external fun nativeExport(id: Long, from: Int, to: Int, format: Int, separator: Int): String?
+
+  @JvmStatic
+  private external fun nativeExportControl(
+    id: Long, from: Int, to: Int, kind: Int, format: Int, separator: Int,
+    includeHtml: Boolean, callback: NativeControlExportCallback,
+  )
 
   @JvmStatic
   private external fun nativeDownloadName(id: Long, block: Int, configured: String, fallback: String): String?
