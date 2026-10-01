@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { before, describe, test } from 'node:test';
@@ -721,6 +722,73 @@ describe('themes', () => {
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
+  });
+
+  /**
+   * Every slot a theme can set is read by something that draws.
+   *
+   * A slot nothing reads is not a harmless extra: `src/theme.ts` will happily
+   * resolve it and send it, the theme will intern, the view will rebuild, and the
+   * value will simply not appear. That is the worst shape a feature can fail in,
+   * because it looks like it worked. So this reads the sources rather than a
+   * hand-kept list, which is the only list that would be right.
+   *
+   * One direction on purpose: a read counted for the wrong slot is a false pass,
+   * but a read missed is caught, and the readers are few and named in one place.
+   */
+  test('every slot is read by a renderer or by the shared rules', () => {
+    const repo = resolve(CPP, '..', '..');
+    const readers = [
+      // The rules both platforms call, and the one token table both read.
+      join(CPP, 'theme', 'ThemeLayout.cpp'),
+      join(CPP, 'highlight', 'TokenPalette.h'),
+      // Each platform's own drawing.
+      join(repo, 'src', 'ios', 'DSRenderedDocument.mm'),
+      join(repo, 'src', 'ios', 'DSSegmentViews.mm'),
+      join(repo, 'src', 'ios', 'DSLayoutManager.mm'),
+      join(repo, 'src', 'ios', 'DSThemeColors.mm'),
+      join(repo, 'src', 'ios', 'DownstreamMarkdownView.mm'),
+      join(repo, 'src', 'ios', 'DownstreamTextLayoutManager.mm'),
+      join(repo, 'src', 'android', 'src', 'main', 'java', 'com', 'downstream', 'RenderedDocument.kt'),
+      join(repo, 'src', 'android', 'src', 'main', 'java', 'com', 'downstream', 'NativeTheme.kt'),
+      join(repo, 'src', 'android', 'src', 'main', 'java', 'com', 'downstream', 'DownstreamMarkdownView.kt'),
+    ].map((path) => readFileSync(path, 'utf8')).join('\n');
+
+    // One form per way a slot can be named in the sources, so the comparison is
+    // about the slot rather than about the spelling.
+    const normalize = (name) =>
+      name
+        .replace(/^(SLOT_|kSlot|k)/, '')
+        .replace(/(\d)/g, '_$1')
+        .replace(/[^A-Za-z0-9]/g, '')
+        .toUpperCase();
+    const read = new Set();
+    for (const match of readers.matchAll(/ThemeSlots\.SLOT_([A-Z0-9_]+)/g)) {
+      read.add(normalize(match[1]));
+    }
+    for (const match of readers.matchAll(/Heading\.([A-Z_]+)/g)) {
+      for (let level = 1; level <= 6; level++) {
+        read.add(`HEADING${level}${match[1]}`);
+      }
+    }
+    for (const match of readers.matchAll(/kSlot([A-Za-z0-9]+)/g)) {
+      read.add(normalize(match[1]));
+    }
+    for (const match of readers.matchAll(/heading::(k[A-Za-z]+)/g)) {
+      for (let level = 1; level <= 6; level++) {
+        read.add(`HEADING${level}${match[1].slice(1).toUpperCase()}`);
+      }
+    }
+
+    const source = JSON.parse(readFileSync(join(repo, 'src', 'theme', 'theme-slots.json'), 'utf8'));
+    const slots = Array.isArray(source.slots)
+      ? source.slots
+      : Object.entries(source.slots).map(([name, value]) => ({ name, ...value }));
+    const unread = slots
+      .map((slot) => slot.name)
+      .filter((name) => !name.endsWith('.dark'))
+      .filter((name) => !read.has(normalize(name)));
+    assert.deepEqual(unread, [], 'these theme slots are set but never drawn');
   });
 
   // The slot table's own invariants, the defaults a platform reads, margin
