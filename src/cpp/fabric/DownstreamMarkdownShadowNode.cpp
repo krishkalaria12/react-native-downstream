@@ -7,6 +7,8 @@
 #include <react/renderer/core/LayoutContext.h>
 #include <react/renderer/core/StateUpdate.h>
 
+#include <utility>
+
 namespace facebook::react {
 
 extern const char DownstreamMarkdownViewComponentName[] = "DownstreamMarkdownView";
@@ -24,6 +26,9 @@ DownstreamMarkdownShadowNode::DownstreamMarkdownShadowNode(const ShadowNodeFragm
                                                            const ShadowNodeFamily::Shared &family,
                                                            ShadowNodeTraits traits)
     : ConcreteViewShadowNode(fragment, family, traits) {
+  // The theme is interned once per distinct value, so an unchanged inline theme
+  // literal costs a pointer compare per revision rather than a hash.
+  resolveTheme();
   requestControlledSource();
 }
 
@@ -57,6 +62,57 @@ DownstreamMarkdownShadowNode::DownstreamMarkdownShadowNode(const ShadowNode &sou
   } else {
     requestControlledSource();
   }
+
+  // The theme is a separate question from the source: the same message can be
+  // re-requested under a new theme, and an unchanged theme under a new source
+  // keeps its interned handle. Reusing the handle rather than re-interning is
+  // what makes a theme change free for every view already holding this node.
+  if (themeUnchanged(previous)) {
+    theme_ = source.theme_;
+  } else {
+    resolveTheme();
+  }
+}
+
+bool DownstreamMarkdownShadowNode::themeUnchanged(const DownstreamMarkdownViewProps &previous) const {
+  const auto &props = getConcreteProps();
+  return previous.themeSlots == props.themeSlots && previous.themeValues == props.themeValues &&
+      previous.themeFonts == props.themeFonts;
+}
+
+downstream::Theme::Handle DownstreamMarkdownShadowNode::resolveTheme() const {
+  const auto &props = getConcreteProps();
+  if (props.themeSlots.empty()) {
+    // An app that passes neither prop gets the static default, which costs
+    // nothing beyond one pointer compare on every measurement.
+    theme_.reset();
+    return nullptr;
+  }
+  std::vector<uint32_t> slots;
+  std::vector<double> values;
+  // The slot and value arrays are parallel by construction, so a length that
+  // does not match is a malformed prop rather than a value a caller can send on
+  // purpose; the extra slots are dropped and the rest of the theme still lands.
+  slots.reserve(props.themeSlots.size());
+  values.reserve(std::min(props.themeSlots.size(), props.themeValues.size()));
+  for (size_t index = 0; index < props.themeSlots.size() && index < props.themeValues.size(); index++) {
+    slots.push_back(static_cast<uint32_t>(props.themeSlots[index]));
+    values.push_back(props.themeValues[index]);
+  }
+  const std::vector<std::string> fonts(props.themeFonts.begin(), props.themeFonts.end());
+  theme_ = downstream::ThemeRegistry::intern(slots, values, fonts);
+  return theme_;
+}
+
+downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale, Float width) const {
+  const auto &props = getConcreteProps();
+  const auto &state = getStateData();
+  return downstream::LayoutHint{static_cast<float>(fontScale),
+                                static_cast<float>(width),
+                                chromeFor(state),
+                                state.wrapToggles,
+                                props.codeBlockWrap,
+                                theme_};
 }
 
 void DownstreamMarkdownShadowNode::requestControlledSource() {
@@ -67,7 +123,10 @@ void DownstreamMarkdownShadowNode::requestControlledSource() {
     return;
   }
   controlled_ = std::make_shared<ControlledSource>();
-  controlled_->prepared = downstream::PreparedDocument::request(props.markdown);
+  // The hint carries this node's theme. Its width is zero, because the node has
+  // not been measured yet, and a hint with no width is expanded against the
+  // widths views use now, so the theme is still prepared.
+  controlled_->prepared = downstream::PreparedDocument::request(props.markdown, layoutHint(1, 0));
 }
 
 void DownstreamMarkdownShadowNode::setLayoutManager(
@@ -152,18 +211,16 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
   // The layout is the prop's default plus the reader's own choices, so a hint
   // carries both. Measuring reads the prop rather than the state's copy of it,
   // because a `codeBlockWrap` change lands in props a revision before the state
-  // that records it does.
-  const downstream::LayoutHint hint{static_cast<float>(layoutContext.fontSizeMultiplier),
-                                    static_cast<float>(layoutConstraints.maximumSize.width),
-                                    chrome,
-                                    state.wrapToggles,
-                                    props.codeBlockWrap};
+  // that records it does. The hint carries the theme too, so the worker builds
+  // the rendering this measurement will mount rather than one Fabric discards.
+  const downstream::LayoutHint hint =
+      layoutHint(layoutContext.fontSizeMultiplier, layoutConstraints.maximumSize.width);
   downstream::RenderPreparer::noteLayout(hint);
   if (!props.sessionId.empty()) {
     downstream::SessionRegistry::noteLayout(props.sessionId, hint);
   }
   return layoutManager_->measure(getDocument(), layoutContext.fontSizeMultiplier, layoutConstraints,
-                                 getSurfaceId(), chrome, props.codeBlockWrap, state.wrapToggles);
+                                 getSurfaceId(), chrome, props.codeBlockWrap, state.wrapToggles, theme_);
 }
 
 void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
@@ -177,13 +234,16 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   const auto &props = getConcreteProps();
   const auto &state = getStateData();
   const uint32_t chrome = chromeFor(state);
+  // Compared by id rather than by pointer, so a view whose theme resolved to an
+  // equal value it already had does not ask for a state update at all.
   if (state.document != document || state.fontSizeMultiplier != layoutContext.fontSizeMultiplier ||
-      state.chrome != chrome || state.codeBlockWrap != props.codeBlockWrap) {
+      state.chrome != chrome || state.codeBlockWrap != props.codeBlockWrap || state.themeId() != themeId()) {
     DownstreamMarkdownState next{state};
     next.document = document;
     next.fontSizeMultiplier = layoutContext.fontSizeMultiplier;
     next.chrome = chrome;
     next.codeBlockWrap = props.codeBlockWrap;
+    next.theme = theme_;
     setStateData(std::move(next));
   }
 
@@ -202,5 +262,7 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
     pendingError_.reset();
   }
 }
+
+uint64_t DownstreamMarkdownShadowNode::themeId() const { return theme_ ? theme_->id() : 0; }
 
 } // namespace facebook::react

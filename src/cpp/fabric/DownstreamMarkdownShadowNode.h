@@ -3,6 +3,7 @@
 #include "DownstreamMarkdownState.h"
 #include "DownstreamTextLayoutManager.h"
 #include "PreparedDocument.h"
+#include "theme/Theme.h"
 
 #include <react/renderer/components/DownstreamSpec/EventEmitters.h>
 #include <react/renderer/components/DownstreamSpec/Props.h>
@@ -67,13 +68,32 @@ private:
   /// Asks for a relayout once a preparation that layout did not wait for ends.
   void relayoutWhenPrepared() const;
 
+  /// The node's layout hint at a scale and a width. Carries the theme, so the
+  /// worker builds the rendering the view will mount and Fabric measures the
+  /// sizes the view draws.
+  downstream::LayoutHint layoutHint(react::Float fontScale, react::Float width) const;
+
   /// The chrome a document lays out with, from the props and the reader's
   /// choices. It is a height, not a rendering, so it is recomputed here rather
   /// than baked into a segment's text.
   uint32_t chromeFor(const DownstreamMarkdownState &state) const;
 
+  /// The theme these theme props resolve to. Interned only when the props
+  /// change, so an unchanged theme costs nothing per revision, and the handle is
+  /// held beside the rest of the node's state so clones share it.
+  downstream::Theme::Handle resolveTheme() const;
+  /// True when the previous props would resolve to the same theme. The arrays
+  /// are compared as vectors rather than through the registry, so an unchanged
+  /// inline literal does not intern.
+  bool themeUnchanged(const DownstreamMarkdownViewProps &previous) const;
+  /// The theme's id, or 0 for the default one, which is its id too.
+  uint64_t themeId() const;
+
   std::shared_ptr<const DownstreamTextLayoutManager> layoutManager_;
   std::shared_ptr<ControlledSource> controlled_;
+  /// Null for the default theme, which is what an app that passes neither prop
+  /// gets. The registry hands out one shared object per distinct value.
+  mutable downstream::Theme::Handle theme_;
   mutable downstream::DocumentHandle document_;
   /// The revision has not chosen its document yet. Once chosen, measurement
   /// and mounting use the same one.
