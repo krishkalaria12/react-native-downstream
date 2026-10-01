@@ -140,8 +140,8 @@
               </tr>
               <tr>
                 <td>Code block header, line numbers, max height<br /><span class="tag new">not planned</span></td>
-                <td>None</td>
-                <td>Language label, <code>lineNumbers</code>, <code>startLine=</code> read from the fence meta string, <code>codeBlockMaxHeight</code> (default 400) that keeps scrolling to the bottom while the block streams, and a placeholder while highlighting loads. The meta string is dropped today: only the language is kept at <code>MarkdownParser.cpp:177</code>.</td>
+                <td>Code card header with the language, copy, download and wrap; the fence info string is kept in <code>Block::info</code> but read only for download names</td>
+                <td>Language label, <code>lineNumbers</code>, <code>startLine=</code> read from the fence meta string, <code>codeBlockMaxHeight</code> (default 400) that keeps scrolling to the bottom while the block streams, and a placeholder while highlighting loads. Native highlighting needs no placeholder. See <a href="code-block-chrome-plan.html">the code block chrome plan</a>.</td>
               </tr>
               <tr>
                 <td>Copy and download controls<br /><span class="tag planned">planned</span></td>

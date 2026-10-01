@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Downstream · code block chrome plan</title>
+    <style>
+      :root {
+        --paper: #f5f8f8;
+        --surface: #ffffff;
+        --surface-soft: #edf3f2;
+        --ink: #17272d;
+        --ink-soft: #486167;
+        --muted: #667c80;
+        --line: #cddcda;
+        --line-strong: #94aeaa;
+        --accent: #146e69;
+        --accent-soft: #d9efeb;
+        --tail: #aa681b;
+        --tail-soft: #f8eddb;
+        --risk: #a64242;
+        --risk-soft: #faeaea;
+        --code: #e8f0ef;
+        --sans: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --paper: #0f1b1e;
+          --surface: #152528;
+          --surface-soft: #1c3334;
+          --ink: #e8f2ef;
+          --ink-soft: #b6cac5;
+          --muted: #92aca7;
+          --line: #34504e;
+          --line-strong: #537872;
+          --accent: #84d4c6;
+          --accent-soft: #1b4643;
+          --tail: #efbb72;
+          --tail-soft: #46351f;
+          --risk: #ef9993;
+          --risk-soft: #462d30;
+          --code: #223a3b;
+        }
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.58 var(--sans); }
+      a { color: var(--accent); text-underline-offset: 0.18em; }
+      :focus-visible { outline: 3px solid var(--tail); outline-offset: 3px; border-radius: 3px; }
+      .shell { display: grid; grid-template-columns: 15rem minmax(0, 1fr); min-height: 100vh; }
+      .rail { position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 2.1rem 1.2rem 2rem 1.5rem; border-right: 1px solid var(--line); background: var(--surface); }
+      .rail-title { font-weight: 800; letter-spacing: -0.035em; line-height: 1.18; font-size: 1.12rem; margin: 0 0 0.35rem; }
+      .rail-subtitle { margin: 0; color: var(--muted); font-size: 0.8rem; line-height: 1.4; }
+      .rail nav { margin-top: 2rem; display: grid; gap: 0.06rem; }
+      .rail nav a { display: block; padding: 0.46rem 0.6rem; color: var(--ink-soft); text-decoration: none; font-size: 0.86rem; line-height: 1.3; border-left: 2px solid transparent; }
+      .rail nav a:hover { color: var(--ink); background: var(--surface-soft); border-left-color: var(--accent); }
+      main { min-width: 0; }
+      .wrap { max-width: 74rem; padding: 3.2rem clamp(1rem, 4.8vw, 4.5rem) 6rem; margin: 0 auto; }
+      .mast { border-bottom: 2px solid var(--ink); padding-bottom: 2.2rem; margin-bottom: 0.6rem; }
+      .kicker { font: 700 0.77rem/1.3 var(--mono); color: var(--accent); letter-spacing: 0.02em; margin: 0 0 0.9rem; }
+      h1 { font-size: clamp(2.3rem, 5vw, 4.3rem); letter-spacing: -0.06em; line-height: 1; margin: 0 0 1.3rem; max-width: 15ch; font-weight: 760; }
+      .lede { font-size: clamp(1.05rem, 1.5vw, 1.22rem); line-height: 1.5; max-width: 52rem; margin: 0; color: var(--ink-soft); }
+      .decision { margin-top: 2rem; padding: 1.2rem 1.4rem; background: var(--accent-soft); border-left: 5px solid var(--accent); max-width: 62rem; }
+      .decision strong { display: block; margin-bottom: 0.3rem; }
+      .decision p { margin: 0; }
+      section { scroll-margin-top: 1.5rem; padding: 2.4rem 0 1.6rem; border-top: 1px solid var(--line); }
+      .section-head { display: grid; grid-template-columns: minmax(0, 2fr) minmax(12rem, 1fr); align-items: end; gap: 2rem; margin-bottom: 1.2rem; }
+      .section-head h2 { font-size: clamp(1.6rem, 2.6vw, 2.3rem); letter-spacing: -0.05em; line-height: 1.13; margin: 0; }
+      .section-head p { margin: 0; color: var(--ink-soft); font-size: 0.94rem; line-height: 1.45; }
+      h3 { font-size: 1.18rem; letter-spacing: -0.025em; line-height: 1.25; margin: 1.8rem 0 0.6rem; }
+      p { max-width: 72ch; margin: 0.5rem 0 1rem; }
+      ul, ol { padding-left: 1.35rem; max-width: 80ch; }
+      li { margin: 0.38rem 0; }
+      code, pre { font-family: var(--mono); }
+      code { background: var(--code); border-radius: 3px; padding: 0.08rem 0.25rem; font-size: 0.86em; overflow-wrap: anywhere; }
+      pre { background: var(--surface); border: 1px solid var(--line); padding: 1rem 1.2rem; overflow-x: auto; font-size: 0.8rem; line-height: 1.6; max-width: 100%; }
+      pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+      .table-wrap { max-width: 100%; overflow-x: auto; border: 1px solid var(--line); background: var(--surface); margin: 1rem 0 1.5rem; }
+      table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 0.86rem; line-height: 1.45; }
+      th, td { padding: 0.72rem 0.85rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+      th { background: var(--surface-soft); font-size: 0.77rem; font-weight: 750; }
+      tr:last-child td { border-bottom: 0; }
+      td.num { font-family: var(--mono); white-space: nowrap; }
+      tr.pick td { background: var(--accent-soft); }
+      .tag { display: inline-block; font: 700 0.7rem/1 var(--mono); padding: 0.28rem 0.42rem; border-radius: 3px; margin: 0.1rem 0.25rem 0.1rem 0; white-space: nowrap; }
+      .tag.go { background: var(--accent-soft); color: var(--accent); }
+      .tag.later { background: var(--tail-soft); color: var(--tail); }
+      .tag.no { background: var(--risk-soft); color: var(--risk); }
+      .meta-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 1.2rem; }
+      .meta-grid > div { background: var(--surface); padding: 1rem 1.1rem; }
+      .meta-grid b { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; }
+      .meta-grid span { color: var(--ink-soft); font-size: 0.9rem; }
+      .big { display: block; font: 800 1.7rem/1.1 var(--mono); color: var(--accent); margin-bottom: 0.3rem; letter-spacing: -0.03em; }
+      .callout { padding: 1rem 1.25rem; background: var(--surface-soft); border-left: 4px solid var(--line-strong); margin: 1.3rem 0; }
+      .callout.risk { background: var(--risk-soft); border-left-color: var(--risk); }
+      .callout p:last-child { margin-bottom: 0; }
+      .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.9rem; margin: 1.2rem 0 1.4rem; }
+      .flow-node { position: relative; background: var(--surface); border: 1px solid var(--line); padding: 0.8rem 0.85rem; font-size: 0.84rem; line-height: 1.4; }
+      .flow-node b { display: block; font-size: 0.86rem; margin-bottom: 0.2rem; }
+      .flow-node span { color: var(--ink-soft); }
+      .flow-node.new { border-color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
+      .flow-node:not(:last-child)::after { content: "→"; position: absolute; top: 0.8rem; right: -0.78rem; color: var(--accent); font-weight: bold; }
+      .phase { border: 1px solid var(--line); background: var(--surface); padding: 1.1rem 1.3rem 0.6rem; margin: 1rem 0; }
+      .phase h3 { margin-top: 0; }
+      .phase .exit { border-top: 1px dashed var(--line); padding-top: 0.6rem; margin-top: 0.6rem; font-size: 0.9rem; color: var(--ink-soft); }
+      .phase .exit b { color: var(--ink); }
+      .swatch { display: inline-block; width: 0.8rem; height: 0.8rem; border-radius: 2px; margin-right: 0.4rem; vertical-align: -0.1rem; border: 1px solid rgba(127, 127, 127, 0.35); }
+      .sources li { font-size: 0.9rem; overflow-wrap: anywhere; }
+      @media (max-width: 1000px) {
+        .shell { grid-template-columns: 1fr; }
+        .rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+        .rail nav { grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); margin-top: 1rem; }
+        .flow { grid-template-columns: 1fr; }
+        .flow-node:not(:last-child)::after { content: "↓"; top: auto; bottom: -1.05rem; right: 50%; }
+      }
+      @media (max-width: 760px) {
+        .meta-grid, .section-head { grid-template-columns: 1fr; gap: 0.6rem; }
+      }
+      .mock { max-width: 34rem; margin: 1rem 0 0.4rem; font-family: var(--mono); font-size: 0.78rem; line-height: 1.55; }
+      .mock-head { display: flex; align-items: center; justify-content: space-between; height: 2rem; padding: 0 0.3rem 0 0.75rem; color: var(--muted); }
+      .mock-head .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .mock-head .btns { display: flex; gap: 0.7rem; color: var(--ink-soft); letter-spacing: 0.02em; }
+      .mock-card { position: relative; background: var(--surface-soft); border-radius: 6px; padding: 0.62rem; overflow: hidden; }
+      .mock-card.capped { max-height: 9.6rem; }
+      .mock-row { display: flex; white-space: pre; }
+      .mock-row .n { flex: none; width: 2.2ch; margin-right: 1.2ch; text-align: right; color: var(--muted); opacity: 0.6; user-select: none; }
+      .mock-row .c { overflow: hidden; }
+      .mock-row.cont .n { visibility: hidden; }
+      .mock-fade { position: absolute; left: 0; right: 0; bottom: 0; height: 2.4rem; background: linear-gradient(to bottom, transparent, var(--surface-soft)); }
+      .mock-note { font: 0.8rem/1.4 var(--sans); color: var(--ink-soft); margin: 0.35rem 0 1.4rem; max-width: 34rem; }
+      .mocks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.6rem; }
+      .k { color: var(--risk); } .s { color: var(--accent); } .f { color: var(--tail); }
+      @media (max-width: 760px) { .mocks { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="rail">
+        <p class="rail-title">Code block chrome</p>
+        <p class="rail-subtitle">Implementation plan · the "code block header, copy, meta string, max height" item from the Streamdown gap analysis</p>
+        <nav aria-label="Sections">
+          <a href="#scope">Scope</a>
+          <a href="#streamdown">What Streamdown does</a>
+          <a href="#others">Other renderers</a>
+          <a href="#constraints">Constraints</a>
+          <a href="#design">Design</a>
+          <a href="#meta">Fence meta grammar</a>
+          <a href="#api">Public API</a>
+          <a href="#streaming">Streaming</a>
+          <a href="#platforms">Platforms</a>
+          <a href="#phases">Phases</a>
+          <a href="#testing">Testing</a>
+          <a href="#risks">Risks and open questions</a>
+          <a href="#followups">Follow-ups</a>
+          <a href="#sources">Sources</a>
+        </nav>
+      </aside>
+      <main>
+        <div class="wrap">
+          <header class="mast">
+            <p class="kicker">docs / code-block-chrome-plan</p>
+            <h1>Line numbers, fence meta and max height for code cards</h1>
+            <p class="lede">
+              The copy and download work turned every code block into a card with a header row, and kept the whole fence info string in
+              <code>Block::info</code>. This plan finishes the card: it reads the meta string once in C++, adds a line-number gutter with
+              <code>startLine</code> and <code>noLineNumbers</code>, caps tall blocks at <code>codeBlockMaxHeight</code> with a viewport that follows
+              the newest line while the block streams, and shows a fence's <code>title</code> in the header. It covers the
+              "Code block header, line numbers, max height" row of the <a href="streamdown-gap-analysis.html">Streamdown gap analysis</a>.
+            </p>
+            <div class="meta-grid">
+              <div><b>Builds on</b><span>Syntax highlighting (#15), copy, download and wrap controls (#16), and the theme and style plan (#18). All three are treated as merged.</span></div>
+              <div><b>Compared against</b><span>Streamdown 2.7.0 (<code>vercel/streamdown@08da224</code>) and <code>react-native-enriched-markdown@14c7d08</code></span></div>
+              <div><b>New dependencies</b><span>None. Platform scroll views and text layout only.</span></div>
+            </div>
+            <div class="decision">
+              <strong>Decision: one fence meta parser in C++, one code layout rule shared by measurement and drawing, and a native viewport that hands drags back to the chat list</strong>
+              <p>
+                <code>parseFenceMeta</code> turns <code>Block::info</code> into a <code>FenceMeta</code> once per block, and the header label, the gutter
+                and the download name all read that one struct. The props (<code>lineNumbers</code>, <code>codeBlockMaxHeight</code>,
+                <code>codeBlockWrap</code>) and the reader's per-block choices (wrap, expand) are gathered into one <code>CodeLayout</code> value that
+                travels in <code>LayoutHint</code> and the Fabric state. One function, <code>codeCardHeight</code>, decides every card's height, so the
+                shadow node, the worker and the view cannot disagree. Line numbers are drawn beside the code, never into it, so copy, selection and
+                accessibility text are unchanged. A capped block scrolls inside its card, stays pinned to its newest line while it streams, and lets a
+                vertical drag fall through to the chat list when the card cannot scroll further that way.
+              </p>
+            </div>
+          </header>
+
+          <section id="scope">
+            <div class="section-head">
+              <h2>Scope</h2>
+              <p>What this item ships, what is already in place, and what stays out.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Piece</th><th>Status</th><th>Notes</th></tr></thead>
+                <tbody>
+                  <tr><td>Header row, language label, copy, download, wrap</td><td><span class="tag go">done in #16</span></td><td>The card, its 32 pt header and the buttons exist. This item adds one optional button (expand) and a title label, and changes nothing else in the row.</td></tr>
+                  <tr><td>Fence info string kept</td><td><span class="tag go">done in #16</span></td><td><code>Block::info</code> (<code>Document.h:157</code>, set at <code>MarkdownParser.cpp:180</code>). Only <code>Export.cpp</code> reads it today, with its own ad hoc <code>fenceName</code> and <code>pathName</code> scans.</td></tr>
+                  <tr><td>Fence meta parsed once</td><td><span class="tag go">in</span></td><td><code>FenceMeta</code> on every code block: <code>title</code>, <code>startLine</code>, <code>noLineNumbers</code>, line marks. Download names move onto it, so the label and the file name always agree.</td></tr>
+                  <tr><td>Line numbers</td><td><span class="tag go">in</span></td><td><code>lineNumbers</code> prop, default <code>true</code> as in Streamdown. A non-scrolling gutter beside the body, numbered from <code>startLine</code>. The meta's <code>noLineNumbers</code> hides it for one block.</td></tr>
+                  <tr><td>Max height with pinned scroll</td><td><span class="tag go">in</span></td><td><code>codeBlockMaxHeight</code>, default 400 points as in Streamdown, <code>0</code> or <code>Infinity</code> to turn it off. Taller code scrolls inside the card. While the block streams, the viewport follows the newest line until the reader scrolls away.</td></tr>
+                  <tr><td>Expand button</td><td><span class="tag go">in</span></td><td>Not in Streamdown. A header button that lifts the cap for one block, through the same Fabric state path as wrap. Shown only on a block taller than the cap. It is the mobile escape from scrolling inside a scrolling chat.</td></tr>
+                  <tr><td>Title in the header</td><td><span class="tag go">in</span></td><td>Streamdown shows only the language. Docusaurus, rehype-pretty-code and Expressive Code show <code>title="…"</code> as the block's name, and the download already uses it.</td></tr>
+                  <tr><td>Placeholder while highlighting loads</td><td><span class="tag go">closed by design</span></td><td>Streamdown renders plain tokens, then swaps in Shiki's result. Downstream colors code on the worker before the snapshot is published, so there is nothing to wait for.</td></tr>
+                  <tr><td>Line marks <code>{1,3-5}</code></td><td><span class="tag later">parsed, drawn later</span></td><td>Parsed so they never leak into a title. Drawing a line background is a follow-up; chat models rarely emit marks.</td></tr>
+                  <tr><td><code>tableMaxHeight</code></td><td><span class="tag later">next</span></td><td>Same viewport, pinning and drag hand-off, on table segments. Its own item, so this one stays reviewable.</td></tr>
+                  <tr><td>Fence-language renderers' <code>meta</code></td><td><span class="tag later">with renderers</span></td><td>Streamdown passes the raw meta to a custom renderer. That item reads <code>Block::info</code> and <code>FenceMeta</code> as they are.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="streamdown">
+            <div class="section-head">
+              <h2>What Streamdown does, and what we take</h2>
+              <p>Read from <code>lib/code-block/*</code>, <code>lib/use-pinned-scroll.ts</code>, <code>lib/components.tsx</code>, <code>lib/remark/code-meta.ts</code>, the code-blocks docs and the changelog at <code>08da224</code>.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Behavior</th><th>Streamdown 2.7</th><th>Downstream plan</th></tr></thead>
+                <tbody>
+                  <tr><td>Meta string</td><td><code>remarkCodeMeta</code> copies mdast <code>node.meta</code> into a <code>metastring</code> hast property. <code>CodeComponent</code> runs two regexes on it: <code>/startLine=(\d+)/</code> and <code>/\bnoLineNumbers\b/</code>.</td><td><span class="tag go">adapt</span> One tokenizer in C++ instead of regexes, so <code>title="startLine=9"</code> is a title, not a start line. It accepts Streamdown's two keys plus the Docusaurus and rehype-pretty-code spellings.</td></tr>
+                  <tr><td><code>lineNumbers</code></td><td>Prop, default <code>true</code>. <code>false</code> hides numbers everywhere, "regardless of the meta string".</td><td><span class="tag go">copy</span> Same name, default and precedence.</td></tr>
+                  <tr><td><code>startLine</code></td><td>Integer ≥ 1 from the meta, applied as <code>counter-reset: line N-1</code>. Values below 1 are ignored.</td><td><span class="tag go">copy</span> Same rule, plus an upper bound (1,000,000) so a hostile value cannot make the gutter absurdly wide.</td></tr>
+                  <tr><td>Number drawing</td><td>A CSS counter in a <code>::before</code> pseudo-element: <code>w-6 mr-4 text-[13px] text-right text-muted-foreground/50 select-none</code>, scrolled sideways with the code.</td><td><span class="tag go">improve</span> A separate gutter that stays put while the code scrolls sideways, as in GitHub and VS Code. Not selectable and not copied, like <code>select-none</code>.</td></tr>
+                  <tr><td>Gutter width</td><td>Fixed <code>w-6</code>. The changelog records "line numbers over 100 wrap and start new line" (<code>d1635f0</code>).</td><td><span class="tag go">improve</span> Width from the digit count of the last number, at least two digits, so 100 and 10,000 fit.</td></tr>
+                  <tr><td><code>codeBlockMaxHeight</code></td><td>Default 400. A number is pixels, a string is any CSS length, and <code>0</code>, <code>Infinity</code>, <code>"0"</code>, <code>"none"</code> and <code>"Infinity"</code> turn it off (<code>resolveMaxHeight</code>). Applies to the body box, padding included, not the header.</td><td><span class="tag go">copy</span> Same default, and the same values turn it off. <span class="tag later">adapt</span> Numbers only: there is no CSS length on native, so another string warns once in development and falls back to the default.</td></tr>
+                  <tr><td>Pinned scroll</td><td><code>usePinnedScroll</code>: while <code>isAnimating</code>, scroll to the bottom once per animation frame. Unpin when the reader scrolls more than 8 px from the bottom, re-pin on return or on a new streaming session.</td><td><span class="tag go">copy</span> Same 8-point threshold and re-pin rules. <span class="tag go">improve</span> Keyed to the block's own settling instead of the whole message's <code>isAnimating</code>, so a finished block stops following while a later one streams.</td></tr>
+                  <tr><td>Header</td><td>32 px (<code>h-8</code>) row with the language in lowercase. Controls float over the top right.</td><td><span class="tag go">keep #16</span> 32 pt row with the language as written; #16 already chose a header that takes space instead of floating. <span class="tag go">improve</span> A fence title replaces the language label.</td></tr>
+                  <tr><td>Incomplete fence</td><td><code>data-incomplete</code> on the container. The block renders as it arrives.</td><td><span class="tag go">already</span> <code>Document::settledBlocks</code> marks settled blocks; pinning reads the same fact.</td></tr>
+                  <tr><td>Placeholder</td><td>Plain tokens first, then Shiki's result; a skeleton for lazy custom renderers.</td><td><span class="tag go">not needed</span> Tokens arrive with the snapshot.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              Streamdown's tests to port: <code>code-block-line-numbers.test.tsx</code> (on by default, off by prop, off by <code>noLineNumbers</code>, meta beats a <code>true</code> prop)
+              and <code>code-block-start-line.test.tsx</code> (absent, 1, 10, 50, 100). The assertions on CSS classes become assertions on the resolved
+              <code>FenceMeta</code> and on the first number the gutter draws.
+            </p>
+          </section>
+
+          <section id="others">
+            <div class="section-head">
+              <h2>Other renderers</h2>
+              <p>Meta syntax in the wild, the closest native peer, and how mobile chat apps treat tall code.</p>
+            </div>
+            <h3>Meta string syntax</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Renderer</th><th>Title</th><th>Line numbers</th><th>Line marks and more</th></tr></thead>
+                <tbody>
+                  <tr><td>Streamdown</td><td>None (only the download name, via the language)</td><td><code>startLine=N</code>, <code>noLineNumbers</code>; on by default</td><td>Raw meta passed to custom renderers</td></tr>
+                  <tr><td>Docusaurus</td><td><code>title="…"</code></td><td><code>showLineNumbers</code>, <code>showLineNumbers=N</code>; off by default</td><td><code>{1,4-6,11}</code> and magic comments</td></tr>
+                  <tr><td>rehype-pretty-code</td><td><code>title="…"</code></td><td><code>showLineNumbers</code>, <code>showLineNumbers{N}</code>; exposes <code>data-line-numbers-max-digits</code></td><td><code>{1-3}</code>, <code>{1,2}#id</code>, <code>/word/</code></td></tr>
+                  <tr><td>Expressive Code</td><td><code>title="…"</code> or a file-name comment</td><td>Plugin</td><td><code>{1, 4, 7-8}</code>, <code>ins=</code>, <code>del=</code>, <code>wrap</code>, <code>collapse={X-Y}</code></td></tr>
+                  <tr><td>Nextra</td><td><code>filename="…"</code></td><td><code>showLineNumbers</code></td><td><code>{1,4-5}</code>, <code>/word/</code>, <code>copy</code></td></tr>
+                  <tr><td>Downstream today (#16)</td><td><code>title="…"</code> or <code>lang:path</code>, for the download name only</td><td>None</td><td>None</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              Models trained on documentation emit all of these. The grammar below accepts each spelling of a title and a start line, and drops what it
+              does not understand. The rehype-pretty-code idea of exposing the maximum digit count is the same fix as Streamdown's gutter bug, and the gutter
+              width rule takes it.
+            </p>
+            <h3>react-native-enriched-markdown</h3>
+            <p>
+              Its GitHub flavor draws a code container with a header (language display name, copy button) above a body that scrolls sideways
+              (<code>ENRMCodeBlockContainerView.m</code>, <code>CodeBlockContainerView.kt</code>). It has no line numbers, no max height and no meta handling:
+              <code>grep</code> finds no <code>lineNumber</code>, <code>startLine</code> or <code>metastring</code> anywhere in the repository. It maps languages to display names
+              (<code>ts</code> → "TypeScript", <code>sh</code> → "Shell") in <code>packages/core/cpp/highlight/CodeBlockLanguages.cpp</code>, a sorted table with a
+              <code>static_assert</code> that it stays sorted. Downstream keeps the language as written, as Streamdown does. A display-name table is an open question below,
+              and enriched-markdown's is a ready MIT-licensed starting point.
+            </p>
+            <h3>Tall code in mobile chat</h3>
+            <p>
+              The ChatGPT app renders every reply in full, with no collapse and no inner scrolling, and users ask in OpenAI's forum for collapsible code. A recent
+              mobile chat client (future-os #713) moved from sideways scrolling to a 16-line preview with an explicit expand and collapse control. Neither
+              nests a vertical scroller inside the chat list. That matters here: on a phone, a 400-point card is more than half the screen, and a scroll view
+              inside a scroll view traps vertical drags unless it hands them back. Hence the drag hand-off in the design and the expand button. Streamdown on
+              mobile web gets hand-off for free from the browser's scroll chaining; native views do not.
+            </p>
+          </section>
+
+          <section id="constraints">
+            <div class="section-head">
+              <h2>Constraints from the contract and the code</h2>
+              <p>Rules from <a href="api.md">api.md</a> and the #15, #16 and #18 designs that this item must keep.</p>
+            </div>
+            <ul>
+              <li><b>Copy is visible text, and line numbers are not text.</b> Copy, selection, <code>getSource()</code>, every export format and accessibility text are byte-identical with numbers on or off.</li>
+              <li><b>Measured height equals drawn height.</b> Every input that changes a card's height (line numbers when wrapped, the cap, expand) reaches the shadow node, the worker and the view through one definition, as <code>codeWraps</code> (<code>Controls.h:41</code>) does today.</li>
+              <li><b>Measurement stays on the worker path.</b> The new inputs travel in <code>LayoutHint</code>, or the worker prepares a size Fabric throws away.</li>
+              <li><b>No React render for reader actions.</b> Expanding a block goes through Fabric state, like the wrap button.</li>
+              <li><b>Plain prose does not pay.</b> A document with no code block builds no gutter and no viewport, and parses no meta.</li>
+              <li><b>Identities name content.</b> <code>IncrementalParser.cpp:399</code> promises "an identity always names the same content". Today <code>sameBlock</code> (<code>Compare.cpp:7</code>) compares <code>language</code> but not <code>info</code>, so a block whose meta changed keeps its identity, and the committed-segment cache keyed by identity would draw the old title. That has to be fixed before anything renders from <code>info</code>.</li>
+              <li><b>Untrusted text.</b> The meta comes from model output. A title is shown as a label and must not be able to spoof: bidi controls and other control characters are removed, as the download name already does.</li>
+              <li><b>Code is left to right.</b> The gutter is on the left in every locale, as the card already is.</li>
+            </ul>
+          </section>
+
+          <section id="design">
+            <div class="section-head">
+              <h2>Design</h2>
+              <p>One parsed meta, one layout value, one height rule, and two new views inside the existing card.</p>
+            </div>
+            <div class="flow" aria-label="Pipeline">
+              <div class="flow-node"><b>md4c parse</b><span><code>Block::info</code>, as today</span></div>
+              <div class="flow-node new"><b>parseFenceMeta</b><span><code>Block::meta</code>: title, start line, flags, marks</span></div>
+              <div class="flow-node new"><b>CodeLayout</b><span>Props and reader choices in <code>LayoutHint</code> and state</span></div>
+              <div class="flow-node new"><b>codeCardHeight</b><span>One rule: header, body, cap, expand, gutter</span></div>
+              <div class="flow-node new"><b>Card view</b><span>Gutter, viewport, pinning, expand button</span></div>
+            </div>
+
+            <div class="mocks">
+              <div>
+                <div class="mock" aria-hidden="true">
+                  <div class="mock-head"><span class="title">src/app.ts</span><span class="btns">⤢ ↵ ⤓ ⧉</span></div>
+                  <div class="mock-card">
+                    <div class="mock-row"><span class="n">10</span><span class="c"><span class="k">export async function</span> <span class="f">load</span>(id: <span class="k">string</span>) {</span></div>
+                    <div class="mock-row"><span class="n">11</span><span class="c">  <span class="k">const</span> res = <span class="k">await</span> <span class="f">fetch</span>(<span class="s">`/api/${id}`</span>);</span></div>
+                    <div class="mock-row"><span class="n">12</span><span class="c">  <span class="k">return</span> res.<span class="f">json</span>();</span></div>
+                    <div class="mock-row"><span class="n">13</span><span class="c">}</span></div>
+                  </div>
+                </div>
+                <p class="mock-note"><code>```ts title="src/app.ts" startLine=10</code>. The title replaces the language label, and numbers start at 10. The gutter stays put when the code scrolls sideways.</p>
+              </div>
+              <div>
+                <div class="mock" aria-hidden="true">
+                  <div class="mock-head"><span class="title">python</span><span class="btns">⤢ ↵ ⤓ ⧉</span></div>
+                  <div class="mock-card capped">
+                    <div class="mock-row"><span class="n">39</span><span class="c">    <span class="k">for</span> row <span class="k">in</span> rows:</span></div>
+                    <div class="mock-row"><span class="n">40</span><span class="c">        total += row.price * row.qty</span></div>
+                    <div class="mock-row"><span class="n">41</span><span class="c">        <span class="k">if</span> total &gt; limit:</span></div>
+                    <div class="mock-row"><span class="n">42</span><span class="c">            <span class="k">raise</span> <span class="f">BudgetError</span>(<span class="s">"over budget"</span>)</span></div>
+                    <div class="mock-row"><span class="n">43</span><span class="c">    <span class="k">return</span> total</span></div>
+                    <div class="mock-row"><span class="n">44</span><span class="c"></span></div>
+                  </div>
+                </div>
+                <p class="mock-note">A block past the cap while streaming: the viewport follows line 44 as it arrives. ⤢ (expand) shows only because the block is taller than the cap.</p>
+              </div>
+            </div>
+
+            <h3>1. One meta parser, on the block</h3>
+            <p>
+              <code>src/cpp/downstream/FenceMeta.{h,cpp}</code> holds a pure function, <code>FenceMeta parseFenceMeta(std::string_view info)</code>, with the
+              grammar given in <a href="#meta">the next section</a>. <code>Block</code> gains <code>FenceMeta meta</code>, filled where <code>MarkdownParser.cpp:180</code>
+              sets <code>info</code>. The open-fence fast path copies the tail block, so the meta travels with it and is never parsed again while the fence grows.
+            </p>
+<pre><code>// FenceMeta.h
+struct LineMark { uint32_t first{0}; uint32_t last{0}; };
+struct FenceMeta {
+  /// From title="…", filename="…", or the path after `lang:`. UTF-8, sanitized:
+  /// control and bidi characters removed, at most 96 UTF-16 units.
+  std::string title;
+  /// First line number, 1 to 1,000,000. From startLine=N, showLineNumbers=N or showLineNumbers{N}.
+  uint32_t startLine{1};
+  /// The fence asked for no line numbers.
+  bool noLineNumbers{false};
+  /// {1,3-5}. Parsed so it never reaches a title; drawn by a later item. At most 64.
+  std::vector&lt;LineMark&gt; marks;
+  bool operator==(const FenceMeta &amp;) const = default;
+};
+FenceMeta parseFenceMeta(std::string_view info);</code></pre>
+            <ul>
+              <li><b>Export reads it.</b> <code>fenceName</code> and <code>pathName</code> (<code>Export.cpp:473</code>, <code>:495</code>) are deleted; <code>downloadName</code> takes <code>block.meta.title</code>. #16's file-name goldens must pass unchanged, which is what proves the move kept behavior.</li>
+              <li><b><code>sameBlock</code> compares <code>info</code>.</b> One line in <code>Compare.cpp</code>, with a test that a change to the meta alone gives the block a new identity in full mode.</li>
+              <li><b>Android reads the parsed fields</b> through <code>nativeReadDocument</code> (title, start line, flags per code block), not by parsing again in Kotlin.</li>
+            </ul>
+
+            <h3>2. One layout value for code</h3>
+            <p>
+              #16 added <code>codeBlockWrap</code> and <code>wrapToggles</code> to <code>LayoutHint</code>, <code>DownstreamMarkdownState</code>, the measure cache and
+              Android's state dynamic, each by hand. This item would add three more inputs the same way. Instead, the five are gathered into one value in a new
+              <code>src/cpp/downstream/CodeLayout.h</code>, and <code>Controls.h</code> keeps only the control bits.
+            </p>
+<pre><code>// CodeLayout.h
+/// From props. Equal for every block in a view.
+struct CodeLayoutProps {
+  bool wrap{false};          // codeBlockWrap
+  bool lineNumbers{true};    // lineNumbers
+  float maxHeight{400};      // codeBlockMaxHeight in points; 0 means no cap
+};
+/// The reader's own per-block choices, by code ordinal, each sorted.
+struct CodeChoices {
+  std::vector&lt;uint32_t&gt; wrapToggles;   // differ from props.wrap (as in #16)
+  std::vector&lt;uint32_t&gt; expanded;      // cap lifted by the expand button
+};
+struct CodeLayout {
+  CodeLayoutProps props;
+  CodeChoices choices;
+  bool operator==(const CodeLayout &amp;) const = default;
+};
+/// How one block lays out. The only place props, choices and meta meet.
+struct CodeBlockLayout {
+  bool wraps;
+  bool lineNumbers;      // props.lineNumbers &amp;&amp; !meta.noLineNumbers
+  uint32_t firstNumber;  // meta.startLine
+  float maxHeight;       // 0 when uncapped or expanded
+};
+CodeBlockLayout resolveCodeBlock(const CodeLayout &amp;, uint32_t ordinal, const FenceMeta &amp;);
+/// At least two digits, so the gutter does not widen at line 10 (and Streamdown's
+/// "over 100" bug cannot happen).
+uint32_t gutterDigits(uint32_t firstNumber, uint32_t lineCount);
+/// header + min(body + 2 * padding, cap), with the cap floored at kMinVisibleLines.
+float codeCardHeight(const CodeBlockLayout &amp;, float headerHeight, float padding,
+                     float bodyHeight, float lineHeight);</code></pre>
+            <p>
+              <code>LayoutHint</code> replaces <code>wrapToggles</code> and <code>codeBlockWrap</code> with <code>CodeLayout code</code>, and its <code>operator==</code> compares
+              that one field. <code>DownstreamMarkdownState</code> does the same, and its <code>toggled</code> becomes <code>toggledWrap</code> and <code>toggledExpand</code>, both
+              resolving <code>chrome</code> again. Android's <code>getDynamic()</code> carries the five fields. <code>codeWraps</code> becomes the <code>wraps</code> member of
+              <code>resolveCodeBlock</code>, and #16's <code>testWrapChoices</code> table runs against it unchanged. Kotlin mirrors <code>resolveCodeBlock</code>,
+              <code>gutterDigits</code> and <code>codeCardHeight</code>, as it already mirrors <code>codeWraps</code>, and one case table checks both copies.
+            </p>
+            <p>
+              Line numbers change height only when a block wraps, because the gutter narrows the width the body wraps at. Unwrapped code is still line count
+              times line height, so a rotation still does not lay code out again. The cap changes height whenever a block is taller than it. Neither changes the
+              attributed string or the spans, so the rendering caches are untouched; only the frame cache and the measure cache key on <code>CodeLayout</code>.
+            </p>
+
+            <h3>3. The gutter</h3>
+            <ul>
+              <li><b>Placement.</b> A gutter view sits between the card's padding and the horizontal scroll view, inside the vertical viewport. It scrolls vertically with the code and never sideways.</li>
+              <li><b>Width.</b> <code>gutterDigits × digitAdvance + gap</code>. <code>digitAdvance</code> is the width of "0" in the code font at the current font scale, measured by each platform; the gap is a theme slot (default 12). The digit count comes from the last number, so a streaming block crosses from 99 to 100 by widening one digit. Unwrapped, that moves the body sideways without changing height; wrapped, it may re-wrap the block, which is still growing anyway.</li>
+              <li><b>Numbers.</b> One per logical line, aligned to the baseline of that line's first visual line. A wrapped continuation line gets none, as in GitHub and VS Code. An empty fence shows one line, numbered, like Streamdown's single empty row.</li>
+              <li><b>Drawing, not text.</b> The gutter draws numbers in its own draw pass with the code font, right-aligned and in the line-number color slot (default: the header label color at 60%, matching Streamdown's <code>muted-foreground/50</code>). It is not a text view, so there is nothing to select, copy or read aloud.</li>
+              <li><b>Cost.</b> Logical line starts (UTF-16 offsets of each <code>\n</code> + 1) are found once per segment text, on the worker, and cached on the segment. A draw finds the first line in its dirty rect (<code>lineFragmentRectForGlyphAtIndex</code> on iOS, <code>Layout.getLineForVertical</code> on Android), then walks down. Only visible numbers are drawn, so a 2,000-line block costs the same per frame as a 20-line one.</li>
+            </ul>
+
+            <h3>4. Max height and the viewport</h3>
+            <ul>
+              <li><b>Rule.</b> A card is <code>header + min(body + 2·padding, cap)</code>, the same box Streamdown caps (padding in, header out). The cap is never below <code>kMinVisibleLines</code> (5) lines plus padding, so at the largest Dynamic Type size a 400-point cap still shows five lines instead of two.</li>
+              <li><b>Views.</b> Every code card gets a vertical viewport (iOS <code>DSCodeViewport</code>, a <code>UIScrollView</code> subclass; Android <code>CodeViewport</code>, a <code>ScrollView</code> subclass) holding the gutter and the existing horizontal scroll view. Vertical scrolling is enabled only when the block is capped. The viewport always exists, so a block that crosses the cap mid-stream is never re-parented and keeps its selection and offsets.</li>
+              <li><b>Affordance.</b> A capped block shows a bottom fade in the card color while content is below, and flashes its scroll indicator the first time it becomes capped. Android uses the built-in vertical fading edge.</li>
+              <li><b>Drag hand-off.</b> A vertical drag that starts on a card goes to the card only if the card can scroll in that direction. On iOS, <code>gestureRecognizerShouldBegin:</code> for the viewport's pan recognizer compares the drag's direction with the offset and returns <code>NO</code> at the matching edge, so the chat list's pan wins. On Android, the viewport calls <code>requestDisallowInterceptTouchEvent(true)</code> on its parent only while <code>canScrollVertically(direction)</code>, and releases it at the edge. Uncapped cards never claim vertical drags, which is today's behavior.</li>
+              <li><b>Offsets survive snapshots.</b> The vertical offset is kept by the same rule #16 uses for the horizontal one: same code ordinal and same first line.</li>
+            </ul>
+
+            <h3>5. Pinned scroll</h3>
+            <p>
+              A capped block that is not yet settled (<code>segment.to &gt; document.settledBlocks</code>) follows its newest line. The view holds a <code>pinned</code> flag,
+              set when it takes a new block. After each snapshot's layout, a pinned, unsettled card sets its offset to the bottom without animation. A drag that
+              ends more than 8 points above the bottom unpins it; scrolling back within 8 points pins it again. Once the block settles, the card stops following
+              and keeps its offset, which is Streamdown's "a pending pin survives the stream ending". A settled block mounted fresh, such as a message scrolled
+              back into a history, starts at the top.
+            </p>
+            <p>
+              Two differences from Streamdown, both deliberate. Pinning is per block, so a finished block above a streaming one stays where the reader left it.
+              And a card never pins while VoiceOver or TalkBack focus is inside it, so the screen reader is not pulled away from the line it is reading.
+            </p>
+            <div class="callout">
+              <p>
+                A side effect worth keeping: once a streaming block reaches the cap, the card stops growing and the code grows inside it. The message's height
+                stays put until the next block starts, so the chat list stops re-anchoring on every line of a long fence.
+              </p>
+            </div>
+
+            <h3>6. The expand button</h3>
+            <p>
+              <code>controls.code.expand</code> (default on, like every control) adds a fourth header button that lifts the cap for one block. It shows only when the
+              block's natural body is taller than the cap, which does not change layout because the header row's height is fixed. A press updates
+              <code>choices.expanded</code> through <code>_state-&gt;updateState</code> on iOS and <code>StateWrapper.updateState</code> on Android, exactly as wrap does; the
+              shadow node measures again and Yoga lays out the new height with no React render. An expanded block that is still streaming grows with its
+              content. The set is cleared on a new generation, a new session, or a change of <code>codeBlockMaxHeight</code>.
+            </p>
+
+            <h3>7. The header label</h3>
+            <ul>
+              <li>The label shows <code>meta.title</code> when the fence has one, and otherwise the language as written, as today. A long path truncates in the middle (<code>NSLineBreakByTruncatingMiddle</code>, <code>TextUtils.TruncateAt.MIDDLE</code>), so <code>…/components/Button.tsx</code> keeps its file name. The fixed row height does not change.</li>
+              <li>The spoken label says both and the start line when it is not 1: "src/app.ts, ts code, from line 10". Numbers themselves are never spoken.</li>
+              <li>A display-name table is not added; see open questions.</li>
+            </ul>
+          </section>
+
+          <section id="meta">
+            <div class="section-head">
+              <h2>Fence meta grammar</h2>
+              <p>Total and tolerant: every input parses, partial input yields nothing it cannot finish, and unknown tokens are ignored.</p>
+            </div>
+            <p>
+              The input is <code>Block::info</code>. The language is the first word, cut at <code>:</code> as highlighting already does. Everything after it is split into tokens
+              at ASCII whitespace outside quotes and braces. At most the first 1 KiB is read.
+            </p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Token</th><th>Effect</th><th>From</th></tr></thead>
+                <tbody>
+                  <tr><td><code>startLine=N</code></td><td><code>startLine</code> when N is 1 to 1,000,000 in plain digits; otherwise ignored</td><td>Streamdown</td></tr>
+                  <tr><td><code>showLineNumbers=N</code>, <code>showLineNumbers{N}</code></td><td>Same as <code>startLine</code>. <code>startLine</code> wins if both appear</td><td>Docusaurus, rehype-pretty-code, Nextra</td></tr>
+                  <tr><td><code>showLineNumbers</code></td><td>Nothing: numbers are on by default, and <code>lineNumbers={false}</code> still wins, as Streamdown's prop does over its meta</td><td>Docusaurus, rehype-pretty-code</td></tr>
+                  <tr><td><code>noLineNumbers</code></td><td>Hide numbers for this block. Exact token, case-sensitive</td><td>Streamdown</td></tr>
+                  <tr><td><code>title="…"</code>, <code>title='…'</code>, <code>title=bare</code>, <code>filename="…"</code></td><td><code>title</code>. The first one wins</td><td>Docusaurus, rehype-pretty-code, Expressive Code, Nextra</td></tr>
+                  <tr><td><code>lang:path</code> in the first word</td><td><code>title</code> when no <code>title=</code> is present (#16's rule, kept)</td><td>Common in model output</td></tr>
+                  <tr><td><code>{1,3-5}</code></td><td><code>marks</code>; ranges are clamped and at most 64 are kept</td><td>Docusaurus, rehype-pretty-code, Expressive Code</td></tr>
+                  <tr><td>Anything else (<code>wrap</code>, <code>ins={…}</code>, <code>/word/</code>, <code>#id</code>)</td><td>Ignored, and still available raw in <code>info</code></td><td>—</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <ul>
+              <li><b>Streaming safety.</b> An unterminated quote or brace drops that token and everything after it. While the opening fence line is still being typed, <code>title="src/ap</code> yields no title rather than a wrong one, and the label shows the language until the closing quote arrives. No number can flicker: numbers exist only for code lines, and code lines exist only after the fence line ends. <code>watchOpenFence</code> already treats an opener with no newline as unsettled (<code>IncrementalParser.cpp:599</code>).</li>
+              <li><b>Property test.</b> For every info string in the fixtures, every prefix parses without failing, never yields a title from an unterminated quote, and the full string parses the same whether or not its prefixes were parsed first. This is the meta's version of the streaming equivalence test.</li>
+              <li><b>Sanitizing.</b> A title loses C0 and C1 controls, bidi embedding, override and isolate characters (U+202A to U+202E, U+2066 to U+2069) and U+200B, and is capped at 96 UTF-16 units. The download name keeps its own stricter path rules on top.</li>
+            </ul>
+          </section>
+
+          <section id="api">
+            <div class="section-head">
+              <h2>Public API</h2>
+              <p>Streamdown's names for Streamdown's features; the expand button follows #16's wrap button.</p>
+            </div>
+<pre><code>// src/types.ts
+type MarkdownViewBaseProps = Readonly&lt;{
+  // …existing props
+  /**
+   * Line numbers beside fenced and indented code. On by default, as in Streamdown.
+   * A fence's `noLineNumbers` hides them for one block; `false` hides them for all.
+   * Numbers are drawn beside the code and are never copied, selected or spoken.
+   */
+  lineNumbers?: boolean;
+  /**
+   * The tallest a code block's body grows, in points, before it scrolls inside its card.
+   * 400 by default, as in Streamdown. `0`, `Infinity`, `'0'`, `'none'` and `'Infinity'` remove the cap.
+   * While a capped block streams, it follows its newest line until the reader scrolls away.
+   */
+  codeBlockMaxHeight?: number | '0' | 'none' | 'Infinity';
+}&gt;;
+
+// MarkdownControls['code'] object form gains:
+expand?: boolean | Readonly&lt;{ onToggle?: (event: MarkdownControlEvent) =&gt; void }&gt;;
+
+// MarkdownControlEvent
+action: 'copy' | 'download' | 'wrap' | 'expand';
+/** Expand only: the block's state after the press. */
+expanded?: boolean;
+
+// MarkdownTranslations gains expandCode ("Show all lines") and collapseCode ("Show fewer lines").
+
+// MarkdownStyle['codeBlock'] gains, as theme slots (append-only ids):
+lineNumbers?: { color?: MarkdownColor; gapWidth?: number };</code></pre>
+            <ul>
+              <li><b>Native props.</b> <code>lineNumbers: WithDefault&lt;boolean, true&gt;</code>, <code>codeBlockMaxHeight: WithDefault&lt;Float, 400&gt;</code>. JavaScript normalizes every "off" form to <code>0</code>, so native never sees <code>Infinity</code>. A negative number, <code>NaN</code> or another string warns once in development and sends the default.</li>
+              <li><b>Controls.</b> <code>ControlBits::CodeExpand = 1u &lt;&lt; 5</code>; the default <code>controls</code> value becomes 63. <code>hasCodeControls</code> includes it.</li>
+              <li><b>Routing.</b> <code>onControlAction</code> with <code>action: 'expand'</code> goes to <code>controls.code.expand.onToggle</code>, the same path as wrap. Like wrap, the event is a report: the button has already acted.</li>
+              <li><b>Not added:</b> a per-block <code>startLine</code> or title prop. Those belong to the source, so they come from the fence.</li>
+              <li><b>Contract edits.</b> <code>docs/api.md</code>: the Code row lists line numbers, fence titles and a capped height in the first release; the props section documents both props, the meta grammar and the expand control; the implementation-status Code blocks row describes the gutter and the viewport. <code>docs/feature-matrix.md</code>: rows for numbers, start line, cap, pinning, expand and drag hand-off.</li>
+            </ul>
+          </section>
+
+          <section id="streaming">
+            <div class="section-head">
+              <h2>Streaming</h2>
+              <p>What changes on each snapshot, and what does not.</p>
+            </div>
+            <ul>
+              <li><b>Meta.</b> Parsed when md4c reports the block. The fast path copies it, so a long fence parses its meta once. A full-mode reparse parses it again, which costs microseconds.</li>
+              <li><b>Gutter.</b> The tail's line starts are found again with each rebuilt tail segment, in the same pass that builds its attributed string or spans, on the worker. Only the visible numbers are drawn.</li>
+              <li><b>Height.</b> Below the cap, a new line grows the card as today. At the cap, the card stops growing and the viewport scrolls instead, so Fabric sees no size change and Yoga does no layout for that snapshot.</li>
+              <li><b>Settling.</b> A block that settles keeps its offset, its expand state and its wrap state, because all three key on the code ordinal, which is stable across append-only snapshots.</li>
+              <li><b>Full mode.</b> Nothing settles until <code>finish()</code>, so every capped block follows its newest line until then. Only the growing block changes, so only it moves.</li>
+              <li><b>Reset.</b> A new generation clears <code>expanded</code> and <code>wrapToggles</code>, unpins nothing (there is nothing left to pin) and resets offsets, as <code>resetTableScrollPositions</code> does.</li>
+            </ul>
+          </section>
+
+          <section id="platforms">
+            <div class="section-head">
+              <h2>Platforms</h2>
+              <p>System views only, at the example app's minimums (iOS 15.1, Android API 24).</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Concern</th><th>iOS</th><th>Android</th></tr></thead>
+                <tbody>
+                  <tr><td>Height</td><td><code>heightOf:</code> (<code>DSRenderedDocument.mm:923</code>) calls <code>codeCardHeight</code> with the block's <code>resolveCodeBlock</code> result. <code>bodyWidthForWidth:</code> subtracts the gutter when wrapped.</td><td><code>heightOf</code> (<code>RenderedDocument.kt:438</code>) calls the Kotlin mirror. <code>CodeSegment.layoutWidth</code> subtracts the gutter when wrapped.</td></tr>
+                  <tr><td>Segment data</td><td><code>DSCodeSegment</code> gains <code>meta</code> (title, start line, flags), <code>lineStarts</code>, and <code>digitAdvance</code> for its font.</td><td><code>CodeSegment</code> gains the same fields; <code>NativeDocument</code> reads the meta through <code>nativeReadDocument</code>.</td></tr>
+                  <tr><td>Viewport</td><td><code>DSCodeViewport : UIScrollView</code> around the gutter and the existing horizontal <code>_scrollView</code>. <code>scrollEnabled</code> only when capped; <code>bounces = NO</code> vertically, so the hand-off is clean.</td><td><code>CodeViewport : ScrollView</code> around a horizontal <code>LinearLayout</code> of the gutter and the existing <code>HorizontalScrollView</code>. <code>isVerticalFadingEdgeEnabled</code> when capped.</td></tr>
+                  <tr><td>Drag hand-off</td><td><code>gestureRecognizerShouldBegin:</code> on the pan recognizer: refuse a vertical-dominant drag toward an edge already reached.</td><td><code>onInterceptTouchEvent</code> and <code>onTouchEvent</code>: <code>parent.requestDisallowInterceptTouchEvent(canScrollVertically(direction))</code> on each move.</td></tr>
+                  <tr><td>Gutter</td><td><code>DSCodeGutterView</code>: <code>drawRect:</code> walks visible line starts and draws with <code>NSString drawAtPoint:</code> in the code font, baseline-aligned from the body's layout manager.</td><td><code>CodeGutterView</code>: <code>onDraw</code> walks visible line starts and calls <code>Canvas.drawText</code> at <code>layout.getLineBaseline</code> of the body's layout.</td></tr>
+                  <tr><td>Pinning</td><td><code>scrollViewDidEndDragging:</code> and <code>scrollViewDidEndDecelerating:</code> update <code>pinned</code>; <code>layoutSubviews</code> applies it after the body frame changes.</td><td><code>onScrollChanged</code> updates <code>pinned</code> when the change came from a touch; <code>onLayout</code> applies it.</td></tr>
+                  <tr><td>Expand</td><td>A fourth <code>DSControlButton</code>, SF Symbol <code>arrow.up.left.and.arrow.down.right</code> and its inverse, selected trait while expanded. <code>didToggleExpandAtOrdinal:</code> on the control delegate.</td><td>A fourth <code>ImageButton</code> with Material <code>unfold_more</code> and <code>unfold_less</code> vector drawables (Apache-2.0), <code>stateDescription</code> while expanded.</td></tr>
+                  <tr><td>Accessibility</td><td>Gutter has <code>isAccessibilityElement = NO</code>. VoiceOver moving into lines below the fold scrolls the viewport, which <code>UIScrollView</code> does for its descendants. Header label as in design §7.</td><td>Gutter has <code>importantForAccessibility = NO</code>. <code>ScrollView</code> exposes scroll forward and backward actions to TalkBack.</td></tr>
+                  <tr><td>Recycling</td><td colspan="2">A recycled card resets <code>pinned</code>, offsets and the indicator flash, and drops its line starts with its segment.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="phases">
+            <div class="section-head">
+              <h2>Phases</h2>
+              <p>Each phase ends green and can be reviewed alone. Phases 3 and 4 can run in parallel.</p>
+            </div>
+            <div class="callout">
+              <p>
+                <b>Where things are verified.</b> Engine behavior by host tests (<code>pnpm test:native</code>), JavaScript by <code>pnpm test</code>, and rendering in the example
+                app on the iOS Simulator and an arm64 Android emulator, using the headless recipes the earlier items used.
+              </p>
+            </div>
+            <div class="phase">
+              <h3>Phase 0 · Contract</h3>
+              <ul>
+                <li>Add <code>lineNumbers</code>, <code>codeBlockMaxHeight</code>, <code>controls.code.expand</code>, the <code>'expand'</code> action, <code>expanded</code>, and the two translation keys to <code>src/types.ts</code>; export them from <code>index.tsx</code>.</li>
+                <li>Make the <code>docs/api.md</code> and <code>docs/feature-matrix.md</code> edits listed under Public API.</li>
+                <li>Apply the decided defaults: <code>lineNumbers</code> on and <code>codeBlockMaxHeight</code> 400.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm typecheck</code> passes; contract reviewed.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 1 · Engine</h3>
+              <ul>
+                <li><code>FenceMeta.{h,cpp}</code>, <code>Block::meta</code> filled in <code>MarkdownParser.cpp</code>; <code>Export.cpp</code> reads <code>meta.title</code> and loses <code>fenceName</code> and <code>pathName</code>.</li>
+                <li><code>sameBlock</code> compares <code>info</code>.</li>
+                <li><code>CodeLayout.h</code>: <code>CodeLayoutProps</code>, <code>CodeChoices</code>, <code>CodeLayout</code>, <code>resolveCodeBlock</code>, <code>gutterDigits</code>, <code>codeCardHeight</code>, <code>codeLineStarts</code>. <code>LayoutHint</code>, <code>DownstreamMarkdownState</code> and the measure cache move to <code>CodeLayout</code>; <code>codeWraps</code> and <code>chromeForProps</code> take it.</li>
+                <li><code>nativeReadDocument</code> passes the parsed meta per code block.</li>
+                <li>Add the new sources to <code>Downstream.podspec</code>, <code>CMakeLists.txt</code>, <code>build.mjs</code> and <code>tests/engine.ts</code>.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm test:native</code> passes the meta goldens, the prefix property test, the code layout and gutter tables, and the identity test; #16's export goldens and <code>testWrapChoices</code> pass unchanged.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 2 · JavaScript</h3>
+              <ul>
+                <li>Normalize <code>codeBlockMaxHeight</code> (a port of <code>resolveMaxHeight</code>, numbers only) and pass <code>lineNumbers</code> through in <code>ControlledMarkdown</code> and <code>StreamMarkdown</code>.</li>
+                <li>Codegen props; <code>CONTROL_CODE_EXPAND</code>; the two label keys appended to <code>CONTROL_LABEL_KEYS</code>; routing for <code>'expand'</code>.</li>
+                <li>After #18 lands: the <code>codeBlock.lineNumbers</code> slots in <code>theme-slots.json</code> and the resolver.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm test</code> passes the ported Streamdown line-number and start-line cases, normalization, and routing.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 3 · iOS</h3>
+              <ul>
+                <li><code>DSCodeViewport</code>, <code>DSCodeGutterView</code>, pinning, the fade and indicator flash in <code>DSCodeSegmentView</code>; the title label with middle truncation; the expand button and <code>didToggleExpandAtOrdinal:</code> through <code>_state-&gt;updateState</code>.</li>
+                <li><code>DSRenderedDocument</code> heights through <code>codeCardHeight</code>; <code>DownstreamTextLayoutManager.mm</code> passes <code>CodeLayout</code> to measurement and preparation.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> the platform checklist under Testing passes on the iOS Simulator in light, dark and the largest Dynamic Type size.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 4 · Android</h3>
+              <ul>
+                <li><code>CodeViewport</code>, <code>CodeGutterView</code>, pinning, fading edge, the expand button through <code>StateWrapper.updateState</code>; the title label.</li>
+                <li><code>RenderedDocument</code> heights through the Kotlin mirror; the view manager's measure reads <code>CodeLayout</code> from <code>localData</code>.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> the same checklist on an API 35 emulator, plus the drag hand-off inside a <code>FlatList</code> and inside a <code>ScrollView</code> without <code>nestedScrollEnabled</code>.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 5 · Example, benchmarks, docs</h3>
+              <ul>
+                <li>Controls screen: fixtures for <code>startLine=98</code> (crossing 99 to 100), <code>noLineNumbers</code>, a title with a long path, each meta spelling, a 300-line block, and a <b>Held mid-stream</b> long fence for pinning.</li>
+                <li>Bench: snapshot apply time for <code>code-streaming</code> with numbers and the cap on and off; gutter draw time for a full viewport.</li>
+                <li>README, <code>docs/api.md</code> implementation status, and the gap analysis row set to shipped.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> budgets under risks met, CI green, docs match the build.</p>
+            </div>
+          </section>
+
+          <section id="testing">
+            <div class="section-head">
+              <h2>Testing</h2>
+              <p>Engine rules against the real engine; platform behavior on the Simulator and the emulator.</p>
+            </div>
+            <h3>Engine (<code>pnpm test:native</code>)</h3>
+            <ul>
+              <li><b>Meta goldens.</b> A hand-written table of info strings and their <code>FenceMeta</code>: each spelling in the grammar, both quote kinds, <code>startLine=0</code>, <code>=-3</code>, <code>=10abc</code>, <code>=1000001</code>, <code>startLine</code> beside <code>showLineNumbers=5</code>, two titles, <code>title="startLine=9"</code>, <code>xnoLineNumbers</code>, a 2 KiB info string, a title with U+202E and a tab, and <code>ts:src/app.ts</code>.</li>
+              <li><b>Prefix property.</b> As described in the grammar section, for every golden.</li>
+              <li><b>Streaming.</b> Replay fences whose meta arrives one byte at a time through <code>IncrementalParser</code> in both modes. The settled meta equals a one-shot parse, and a meta-only change in full mode gives the block a new identity.</li>
+              <li><b>Layout tables.</b> <code>gutterDigits</code> (1 line, 9, 10, 99, 100, start 998 with 3 lines, start 1,000,000). <code>codeCardHeight</code> with no cap, a cap above and below the body, an expanded block, no header, the five-line floor at a large line height, and a wrapped block with and without numbers. <code>resolveCodeBlock</code> for every combination of prop, meta and choice.</li>
+              <li><b>Unchanged output.</b> Code text, every export format and the accessibility text dump are byte-identical with <code>lineNumbers</code> on and off and with any cap.</li>
+            </ul>
+            <h3>JavaScript (<code>pnpm test</code>)</h3>
+            <ul>
+              <li>Streamdown's line-number and start-line cases, ported. <code>codeBlockMaxHeight</code> normalization for <code>undefined</code>, <code>0</code>, <code>Infinity</code>, the three strings, a negative, <code>NaN</code> and <code>"50vh"</code>. Expand control resolution and routing; an event from an old generation is dropped.</li>
+            </ul>
+            <h3>Platforms (Simulator and emulator)</h3>
+            <ul>
+              <li>Numbers start at the meta's start line; 99 to 100 widens the gutter with nothing clipped; a wrapped long line numbers only its first visual line; the gutter stays still while the code scrolls sideways.</li>
+              <li>Selecting and copying code, and the code copy button, never include a number; VoiceOver and TalkBack never read one.</li>
+              <li>A 300-line block shows a 400-point card that scrolls inside. Starting a drag at its top edge pulling down, and at its bottom edge pushing up, scrolls the chat list instead. The same inside a <code>FlatList</code> and on Android inside a <code>ScrollView</code> without <code>nestedScrollEnabled</code>.</li>
+              <li>While a long fence streams, the card follows the newest line; scrolling up stops it; scrolling back to the bottom resumes it; finishing leaves the offset alone. A block above a streaming one does not move.</li>
+              <li>Expand appears only on blocks taller than the cap, grows the card through Fabric with no React render, survives later snapshots, and is cleared by <code>reset()</code>.</li>
+              <li><code>lineNumbers={false}</code>, <code>noLineNumbers</code>, <code>codeBlockMaxHeight={0}</code> and <code>controls={false}</code> each change only what they name. Rotation lays out no unwrapped code again. Light, dark and the largest text size.</li>
+            </ul>
+          </section>
+
+          <section id="risks">
+            <div class="section-head">
+              <h2>Risks and open questions</h2>
+              <p>The two defaults are decided; the rest are risks with their mitigation.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Question or risk</th><th>Recommendation</th></tr></thead>
+                <tbody>
+                  <tr><td>Default of <code>lineNumbers</code></td><td><span class="tag go">decided true</span> Streamdown parity, as #16 chose for <code>controls</code>. It changes every existing app's code blocks and costs about 30 points of width on a 375-point phone. The package is 0.1.x, so say so in the release notes.</td></tr>
+                  <tr><td>Default of <code>codeBlockMaxHeight</code></td><td><span class="tag go">decided 400</span> Streamdown parity, with the drag hand-off and expand making it workable on a phone. Apps that prefer full-height code pass <code>codeBlockMaxHeight={0}</code>.</td></tr>
+                  <tr><td>iOS cannot hand off mid-drag</td><td>A pan that starts inside a card and reaches its edge does not continue into the chat list. <code>UIScrollView</code> has no scroll chaining; the hand-off decides when the drag starts. Accept and document it. Expand is the escape.</td></tr>
+                  <tr><td>Android lists that intercept early</td><td>Lists built on Gesture Handler or Reanimated may claim the drag before <code>requestDisallowInterceptTouchEvent</code> arrives. Verify with <code>FlatList</code>, <code>FlashList</code> and a Gesture Handler <code>ScrollView</code> in Phase 4, and document any list that needs <code>nestedScrollEnabled</code>.</td></tr>
+                  <tr><td>Large text and the cap</td><td>The five-line floor keeps a capped block readable at accessibility sizes. Points are not scaled by the font scale, matching React Native's own layout props.</td></tr>
+                  <tr><td>Selection inside a capped viewport</td><td>A selection handle dragged past the viewport's edge does not scroll it, the same limit #16 recorded for sideways scrolling. Copy buttons cover the common case.</td></tr>
+                  <tr><td>Pinning against the reader</td><td>A card never pins while screen reader focus is inside it, and any touch-driven scroll away from the bottom unpins it.</td></tr>
+                  <tr><td>Title spoofing</td><td>A model can write any title. Removing bidi and control characters keeps <code>exe.txt</code> from rendering as <code>txt.exe</code>, and the language stays in the spoken label.</td></tr>
+                  <tr><td>Refactor of #16's layout fields</td><td>Moving <code>wrapToggles</code> and <code>codeBlockWrap</code> into <code>CodeLayout</code> touches every layer #16 touched. It is mechanical, and <code>testWrapChoices</code> plus #16's simulator checklist guard it. Adding three more loose fields instead would repeat the drift #16's review found.</td></tr>
+                  <tr><td>Open: language display names</td><td>enriched-markdown shows "TypeScript" for <code>ts</code>; Streamdown shows <code>ts</code>. <span class="tag later">recommend no</span> for now: the label is what the author wrote, and a title covers the case where a nicer name matters. If adopters ask, enriched-markdown's MIT table is the starting point, keyed through <code>translations</code>.</td></tr>
+                  <tr><td>Open: header without controls</td><td>Streamdown shows the language even with <code>controls={false}</code>; #16 removes the whole row. Keep #16's rule: a capped block without a header still scrolls inside, it just has no expand button.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="followups">
+            <div class="section-head">
+              <h2>Follow-ups this unlocks</h2>
+              <p>Not part of this item.</p>
+            </div>
+            <ul>
+              <li><code>tableMaxHeight</code> (Streamdown default 300) on table segments, reusing the viewport, pinning and drag hand-off.</li>
+              <li>Drawing <code>meta.marks</code> as line backgrounds in the gutter's pass, and <code>ins=</code> and <code>del=</code> after it.</li>
+              <li><code>wrap</code> and <code>wrap=false</code> in the meta as a block's starting wrap state, which is one more input to <code>resolveCodeBlock</code>.</li>
+              <li>Fence-language renderers receive <code>meta</code> (raw <code>info</code>) and the parsed <code>FenceMeta</code>, as Streamdown's <code>CustomRendererProps.meta</code> does.</li>
+              <li>A header that stays visible while a tall uncapped block scrolls past, for apps that set <code>codeBlockMaxHeight={0}</code>.</li>
+              <li>Viewport-limited text drawing for very large capped blocks, if Bench shows the hidden part of the body costing mount time.</li>
+            </ul>
+          </section>
+
+          <section id="sources">
+            <div class="section-head">
+              <h2>Sources</h2>
+              <p>Code and documents read for this plan.</p>
+            </div>
+            <ul class="sources">
+              <li>Streamdown at <code>08da224</code> (2.7.0): <code>packages/streamdown/lib/code-block/{index,body,header,container,highlighted-body}.tsx</code>, <code>lib/use-pinned-scroll.ts</code>, <code>lib/components.tsx</code> (meta regexes and <code>CodeComponent</code>), <code>lib/remark/code-meta.ts</code>, <code>index.tsx</code> (defaults), <code>lib/plugin-types.ts</code> (<code>CustomRendererProps.meta</code>), <code>CHANGELOG.md</code> (<code>5faa6fa</code>, <code>57cd3b5</code>, <code>d6666b6</code>, <code>d1635f0</code>, <code>dc3f1d2</code>), <code>apps/website/content/docs/code-blocks.mdx</code>, and the tests <code>code-block-line-numbers.test.tsx</code> and <code>code-block-start-line.test.tsx</code></li>
+              <li>react-native-enriched-markdown at <code>14c7d08</code>: <code>ios/segments/ENRMCodeBlockContainerView.m</code>, <code>packages/core/cpp/highlight/CodeBlockLanguages.cpp</code>, <code>docs/CODE_HIGHLIGHT.md</code></li>
+              <li><a href="https://docusaurus.io/docs/markdown-features/code-blocks">Docusaurus: Code blocks</a> (<code>title</code>, <code>showLineNumbers=N</code>, <code>{1,4-6,11}</code>)</li>
+              <li><a href="https://rehype-pretty.pages.dev/">Rehype Pretty Code</a> (<code>showLineNumbers{N}</code>, <code>data-line-numbers-max-digits</code>, <code>title</code>, highlighted lines)</li>
+              <li>Expressive Code: <a href="https://expressive-code.com/key-features/text-markers/">Text and line markers</a>, <a href="https://expressive-code.com/key-features/word-wrap/">Word wrap</a>, <a href="https://expressive-code.com/key-features/frames/">Frames</a>, <a href="https://expressive-code.com/plugins/collapsible-sections/">Collapsible sections</a></li>
+              <li>Mobile chat: <a href="https://community.openai.com/t/feature-request-collapsible-code-blocks-in-chat/1358142">OpenAI forum, collapsible code blocks request</a>; <a href="https://github.com/futuregene/future-os/pull/713">future-os #713, expandable code previews on mobile</a></li>
+              <li>Nested scrolling in React Native: <a href="https://github.com/facebook/react-native/issues/32495">react-native #32495</a> and <a href="https://blog.logrocket.com/common-bugs-react-native-scrollview/">LogRocket, common ScrollView bugs</a> (<code>nestedScrollEnabled</code> on Android)</li>
+              <li>This repository on the #18 branch: <code>src/cpp/downstream/{Document.h,MarkdownParser.cpp,Export.cpp,Compare.cpp,Controls.h,RenderPreparer.h,SegmentPlan.cpp}</code>, <code>src/cpp/session/IncrementalParser.cpp</code>, <code>src/cpp/fabric/DownstreamMarkdownState.h</code>, <code>src/ios/{DSRenderedDocument,DSSegmentViews}.mm</code>, <code>src/android/.../{RenderedDocument,DownstreamMarkdownView}.kt</code>, <code>docs/copy-download-controls-plan.html</code>, <code>docs/theme-style-plan.html</code>, <code>docs/api.md</code></li>
+            </ul>
+          </section>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>
