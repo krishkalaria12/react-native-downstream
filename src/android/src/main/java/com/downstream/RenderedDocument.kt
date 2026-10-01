@@ -172,6 +172,15 @@ private class BlockSpan(
 ) : LineHeightSpan, LineBackgroundSpan {
   private fun blockStart(text: CharSequence) = (text as Spanned).getSpanStart(this)
 
+  // The first line's metrics before and after the block spacing. StaticLayout
+  // hands the next line of the same paragraph the metrics this span left on the
+  // first, so a wrapped second line would otherwise open the block's whole gap
+  // above itself.
+  private var naturalAscent = 0
+  private var naturalTop = 0
+  private var spacedAscent = 0
+  private var spacedTop = 0
+
   override fun chooseHeight(
     text: CharSequence,
     lineStart: Int,
@@ -181,8 +190,15 @@ private class BlockSpan(
     fm: Paint.FontMetricsInt,
   ) {
     if (lineStart == blockStart(text)) {
+      naturalAscent = fm.ascent
+      naturalTop = fm.top
       fm.ascent -= spacingBefore
       fm.top -= spacingBefore
+      spacedAscent = fm.ascent
+      spacedTop = fm.top
+    } else if (spacingBefore != 0 && fm.ascent == spacedAscent && fm.top == spacedTop) {
+      fm.ascent = naturalAscent
+      fm.top = naturalTop
     }
   }
 
