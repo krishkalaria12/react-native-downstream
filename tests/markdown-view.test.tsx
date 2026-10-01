@@ -12,6 +12,7 @@ import {
 } from '../src/createMarkdownStream';
 import { DownstreamMarkdown } from '../src/DownstreamMarkdown';
 import { presets } from '../src/presets';
+import { themeSlot } from '../src/themeSlots';
 import type { MarkdownViewProps } from '../src/types';
 import { parse, visibleText } from './engine';
 import { createNativeView, type NativeView } from './native-view';
@@ -823,10 +824,106 @@ describe('DownstreamMarkdown theme', () => {
         theme={{ colors: { foreground: '#111111' } }}
       />
     );
-    expect(themeProps().themeSlots).toEqual(first.themeSlots);
-    expect(themeProps().themeValues).toEqual(first.themeValues);
+    expect(themeProps().themeSlots).toBe(first.themeSlots);
+    expect(themeProps().themeValues).toBe(first.themeValues);
+    expect(themeProps().themeFonts).toBe(first.themeFonts);
     expect(nativeView.count()).toBe(2);
   });
+
+  for (const mode of ['controlled', 'stream'] as const) {
+    function sourceProps(): MarkdownViewProps {
+      return mode === 'controlled' ? { markdown: 'x' } : { stream: stream() };
+    }
+
+    it(`updates ${mode} slots when equal values move to a different element`, () => {
+      const source = sourceProps();
+      mount(
+        <DownstreamMarkdown
+          {...source}
+          markdownStyle={{ paragraph: { fontSize: 20 } }}
+        />
+      );
+      const first = themeProps();
+      rerender(
+        <DownstreamMarkdown
+          {...source}
+          markdownStyle={{ h1: { fontSize: 20 } }}
+        />
+      );
+      expect(themeProps().themeValues).toEqual(first.themeValues);
+      expect(themeProps().themeSlots).toEqual([
+        themeSlot('heading.1.fontSize')!.id,
+      ]);
+      expect(themeProps().themeSlots).not.toBe(first.themeSlots);
+    });
+
+    it(`updates changed and removed ${mode} fonts`, () => {
+      const source = sourceProps();
+      mount(
+        <DownstreamMarkdown
+          {...source}
+          markdownStyle={{ paragraph: { fontFamily: 'Inter' } }}
+        />
+      );
+      const first = themeProps();
+      rerender(
+        <DownstreamMarkdown
+          {...source}
+          markdownStyle={{ paragraph: { fontFamily: 'System' } }}
+        />
+      );
+      expect(themeProps().themeFonts).toEqual(['System']);
+      expect(themeProps().themeValues).toEqual(first.themeValues);
+      rerender(<DownstreamMarkdown {...source} />);
+      expect(themeProps().themeSlots).toEqual([]);
+      expect(themeProps().themeValues).toEqual([]);
+      expect(themeProps().themeFonts).toEqual([]);
+    });
+
+    it(`compares the complete ${mode} font table when slot values stay equal`, () => {
+      const source = sourceProps();
+      mount(
+        <DownstreamMarkdown
+          {...source}
+          markdownStyle={{ paragraph: { fontFamily: 'Inter' } }}
+        />
+      );
+      const first = themeProps();
+      rerender(
+        <DownstreamMarkdown
+          {...source}
+          markdownStyle={[
+            { paragraph: { fontFamily: 'Inter' } },
+            { paragraph: { fontFamily: 'System' } },
+            { paragraph: { fontFamily: 'Inter' } },
+          ]}
+        />
+      );
+      expect(themeProps().themeSlots).toEqual(first.themeSlots);
+      expect(themeProps().themeValues).toEqual(first.themeValues);
+      expect(themeProps().themeFonts).toEqual(['Inter', 'System']);
+    });
+
+    it(`preserves ${mode} array identities for equivalent inline styles and fonts`, () => {
+      const source = sourceProps();
+      mount(
+        <DownstreamMarkdown
+          {...source}
+          markdownStyle={{ paragraph: { fontSize: 20, fontFamily: 'Inter' } }}
+        />
+      );
+      const first = themeProps();
+      rerender(
+        <DownstreamMarkdown
+          {...source}
+          markdownStyle={{ paragraph: { fontFamily: 'Inter', fontSize: 20 } }}
+        />
+      );
+      expect(themeProps().themeSlots).toBe(first.themeSlots);
+      expect(themeProps().themeValues).toBe(first.themeValues);
+      expect(themeProps().themeFonts).toBe(first.themeFonts);
+    });
+  }
 
   it('sends one update when the theme changes', () => {
     mount(<DownstreamMarkdown markdown="x" theme={{ radius: 12 }} />);

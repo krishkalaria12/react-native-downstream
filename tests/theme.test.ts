@@ -10,11 +10,17 @@
  * equal by value sends nothing rather than proving the arrays by eye.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { processColor } from 'react-native';
 
 import { presets } from '../src/presets';
 import { resetThemeWarnings, resolveTheme } from '../src/theme';
 import { THEME_SLOTS, themeSlot } from '../src/themeSlots';
 import type { MarkdownStyle, MarkdownTheme } from '../src/types';
+
+vi.mock('react-native', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-native')>();
+  return { ...actual, processColor: vi.fn(actual.processColor) };
+});
 
 /**
  * A style written for another renderer, handed to this one as it stands.
@@ -56,6 +62,7 @@ function sets(
 
 beforeEach(() => {
   resetThemeWarnings();
+  vi.mocked(processColor).mockClear();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
@@ -65,6 +72,27 @@ afterEach(() => {
 });
 
 describe('resolveTheme', () => {
+  it('converts each palette color once before writing all its slots', () => {
+    const resolved = resolveTheme({ colors: { foreground: '#010203' } });
+    expect(processColor).toHaveBeenCalledExactlyOnceWith('#010203');
+    expect(resolved.slots).toHaveLength(20);
+    expect(resolved.values).toEqual(Array(20).fill(0xff010203));
+  });
+
+  it('converts each appearance once while preserving later half overrides', () => {
+    const resolved = resolveTheme([
+      { colors: { foreground: { light: '#111111', dark: '#222222' } } },
+      { colors: { foreground: { dark: '#333333' } } },
+    ]);
+    expect(processColor).toHaveBeenCalledTimes(3);
+    expect(resolved.slots).toHaveLength(20);
+    expect(resolved.values).toEqual(
+      Array.from({ length: 20 }, (_, index) =>
+        index % 2 === 0 ? 0xff111111 : 0xff333333
+      )
+    );
+  });
+
   it('sends three empty arrays for no theme at all', () => {
     // "No theme means no change" is structural: the native side sees the same
     // empty list an app would send, and its static default theme stands.

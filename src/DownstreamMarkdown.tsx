@@ -181,6 +181,9 @@ function useStableTheme(resolved: ResolvedTheme): ResolvedTheme {
   const previous = stable.current;
   if (
     previous.slots.length !== resolved.slots.length ||
+    previous.values.length !== resolved.values.length ||
+    previous.fonts.length !== resolved.fonts.length ||
+    previous.slots.some((slot, index) => slot !== resolved.slots[index]) ||
     previous.values.some((value, index) => value !== resolved.values[index]) ||
     previous.fonts.some((family, index) => family !== resolved.fonts[index])
   ) {

@@ -764,28 +764,6 @@ internal class RenderedDocument(
     }
 
     /**
-     * The bottom margin of the block before `from`, in points.
-     *
-     * Margin collapsing needs the margin on the block above, and a segment only
-     * holds its own blocks, so a segment that does not start the document reads
-     * that one block here. It is the only block a segment needs from outside
-     * itself, and it is read once per segment rather than once per block.
-     *
-     * Zero when the document does not have that block, which is what a
-     * vanished document should collapse to rather than throw.
-     */
-    private fun bottomMarginAbove(documentId: Long, from: Int, style: Style, themeId: Long): Float {
-      if (from <= 0) {
-        return 0f
-      }
-      val previous = DownstreamNative.readDocument(documentId, from - 1, from, themeId) ?: return 0f
-      if (previous.blockCount == 0) {
-        return 0f
-      }
-      return style.px(style.theme.number(style.marginBottomSlot(previous, 0)))
-    }
-
-    /**
      * Returns a cached rendering, or null when the document is gone.
      *
      * `syntaxHighlighting` decides whether code blocks carry token colors.
@@ -838,10 +816,7 @@ internal class RenderedDocument(
             ?.let {
               buildSegment(
                 it, style, planned.from, planned.isCode, ordinal, planned.identity, syntaxHighlighting,
-                // The block above this segment is not in the slice, so its
-                // bottom margin is read on its own. One block, one crossing, and
-                // only for a segment that does not start the document.
-                bottomMarginAbove(documentId, planned.from, style, themeId),
+                style.px(it.previousBottomMargin),
               )
             }
             ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
@@ -928,46 +903,10 @@ internal class RenderedDocument(
      * paragraph's rather than adding to them, which is why a block inside a
      * quote is not a paragraph with an indent.
      */
-    fun marginTopSlot(document: NativeDocument, block: Int): Int {
-      val kind = document.blockKind(block)
-      if (kind == NativeDocument.KIND_HEADING) {
-        return headingSlot(document.headingLevel(block), ThemeSlots.Heading.MARGIN_TOP)
-      }
-      for (depth in 0 until document.containerCount(block)) {
-        when (document.containerKind(block, depth)) {
-          NativeDocument.CONTAINER_QUOTE, NativeDocument.CONTAINER_ADMONITION ->
-            return ThemeSlots.SLOT_BLOCKQUOTE_MARGIN_TOP
-          NativeDocument.CONTAINER_LIST_ITEM -> return ThemeSlots.SLOT_LIST_MARGIN_TOP
-        }
-      }
-      return when (kind) {
-        NativeDocument.KIND_CODE, NativeDocument.KIND_HTML -> ThemeSlots.SLOT_CODE_BLOCK_MARGIN_TOP
-        NativeDocument.KIND_TABLE_ROW -> ThemeSlots.SLOT_TABLE_MARGIN_TOP
-        NativeDocument.KIND_RULE -> ThemeSlots.SLOT_THEMATIC_BREAK_MARGIN_TOP
-        else -> ThemeSlots.SLOT_PARAGRAPH_MARGIN_TOP
-      }
-    }
+    fun marginTopSlot(document: NativeDocument, block: Int): Int = document.blockMarginTop(block)
 
-    /** Which bottom margin a block leaves behind, for the block that follows. */
-    fun marginBottomSlot(document: NativeDocument, block: Int): Int {
-      val kind = document.blockKind(block)
-      if (kind == NativeDocument.KIND_HEADING) {
-        return headingSlot(document.headingLevel(block), ThemeSlots.Heading.MARGIN_BOTTOM)
-      }
-      for (depth in 0 until document.containerCount(block)) {
-        when (document.containerKind(block, depth)) {
-          NativeDocument.CONTAINER_QUOTE, NativeDocument.CONTAINER_ADMONITION ->
-            return ThemeSlots.SLOT_BLOCKQUOTE_MARGIN_BOTTOM
-          NativeDocument.CONTAINER_LIST_ITEM -> return ThemeSlots.SLOT_LIST_MARGIN_BOTTOM
-        }
-      }
-      return when (kind) {
-        NativeDocument.KIND_CODE, NativeDocument.KIND_HTML -> ThemeSlots.SLOT_CODE_BLOCK_MARGIN_BOTTOM
-        NativeDocument.KIND_TABLE_ROW -> ThemeSlots.SLOT_TABLE_MARGIN_BOTTOM
-        NativeDocument.KIND_RULE -> ThemeSlots.SLOT_THEMATIC_BREAK_MARGIN_BOTTOM
-        else -> ThemeSlots.SLOT_PARAGRAPH_MARGIN_BOTTOM
-      }
-    }
+    /** Which bottom margin a block leaves behind, resolved by ThemeLayout. */
+    fun marginBottomSlot(document: NativeDocument, block: Int): Int = document.blockMarginBottom(block)
 
     /**
      * The gap above a block, from its own top margin and the bottom margin of
@@ -975,7 +914,7 @@ internal class RenderedDocument(
      *
      * `previousBottom` is that bottom margin in points, which is what lets the
      * rule work across a segment boundary: a segment sees only its own blocks,
-     * so the caller reads the block before the segment and passes its margin in.
+     * so the document read carries the preceding margin with the slice.
      */
     fun gapAbove(document: NativeDocument, block: Int, previousBottom: Float): Float {
       val spacing = document.spacingBefore(block)
@@ -1175,13 +1114,14 @@ internal class RenderedDocument(
       }
 
       for (run in 0 until document.runCount) {
+        val styles = document.runStyles(run)
+        val link = document.runLink(run)
         val start = document.runStart(run)
         val end = document.runEnd(run)
-        val styles = document.runStyles(run)
         val bold = styles and NativeDocument.STYLE_STRONG != 0
         val italic = styles and NativeDocument.STYLE_EMPHASIS != 0
         val isCode = styles and NativeDocument.STYLE_CODE != 0
-        val linked = document.runLink(run) >= 0
+        val linked = link >= 0
 
         // The run's face starts as the block's own and takes the inline kind's
         // slots on top, so a `strong` in a themed heading is a heavier heading
@@ -1189,9 +1129,14 @@ internal class RenderedDocument(
         // than a style span, because a theme's weight is a number the hundred
         // `Typeface` constants do not cover.
         val blockIndex = document.blockOf(start)
-        var runWeight = document.blockFontWeight(blockIndex)
-        var runItalic = document.blockItalic(blockIndex)
-        var runFamily = theme.familyAt(document.blockFontFamily(blockIndex))
+        val blockWeight = document.blockFontWeight(blockIndex)
+        val blockItalic = document.blockItalic(blockIndex)
+        val blockFamily = theme.familyAt(document.blockFontFamily(blockIndex))
+        val blockMonospaced = document.isCodeElement(blockIndex) && blockFamily.isEmpty()
+        var runWeight = blockWeight
+        var runItalic = blockItalic
+        var runFamily = blockFamily
+        var runMonospaced = blockMonospaced
         if (bold) {
           runFamily = theme.family(ThemeSlots.SLOT_STRONG_FONT_FAMILY).ifEmpty { runFamily }
           // A theme that named a weight means it; one that named only a family
@@ -1214,20 +1159,24 @@ internal class RenderedDocument(
         }
         if (isCode) {
           runFamily = theme.family(ThemeSlots.SLOT_CODE_FONT_FAMILY)
+          runMonospaced = runFamily.isEmpty()
         }
-        text.setSpan(
-          TypefaceSpan(
-            theme.typeface(
-              runFamily,
-              runWeight,
-              runItalic,
-              isCode && runFamily.isEmpty(),
+        runMonospaced = runMonospaced && runFamily.isEmpty()
+        // Color-only styles inherit the block's face. Table rows skip block
+        // spans, so their runs still need a face over the cell's paragraph paint.
+        // Elsewhere only add a metric span when the effective face changes.
+        if (isTable || runWeight != blockWeight || runItalic != blockItalic ||
+          runFamily != blockFamily || runMonospaced != blockMonospaced
+        ) {
+          text.setSpan(
+            TypefaceSpan(
+              theme.typeface(runFamily, runWeight, runItalic, runMonospaced),
             ),
-          ),
-          start,
-          end,
-          flags,
-        )
+            start,
+            end,
+            flags,
+          )
+        }
 
         // A theme can recolor each inline kind on its own. The colors default to
         // "inherit", so an unset one leaves the block's color alone rather than
@@ -1319,7 +1268,6 @@ internal class RenderedDocument(
             flags,
           )
         }
-        val link = document.runLink(run)
         if (link >= 0) {
           // A theme can turn the underline off, which is what a link that reads
           // as a link by color alone wants.

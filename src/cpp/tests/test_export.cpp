@@ -8,6 +8,7 @@
 #include "CodeHighlighter.h"
 #include "Controls.h"
 #include "Export.h"
+#include "InlineRuns.h"
 #include "MarkdownParser.h"
 #include "SegmentPlan.h"
 #include "Unicode.h"
@@ -367,6 +368,25 @@ void testNames() {
 } // namespace
 
 int main() {
+  const std::vector<InlineRun> runs = {{2, 5, InlineStyle::Strong, -1},
+                                       {5, 8, InlineStyle::Emphasis, -1},
+                                       {10, 15, InlineStyle::Link, 0}};
+  // Compare every boundary and gap against a full scan, including empty and
+  // reversed ranges. The renderer and exporter share this selection.
+  for (uint32_t start = 0; start <= 16; ++start) {
+    for (uint32_t end = 0; end <= 16; ++end) {
+      std::vector<const InlineRun *> expected;
+      for (const InlineRun &run : runs) {
+        if (start < end && run.end > start && run.start < end) expected.push_back(&run);
+      }
+      const auto selected = inlineRunsInRange(runs, start, end);
+      CHECK(selected.size() == expected.size(), "inline range matches full scan count");
+      for (size_t index = 0; index < selected.size() && index < expected.size(); ++index) {
+        CHECK(&selected[index] == expected[index], "inline range preserves run identity and order");
+      }
+    }
+  }
+  CHECK(inlineRunsInRange({}, 0, 10).empty(), "an empty run list has no overlaps");
   testSegmentPlan();
   testWrapChoices();
   testCodeExport();

@@ -43,6 +43,14 @@ DownstreamMarkdownShadowNode::DownstreamMarkdownShadowNode(const ShadowNode &sou
   // Fabric passes to every clone of this node, so a state update that clones
   // the node keeps them without a second copy that could fall out of step.
 
+  // Source preparation needs the current theme before scheduling its worker.
+  const bool sameTheme = themeUnchanged(previous);
+  if (sameTheme) {
+    theme_ = source.theme_;
+  } else {
+    resolveTheme();
+  }
+
   // Keep the last valid document either way: it is reused when the source is
   // unchanged, and retained as the fallback when a new source fails to parse.
   document_ = source.document_;
@@ -63,14 +71,12 @@ DownstreamMarkdownShadowNode::DownstreamMarkdownShadowNode(const ShadowNode &sou
     requestControlledSource();
   }
 
-  // The theme is a separate question from the source: the same message can be
-  // re-requested under a new theme, and an unchanged theme under a new source
-  // keeps its interned handle. Reusing the handle rather than re-interning is
-  // what makes a theme change free for every view already holding this node.
-  if (themeUnchanged(previous)) {
-    theme_ = source.theme_;
-  } else {
-    resolveTheme();
+  // A clone can reuse pending source work while changing its theme or controls.
+  // The worker can use this hint if it has not collected its layouts yet.
+  // Later changes use the normal on-demand platform rendering cache.
+  if (controlled_ && controlled_->prepared &&
+      (!sameTheme || previous.controls != props.controls || previous.codeBlockWrap != props.codeBlockWrap)) {
+    controlled_->prepared->noteHint(layoutHint(1, 0));
   }
 }
 

@@ -27,9 +27,8 @@ public:
   /// `hint` is the requesting node's own layout hint, which carries its theme.
   /// Its width is zero, because a node that has just been created has not been
   /// measured yet; the theme is still prepared, at the widths views use now. The
-  /// hint is prepared alongside the recent ones rather than instead of them, so
-  /// the first view in a commit to show a source is not prepared for whichever
-  /// theme the last measured view used.
+  /// recent widths and scales seed this source's own theme and controls. Other
+  /// views' themes and controls are not prepared speculatively for this source.
   static std::shared_ptr<PreparedDocument> request(std::string_view source,
                                                    const LayoutHint &hint = LayoutHint());
 
@@ -40,7 +39,9 @@ public:
 
   const std::string &source() const { return source_; }
   /// Notes one more layout this source should be prepared for. Called by
-  /// `request`, and by a node whose theme changed under a source already parsed.
+  /// `request`, and by a node whose theme changed while source work is pending.
+  /// A hint added after the worker collects layouts does not restart its task;
+  /// the platform builds that rendering on demand.
   void noteHint(const LayoutHint &hint);
   bool done() const { return task_->done(); }
   /// Runs the preparation on the calling thread if no worker has started it,

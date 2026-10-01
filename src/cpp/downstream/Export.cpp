@@ -1,4 +1,5 @@
 #include "Export.h"
+#include "InlineRuns.h"
 
 #include "ExportNames.h"
 #include "Unicode.h"
@@ -164,18 +165,16 @@ void visitPieces(const Block &block, const TableCell &cell, Visit visit) {
   const uint32_t start = std::min<uint32_t>(cell.start, length);
   const uint32_t end = std::min<uint32_t>(std::max(cell.start, cell.end), length);
   uint32_t cursor = start;
-  auto run = std::lower_bound(block.runs.begin(), block.runs.end(), start,
-                              [](const InlineRun &run, uint32_t offset) { return run.end <= offset; });
-  for (; run != block.runs.end() && run->start < end; ++run) {
-    const uint32_t runStart = std::max(run->start, start);
-    const uint32_t runEnd = std::min(run->end, end);
+  for (const InlineRun &run : inlineRunsInRange(block.runs, start, end)) {
+    const uint32_t runStart = std::max(run.start, start);
+    const uint32_t runEnd = std::min(run.end, end);
     if (runStart >= runEnd) {
       continue;
     }
     if (runStart > cursor) {
       visit(Piece{cursor, runStart, 0, -1});
     }
-    visit(Piece{runStart, runEnd, run->styles, run->link});
+    visit(Piece{runStart, runEnd, run.styles, run.link});
     cursor = runEnd;
   }
   if (cursor < end) {

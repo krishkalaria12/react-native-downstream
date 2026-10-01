@@ -6,15 +6,22 @@
  * arrays, and building the three positional arrays the native side reads. It
  * says nothing about what the platforms do with them, which is why it is
  * separate from the engine benchmarks in `native-highlight.mjs` and needs a
- * device for the rest.
+ * device for the rest. React Native's color conversion is a test stub here;
+ * compare revisions using the same Node version and machine.
+ *
+ * Run: pnpm exec vitest bench benchmarks/theme-resolve.bench.ts --run --silent=false
  */
-import { describe, test } from 'vitest';
+import { describe, test, type BenchRegistration } from 'vitest';
 
 import { presets } from '../src/presets';
-import { syntaxColorsFromTheme } from '../src/syntaxTheme';
-import { resolveTheme } from '../src/theme';
-import { THEME_SLOTS } from '../src/themeSlots';
+import { syntaxColorsFromTheme as convertSyntaxTheme } from '../src/syntaxTheme';
+import { resolveTheme as resolveThemeProp } from '../src/theme';
 import type { MarkdownStyle, MarkdownTheme } from '../src/types';
+
+// Bind outside timed callbacks to exclude Vitest's module export getters.
+const resolveTheme = resolveThemeProp;
+const syntaxColorsFromTheme = convertSyntaxTheme;
+const github = presets.github;
 
 /** A theme naming something at every altitude, which is the expensive shape. */
 const FULL_THEME: MarkdownTheme = {
@@ -159,32 +166,56 @@ const DRACULA = {
   ],
 } as const;
 
-const SLOT_COUNT = Object.keys(THEME_SLOTS).length;
+/** Print metrics explicitly: Vitest 5 runs these as context benchmarks. */
+async function report(registration: BenchRegistration<string>): Promise<void> {
+  const result = await registration.run({ time: 500, warmupTime: 250 });
+  console.log(
+    `${result.name}: mean ${(result.latency.mean * 1000).toFixed(3)} µs, ` +
+      `p99 ${(result.latency.p99 * 1000).toFixed(3)} µs, ` +
+      `relative margin ±${result.latency.rme.toFixed(2)}%`
+  );
+}
 
 describe('theme resolution', () => {
-  test('empty theme', ({ bench }) => {
-    bench('no overrides', () => {
-      resolveTheme({}, {});
-    }).run();
+  test('empty theme', async ({ bench }) => {
+    await report(
+      bench('no overrides', () => {
+        resolveTheme({}, {});
+      })
+    );
   });
 
-  test('color-only theme', ({ bench }) => {
+  test('foreground fan-out', async ({ bench }) => {
+    await report(
+      bench('one color, 10 destinations', () => {
+        resolveTheme({ colors: { foreground: '#101418' } });
+      })
+    );
+  });
+
+  test('color-only theme', async ({ bench }) => {
     // The common case: a reader picks a palette and nothing else moves.
-    bench(`${Object.keys(FULL_THEME.colors ?? {}).length} colors`, () => {
-      resolveTheme({ colors: FULL_THEME.colors }, {});
-    }).run();
+    await report(
+      bench(`${Object.keys(FULL_THEME.colors ?? {}).length} colors`, () => {
+        resolveTheme({ colors: FULL_THEME.colors }, {});
+      })
+    );
   });
 
   test('full theme', async ({ bench }) => {
-    await bench(`every slot at both altitudes`, () => {
-      resolveTheme(FULL_THEME, FULL_STYLE);
-    }).run();
+    await report(
+      bench(`every slot at both altitudes`, () => {
+        resolveTheme(FULL_THEME, FULL_STYLE);
+      })
+    );
   });
 
   test('preset', async ({ bench }) => {
-    await bench('presets.github', () => {
-      resolveTheme(presets.github.theme, presets.github.markdownStyle);
-    }).run();
+    await report(
+      bench('presets.github', () => {
+        resolveTheme(github.theme, github.markdownStyle);
+      })
+    );
   });
 
   test('merged arrays', async ({ bench }) => {
@@ -194,27 +225,14 @@ describe('theme resolution', () => {
       colors: { foreground: '#101418' },
       radius: 6,
     };
-    await bench('3 layers merged', () => {
-      resolveTheme(
-        [presets.github.theme, brand, FULL_THEME],
-        [presets.github.markdownStyle, FULL_STYLE]
-      );
-    }).run();
-  });
-
-  test('slot table size', ({ bench }) => {
-    // The cost every resolution walks: the whole table, however little a theme
-    // actually names. Kept as its own number because it is the floor, and a
-    // regression in the table's shape shows up here first.
-    bench(`${SLOT_COUNT} slots`, () => {
-      let sum = 0;
-      // Values rather than keys: the resolver never names a slot by string, it
-      // walks the table, so that is what this measures.
-      for (const entry of Object.values(THEME_SLOTS)) {
-        sum += entry.id;
-      }
-      return sum;
-    }).run();
+    await report(
+      bench('3 layers merged', () => {
+        resolveTheme(
+          [github.theme, brand, FULL_THEME],
+          [github.markdownStyle, FULL_STYLE]
+        );
+      })
+    );
   });
 });
 
@@ -223,36 +241,45 @@ describe('wire shape', () => {
     // The three arrays the native side reads. A full theme produces one entry
     // per named slot plus one per color's dark half, so this is what a themed
     // view allocates per commit.
-    await bench('full theme, sorted ids', () => {
-      const resolved = resolveTheme(FULL_THEME, FULL_STYLE);
-      // Read out of the result so the pack cannot be optimized away, and so a
-      // regression in how many entries it produces shows up as a shape change.
-      return (
-        resolved.slots.length + resolved.values.length + resolved.fonts.length
-      );
-    }).run();
+    await report(
+      bench('full theme, sorted ids', () => {
+        const resolved = resolveTheme(FULL_THEME, FULL_STYLE);
+        // Read out of the result so the pack cannot be optimized away, and so a
+        // regression in how many entries it produces shows up as a shape change.
+        return (
+          resolved.slots.length + resolved.values.length + resolved.fonts.length
+        );
+      })
+    );
   });
 });
 
 describe('syntax conversion', () => {
   test('a VS Code theme', async ({ bench }) => {
-    await bench(`${DRACULA.tokenColors.length} scopes`, () => {
-      syntaxColorsFromTheme(DRACULA);
-    }).run();
+    await report(
+      bench(`${DRACULA.tokenColors.length} scopes`, () => {
+        syntaxColorsFromTheme(DRACULA);
+      })
+    );
   });
 
-  test('an unrecognised theme', ({ bench }) => {
+  test('an unrecognised theme', async ({ bench }) => {
     // Every scope misses, which is the worst case: the converter has to walk the
     // whole list and produce nothing. A scope list that resolves to nothing must
     // not cost more than one that resolves to everything.
-    bench('no scopes match', () => {
-      syntaxColorsFromTheme({
-        name: 'empty',
-        type: 'dark',
-        tokenColors: [
-          { scope: ['nonexistent.scope'], settings: { foreground: '#ffffff' } },
-        ],
-      } as never);
-    }).run();
+    await report(
+      bench('no scopes match', () => {
+        syntaxColorsFromTheme({
+          name: 'empty',
+          type: 'dark',
+          tokenColors: [
+            {
+              scope: ['nonexistent.scope'],
+              settings: { foreground: '#ffffff' },
+            },
+          ],
+        } as never);
+      })
+    );
   });
 });

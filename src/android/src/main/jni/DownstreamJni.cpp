@@ -277,10 +277,14 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
   // `theme_layout::kBlockLayoutStride` writes. Resolved here rather than in
   // Kotlin so the rules in ThemeLayout are the only copy of them.
   std::vector<double> layouts;
-  layouts.reserve(static_cast<size_t>(to - from) * theme_layout::kBlockLayoutStride);
-  // Sized up front so appending per block cannot reallocate mid-write. The
-  // writer would grow it anyway; this only says so in one place.
-  layouts.resize(static_cast<size_t>(to - from) * theme_layout::kBlockLayoutStride);
+  const size_t layoutFields = static_cast<size_t>(to - from) * theme_layout::kBlockLayoutStride;
+  // The trailing scalar carries the margin needed at the segment boundary,
+  // avoiding a second document read just to flatten the preceding block.
+  layouts.resize(layoutFields + 1);
+  if (from > 0) {
+    const auto previous = theme_layout::blockLayout(*theme, document->blocks[static_cast<size_t>(from - 1)]);
+    layouts[layoutFields] = theme->number(previous.marginBottom);
+  }
 
   // Block languages are the only UTF-8 fields a platform reads per block, so
   // they ride in the string table and the blocks point into it.

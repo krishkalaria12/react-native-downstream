@@ -81,10 +81,8 @@ export function hasWarned(key: string): boolean {
 
 // Bound once at load rather than read through the import at each call.
 //
-// Both are called once per themeable slot on every resolution, so they sit in
-// the hottest loop in this file. A bundler would inline them either way; reading
-// them once keeps the cost here in the resolver rather than in whatever module
-// interop the host happens to use.
+// Slot lookup is called once per themeable slot and color conversion once per
+// input color. Reading them once keeps module interop out of these loops.
 const processColor = rnProcessColor as (value: unknown) => unknown;
 const themeSlot = slotFor;
 
@@ -599,10 +597,11 @@ function applyThemeTokens(slots: Slots, theme: MarkdownTheme): void {
         );
         continue;
       }
-      // One origin for the whole fan-out, so an unreadable token is one warning
-      // rather than one per slot it would have reached.
-      for (const name of names)
-        setColor(slots, `theme.colors.${token}`, value, name);
+      // Convert once per token, then share its appearance halves across slots.
+      const color = resolveColor(value, `theme.colors.${token}`);
+      if (color !== undefined) {
+        for (const name of names) slots.color(name, color);
+      }
     }
   }
   if (typeof theme.radius === 'number') slots.number('radius', theme.radius);

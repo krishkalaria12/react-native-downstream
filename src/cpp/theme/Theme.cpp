@@ -24,7 +24,7 @@ constexpr size_t kRetainedThemes = 16;
 /// Folded into both hashes first, so a hash computed before a change to how a
 /// theme is summarised cannot be mistaken for one computed after it. The value
 /// only has to change when the summarisation does.
-constexpr uint64_t kHashVersion = 1;
+constexpr uint64_t kHashVersion = 2;
 
 /// The widest integer a double holds exactly.
 constexpr uint64_t kMaxExactDouble = (1ull << 53) - 1;
@@ -40,6 +40,14 @@ public:
       state_ *= 0x100000001b3ull;
     }
     count_++;
+  }
+
+  void add(const std::string &value) {
+    add(value.size());
+    for (const unsigned char byte : value) {
+      state_ ^= byte;
+      state_ *= 0x100000001b3ull;
+    }
   }
 
   uint64_t digest() const {
@@ -289,11 +297,30 @@ Theme::Handle ThemeRegistry::intern(const std::vector<uint32_t> &slots,
   Hasher layoutHash;
   idHash.add(kHashVersion);
   layoutHash.add(kHashVersion);
+  bool hasFonts = false;
+  bool hasLayout = false;
   for (size_t index = 0; index < accepted.size();) {
+    hasFonts |= kSlotKinds[slots[accepted[index]] - 1] == static_cast<uint8_t>(SlotKind::Font);
+    hasLayout |= kSlotLayout[slots[accepted[index]] - 1] != 0;
     index += hashOverride(idHash, layoutHash, slots, values, accepted[index]);
   }
+  // Font values are indices, so their array's ordered names are part of both
+  // identities. Lengths separate names and preserve numeric array addressing.
+  // Arrays without a font override have no effect on rendering or layout.
+  if (hasFonts) {
+    idHash.add(kSlotIdCount);
+    layoutHash.add(kSlotIdCount);
+    idHash.add(fonts.size());
+    layoutHash.add(fonts.size());
+    for (const std::string &font : fonts) {
+      idHash.add(font);
+      layoutHash.add(font);
+    }
+  }
   const uint64_t id = idHash.digest();
-  const uint64_t layoutKey = layoutHash.digest();
+  // Colors alone retain the default metrics, including when a view first
+  // switches from the default theme to a palette.
+  const uint64_t layoutKey = hasLayout ? layoutHash.digest() : 0;
 
   Pool &state = pool();
   std::lock_guard<std::mutex> lock(state.mutex);

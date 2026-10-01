@@ -4,6 +4,7 @@
 #import "DSThemeColors.h"
 
 #include "Controls.h"
+#include "InlineRuns.h"
 #include "SegmentPlan.h"
 #include "TokenPalette.h"
 #include "theme/ThemeLayout.h"
@@ -80,7 +81,7 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
   UIColor *inlineCodeBackground = [colors colorForSlot:kSlotCodeBackgroundColor fallback:UIColor.tertiarySystemFillColor];
   UIColor *footnoteColor = [colors colorForSlot:kSlotFootnoteColor fallback:UIColor.linkColor];
   const CGFloat footnoteSize = size * footnoteSizeScale(theme);
-  for (const InlineRun &run : block.runs) {
+  for (const InlineRun &run : inlineRunsInRange(block.runs, clampStart, clampEnd)) {
     const uint32_t start = std::max(run.start, clampStart);
     const uint32_t end = std::min(run.end, clampEnd);
     if (start >= end) {
@@ -114,7 +115,10 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
     }
 
     NSMutableDictionary *attributes = [NSMutableDictionary new];
-    attributes[NSFontAttributeName] = runFont(runTypeface, runSize, code || monospaced);
+    if (runSize != size || runTypeface.family != font.family || runTypeface.weight != font.weight ||
+        runTypeface.italic != font.italic || (code && !monospaced)) {
+      attributes[NSFontAttributeName] = runFont(runTypeface, runSize, code || monospaced);
+    }
     if (code) {
       attributes[NSBackgroundColorAttributeName] = inlineCodeBackground;
       attributes[NSForegroundColorAttributeName] =
