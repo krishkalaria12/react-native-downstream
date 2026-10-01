@@ -386,6 +386,11 @@ function applyProperty(
         if (color !== undefined) slots.color(name, color);
       }
       return;
+    case 'object':
+      // A `{ light, dark }` pair or a `DynamicColorIOS`, which is how an element
+      // color follows the appearance. Only a color slot takes one.
+      if (themeSlot(name)?.kind === 'color') setColor(slots, origin, raw, name);
+      return;
     default:
       return;
   }
