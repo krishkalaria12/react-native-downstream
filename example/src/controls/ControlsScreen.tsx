@@ -18,21 +18,92 @@ import { radius, space, useTheme } from '../ui/theme';
  * fence that needs wrapping, an indented block with no language, and a table
  * with an alignment row.
  */
-const SOURCE = `# Copy and download controls
+const SOURCE = `# Line numbers, titles, and a capped height
 
-Controls are on by default. Every button below was drawn by the native view; the
-log records what each press reported.
+Numbers are on by default and every one of these headers is drawn natively. A
+fence's own meta decides its title and its first line number; the cap decides how
+tall a body grows before it scrolls inside its card.
 
-## A short fence
+## A titled block numbered from 10
 
-\`\`\`ts
-export const answer = 42;
+\`\`\`ts title="src/app/load.ts" startLine=10
+export async function load(id: string) {
+  const res = await fetch(\`/api/\${id}\`);
+  return res.json();
+}
 \`\`\`
 
-## A fence that needs wrapping
+## One that hides its numbers
 
-\`\`\`ts
-const configuration = { retries: 3, backoffMs: 250, timeoutMs: 30_000, endpoint: 'https://example.com/v1/segments', headers: { accept: 'application/json' } };
+\`\`\`python noLineNumbers
+    for row in rows:
+        total += row.price * row.qty
+    return total
+\`\`\`
+
+## Crossing from 99 to 100
+
+\`\`\`ts startLine=98
+  98
+  99
+ 100
+ 101
+ 102
+\`\`\`
+
+## A long path, truncated in the middle
+
+\`\`\`ts title="packages/react-native-downstream/src/android/main/java/com/downstream/RenderedDocument.kt"
+const x = 1;
+\`\`\`
+
+## Every other spelling of a title
+
+The Docusaurus, rehype-pretty code, Expressive Code, and Nextra spellings all
+name the same block, and \`lang:path\` is what a model writes when it means a
+file name.
+
+\`\`\`ts filename="named-by-filename.ts"
+const a = 1;
+\`\`\`
+
+\`\`\`ts showLineNumbers{42}
+def third(): ...
+\`\`\`
+
+\`\`\`rust:src/lib.rs
+pub fn main() {}
+\`\`\`
+
+## A block past the cap, with an expand button
+
+\`\`\`python
+def total(rows):
+    result = 0
+    for row in rows:
+        price = row.price
+        quantity = row.quantity
+        if quantity > 100:
+            price = price * 0.9
+        result += price * quantity
+    return result
+
+
+def average(rows):
+    if not rows:
+        return 0
+    return total(rows) / len(rows)
+
+
+def report(rows, limit=100):
+    for row in rows:
+        if row.price > limit:
+            print(row.name, row.price, row.quantity)
+        elif row.quantity > 10:
+            print(row.name, "bulk", row.quantity)
+        else:
+            print(row.name, row.price)
+    return average(rows)
 \`\`\`
 
 ## An indented block, which has no language
@@ -51,14 +122,18 @@ const configuration = { retries: 3, backoffMs: 250, timeoutMs: 30_000, endpoint:
 
 /**
  * Appended when the document is held mid-stream: a fence that never closes, so
- * its block is still being written and its controls stay off while every block
- * above it is settled and usable.
+ * its block is still being written, its controls stay off, and a capped card
+ * follows the newest line that has arrived.
  */
 const OPEN_TAIL = `
 ## A block still being written
 
-\`\`\`ts
-export function pending(`;
+\`\`\`python title="still-arriving.py" startLine=1
+def pending(rows):
+    for row in rows:
+        if row.price > 100:
+            yield row
+`;
 
 const STATES = [
   { value: 'finished', label: 'Finished' },
@@ -87,6 +162,9 @@ const MODES = [
   { value: 'defaults', label: 'Defaults' },
   { value: 'titled', label: 'Custom names' },
   { value: 'off', label: 'Controls off' },
+  { value: 'no-expand', label: 'No expand' },
+  { value: 'no-numbers', label: 'No numbers' },
+  { value: 'uncapped', label: 'Uncapped' },
 ] as const;
 
 type Mode = (typeof MODES)[number]['value'];
@@ -105,6 +183,9 @@ const LOG_LIMIT = 6;
 function describe(event: MarkdownControlEvent): string {
   if (event.action === 'wrap') {
     return `${event.block} wrap ${event.wrapped === true ? 'on' : 'off'}`;
+  }
+  if (event.action === 'expand') {
+    return `${event.block} expand ${event.expanded === true ? 'on' : 'off'}`;
   }
   const format = event.format === undefined ? '' : ` as ${event.format}`;
   return `${event.block} ${event.action}${format}`;
@@ -160,6 +241,8 @@ export function ControlsScreen() {
   const [mode, setMode] = useState<Mode>('defaults');
   const [separator, setSeparator] = useState<Separator>('auto');
   const [wrap, setWrap] = useState(false);
+  const [numbers, setNumbers] = useState(true);
+  const [maxHeight, setMaxHeight] = useState<number | 'none'>(400);
   const [streamState, setStreamState] = useState<StreamState>('finished');
   const stream = useHeldStream(streamState);
   const { entries, push, clear } = useLog();
@@ -176,6 +259,7 @@ export function ControlsScreen() {
 
   const controls = useCallback((): MarkdownControls => {
     if (mode === 'off') return false;
+    if (mode === 'no-expand') return { code: { expand: false } };
     if (mode === 'titled') {
       return {
         code: {
@@ -209,7 +293,7 @@ export function ControlsScreen() {
       >
         <Hero
           title="Controls"
-          summary="Copy, download, and wrap on code blocks and tables, drawn natively and enabled by default."
+          summary="Line numbers, fence titles, a capped height, and the copy, download, wrap, and expand controls, all drawn natively."
         />
 
         <SectionLabel trailing={<Badge label="offline" tone="neutral" />}>
@@ -237,6 +321,28 @@ export function ControlsScreen() {
                 variant={wrap ? 'primary' : 'secondary'}
                 onPress={() => setWrap((value) => !value)}
                 hint="Sets codeBlockWrap for the whole document"
+              />
+              <Button
+                label={numbers ? 'Numbers: on' : 'Numbers: off'}
+                variant={numbers ? 'primary' : 'secondary'}
+                onPress={() => setNumbers((value) => !value)}
+                hint="Sets lineNumbers for the whole document"
+              />
+              <Button
+                label={maxHeight === 'none' ? 'Cap: none' : `Cap: ${maxHeight}`}
+                variant={maxHeight === 'none' ? 'secondary' : 'primary'}
+                onPress={() =>
+                  setMaxHeight((value) =>
+                    value === 'none'
+                      ? 400
+                      : value === 400
+                      ? 200
+                      : value === 200
+                      ? 'none'
+                      : 400
+                  )
+                }
+                hint="Sets codeBlockMaxHeight for the whole document"
               />
               <Button
                 label="Clear log"
@@ -271,6 +377,14 @@ export function ControlsScreen() {
               </Notice>
             </View>
           )}
+          {mode === 'no-expand' && (
+            <View style={styles.notice}>
+              <Notice tone="accent" title="No expand button">
+                Only the expand control is off. Copy, download, and wrap are
+                unchanged, and a capped block still scrolls inside its card.
+              </Notice>
+            </View>
+          )}
         </View>
 
         <SectionLabel>Document</SectionLabel>
@@ -280,6 +394,8 @@ export function ControlsScreen() {
               stream={stream}
               controls={controls()}
               codeBlockWrap={wrap}
+              lineNumbers={numbers}
+              codeBlockMaxHeight={maxHeight}
               onError={onError}
             />
           ) : (
@@ -287,6 +403,8 @@ export function ControlsScreen() {
               markdown={SOURCE}
               controls={controls()}
               codeBlockWrap={wrap}
+              lineNumbers={numbers}
+              codeBlockMaxHeight={maxHeight}
               onError={onError}
             />
           )}
