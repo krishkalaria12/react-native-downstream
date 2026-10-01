@@ -18,6 +18,12 @@ internal class NativeDocument(
   private val strings: Array<String>,
   private val cells: IntArray,
   private val tokens: IntArray,
+  /**
+   * Each block's resolved typography and margins, one entry per block per
+   * [BLOCK_LAYOUT_STRIDE] fields. Resolved in C++ by the same rules iOS calls, so
+   * a theme means one thing rather than one thing per platform.
+   */
+  private val layouts: DoubleArray,
 ) {
   val blockCount: Int get() = blocks.size / BLOCK_STRIDE
   val runCount: Int get() = runs.size / RUN_STRIDE
@@ -36,8 +42,57 @@ internal class NativeDocument(
   /** The synthetic title paragraph of an admonition, decided document-wide. */
   fun isAdmonitionTitle(block: Int) = blocks[block * BLOCK_STRIDE + 11] != 0
 
+  /**
+   * Which block an offset in the flattened text falls in.
+   *
+   * A run's face starts as its block's, so a run has to find the block it sits
+   * in. One pass over the block table, which is short; a run count table would
+   * be another array to keep in step with the blocks one.
+   */
+  fun blockOf(offset: Int): Int {
+    for (block in 0 until blockCount) {
+      if (offset >= blockStart(block)) {
+        return block
+      }
+    }
+    return 0
+  }
+
   /** The fence language as written, or empty for an indented block. */
   fun blockLanguage(block: Int) = blocks[block * BLOCK_STRIDE + 12].let { if (it >= 0) strings[it] else "" }
+
+  /** A block's font size, in points before font scaling. */
+  fun blockFontSize(block: Int) = layout(block, 0).toFloat()
+
+  /** A block's weight, as a CSS weight. */
+  fun blockFontWeight(block: Int) = layout(block, 1).toFloat()
+
+  /** An index into the theme's family list, or -1 for the platform's font. */
+  fun blockFontFamily(block: Int) = layout(block, 2).toInt()
+
+  /** A block's line height, or zero to leave the platform's own leading. */
+  fun blockLineHeight(block: Int) = layout(block, 3).toFloat()
+
+  /** The color slot a block's text draws in. */
+  fun blockColorSlot(block: Int) = layout(block, 4).toInt()
+
+  /** The margin slot above a block. */
+  fun blockMarginTop(block: Int) = layout(block, 5).toInt()
+
+  /** The margin slot below a block. */
+  fun blockMarginBottom(block: Int) = layout(block, 6).toInt()
+
+  /** Whether a block draws in italic. */
+  fun blockItalic(block: Int) = layout(block, 7) != 0.0
+
+  /** Which element a block draws as. See `theme_layout::BlockElement`. */
+  fun blockElement(block: Int) = layout(block, 8).toInt()
+
+  /** Whether a block draws as code, which is what picks the monospace face. */
+  fun isCodeElement(block: Int) = blockElement(block) == ELEMENT_CODE
+
+  private fun layout(block: Int, field: Int): Double =
+    layouts.getOrElse(block * BLOCK_LAYOUT_STRIDE + field) { FALLBACK_LAYOUT[field] }
 
   private fun cell(block: Int, column: Int) = (blocks[block * BLOCK_STRIDE + 8] + column) * CELL_STRIDE
 
@@ -68,6 +123,24 @@ internal class NativeDocument(
     private const val CONTAINER_STRIDE = 5
     private const val RUN_STRIDE = 4
     private const val TOKEN_STRIDE = 3
+    /**
+     * One block's resolved layout, in the order `writeBlockLayout` writes it.
+     * The stride is the only place that order is written down, and it has to
+     * match `theme_layout::kBlockLayoutStride` exactly.
+     */
+    private const val BLOCK_LAYOUT_STRIDE = 9
+
+    /** `theme_layout::BlockElement`. A block draws as code at this index. */
+    private const val ELEMENT_CODE = 2
+
+    /**
+     * What a block reads as when its layout is missing.
+     *
+     * An array shorter than the blocks it describes means the read came back
+     * from a build without the layouts, so the block gets the body metrics
+     * rather than a zero size and a zero margin.
+     */
+    private val FALLBACK_LAYOUT = doubleArrayOf(16.0, 400.0, -1.0, 0.0, 9.0, 12.0, 0.0, 0.0, 0.0)
 
     const val KIND_PARAGRAPH = 0
     const val KIND_HEADING = 1
@@ -173,10 +246,18 @@ internal object DownstreamNative {
    */
   @JvmStatic
   @DoNotStrip
-  fun prepare(documentId: Long, fontScale: Float, width: Float, chrome: Int, codeBlockWrap: Boolean, wrapToggles: IntArray) {
+  fun prepare(
+    documentId: Long,
+    fontScale: Float,
+    width: Float,
+    chrome: Int,
+    codeBlockWrap: Boolean,
+    wrapToggles: IntArray,
+    themeId: Long,
+  ) {
     val context = preparationContext?.get() ?: return
     try {
-      val rendered = RenderedDocument.obtain(context, documentId, fontScale) ?: return
+      val rendered = RenderedDocument.obtain(context, documentId, fontScale, themeId = themeId) ?: return
       if (width.isFinite() && width > 0) {
         rendered.height(
           PixelUtil.toPixelFromDIP(width).toInt(),
@@ -191,8 +272,8 @@ internal object DownstreamNative {
   }
 
   /** Returns null when the document is no longer alive. */
-  fun readDocument(id: Long, from: Int, to: Int): NativeDocument? {
-    val parts = nativeReadDocument(id, from, to) ?: return null
+  fun readDocument(id: Long, from: Int, to: Int, themeId: Long = 0L): NativeDocument? {
+    val parts = nativeReadDocument(id, from, to, themeId) ?: return null
     @Suppress("UNCHECKED_CAST")
     return NativeDocument(
       text = parts[0] as String,
@@ -202,6 +283,7 @@ internal object DownstreamNative {
       strings = parts[4] as Array<String>,
       cells = parts[5] as IntArray,
       tokens = parts[6] as IntArray,
+      layouts = parts[7] as DoubleArray,
     )
   }
 
@@ -233,11 +315,41 @@ internal object DownstreamNative {
   fun traceDocument(id: Long, event: String) = nativeTraceDocument(id, event)
   fun isTracingDocument(id: Long) = nativeIsTracingDocument(id)
 
+  /**
+   * Interns a theme and returns its id, which is what the state carries.
+   *
+   * A shadow node calls this once per prop change; the drawing layer looks the
+   * result up again rather than receiving 232 numbers on every state update.
+   * Empty arrays are the default theme, so an app that passes neither prop pays
+   * nothing here either.
+   */
+  fun internTheme(slotIds: IntArray, values: DoubleArray, families: Array<String>): Long =
+    nativeInternTheme(slotIds, values, families)
+
+  /**
+   * The theme's resolved values, as [NativeTheme] reads them.
+   *
+   * See the JNI side for the shape: five parallel arrays, one crossing, so a
+   * rendering costs one trip rather than one per slot.
+   */
+  fun themeSnapshot(themeId: Long): Array<Any> =
+    nativeThemeSnapshot(themeId) ?: Array(0) { 0.0 }
+
+  /**
+   * The platform font scale, capped by the theme's `maxFontSizeMultiplier`.
+   *
+   * The one theme value that changes measurement, which is why it crosses here
+   * rather than being duplicated in Kotlin. An unknown id leaves the platform's
+   * own scale alone.
+   */
+  fun fontScaleCap(themeId: Long, platformScale: Float): Float =
+    nativeFontScaleCap(themeId, platformScale.toDouble()).toFloat()
+
   private const val PLAN_STRIDE = 6
 
   // Implemented in DownstreamJni.cpp, which links into libappmodules.so.
   @JvmStatic
-  private external fun nativeReadDocument(id: Long, from: Int, to: Int): Array<Any>?
+  private external fun nativeReadDocument(id: Long, from: Int, to: Int, themeId: Long): Array<Any>?
 
   @JvmStatic
   private external fun nativeSegmentPlan(id: Long): LongArray?
@@ -297,6 +409,15 @@ internal object DownstreamNative {
   private external fun nativeIsTracingDocument(id: Long): Boolean
 
   // Implemented in DownstreamTextLayoutManager.cpp.
+  @JvmStatic
+  private external fun nativeInternTheme(slotIds: IntArray, values: DoubleArray, families: Array<String>): Long
+
+  @JvmStatic
+  private external fun nativeThemeSnapshot(themeId: Long): Array<Any>?
+
+  @JvmStatic
+  private external fun nativeFontScaleCap(themeId: Long, platformScale: Double): Double
+
   @JvmStatic
   private external fun nativeInstallPreparer()
 }

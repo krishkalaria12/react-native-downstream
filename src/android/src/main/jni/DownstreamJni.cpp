@@ -6,6 +6,9 @@
 #include "SessionTrace.h"
 #include "Unicode.h"
 #include "WorkerPool.h"
+#include "theme/Theme.h"
+#include "theme/ThemeLayout.h"
+#include "theme/ThemeSlots.h"
 
 #include <jni.h>
 
@@ -91,15 +94,161 @@ Java_com_downstream_DownstreamNative_nativeIsTracingDocument(JNIEnv * /*env*/, j
   return downstream::SessionTrace::enabledDocument(static_cast<uint64_t>(id)) ? JNI_TRUE : JNI_FALSE;
 }
 
+// Interns a theme from the arrays the shadow node built, and returns its id.
+//
+// The id is what travels: the node's state carries it, and the platforms look
+// the theme up again through the same registry the node interned it into. That
+// is why nothing here returns a slot value, and why a theme costs one id rather
+// than 232 numbers every time a frame's state crosses JNI.
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_downstream_DownstreamNative_nativeInternTheme(JNIEnv *env,
+                                                       jclass /*clazz*/,
+                                                       jintArray slotIds,
+                                                       jdoubleArray values,
+                                                       jobjectArray families) {
+  if (slotIds == nullptr || values == nullptr) {
+    return 0;
+  }
+  const jsize slots = env->GetArrayLength(slotIds);
+  const jsize count = env->GetArrayLength(values);
+  std::vector<uint32_t> slots32(static_cast<size_t>(slots));
+  std::vector<double> numbers(static_cast<size_t>(count));
+  env->GetIntArrayRegion(slotIds, 0, slots, reinterpret_cast<jint *>(slots32.data()));
+  env->GetDoubleArrayRegion(values, 0, count, numbers.data());
+  std::vector<std::string> fonts;
+  if (families != nullptr) {
+    const jsize fontCount = env->GetArrayLength(families);
+    fonts.reserve(static_cast<size_t>(fontCount));
+    for (jsize index = 0; index < fontCount; index++) {
+      auto name = static_cast<jstring>(env->GetObjectArrayElement(families, index));
+      if (name == nullptr) {
+        fonts.emplace_back();
+        continue;
+      }
+      const char *utf = env->GetStringUTFChars(name, nullptr);
+      fonts.emplace_back(utf != nullptr ? utf : "");
+      if (utf != nullptr) {
+        env->ReleaseStringUTFChars(name, utf);
+      }
+      env->DeleteLocalRef(name);
+    }
+  }
+  // Interning is total: a malformed list comes back as the default theme rather
+  // than as a theme with half its values, so this returns 0 for that case too.
+  return static_cast<jlong>(ThemeRegistry::intern(slots32, numbers, fonts)->id());
+}
+
+// The theme's resolved values, in one crossing.
+//
+//   [0] DoubleArray, one entry per slot id: every metric, weight and flag
+//   [1] IntArray,    the light half of every color, as ARGB
+//   [2] IntArray,    the dark half of every color
+//   [3] BooleanArray, which colors the theme actually set
+//   [4] String[],    the families a font slot names
+//
+// One call rather than one per slot because the alternative is 232 crossings per
+// rendering, and a rendering is built per segment per snapshot. The unset flag
+// is separate from the color because transparent black is a color a theme can
+// ask for, so zero cannot mean "not set".
+//
+// The metrics array carries a color slot's number too, which is meaningless: it
+// is one entry per id so a caller can index by the id it already holds without
+// a translation table of its own.
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_downstream_DownstreamNative_nativeThemeSnapshot(JNIEnv *env, jclass /*clazz*/, jlong id) {
+  // An id the pool does not hold answers with the default theme, so a caller
+  // with a stale id draws the platform's own look rather than nothing.
+  Theme::Handle theme = ThemeRegistry::find(static_cast<uint64_t>(id));
+  if (theme == nullptr) {
+    theme = Theme::defaultTheme();
+  }
+  const size_t count = theme::kSlotIdCount;
+
+  jdoubleArray numbers = env->NewDoubleArray(static_cast<jsize>(count));
+  std::vector<jdouble> numberValues(count, 0);
+  std::vector<jint> lightValues(count, 0);
+  std::vector<jint> darkValues(count, 0);
+  std::vector<jboolean> setValues(count, JNI_FALSE);
+  for (size_t slot = 1; slot < count; slot++) {
+    // One flag per slot, whatever kind it is: a color that was set, a font that
+    // names a family, a metric that was named. The renderer needs to tell
+    // "this theme asked for 700" from "this theme said nothing", and the two are
+    // otherwise the same number.
+    setValues[slot - 1] = theme->slotSet(static_cast<uint32_t>(slot)) ? JNI_TRUE : JNI_FALSE;
+    if (theme::kSlotKinds[slot - 1] == static_cast<uint8_t>(theme::SlotKind::Color)) {
+      const Theme::Color &color = theme->color(static_cast<uint32_t>(slot));
+      lightValues[slot - 1] = static_cast<jint>(color.light);
+      darkValues[slot - 1] = static_cast<jint>(color.dark);
+      continue;
+    }
+    numberValues[slot - 1] = theme->number(static_cast<uint32_t>(slot));
+  }
+  env->SetDoubleArrayRegion(numbers, 0, static_cast<jsize>(count), numberValues.data());
+
+  jintArray light = toJavaArray(env, lightValues);
+  jintArray dark = toJavaArray(env, darkValues);
+  jbooleanArray set = env->NewBooleanArray(static_cast<jsize>(count));
+  env->SetBooleanArrayRegion(set, 0, static_cast<jsize>(count), setValues.data());
+
+  const std::vector<std::string> &families = theme->fontNames();
+  jobjectArray familyArray = env->NewObjectArray(static_cast<jsize>(families.size()),
+                                                  env->FindClass("java/lang/String"),
+                                                  nullptr);
+  for (size_t index = 0; index < families.size(); index++) {
+    jstring name = env->NewStringUTF(families[index].c_str());
+    env->SetObjectArrayElement(familyArray, static_cast<jsize>(index), name);
+    // The array holds its own reference now, so the local one goes.
+    env->DeleteLocalRef(name);
+  }
+
+  jobjectArray result = env->NewObjectArray(5, env->FindClass("java/lang/Object"), nullptr);
+  env->SetObjectArrayElement(result, 0, numbers);
+  env->SetObjectArrayElement(result, 1, light);
+  env->SetObjectArrayElement(result, 2, dark);
+  env->SetObjectArrayElement(result, 3, set);
+  env->SetObjectArrayElement(result, 4, familyArray);
+  return result;
+}
+
+// The theme the platform font scale is capped at, which is the one theme value
+// that changes measurement without changing a single drawing call.
+//
+// An id the pool does not hold means the theme is gone, which cannot happen
+// while the node's state carries the id, so the answer falls back to the
+// platform's own scale rather than to zero.
+extern "C" JNIEXPORT jdouble JNICALL
+Java_com_downstream_DownstreamNative_nativeFontScaleCap(JNIEnv * /*env*/,
+                                                        jclass /*clazz*/,
+                                                        jlong id,
+                                                        jdouble platformScale) {
+  const Theme::Handle theme = ThemeRegistry::find(static_cast<uint64_t>(id));
+  if (theme == nullptr) {
+    return platformScale;
+  }
+  return theme_layout::fontScale(*theme, platformScale);
+}
+
 /// Flattens blocks [from, to) of a document into one text and integer
 /// tables, with block indices and text offsets relative to `from`. Layouts
 /// must match NativeDocument.kt. Empty blocks get a zero-width space so they
 /// occupy a line. Links are read one at a time by nativeReadLink.
 extern "C" JNIEXPORT jobjectArray JNICALL
-Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env, jclass /*clazz*/, jlong id, jint from, jint to) {
+Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
+                                                        jclass /*clazz*/,
+                                                        jlong id,
+                                                        jint from,
+                                                        jint to,
+                                                        jlong themeId) {
   const DocumentHandle document = DocumentRegistry::find(static_cast<uint64_t>(id));
   if (!document || from < 0 || to < from || static_cast<size_t>(to) > document->blocks.size()) {
     return nullptr;
+  }
+  // A document the theme pool does not hold answers with the default theme, so a
+  // stale id lays the blocks out with the platform's own metrics rather than
+  // with nothing at all.
+  Theme::Handle theme = ThemeRegistry::find(static_cast<uint64_t>(themeId));
+  if (theme == nullptr) {
+    theme = Theme::defaultTheme();
   }
 
   std::u16string text;
@@ -112,6 +261,14 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env, jclass /*cl
   // NativeDocument.kt.
   std::vector<jint> tokens;
   std::vector<std::u16string> strings;
+  // Each block's resolved typography and margins, in the fixed order
+  // `theme_layout::kBlockLayoutStride` writes. Resolved here rather than in
+  // Kotlin so the rules in ThemeLayout are the only copy of them.
+  std::vector<double> layouts;
+  layouts.reserve(static_cast<size_t>(to - from) * theme_layout::kBlockLayoutStride);
+  // Sized up front so appending per block cannot reallocate mid-write. The
+  // writer would grow it anyway; this only says so in one place.
+  layouts.resize(static_cast<size_t>(to - from) * theme_layout::kBlockLayoutStride);
 
   // Block languages are the only UTF-8 fields a platform reads per block, so
   // they ride in the string table and the blocks point into it.
@@ -145,6 +302,9 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env, jclass /*cl
                                     isAdmonitionTitle(*document, index) ? 1 : 0,
                                     intern(block.language),
                                 });
+    theme_layout::writeBlockLayout(
+      *theme, theme_layout::blockLayout(*theme, block), layouts,
+      static_cast<size_t>(index - static_cast<size_t>(from)) * theme_layout::kBlockLayoutStride);
     for (const TableCell &cell : block.cells) {
       cells.insert(cells.end(), {start + static_cast<jint>(cell.start), start + static_cast<jint>(cell.end),
                                  static_cast<jint>(cell.align)});
@@ -189,7 +349,7 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env, jclass /*cl
     env->DeleteLocalRef(value);
   }
 
-  jobjectArray result = env->NewObjectArray(7, objectClass, nullptr);
+  jobjectArray result = env->NewObjectArray(8, objectClass, nullptr);
   env->SetObjectArrayElement(result, 0, toJavaString(env, text));
   env->SetObjectArrayElement(result, 1, toJavaArray(env, blocks));
   env->SetObjectArrayElement(result, 2, toJavaArray(env, containers));
@@ -197,6 +357,11 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env, jclass /*cl
   env->SetObjectArrayElement(result, 4, stringArray);
   env->SetObjectArrayElement(result, 5, toJavaArray(env, cells));
   env->SetObjectArrayElement(result, 6, toJavaArray(env, tokens));
+  jdoubleArray layoutArray = env->NewDoubleArray(static_cast<jsize>(layouts.size()));
+  if (!layouts.empty()) {
+    env->SetDoubleArrayRegion(layoutArray, 0, static_cast<jsize>(layouts.size()), layouts.data());
+  }
+  env->SetObjectArrayElement(result, 7, layoutArray);
   return result;
 }
 

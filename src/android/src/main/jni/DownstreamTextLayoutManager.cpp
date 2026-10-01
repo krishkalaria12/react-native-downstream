@@ -1,6 +1,7 @@
 #include "DownstreamTextLayoutManager.h"
 
 #include "DocumentRegistry.h"
+#include "theme/Theme.h"
 
 #include <fbjni/fbjni.h>
 #include <jni.h>
@@ -49,7 +50,7 @@ Java_com_downstream_DownstreamNative_nativeInstallPreparer(JNIEnv *env, jclass c
   if (javaReady.load(std::memory_order_relaxed)) {
     return;
   }
-  const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JFFIZI[I)V");
+  const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JFFIZI[IJ)V");
   if (method == nullptr || env->GetJavaVM(&javaVm) != JNI_OK) {
     env->ExceptionClear();
     return;
@@ -68,9 +69,12 @@ namespace facebook::react {
 Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHandle &document,
                                                   Float fontSizeMultiplier, Float maximumWidth,
                                                   SurfaceId surfaceId, uint32_t chrome, bool codeBlockWrap,
-                                                  const std::vector<uint32_t> &wrapToggles) const {
+                                                  const std::vector<uint32_t> &wrapToggles,
+                                                  const downstream::Theme::Handle &theme) const {
+  // Java resolves the theme through the registry by id, the way it resolves the
+  // document, so no slot value is copied across JNI on a measurement. Zero is
+  // the default theme's own id.
   downstream::DocumentRegistry::add(document);
-
   const auto &fabricUIManager = contextContainer_->at<jni::global_ref<jobject>>("FabricUIManager");
   static const auto measure =
       jni::findClassStatic("com/facebook/react/fabric/FabricUIManager")
@@ -88,7 +92,8 @@ Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHand
   }
   folly::dynamic localData = folly::dynamic::object("documentId", static_cast<double>(document->id))(
       "fontScale", static_cast<double>(fontSizeMultiplier))("chrome", static_cast<double>(chrome))(
-      "codeBlockWrap", codeBlockWrap ? 1.0 : 0.0)("wrapToggles", std::move(toggleArray));
+      "codeBlockWrap", codeBlockWrap ? 1.0 : 0.0)("wrapToggles", std::move(toggleArray))(
+      "themeId", static_cast<double>(theme ? theme->id() : 0));
   auto localDataMap = ReadableNativeMap::newObjectCxxArgs(std::move(localData));
   auto propsMap = ReadableNativeMap::newObjectCxxArgs(folly::dynamic::object());
   auto componentName = make_jstring("DownstreamMarkdownView");
@@ -124,7 +129,8 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
     env->CallStaticVoidMethod(nativeClass, prepareMethod, static_cast<jlong>(document->id),
                               static_cast<jfloat>(hint.fontScale), static_cast<jfloat>(hint.width),
                               static_cast<jint>(hint.chrome),
-                              static_cast<jboolean>(hint.codeBlockWrap ? JNI_TRUE : JNI_FALSE), toggles);
+                              static_cast<jboolean>(hint.codeBlockWrap ? JNI_TRUE : JNI_FALSE), toggles,
+                              static_cast<jlong>(hint.themeId()));
     env->DeleteLocalRef(toggles);
     if (env->ExceptionCheck()) {
       env->ExceptionClear();
