@@ -152,7 +152,6 @@ public:
         // registry rather than copying its values across JNI on every update.
         "themeId", static_cast<double>(themeId()));
   }
-#endif
 
 private:
   static std::vector<uint32_t> readOrdinals(const folly::dynamic &array) {
@@ -175,6 +174,7 @@ private:
     }
     return array;
   }
+#endif
 };
 
 } // namespace facebook::react

@@ -374,7 +374,8 @@ NSString *nameForFormat(NSString *format) {
                       format:(NSString *)format
                     language:(NSString *)language
                     filename:(NSString *)filename
-                     wrapped:(BOOL)wrapped {
+                     wrapped:(BOOL)wrapped
+                    expanded:(BOOL)expanded {
   const auto *emitter = [self emitter];
   if (emitter == nullptr) {
     return;
@@ -511,7 +512,8 @@ NSString *nameForFormat(NSString *format) {
                                format:format
                              language:language
                              filename:name
-                              wrapped:NO];
+                              wrapped:NO
+                             expanded:NO];
       }
     }];
   };
@@ -585,7 +587,13 @@ NSString *nameForFormat(NSString *format) {
   // measurement resolves the same way afterwards.
   DownstreamMarkdownState next = _state->getData().toggledWrap(ordinal, _controls);
   _state->updateState(std::move(next));
-  [self emitControlWithBlock:@"code" action:@"wrap" format:@"" language:language filename:@"" wrapped:wrapped];
+  [self emitControlWithBlock:@"code"
+                      action:@"wrap"
+                      format:@""
+                    language:language
+                    filename:@""
+                     wrapped:wrapped
+                    expanded:NO];
 }
 
 - (void)didToggleExpandAtOrdinal:(uint32_t)ordinal language:(NSString *)language expanded:(BOOL)expanded {
@@ -602,9 +610,9 @@ NSString *nameForFormat(NSString *format) {
                       action:@"expand"
                       format:@""
                     language:language
-                   filename:@""
-                    wrapped:NO
-                   expanded:expanded];
+                    filename:@""
+                     wrapped:NO
+                    expanded:expanded];
 }
 
 - (void)didFailControlOfKind:(DSBlockKind)kind action:(NSString *)action message:(NSString *)message {
