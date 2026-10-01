@@ -17,6 +17,12 @@ namespace {
 
 constexpr CGFloat kLinkHitSlop = 4;
 
+/// How far a line number is dimmed below the code it numbers, which is what
+/// Streamdown's `muted-foreground/50` gutter draws at. Applied to the theme's own
+/// code color rather than to a fixed gray, so a theme that restyles code restyles
+/// its numbers in step.
+constexpr CGFloat kGutterAlpha = 0.5;
+
 NSString *const kPlaceholder = @"\u200b";
 
 BOOL hasLink(NSAttributedString *text, NSRange range) {
@@ -276,8 +282,8 @@ using namespace downstream::ControlBits;
 /// the delegate a description rather than doing the work itself, because only
 /// the view that holds the document can read a block.
 @interface DSControlButton : UIButton
-@property (nonatomic) NSString *action;
-@property (nonatomic) NSString *format;
+@property (nonatomic, copy) NSString *action;
+@property (nonatomic, copy) NSString *format;
 @end
 
 @implementation DSControlButton
@@ -290,17 +296,21 @@ typedef NS_ENUM(NSInteger, DSControlLabel) {
   DSControlLabelCopied = 2,
   DSControlLabelWrapCode = 3,
   DSControlLabelUnwrapCode = 4,
-  DSControlLabelCopyTable = 5,
-  DSControlLabelCopyTableAsMarkdown = 6,
-  DSControlLabelCopyTableAsCsv = 7,
-  DSControlLabelCopyTableAsTsv = 8,
-  DSControlLabelDownloadTable = 9,
-  DSControlLabelDownloadTableAsCsv = 10,
-  DSControlLabelDownloadTableAsMarkdown = 11,
-  DSControlLabelTableFormatMarkdown = 12,
-  DSControlLabelTableFormatCsv = 13,
-  DSControlLabelTableFormatTsv = 14,
-  DSControlLabelCount = 15,
+  // Appended, not inserted: `src/controls.ts` sends the labels positionally, so
+  // a new key goes at the end rather than moving every later one.
+  DSControlLabelExpandCode = 5,
+  DSControlLabelCollapseCode = 6,
+  DSControlLabelCopyTable = 7,
+  DSControlLabelCopyTableAsMarkdown = 8,
+  DSControlLabelCopyTableAsCsv = 9,
+  DSControlLabelCopyTableAsTsv = 10,
+  DSControlLabelDownloadTable = 11,
+  DSControlLabelDownloadTableAsCsv = 12,
+  DSControlLabelDownloadTableAsMarkdown = 13,
+  DSControlLabelTableFormatMarkdown = 14,
+  DSControlLabelTableFormatCsv = 15,
+  DSControlLabelTableFormatTsv = 16,
+  DSControlLabelCount = 17,
 };
 
 NSString *const kSymbolCopy = @"doc.on.doc";
@@ -313,6 +323,11 @@ NSString *const kSymbolDownload = @"arrow.down.to.line";
 /// arrow is drawn rather than looked up.
 NSString *const kSymbolWrap = @"text.alignleft";
 NSString *const kSymbolUnwrap = @"text.alignleft";
+
+/// Expanding is a state, so it is drawn as one: the two arrows point apart when
+/// the block grows past the cap and together when the cap comes back.
+NSString *const kSymbolExpand = @"arrow.up.left.and.arrow.down.right";
+NSString *const kSymbolCollapse = @"arrow.down.left.and.arrow.up.right";
 
 /// Every control glyph at one size, so a glyph swapped in later (a copy's check,
 /// a wrap state) matches the ones built with the button.
@@ -346,22 +361,361 @@ NSString *symbolForWrap(BOOL wrapped) {
   return wrapped ? kSymbolUnwrap : kSymbolWrap;
 }
 
-namespace {
-} // namespace
+NSString *symbolForExpand(BOOL expanded) {
+  return expanded ? kSymbolCollapse : kSymbolExpand;
+}
 
 #pragma mark - Code cards
 
-/// A code card: a fixed header row, and below it a horizontal scroll view
-/// holding a text segment view for the one code block.
-///
-/// The header does not scroll, so the buttons stay in place while a long line
-/// scrolls, and it takes layout space rather than floating over the code, so
-/// the code is never covered.
+namespace {
+
+/// Padding inside a code card, the same on every side, and the height of the fade
+/// that says a capped block has more below it. Both are the measurement's, so the
+/// card draws inside the box the height reserved.
+constexpr CGFloat kCodePadding = 10;
+constexpr CGFloat kBottomFade = 24;
+
+/// How far from the bottom a reader may scroll and still be "following" the
+/// newest line. Streamdown's `usePinnedScroll` uses 8 points; a reader who
+/// scrolls up that far means it.
+constexpr CGFloat kPinThreshold = 8;
+
+} // namespace
+
+#pragma mark - The gutter
+
+/**
+ * The line numbers beside a code block, drawn rather than typed.
+ *
+ * A text view here would put numbers into the selection, the clipboard, and the
+ * accessibility tree, which is exactly what a line number must not be. Drawing
+ * them keeps copied text byte-identical with numbers on or off, and keeps a
+ * screen reader from reading them.
+ *
+ * The gutter scrolls vertically with the code and never sideways, so the numbers
+ * stay legible while a long line scrolls under them. Its width comes from the
+ * digit count of the last number, so a block crossing 99 widens by one digit
+ * rather than wrapping onto a second row.
+ */
+@interface DSCodeSegmentView ()
+/// The block this card draws, so the document view resolves its layout against
+/// the same meta the measurement used.
+@property (nonatomic, readonly, nullable) DSCodeSegment *segment;
+/// False once the block's fence has closed, which stops a capped card following
+/// its newest line.
+@property (nonatomic) BOOL streaming;
+@end
+
+@interface DSCodeGutterView : UIView
+@property (nonatomic, weak, nullable) DSTextSegmentView *body;
+/// The UTF-16 offset of each logical line, owned by the code segment.
+@property (nonatomic, copy, nullable) NSData *lineStarts;
+@property (nonatomic) uint32_t firstNumber;
+@property (nonatomic) uint32_t lineCount;
+@property (nonatomic) CGFloat digitAdvance;
+/// The code font at this scale. Numbers are drawn in it so a gutter's digits line
+/// up with the code's own monospaced columns.
+@property (nonatomic, nullable, strong) UIFont *font;
+/// The code's own color, which the numbers draw in at `kGutterAlpha`. Nil falls
+/// back to the system secondary label, which is what a card with no theme gets.
+@property (nonatomic, nullable, strong) UIColor *textColor;
+@end
+
+@implementation DSCodeGutterView {
+  UIFont *_font;
+  UIColor *_textColor;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+  if (self = [super initWithFrame:frame]) {
+    self.opaque = NO;
+    self.backgroundColor = UIColor.clearColor;
+    self.contentMode = UIViewContentModeRedraw;
+    // Numbers are decoration beside the code, not text in the document, so they
+    // are never a focus stop and never a VoiceOver element.
+    self.isAccessibilityElement = NO;
+    self.userInteractionEnabled = NO;
+  }
+  return self;
+}
+
+/// The font numbers are drawn in: the code font when the body has one, and a
+/// digit-only monospaced face at the same size otherwise.
+- (UIFont *)numberFont {
+  if (self.font != nil) {
+    return self.font;
+  }
+  return [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightRegular];
+}
+
+- (void)setBody:(DSTextSegmentView *)body {
+  _body = body;
+  [self setNeedsDisplay];
+}
+
+- (void)setFont:(UIFont *)font {
+  _font = font;
+  [self setNeedsDisplay];
+}
+
+- (void)setTextColor:(UIColor *)textColor {
+  _textColor = textColor;
+  [self setNeedsDisplay];
+}
+
+- (void)setFirstNumber:(uint32_t)firstNumber {
+  if (firstNumber == _firstNumber) {
+    return;
+  }
+  _firstNumber = firstNumber;
+  [self setNeedsDisplay];
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+  [super traitCollectionDidChange:previousTraitCollection];
+  if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+    // The numbers take a dynamic color, which resolves against the trait
+    // collection at draw time, so redrawing is all that is needed here.
+    [self setNeedsDisplay];
+  }
+}
+
+/// The number drawn beside logical line `index`, or 0 when the gutter has none.
+- (NSString *)numberForLine:(uint32_t)index {
+  if (self.lineStarts == nil || index >= self.lineCount) {
+    return nil;
+  }
+  return [NSString stringWithFormat:@"%u", self.firstNumber + index];
+}
+
+- (void)drawRect:(CGRect)rect {
+  DSTextSegmentView *body = self.body;
+  if (body == nil || self.lineCount == 0) {
+    return;
+  }
+  // The theme's code color dimmed, so the numbers read as an annotation on the
+  // code rather than as more of it. A dynamic color resolves against the trait
+  // collection here, at draw time.
+  UIColor *const color = [(self.textColor ?: UIColor.secondaryLabelColor) colorWithAlphaComponent:kGutterAlpha];
+  UIFont *font = self.numberFont;
+  NSLayoutManager *manager = body.layoutManager;
+  if (manager.numberOfGlyphs == 0) {
+    return;
+  }
+  const CGFloat inset = body.textContainerInset.top;
+  const CGFloat width = CGRectGetWidth(self.bounds);
+
+  // Only the numbers whose lines intersect the dirty rect are drawn, so a block
+  // with two thousand lines costs the same per frame as one with twenty.
+  const CGRect visible = CGRectOffset(rect, 0, -inset);
+  if (CGRectIsEmpty(visible)) {
+    return;
+  }
+  // The first logical line at or below the top of the dirty rect, found from the
+  // line starts rather than by walking glyphs from the top of the block.
+  uint32_t first = 0;
+  const uint32_t *starts = (const uint32_t *)self.lineStarts.bytes;
+  while (first + 1 < self.lineCount && starts[first + 1] <= (uint32_t)MAX(visible.origin.y, 0)) {
+    first++;
+  }
+  // Each logical line starts at the first visual line its first glyph is on. A
+  // wrapped continuation line gets no number, as in GitHub and VS Code.
+  for (uint32_t line = first; line < self.lineCount; line++) {
+    const uint32_t offset = starts[line];
+    if (offset >= manager.numberOfGlyphs && line > 0) {
+      break;
+    }
+    const NSUInteger glyph = [manager glyphRangeForCharacterRange:NSMakeRange(offset, 0) actualCharacterRange:NULL]
+                                 .location;
+    if (glyph >= manager.numberOfGlyphs) {
+      break;
+    }
+    const CGRect fragment = [manager lineFragmentRectForGlyphAtIndex:glyph effectiveRange:NULL];
+    const CGFloat baseline = CGRectGetMinY(fragment) + [manager locationForGlyphAtIndex:glyph].y;
+    if (baseline - font.ascender > CGRectGetMaxY(visible) && line > first) {
+      break;
+    }
+    NSString *number = [self numberForLine:line];
+    if (number.length == 0) {
+      continue;
+    }
+    NSDictionary<NSAttributedStringKey, id> *attributes =
+        @{NSFontAttributeName : font, NSForegroundColorAttributeName : color};
+    const CGSize size = [number sizeWithAttributes:attributes];
+    // Right-aligned against the gap, so the numbers line up on their last digit
+    // as they do in GitHub and VS Code.
+    [number drawAtPoint:CGPointMake(std::max<CGFloat>(0, width - size.width - 2), baseline - font.ascender)
+          withAttributes:attributes];
+  }
+}
+
+@end
+
+#pragma mark - The viewport
+
+/**
+ * The vertical scroll view around a capped code card's gutter and body.
+ *
+ * It exists on every card, not only a capped one, so a block that crosses the
+ * cap mid-stream is never re-parented and keeps its selection and offsets.
+ * `scrollEnabled` is what differs.
+ *
+ * A drag belongs to this view only while it can scroll that way. `UIScrollView`
+ * has no scroll chaining, so the decision is made when the drag starts: at an
+ * edge this pan recognizer declines, and the chat list's own pan takes the drag
+ * from there.
+ */
+@implementation DSCodeViewport {
+  /// A pinned card is one whose reader has not scrolled away from the bottom.
+  BOOL _pinned;
+  /// Set when the card asks for a pin, applied after the next layout, which is
+  /// where the content size the pin needs is known.
+  BOOL _needsPin;
+  /// Only a touch-driven scroll unpins; a pin this view applied itself must not
+  /// immediately unpin itself.
+  BOOL _touchScrolling;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+  if (self = [super initWithFrame:frame]) {
+    // A capped card scrolls up and down; the horizontal scroll view inside it
+    // takes the sideways drag, so only the vertical indicator is worth showing.
+    self.showsHorizontalScrollIndicator = NO;
+    self.showsVerticalScrollIndicator = NO;
+    // No bouncing, so reaching an edge is a real edge and the hand-off is clean.
+    self.alwaysBounceVertical = NO;
+    self.directionalLockEnabled = YES;
+    self.delaysContentTouches = NO;
+  }
+  return self;
+}
+
+- (void)setStreaming:(BOOL)streaming {
+  if (streaming == _streaming) {
+    return;
+  }
+  _streaming = streaming;
+  // A settled block keeps whatever offset it has, which is Streamdown's "a
+  // pending pin survives the stream ending". A block that starts unsettled
+  // follows its newest line.
+  if (streaming && self.scrollEnabled) {
+    _pinned = YES;
+    _needsPin = YES;
+  }
+}
+
+- (void)layoutSubviews {
+  [super layoutSubviews];
+  if (!_needsPin) {
+    return;
+  }
+  _needsPin = NO;
+  if (_pinned) {
+    [self pinToBottom];
+  }
+}
+
+/// True while this card is within the threshold of its newest line, which is what
+/// a reader scrolling back to the bottom restores.
+- (BOOL)isNearBottom {
+  const CGFloat maximum = std::max<CGFloat>(0, self.contentSize.height - CGRectGetHeight(self.bounds));
+  return maximum - self.contentOffset.y <= kPinThreshold;
+}
+
+- (void)pinToBottom {
+  const CGFloat maximum = std::max<CGFloat>(0, self.contentSize.height - CGRectGetHeight(self.bounds));
+  if (maximum > 0) {
+    // Without animation: this runs after each snapshot's layout, and an animated
+    // scroll would still be moving when the next one arrives.
+    [self setContentOffset:CGPointMake(0, maximum) animated:NO];
+  }
+}
+
+/// Moves to the newest line after the next layout, which is where the content
+/// size a pin needs is known.
+- (void)requestPin {
+  _needsPin = YES;
+  [self setNeedsLayout];
+}
+
+#pragma mark - Drag hand-off
+
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
+  UIPanGestureRecognizer *pan = (UIPanGestureRecognizer *)gestureRecognizer;
+  if (![pan isKindOfClass:UIPanGestureRecognizer.class] || !self.scrollEnabled) {
+    return [super gestureRecognizerShouldBegin:gestureRecognizer];
+  }
+  const CGPoint velocity = [pan velocityInView:self];
+  // A sideways drag belongs to the horizontal scroll view inside.
+  if (std::abs(velocity.x) > std::abs(velocity.y)) {
+    return NO;
+  }
+  const CGFloat maximum = std::max<CGFloat>(0, self.contentSize.height - CGRectGetHeight(self.bounds));
+  if (maximum <= 0) {
+    // Nothing below the fold: a vertical drag is the chat list's, whatever its
+    // direction, which is today's behavior for an uncapped card.
+    return NO;
+  }
+  // Already at the edge this drag would move toward: refuse, and the list's pan
+  // wins. iOS decides the gesture's ownership at its start and does not hand it
+  // over mid-drag, so this is the only place the decision can be made.
+  if (velocity.y < 0 && self.contentOffset.y >= maximum - 0.5) {
+    return NO;
+  }
+  if (velocity.y > 0 && self.contentOffset.y <= 0.5) {
+    return NO;
+  }
+  return [super gestureRecognizerShouldBegin:gestureRecognizer];
+}
+
+#pragma mark - Scrolling
+
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+  if (!_touchScrolling) {
+    return;
+  }
+  // More than the threshold away from the bottom and the reader has taken over.
+  const CGFloat maximum = std::max<CGFloat>(0, self.contentSize.height - CGRectGetHeight(self.bounds));
+  _pinned = maximum - self.contentOffset.y <= kPinThreshold;
+}
+
+- (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
+  _touchScrolling = YES;
+}
+
+- (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate {
+  if (!decelerate) {
+    _touchScrolling = NO;
+  }
+}
+
+- (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView {
+  _touchScrolling = NO;
+  _pinned = self.isNearBottom;
+}
+
+@end
+
+#pragma mark - Code cards
+
+/**
+ * A code card: a fixed header row, and below it a viewport holding the line-number
+ * gutter and a horizontal scroll view with a text segment view for the one code
+ * block.
+ *
+ * The header does not scroll, so the buttons stay in place while a long line
+ * scrolls, and it takes layout space rather than floating over the code, so the
+ * code is never covered. The viewport exists on every card and scrolls only while
+ * the block is past `codeBlockMaxHeight`, so a block crossing the cap mid-stream
+ * keeps its selection and its offsets.
+ */
 @implementation DSCodeSegmentView {
-  DSCodeSegment *_segment;
+  DSCodeSegment *_segmentStorage;
   UIView *_header;
   UILabel *_language;
   UIStackView *_buttons;
+  DSCodeViewport *_viewport;
+  DSCodeGutterView *_gutter;
   UIScrollView *_scrollView;
   DSTextSegmentView *_body;
   NSArray<NSString *> *_labels;
@@ -371,11 +725,18 @@ namespace {
   /// The labels the current buttons and menu items were built from, so a changed
   /// `translations` prop rebuilds them instead of leaving stale strings up.
   NSArray<NSString *> *_builtLabels;
-  BOOL _wrapped;
   BOOL _copied;
   NSTimer *_copiedTimer;
   CGFloat _savedOffset;
+  CGFloat _savedVerticalOffset;
   BOOL _needsScrollRestore;
+  /// Set while the block is streaming, so a capped card follows its newest line.
+  BOOL _streaming;
+  /// Shown once, the first time this block becomes capped.
+  BOOL _showedIndicator;
+  /// Whether the last button pass saw a capped card, so the layout that changes
+  /// the answer can rebuild the header rather than doing it twice per snapshot.
+  BOOL _lastCapped;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -393,6 +754,9 @@ namespace {
     _language.adjustsFontSizeToFitWidth = YES;
     _language.minimumScaleFactor = 0.7;
     _language.translatesAutoresizingMaskIntoConstraints = NO;
+    // A fence's title can be a long path, so it truncates in the middle and keeps
+    // its file name rather than losing the name to an ellipsis.
+    _language.lineBreakMode = NSLineBreakByTruncatingMiddle;
 
     _buttons = [UIStackView new];
     _buttons.axis = UILayoutConstraintAxisHorizontal;
@@ -401,22 +765,25 @@ namespace {
     [_header addSubview:_language];
     [_header addSubview:_buttons];
 
+    _viewport = [DSCodeViewport new];
+    // The scroll view and the body are framed in layoutSubviews from the
+    // measured body size. Under Auto Layout a non-scrolling text view would take
+    // its intrinsic one-line width instead, and never wrap.
     _scrollView = [UIScrollView new];
-    // A vertical drag belongs to the chat list, so the scroll view takes only
-    // horizontal gestures and never bounces vertically.
     _scrollView.showsVerticalScrollIndicator = NO;
     _scrollView.alwaysBounceVertical = NO;
     _scrollView.directionalLockEnabled = YES;
 
-    // The scroll view and the body are framed in layoutSubviews from the
-    // measured body size. Under Auto Layout a non-scrolling text view would
-    // take its intrinsic one-line width instead, and never wrap.
     _body = [DSTextSegmentView new];
     _body.scrollEnabled = NO;
 
+    _gutter = [DSCodeGutterView new];
+
+    [_viewport addSubview:_gutter];
     [_scrollView addSubview:_body];
+    [_viewport addSubview:_scrollView];
     [self addSubview:_header];
-    [self addSubview:_scrollView];
+    [self addSubview:_viewport];
     [self setConstraints];
   }
   return self;
@@ -427,7 +794,7 @@ namespace {
     [_header.topAnchor constraintEqualToAnchor:self.topAnchor],
     [_header.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
     [_header.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-    [_header.heightAnchor constraintEqualToConstant:_showsHeader ? kChromeRowHeight : 0],
+    [_header.heightAnchor constraintEqualToConstant:self.showsHeader ? kChromeRowHeight : 0],
     [_language.leadingAnchor constraintEqualToAnchor:_header.leadingAnchor constant:12],
     [_language.centerYAnchor constraintEqualToAnchor:_header.centerYAnchor],
     [_language.trailingAnchor constraintLessThanOrEqualToAnchor:_buttons.leadingAnchor constant:-8],
@@ -441,9 +808,10 @@ namespace {
   static dispatch_once_t once;
   dispatch_once(&once, ^{
     fallback = @[
-      @"Copy Code", @"Download file", @"Copied", @"Wrap lines", @"Don't wrap lines", @"Copy table",
-      @"Copy table as Markdown", @"Copy table as CSV", @"Copy table as TSV", @"Download table",
-      @"Download table as CSV", @"Download table as Markdown", @"Markdown", @"CSV", @"TSV",
+      @"Copy Code", @"Download file", @"Copied", @"Wrap lines", @"Don't wrap lines", @"Show all lines",
+      @"Show fewer lines", @"Copy table", @"Copy table as Markdown", @"Copy table as CSV",
+      @"Copy table as TSV", @"Download table", @"Download table as CSV", @"Download table as Markdown",
+      @"Markdown", @"CSV", @"TSV",
     ];
   });
   return _labels.count >= DSControlLabelCount ? _labels : fallback;
@@ -458,24 +826,45 @@ namespace {
   [self updateButtons];
 }
 
+- (DSCodeSegment *)segment {
+  return _segmentStorage;
+}
+
 - (void)setSegment:(DSCodeSegment *)segment {
-  if (segment == _segment) {
+  if (segment == _segmentStorage) {
     return;
   }
-  // The tail block is rebuilt on every snapshot while its fence is open, so
-  // the offset is kept only while the block still looks like the same one.
-  const BOOL sameBlock = _segment != nil && segment != nil &&
-                         _segment.codeOrdinal == segment.codeOrdinal &&
-                         [_segment.firstLine isEqualToString:segment.firstLine];
+  // The tail block is rebuilt on every snapshot while its fence is open, so both
+  // offsets are kept only while the block still looks like the same one.
+  const BOOL sameBlock = _segmentStorage != nil && segment != nil &&
+                         _segmentStorage.codeOrdinal == segment.codeOrdinal &&
+                         [_segmentStorage.firstLine isEqualToString:segment.firstLine];
   _savedOffset = sameBlock ? _scrollView.contentOffset.x : 0;
+  _savedVerticalOffset = sameBlock ? _viewport.contentOffset.y : 0;
   _needsScrollRestore = YES;
-  _segment = segment;
+  // A new block arrives unsettled, so a capped card starts pinned to its newest
+  // line. `setStreaming:` turns that off once the fence closes.
+  _streaming = YES;
+  _segmentStorage = segment;
   _body.linkDelegate = self.linkDelegate;
   [_body setSegment:segment.text];
-  _language.text = segment.language;
-  _language.accessibilityLabel = segment.language.length > 0
-      ? [NSString stringWithFormat:@"%@, code", segment.language]
-      : @"code";
+  _gutter.body = _body;
+  _gutter.lineStarts = [NSData dataWithBytes:segment.lineStarts->data()
+                                      length:segment.lineStarts->size() * sizeof(uint32_t)];
+  _gutter.firstNumber = segment.fenceMeta.startLine;
+  _gutter.lineCount = segment.lineCount;
+  _gutter.digitAdvance = segment.digitAdvance;
+  _gutter.font = segment.codeFont;
+  // The gutter draws in the code's own color, dimmed rather than re-themed: the
+  // numbers annotate the code beside them, so a theme that restyles code restyles
+  // its numbers in step. Streamdown's `muted-foreground/50` is the same idea.
+  _gutter.textColor = [[segment.theme colorForSlot:kSlotCodeBlockColor
+                                            fallback:UIColor.secondaryLabelColor]
+      colorWithAlphaComponent:kGutterAlpha];
+  // A fence's title replaces the language, and the spoken label keeps both plus
+  // the start line, so a screen reader still hears what kind of code this is.
+  _language.text = segment.title.length > 0 ? segment.title : segment.language;
+  _language.accessibilityLabel = [self spokenLabel];
   // The header row's own three colors, read once per block rather than per draw,
   // because the card is redrawn whenever its bounds change.
   _headerColor = [segment.theme colorForSlot:kSlotCodeBlockHeaderColor fallback:UIColor.secondaryLabelColor];
@@ -491,6 +880,28 @@ namespace {
   [self updateButtons];
   [self setNeedsLayout];
   [self setNeedsDisplay];
+}
+
+/// "src/app.ts, ts code, from line 10": both names, and the start line when it
+/// is not the default. The numbers themselves are never read aloud.
+- (NSString *)spokenLabel {
+  const DSCodeSegment *segment = _segmentStorage;
+  NSString *language = segment.language;
+  NSString *title = segment.title;
+  const BOOL hasTitle = title.length > 0 && ![title isEqualToString:language];
+  NSMutableArray<NSString *> *parts = [NSMutableArray new];
+  if (hasTitle) {
+    [parts addObject:title];
+  }
+  if (language.length > 0) {
+    [parts addObject:[NSString stringWithFormat:@"%@ code", language]];
+  } else {
+    [parts addObject:@"code"];
+  }
+  if (segment.fenceMeta.startLine != 1) {
+    [parts addObject:[NSString stringWithFormat:@"from line %u", segment.fenceMeta.startLine]];
+  }
+  return [parts componentsJoinedByString:@", "];
 }
 
 - (void)setLinkDelegate:(id<DSLinkDelegate>)linkDelegate {
@@ -532,11 +943,12 @@ namespace {
   [self updateButtons];
 }
 
-- (void)setWrapped:(BOOL)wrapped {
-  if (wrapped == _wrapped) {
+- (void)setLayout:(downstream::CodeBlockLayout)layout {
+  if (layout.wraps == _layout.wraps && layout.lineNumbers == _layout.lineNumbers &&
+      layout.firstNumber == _layout.firstNumber && layout.maxHeight == _layout.maxHeight) {
     return;
   }
-  _wrapped = wrapped;
+  _layout = layout;
   [self updateButtons];
   [self setNeedsLayout];
 }
@@ -550,14 +962,18 @@ namespace {
     [view removeFromSuperview];
   }
   _builtLabels = [_labels copy];
+  UIButton *expand = makeControlButton(symbolForExpand(NO), [self label:DSControlLabelExpandCode], @"expand", @"");
   UIButton *wrap = makeControlButton(symbolForWrap(NO), [self label:DSControlLabelWrapCode], @"wrap", @"");
   UIButton *download =
       makeControlButton(kSymbolDownload, [self label:DSControlLabelDownloadFile], @"download", @"text");
   UIButton *copy = makeControlButton(kSymbolCopy, [self label:DSControlLabelCopyCode], @"copy", @"text");
-  wrap.tag = 0;
-  download.tag = 1;
-  copy.tag = 2;
-  for (UIButton *button in @[wrap, download, copy]) {
+  // A fixed order, so the expand button does not shift the others as it appears
+  // and disappears with a block's height.
+  expand.tag = 0;
+  wrap.tag = 1;
+  download.tag = 2;
+  copy.tag = 3;
+  for (UIButton *button in @[expand, wrap, download, copy]) {
     button.accessibilityIdentifier = [NSString stringWithFormat:@"ds.code.%@", button.accessibilityLabel];
     [button addTarget:self action:@selector(handleControl:) forControlEvents:UIControlEventTouchUpInside];
     [_buttons addArrangedSubview:button];
@@ -565,8 +981,11 @@ namespace {
 }
 
 /// Rebuilds the header's buttons from the current controls, enabled state, and
-/// wrap state. The buttons are created once; only their glyphs, labels, and
-/// states change, which is what keeps a snapshot from allocating any.
+/// layout. The buttons are created once; only their glyphs, labels, and states
+/// change, which is what keeps a snapshot from allocating any.
+/// Rebuilds the header's buttons from the current controls, enabled state, and
+/// layout. The buttons are created once; only their glyphs, labels, and states
+/// change, which is what keeps a snapshot from allocating any.
 - (void)updateButtons {
   if (!self.showsHeader) {
     _buttons.hidden = YES;
@@ -577,29 +996,48 @@ namespace {
   _language.hidden = NO;
   [self buildButtonsIfNeeded];
   NSArray<UIButton *> *all = _buttons.arrangedSubviews;
-  const BOOL showDownload = (_controls & CodeDownload) != 0;
-  const BOOL showCopy = (_controls & CodeCopy) != 0;
+  // Expand appears only on a block past the cap, because that is the only block
+  // it can do anything for, and a hidden button is cheaper than a wrong one.
+  const BOOL capped = [self isCapped];
+  _lastCapped = capped;
+  const BOOL showExpand = (_controls & CodeExpand) != 0 && capped;
   const BOOL showWrap = (_controls & CodeWrap) != 0;
-  ((UIButton *)all[0]).hidden = !showWrap;
-  ((UIButton *)all[1]).hidden = !showDownload;
-  ((UIButton *)all[2]).hidden = !showCopy;
+  ((UIButton *)all[0]).hidden = !showExpand;
+  ((UIButton *)all[1]).hidden = !showWrap;
+  ((UIButton *)all[2]).hidden = (_controls & CodeDownload) == 0;
+  ((UIButton *)all[3]).hidden = (_controls & CodeCopy) == 0;
   for (UIButton *button in all) {
     button.enabled = _controlsEnabled && !button.hidden;
   }
 
-  UIButton *wrap = (UIButton *)all[0];
-  wrap.selected = _wrapped;
-  [wrap setImage:controlImage(symbolForWrap(_wrapped)) forState:UIControlStateNormal];
-  wrap.accessibilityLabel = _wrapped ? [self label:DSControlLabelUnwrapCode] : [self label:DSControlLabelWrapCode];
+  UIButton *expand = (UIButton *)all[0];
+  expand.selected = !capped;
+  [expand setImage:controlImage(symbolForExpand(!capped)) forState:UIControlStateNormal];
+  expand.accessibilityLabel = capped ? [self label:DSControlLabelExpandCode]
+                                     : [self label:DSControlLabelCollapseCode];
   // No explicit traits: UIButton derives Selected and Not Enabled itself, and a
   // fixed value would tell VoiceOver a disabled button can be pressed.
 
-  UIButton *download = (UIButton *)all[1];
+  UIButton *wrap = (UIButton *)all[1];
+  wrap.selected = _layout.wraps;
+  [wrap setImage:controlImage(symbolForWrap(_layout.wraps)) forState:UIControlStateNormal];
+  wrap.accessibilityLabel = _layout.wraps ? [self label:DSControlLabelUnwrapCode] : [self label:DSControlLabelWrapCode];
+
+  UIButton *download = (UIButton *)all[2];
   download.accessibilityLabel = [self label:DSControlLabelDownloadFile];
-  UIButton *copy = (UIButton *)all[2];
+  UIButton *copy = (UIButton *)all[3];
   [copy setImage:controlImage(symbolForCopy(_copied)) forState:UIControlStateNormal];
   copy.accessibilityLabel = _copied ? [self label:DSControlLabelCopied] : [self label:DSControlLabelCopyCode];
   [self updateCopiedSpokenText];
+}
+
+/// True when this block's body is taller than its cap, which is what makes the
+/// viewport scroll and the expand button mean something.
+- (BOOL)isCapped {
+  if (_segmentStorage == nil || !(_layout.maxHeight > 0)) {
+    return NO;
+  }
+  return _viewport.contentSize.height > _layout.maxHeight;
 }
 
 - (void)updateCopiedSpokenText {
@@ -625,22 +1063,28 @@ namespace {
 
 - (void)handleControl:(UIButton *)sender {
   DSControlButton *button = (DSControlButton *)sender;
-  if (!sender.enabled || _segment == nil) {
+  if (!sender.enabled || _segmentStorage == nil) {
     return;
   }
   if ([button.action isEqualToString:@"wrap"]) {
-    [self.controlDelegate didToggleWrapAtOrdinal:_segment.codeOrdinal
-                                        language:_segment.language
-                                         wrapped:!_wrapped];
+    [self.controlDelegate didToggleWrapAtOrdinal:_segmentStorage.codeOrdinal
+                                        language:_segmentStorage.language
+                                         wrapped:!_layout.wraps];
+    return;
+  }
+  if ([button.action isEqualToString:@"expand"]) {
+    [self.controlDelegate didToggleExpandAtOrdinal:_segmentStorage.codeOrdinal
+                                          language:_segmentStorage.language
+                                          expanded:![self isCapped]];
     return;
   }
   if ([button.action isEqualToString:@"copy"]) {
     [self markCopied];
   }
   [self.controlDelegate didPressControlOfKind:DSBlockKindCode
-                                   blockIndex:_segment.blockIndex
+                                   blockIndex:_segmentStorage.blockIndex
                                    blockCount:1
-                                     language:_segment.language
+                                     language:_segmentStorage.language
                                       action:button.action
                                       format:button.format
                                     filename:@""];
@@ -663,38 +1107,99 @@ namespace {
   [_copiedTimer invalidate];
 }
 
+/// Drops the saved offsets and returns to the top, for a new generation.
+- (void)resetScrollPosition {
+  _needsScrollRestore = YES;
+  _savedOffset = 0;
+  _savedVerticalOffset = 0;
+  _showedIndicator = NO;
+  [self setNeedsLayout];
+}
+
 - (void)layoutSubviews {
   [super layoutSubviews];
-  if (_segment == nil) {
+  if (_segmentStorage == nil) {
     return;
   }
   const CGFloat headerHeight = self.showsHeader ? kChromeRowHeight : 0;
-  const CGFloat leading = _segment.contentLeading;
-  const CGFloat padding = _segment.padding;
-  const CGRect card = CGRectMake(leading, headerHeight, self.bounds.size.width - leading, self.bounds.size.height - headerHeight);
-  const CGFloat bodyWidth = [_segment bodyWidthForWidth:card.size.width wrapped:_wrapped];
-  const CGFloat bodyHeight = [_segment bodyHeightForWidth:card.size.width wrapped:_wrapped];
-  _scrollView.frame = CGRectInset(card, padding, padding);
+  // The card's padding is the theme's, so a theme that pads a card wider gives the
+  // body and the gutter exactly that much less room.
+  const CGFloat leading = _segmentStorage.contentLeading;
+  const CGFloat padding = _segmentStorage.padding;
+  const CGRect card = CGRectMake(leading, headerHeight, self.bounds.size.width - leading,
+                                 self.bounds.size.height - headerHeight);
+  const CGFloat gutterWidth = [_segmentStorage gutterWidthForLayout:_layout];
+  _gutter.hidden = gutterWidth <= 0;
+  // The gutter narrows the width a wrapped body wraps at, which is the only way
+  // numbers change a block's height. An unwrapped body is laid out at its own
+  // length either way, so it never lays code out again on a rotation.
+  const CGFloat bodyWidth =
+      [_segmentStorage.text usedWidthForWidth:[_segmentStorage layoutWidthForCard:card.size.width
+                                                                         wrapped:_layout.wraps
+                                                                    gutterWidth:gutterWidth]];
+  const CGFloat bodyHeight =
+      [_segmentStorage.text heightForWidth:[_segmentStorage layoutWidthForCard:card.size.width
+                                                                      wrapped:_layout.wraps
+                                                                 gutterWidth:gutterWidth]];
+  const CGRect viewport = CGRectInset(card, padding, padding);
+  _viewport.frame = viewport;
+  // The gutter sits inside the card's padding, at the leading edge, and the
+  // horizontal scroll view takes the rest.
+  _gutter.frame = CGRectMake(0, 0, gutterWidth, std::max<CGFloat>(bodyHeight, viewport.size.height));
+  _scrollView.frame = CGRectMake(gutterWidth, 0, std::max<CGFloat>(0, viewport.size.width - gutterWidth),
+                                 _gutter.frame.size.height);
   _body.frame = CGRectMake(0, 0, std::max<CGFloat>(bodyWidth, 0), std::max<CGFloat>(bodyHeight, 0));
   _scrollView.contentSize = _body.bounds.size;
+  // A gutter is as tall as the code, and it scrolls vertically with it, so the
+  // numbers beside the visible lines are the ones the reader sees.
+  _viewport.contentSize = CGSizeMake(viewport.size.width, _gutter.frame.size.height);
+  // Whether the block is capped is only known here, and the expand button depends
+  // on it, so this is where a header that appears or disappears is decided. The
+  // header row's height is fixed either way, so nothing moves.
+  if ([self isCapped] != _lastCapped) {
+    [self updateButtons];
+  }
+
+  // Vertical scrolling turns on only while the block is past its cap, which is
+  // the whole difference between a capped card and an uncapped one.
+  // The viewport scrolls only while the block is past its cap, which is the whole
+  // difference between a capped card and an uncapped one.
+  const BOOL capped = _layout.maxHeight > 0 && bodyHeight + 2 * padding > _layout.maxHeight;
+  _viewport.scrollEnabled = capped;
+  _viewport.streaming = _streaming;
+  if (capped && !_showedIndicator) {
+    // Flash the indicator the first time a block becomes capped, so the scroll is
+    // discoverable rather than merely available.
+    _showedIndicator = YES;
+    [_viewport flashScrollIndicators];
+  }
+
   if (_needsScrollRestore) {
     const CGFloat maximum = std::max<CGFloat>(0, _scrollView.contentSize.width - _scrollView.bounds.size.width);
     _scrollView.contentOffset = CGPointMake(std::clamp(_savedOffset, 0.0, maximum), 0);
+    const CGFloat verticalMaximum = std::max<CGFloat>(0, _viewport.contentSize.height - viewport.size.height);
+    _viewport.contentOffset = CGPointMake(0, std::clamp(_savedVerticalOffset, 0.0, verticalMaximum));
     _needsScrollRestore = NO;
+  } else if (capped && _streaming) {
+    // Follow the newest line, which is Streamdown's pinned scroll: after each
+    // snapshot's layout, a pinned card goes to the bottom.
+    [_viewport requestPin];
   }
+  [self setNeedsDisplay];
 }
 
 /// The card's rounded code background, plus the container bars and the list
-/// marker, which live in the non-scrolling margin beside it.
+/// marker, which live in the non-scrolling margin beside it, and a bottom fade
+/// while a capped block has more below.
 - (void)drawRect:(CGRect)rect {
-  if (_segment == nil) {
+  if (_segmentStorage == nil) {
     return;
   }
-  const CGFloat leading = _segment.contentLeading;
+  const CGFloat leading = _segmentStorage.contentLeading;
   const CGFloat headerHeight = self.showsHeader ? kChromeRowHeight : 0;
   // A rule under the header row, when the theme asked for one. Its color
   // defaults to clear, so a theme that says nothing draws nothing.
-  UIColor *headerBorder = _segment.headerBorderColor;
+  UIColor *headerBorder = _segmentStorage.headerBorderColor;
   if (headerBorder != nil && self.showsHeader) {
     [headerBorder setFill];
     UIRectFill(CGRectMake(0, headerHeight - 1, self.bounds.size.width, 1));
@@ -704,17 +1209,18 @@ namespace {
   // The card's fill, radius and border are all the theme's, and the border is
   // drawn rather than filled because it sits inside the card's bounds, which is
   // what keeps a themed card the height the measurement gave it.
-  UIColor *fill = [_segment.theme colorForSlot:kSlotCodeBlockBackgroundColor fallback:UIColor.tertiarySystemFillColor];
-  UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:card cornerRadius:_segment.borderRadius];
+  UIColor *fill = [_segmentStorage.theme colorForSlot:kSlotCodeBlockBackgroundColor
+                                           fallback:UIColor.tertiarySystemFillColor];
+  UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:card cornerRadius:_segmentStorage.borderRadius];
   [fill setFill];
   [path fill];
-  if (_segment.borderWidth > 0) {
-    [[_segment.theme colorForSlot:kSlotCodeBlockBorderColor fallback:nil] setStroke];
-    path.lineWidth = _segment.borderWidth;
+  if (_segmentStorage.borderWidth > 0) {
+    [[_segmentStorage.theme colorForSlot:kSlotCodeBlockBorderColor fallback:nil] setStroke];
+    path.lineWidth = _segmentStorage.borderWidth;
     [path stroke];
   }
 
-  for (DSContainerInfo *container in _segment.containers) {
+  for (DSContainerInfo *container in _segmentStorage.containers) {
     if (container.barColor != nil && container.barWidth > 0) {
       [container.barColor setFill];
       const CGFloat x = container.leading + 2;
@@ -722,10 +1228,40 @@ namespace {
     }
     if (container.marker != nil) {
       UIFont *font = [container.marker attribute:NSFontAttributeName atIndex:0 effectiveRange:NULL];
-      const CGFloat baseline = headerHeight + _segment.padding + font.ascender;
+      const CGFloat baseline = headerHeight + _segmentStorage.padding + font.ascender;
       const CGFloat x = container.leading + container.width - container.markerGap - container.marker.size.width;
       [container.marker drawAtPoint:CGPointMake(x, baseline - font.ascender)];
     }
+  }
+
+  // The fade says there is more below without covering the last line's text: it
+  // is short, and it sits inside the card's own bottom padding.
+  if (_viewport.scrollEnabled && _viewport.contentOffset.y < _viewport.contentSize.height - CGRectGetHeight(_viewport.bounds) - 0.5) {
+    const CGFloat height = std::min<CGFloat>(kBottomFade, CGRectGetHeight(card) / 2);
+    CGContextRef context = UIGraphicsGetCurrentContext();
+    CGContextSaveGState(context);
+    [[UIBezierPath bezierPathWithRoundedRect:card cornerRadius:6] addClip];
+    // The card's own fill, fading to nothing, so the fade reads as more of the
+    // card rather than as a gray bar over it. The dynamic color resolves against
+    // the trait collection here, in the draw pass, so this is the appearance's
+    // fill rather than a fixed one.
+    CGFloat red = 0;
+    CGFloat green = 0;
+    CGFloat blue = 0;
+    CGFloat alpha = 0;
+    if ([UIColor.tertiarySystemFillColor getRed:&red green:&green blue:&blue alpha:&alpha]) {
+      CGFloat components[8] = {red, green, blue, alpha, red, green, blue, 0};
+      const CGFloat locations[2] = {0, 1};
+      CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+      CGGradientRef gradient = CGGradientCreateWithColorComponents(space, components, locations, 2);
+      if (gradient != NULL) {
+        CGContextDrawLinearGradient(context, gradient, CGPointMake(CGRectGetMinX(card), CGRectGetMaxY(card) - height),
+                                    CGPointMake(CGRectGetMinX(card), CGRectGetMaxY(card)), 0);
+        CGGradientRelease(gradient);
+      }
+      CGColorSpaceRelease(space);
+    }
+    CGContextRestoreGState(context);
   }
 }
 
@@ -748,8 +1284,8 @@ namespace {
 
 - (NSArray *)accessibilityElements {
   // Header label, then the buttons, then the code, which is the order
-  // Streamdown's DOM reads in.
-  if (_segment == nil) {
+  // Streamdown's DOM reads in. The gutter is not listed: it holds no text.
+  if (_segmentStorage == nil) {
     return @[];
   }
   NSMutableArray *elements = [NSMutableArray new];
@@ -763,9 +1299,19 @@ namespace {
     }
   }
   // The body is listed as a container, not flattened: its elements' frames are
-  // in the body's space, which the header and the scroll offset move.
+  // in the body's space, which the header and the scroll offsets move.
   [elements addObject:_body];
   return elements;
+}
+
+/// The block is finished once its fence has closed. A card stops following its
+/// newest line then, and keeps whatever offset the reader left.
+- (void)setStreaming:(BOOL)streaming {
+  if (streaming == _streaming) {
+    return;
+  }
+  _streaming = streaming;
+  [self setNeedsLayout];
 }
 
 @end
@@ -1013,9 +1559,10 @@ namespace {
   static dispatch_once_t once;
   dispatch_once(&once, ^{
     fallback = @[
-      @"Copy Code", @"Download file", @"Copied", @"Wrap lines", @"Don't wrap lines", @"Copy table",
-      @"Copy table as Markdown", @"Copy table as CSV", @"Copy table as TSV", @"Download table",
-      @"Download table as CSV", @"Download table as Markdown", @"Markdown", @"CSV", @"TSV",
+      @"Copy Code", @"Download file", @"Copied", @"Wrap lines", @"Don't wrap lines", @"Show all lines",
+      @"Show fewer lines", @"Copy table", @"Copy table as Markdown", @"Copy table as CSV",
+      @"Copy table as TSV", @"Download table", @"Download table as CSV", @"Download table as Markdown",
+      @"Markdown", @"CSV", @"TSV",
     ];
   });
   return _labels.count >= DSControlLabelCount ? _labels : fallback;
@@ -1294,13 +1841,12 @@ namespace {
   NSMutableArray<UIView<DSSegmentView> *> *_segmentViews;
   NSArray<NSString *> *_labels;
   uint32_t _chrome;
-  /// A code block's ordinals, so a wrap choice can be applied by ordinal
-  /// rather than by segment index, which moves as blocks stream in.
+  /// A code block's ordinals, so a wrap or expand choice can be applied by
+  /// ordinal rather than by segment index, which moves as blocks stream in.
   NSMutableArray<NSNumber *> *_codeOrdinals;
-  /// `_codeWrapToggles` sorted, which is the form `downstream::codeWraps` takes.
-  /// Both the card views and the frame stack read this one copy, so a block's
-  /// drawn layout and its measured height are the same decision.
-  std::vector<uint32_t> _wrapToggleOrdinals;
+  /// The whole code layout, which both the card views and the frame stack read,
+  /// so a block's drawn layout and its measured height are the same decision.
+  downstream::CodeLayout _codeLayout;
   /// The theme's selection color, applied to every text view in the stack.
   UIColor *_selectionColor;
 }
@@ -1345,11 +1891,16 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
     code.showsHeader = (_chrome & downstream::kChromeCodeHeader) != 0;
     code.controls = _controls;
     code.controlsEnabled = [self isSegmentSettledAtIndex:index];
+    // A block that is settled keeps its offset and stops following its newest
+    // line. `Document::settledBlocks` is the same fact pinning reads, so a card
+    // and the parser cannot disagree about whether the fence has closed.
+    code.streaming = ![self isSegmentSettledAtIndex:index];
     if (_codeOrdinals.count > index) {
-      // The same helper the measurement used, so the frame this card is given
+      // The same two calls the measurement used, so the frame this card is given
       // and the layout it draws inside it are one decision.
-      code.wrapped = downstream::codeWraps(_codeBlockWrap, _wrapToggleOrdinals,
-                                           _codeOrdinals[index].unsignedIntValue);
+      DSCodeSegment *card = code.segment;
+      code.layout = downstream::resolveCodeBlock(
+          _codeLayout, _codeOrdinals[index].unsignedIntValue, card.fenceMeta);
     }
     return;
   }
@@ -1472,25 +2023,11 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
   [self reapplyState];
 }
 
-- (void)setCodeBlockWrap:(BOOL)codeBlockWrap {
-  if (codeBlockWrap == _codeBlockWrap) {
+- (void)setCodeLayout:(downstream::CodeLayout)codeLayout {
+  if (codeLayout == _codeLayout) {
     return;
   }
-  _codeBlockWrap = codeBlockWrap;
-  [self reapplyState];
-}
-
-- (void)setCodeWrapToggles:(NSSet<NSNumber *> *)codeWrapToggles {
-  if ([_codeWrapToggles isEqualToSet:codeWrapToggles]) {
-    return;
-  }
-  _codeWrapToggles = [codeWrapToggles copy];
-  _wrapToggleOrdinals.clear();
-  _wrapToggleOrdinals.reserve(codeWrapToggles.count);
-  for (NSNumber *ordinal in codeWrapToggles) {
-    _wrapToggleOrdinals.push_back(ordinal.unsignedIntValue);
-  }
-  std::sort(_wrapToggleOrdinals.begin(), _wrapToggleOrdinals.end());
+  _codeLayout = codeLayout;
   [self reapplyState];
 }
 
@@ -1527,6 +2064,19 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
   }
 }
 
+/// A new generation clears the reader's own scroll positions, which is what
+/// `resetTableScrollPositions` has always done for tables, and what a code card's
+/// vertical offset needs as well: the old offsets name lines in a document that
+/// is gone.
+- (void)resetScrollPositions {
+  [self resetTableScrollPositions];
+  for (UIView *view in _segmentViews) {
+    if ([view isKindOfClass:DSCodeSegmentView.class]) {
+      [(DSCodeSegmentView *)view resetScrollPosition];
+    }
+  }
+}
+
 - (void)setLinkDelegate:(id<DSLinkDelegate>)linkDelegate {
   _linkDelegate = linkDelegate;
   for (UIView *view in _segmentViews) {
@@ -1544,8 +2094,7 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
   // set is the reader's own, and `codeWraps` is what the card views call too.
   NSArray<NSValue *> *frames = [_rendered segmentFramesForWidth:self.bounds.size.width
                                                           chrome:_chrome
-                                                   codeBlockWrap:_codeBlockWrap
-                                                     wrapToggles:_wrapToggleOrdinals];
+                                                             code:_codeLayout];
   for (NSUInteger index = 0; index < _segmentViews.count && index < frames.count; index++) {
     _segmentViews[index].frame = frames[index].CGRectValue;
   }

@@ -5,6 +5,9 @@
 #import "DSThemeColors.h"
 
 #ifdef __cplusplus
+#include <vector>
+
+#include "CodeLayout.h"
 #include "Document.h"
 #include "RenderPreparer.h"
 #include "theme/Theme.h"
@@ -93,9 +96,26 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 @property (nonatomic, readonly) DSTextSegment *text;
 /// The fence language as written, or empty for an indented block.
 @property (nonatomic, readonly) NSString *language;
+/// The fence's title when it named one, which replaces the language in the
+/// header. Sanitized by the engine's parser, so it is safe to draw as a label.
+@property (nonatomic, readonly) NSString *title;
+/// The fence's own meta, as the engine parsed it. The gutter and the cap both
+/// resolve through `resolveCodeBlock` against this, so a measurement and a draw
+/// cannot disagree about them.
+@property (nonatomic, readonly) downstream::FenceMeta fenceMeta;
+/// The UTF-16 offset of each logical line, found once on the worker so the
+/// gutter's draw pass never searches the text.
+@property (nonatomic, readonly) const std::vector<uint32_t> *lineStarts;
+/// The number of logical lines, so the gutter knows its last number.
+@property (nonatomic, readonly) uint32_t lineCount;
+/// The advance of one digit in the code font at this font scale, which is what
+/// makes the gutter exactly as wide as its widest number.
+@property (nonatomic, readonly) CGFloat digitAdvance;
+/// The code font at this font scale, which the gutter draws its numbers in.
+@property (nonatomic, readonly) UIFont *codeFont;
 @property (nonatomic, readonly) NSInteger blockIndex;
 /// The block's ordinal among the document's code blocks, which is what a
-/// reader's wrap choice is keyed by.
+/// reader's wrap or expand choice is keyed by.
 @property (nonatomic, readonly) uint32_t codeOrdinal;
 @property (nonatomic, readonly) NSArray<DSContainerInfo *> *containers;
 @property (nonatomic, readonly) CGFloat contentLeading;
@@ -116,15 +136,17 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 @property (nonatomic, readonly) CGFloat padding;
 @property (nonatomic, readonly) CGFloat borderRadius;
 @property (nonatomic, readonly) CGFloat borderWidth;
+/// The card's line height, which the height floor in `codeCardHeight` needs.
+@property (nonatomic, readonly) CGFloat lineHeight;
 
 - (CGFloat)headerHeight;
-/// Body height at a card width, wrapped or not. A wrapped body's height depends
-/// on the width; an unwrapped one's does not, which is why a rotation does not
-/// lay code out again.
-- (CGFloat)bodyHeightForWidth:(CGFloat)width wrapped:(BOOL)wrapped;
-/// Body width at a card width, wrapped or not. Unwrapped, it is the longest
-/// line, which is what the horizontal scroll view scrolls.
-- (CGFloat)bodyWidthForWidth:(CGFloat)width wrapped:(BOOL)wrapped;
+/// The width the body lays out at, given the card's width, whether it wraps, and
+/// how much room the gutter takes. Unbounded when it does not wrap, which is what
+/// makes a long line scroll instead of wrapping.
+- (CGFloat)layoutWidthForCard:(CGFloat)cardWidth wrapped:(BOOL)wrapped gutterWidth:(CGFloat)gutterWidth;
+/// The gutter's width: its widest number's digits in the code font, plus the gap
+/// before the code. Zero when this block draws no numbers.
+- (CGFloat)gutterWidthForLayout:(const downstream::CodeBlockLayout &)layout;
 @end
 
 @interface DSTableCell : NSObject
@@ -206,19 +228,14 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 
 /// Segment frames stacked at a width. Safe to call from any thread.
 ///
-/// `chrome` and the reader's wrap choices are part of the key rather than the
+/// `chrome` and the whole code layout are part of the key rather than the
 /// rendering, so a change to either restacks frames without rebuilding any
-/// attributed text.
+/// attributed text. Every input that changes a card's height is in that layout,
+/// which is what keeps a measurement and the frame the view draws from agreeing.
 - (NSArray<NSValue *> *)segmentFramesForWidth:(CGFloat)width
                                      chrome:(uint32_t)chrome
-                              codeBlockWrap:(BOOL)codeBlockWrap
-                                wrapToggles:(const std::vector<uint32_t> &)wrapToggles;
-- (CGSize)sizeForWidth:(CGFloat)width
-                chrome:(uint32_t)chrome
-         codeBlockWrap:(BOOL)codeBlockWrap
-           wrapToggles:(const std::vector<uint32_t> &)wrapToggles;
-/// The chrome a view lays out with for the props it has.
-- (uint32_t)chromeForControls:(uint32_t)controls codeBlockWrap:(BOOL)codeBlockWrap;
+                                        code:(const downstream::CodeLayout &)code;
+- (CGSize)sizeForWidth:(CGFloat)width chrome:(uint32_t)chrome code:(const downstream::CodeLayout &)code;
 
 @end
 

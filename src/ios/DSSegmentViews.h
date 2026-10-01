@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef __cplusplus
+#include "CodeLayout.h"
+#endif
+
 #import <UIKit/UIKit.h>
 
 #import "DSRenderedDocument.h"
@@ -42,6 +46,8 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 /// A per-block wrap toggle. `ordinal` is the block's ordinal among the
 /// document's code blocks, which is what the choice is keyed by.
 - (void)didToggleWrapAtOrdinal:(uint32_t)ordinal language:(NSString *)language wrapped:(BOOL)wrapped;
+/// A per-block height-cap toggle, from the expand button.
+- (void)didToggleExpandAtOrdinal:(uint32_t)ordinal language:(NSString *)language expanded:(BOOL)expanded;
 /// A copy, a download, or a save that failed.
 - (void)didFailControlOfKind:(DSBlockKind)kind action:(NSString *)action message:(NSString *)message;
 @end
@@ -62,9 +68,13 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 - (void)setSegment:(DSTextSegment *)segment;
 @end
 
-/// One code block: a header row above a horizontally scrolling body. The body
-/// is a text segment view, so selection, plain-text copy, token colors, and
-/// link hit testing inside the code are the ones a text segment already has.
+/// One code block: a header row above a card that scrolls sideways and, when the
+/// block is past `codeBlockMaxHeight`, vertically inside its own frame.
+///
+/// The body is a text segment view, so selection, plain-text copy, token colors,
+/// and link hit testing inside the code are the ones a text segment already has.
+/// The gutter is a sibling that draws numbers rather than holding text, so there
+/// is nothing to select, copy, or read aloud.
 @interface DSCodeSegmentView : UIView <DSSegmentView>
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
 @property (nonatomic, weak, nullable) id<DSControlDelegate> controlDelegate;
@@ -72,12 +82,31 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 @property (nonatomic, readwrite) BOOL showsHeader;
 /// Buttons to build, as bits of `downstream::ControlBits`.
 @property (nonatomic) uint32_t controls;
-/// The block's current layout: wrapping or scrolling sideways.
-@property (nonatomic, getter=isWrapped) BOOL wrapped;
+/// The block's resolved layout, from the props, the reader's choices, and the
+/// fence's own meta. One value, because a measurement and a draw both resolve it
+/// rather than each re-deciding what wraps or what is capped.
+@property (nonatomic) downstream::CodeBlockLayout layout;
 /// The theme's selection highlight, applied to the body text view.
 @property (nonatomic) UIColor *selectionColor;
 - (void)setSegment:(DSCodeSegment *)segment;
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
+@end
+
+/// The vertical viewport around a code card's gutter and body.
+///
+/// Every code card has one, so a block that crosses the cap mid-stream is never
+/// re-parented and keeps its selection and its scroll offsets. Vertical scrolling
+/// is enabled only while the block is capped.
+///
+/// A drag that starts here belongs to this scroll view only while it can scroll
+/// that way: at an edge it refuses, and the chat list's own pan takes the drag.
+@interface DSCodeViewport : UIScrollView
+/// True while this block's fence is still open, which is what makes a capped
+/// card follow its newest line. A settled block keeps whatever offset it has.
+@property (nonatomic) BOOL streaming;
+/// Moves to the newest line after the next layout, unless the reader has scrolled
+/// away from the bottom.
+- (void)requestPin;
 @end
 
 /// One table: fixed column widths in a horizontal scroll view, with a toolbar
@@ -98,15 +127,16 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 @property (nonatomic, weak, nullable) id<DSControlDelegate> controlDelegate;
 @property (nonatomic) BOOL selectable;
 @property (nonatomic) uint32_t controls;
-@property (nonatomic) BOOL codeBlockWrap;
-/// Code blocks whose layout differs from `codeBlockWrap`, by ordinal. A block
-/// wraps when that is true, and scrolls sideways when it is not.
-@property (nonatomic, copy) NSSet<NSNumber *> *codeWrapToggles;
+/// The whole code layout: the `lineNumbers`, `codeBlockWrap`, and
+/// `codeBlockMaxHeight` props, plus the reader's own per-block wrap and expand
+/// choices. One value, so a frame and the layout drawn inside it cannot disagree.
+@property (nonatomic) downstream::CodeLayout codeLayout;
 /// Label strings in the order `src/controls.ts` sends them.
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
 - (void)setRendered:(nullable DSRenderedDocument *)rendered;
 - (void)setChrome:(uint32_t)chrome;
-- (void)resetTableScrollPositions;
+/// Drops every reader scroll position, for a new generation.
+- (void)resetScrollPositions;
 - (NSInteger)linkIndexAtPoint:(CGPoint)point;
 /// The selection highlight, from the view's theme. Applied to every text view,
 /// so a themed `colors.selection` reaches the platform's own selection drawing
