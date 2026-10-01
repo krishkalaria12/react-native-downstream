@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CodeLayout.h"
 #include "Document.h"
 #include "theme/Theme.h"
 
@@ -20,7 +21,7 @@ enum Chrome : uint32_t {
   kChromeTableToolbar = 1u << 1,
   /// Every code block in the document is laid out at the card's width, so its
   /// long lines wrap. This says nothing about a document that has a mix, which
-  /// `Controls.h`'s `codeWraps` decides one block at a time.
+  /// `CodeLayout.h`'s `resolveCodeBlock` decides one block at a time.
   kChromeCodeWrap = 1u << 2,
 };
 
@@ -31,17 +32,16 @@ struct LayoutHint {
   /// See `Chrome`. Height depends on it, so two layouts that differ only here
   /// are two layouts.
   uint32_t chrome{kChromeNone};
-  /// The code blocks whose layout differs from the `codeBlockWrap` prop, by
-  /// ordinal and sorted. This is the reader's own state, not a revision of it:
-  /// a revision would separate two states that lay out identically (a block
+  /// The code layout this measurement is at: the props and the reader's choices
+  /// together. Every input that changes a card's height travels in here, so a
+  /// worker measures the layout the view is about to draw.
+  ///
+  /// These are the reader's own choices rather than a revision of them: a
+  /// revision would separate two states that lay out identically (a block
   /// toggled on and back off), and the hint has to be enough on its own for the
-  /// worker to measure the same heights the view draws. Almost always empty, so
-  /// the comparison below is one size check in practice.
-  std::vector<uint32_t> wrapToggles;
-  /// The `codeBlockWrap` prop. It travels beside the toggles because together
-  /// they decide each block's layout: neither half can be inferred from
-  /// `chrome`, which only says whether every block wraps.
-  bool codeBlockWrap{false};
+  /// worker to measure the same heights the view draws. The choice sets are
+  /// almost always empty, so the comparison below is one size check in practice.
+  CodeLayout code;
   /// The theme this view draws with, or null for the default one. A worker
   /// builds the rendering the view will mount, so the theme has to be part of
   /// the hint: without it the worker would prepare an unthemed layout that
@@ -49,18 +49,13 @@ struct LayoutHint {
   Theme::Handle theme;
 
   // Constructors rather than aggregate initialisation, so a caller that names
-  // only a width and a scale says so instead of leaving a vector and a flag to
-  // default, and a caller that names all six cannot leave one out by accident.
+  // only a width and a scale says so instead of leaving the chrome, the code
+  // layout and the theme to default, and a caller that names all four cannot
+  // leave one out by accident.
   LayoutHint() = default;
   LayoutHint(float scale, float at) : fontScale(scale), width(at) {}
-  LayoutHint(float scale, float at, uint32_t chromeIn, std::vector<uint32_t> toggles, bool wrap,
-             Theme::Handle themeIn = nullptr)
-      : fontScale(scale),
-        width(at),
-        chrome(chromeIn),
-        wrapToggles(std::move(toggles)),
-        codeBlockWrap(wrap),
-        theme(std::move(themeIn)) {}
+  LayoutHint(float scale, float at, uint32_t chromeIn, CodeLayout codeIn, Theme::Handle themeIn = nullptr)
+      : fontScale(scale), width(at), chrome(chromeIn), code(std::move(codeIn)), theme(std::move(themeIn)) {}
 
   /// Equal when two layouts would draw the same sizes. The theme compares by
   /// id rather than by pointer, so two equal themes are one layout hint and a
@@ -68,8 +63,7 @@ struct LayoutHint {
   /// rendering rather than rebuilding them.
   bool operator==(const LayoutHint &other) const {
     return fontScale == other.fontScale && width == other.width && chrome == other.chrome &&
-        codeBlockWrap == other.codeBlockWrap && wrapToggles == other.wrapToggles &&
-        themeId() == other.themeId();
+        code == other.code && themeId() == other.themeId();
   }
 
   /// The theme's id, or 0 for the default one, which is its id too.

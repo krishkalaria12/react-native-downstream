@@ -6,8 +6,8 @@
 
 #include "CodeBlocks.h"
 #include "CodeHighlighter.h"
+#include "CodeLayout.h"
 #include "Controls.h"
-#include "FenceMeta.h"
 #include "Export.h"
 #include "InlineRuns.h"
 #include "MarkdownParser.h"
@@ -93,8 +93,6 @@ void checkExport(std::string_view expected, const char *label, std::string_view 
 
 void checkName(const char *label, const char *expected, std::string_view info, std::string_view language,
                std::string_view configured = "", std::string_view fallback = "file") {
-  // The name comes from the parsed meta, so a fence's own title, path, and
-  // language all reach this one call. #16's file-name goldens below are unchanged.
   check(expected, label,
         downloadName(parseFenceMeta(info), language, std::string(configured), std::string(fallback)));
 }
@@ -125,36 +123,174 @@ void testSegmentPlan() {
 void testWrapChoices() {
   const std::vector<uint32_t> none;
   const std::vector<uint32_t> third{2};
+  CodeLayout unwrapped;
+  CodeLayout wrapped;
+  wrapped.props.wrap = true;
+
+  auto layoutOf = [](const CodeLayout &layout, uint32_t ordinal) {
+    return resolveCodeBlock(layout, ordinal, FenceMeta{}).wraps;
+  };
 
   // Nothing toggled: every block follows the prop.
-  CHECK(codeWraps(false, none, 0) == false, "an untoggled block does not wrap when the prop is off");
-  CHECK(codeWraps(true, none, 0) == true, "an untoggled block wraps when the prop is on");
+  CHECK(layoutOf(unwrapped, 0) == false, "an untoggled block does not wrap when the prop is off");
+  CHECK(layoutOf(wrapped, 0) == true, "an untoggled block wraps when the prop is on");
 
   // One block toggled: it is the only one that differs from the prop, and the
   // rest still follow it. This is the case a single chrome bit cannot express.
-  CHECK(codeWraps(false, third, 2) == true, "a toggled block wraps when the prop is off");
-  CHECK(codeWraps(true, third, 2) == false, "a toggled block stops wrapping when the prop is on");
-  CHECK(codeWraps(false, third, 0) == false, "an untoggled neighbour still follows the prop being off");
-  CHECK(codeWraps(true, third, 0) == true, "an untoggled neighbour still follows the prop being on");
-  CHECK(codeWraps(false, third, 1) == false, "a neighbour before the toggle is unaffected");
-  CHECK(codeWraps(false, third, 3) == false, "a neighbour after the toggle is unaffected");
+  CodeLayout mixedUnwrapped = unwrapped;
+  mixedUnwrapped.choices.wrapToggles = third;
+  CodeLayout mixedWrapped = wrapped;
+  mixedWrapped.choices.wrapToggles = third;
+  CHECK(layoutOf(mixedUnwrapped, 2) == true, "a toggled block wraps when the prop is off");
+  CHECK(layoutOf(mixedWrapped, 2) == false, "a toggled block stops wrapping when the prop is on");
+  CHECK(layoutOf(mixedUnwrapped, 0) == false, "an untoggled neighbour still follows the prop being off");
+  CHECK(layoutOf(mixedWrapped, 0) == true, "an untoggled neighbour still follows the prop being on");
+  CHECK(layoutOf(mixedUnwrapped, 1) == false, "a neighbour before the toggle is unaffected");
+  CHECK(layoutOf(mixedUnwrapped, 3) == false, "a neighbour after the toggle is unaffected");
 
   // The chrome bit says only whether every block wraps, and the toggle set is
   // what fills in a mixed document.
-  CHECK((chromeForProps(ControlBits::CodeWrap, true, none) & kChromeCodeWrap) != 0,
+  CHECK((chromeForProps(ControlBits::CodeWrap, wrapped) & kChromeCodeWrap) != 0,
         "no toggles with the prop on is all-wrapping chrome");
-  CHECK((chromeForProps(ControlBits::CodeWrap, true, third) & kChromeCodeWrap) == 0,
+  CHECK((chromeForProps(ControlBits::CodeWrap, mixedWrapped) & kChromeCodeWrap) == 0,
         "any toggle clears the all-wrapping bit");
-  CHECK((chromeForProps(ControlBits::CodeWrap, false, third) & kChromeCodeWrap) == 0,
+  CHECK((chromeForProps(ControlBits::CodeWrap, mixedUnwrapped) & kChromeCodeWrap) == 0,
         "the prop off is never all-wrapping chrome");
 
   // The header and the toolbar do not depend on any of this.
-  CHECK((chromeForProps(ControlBits::CodeCopy, false, third) & kChromeCodeHeader) != 0,
+  CHECK((chromeForProps(ControlBits::CodeCopy, mixedUnwrapped) & kChromeCodeHeader) != 0,
         "a copy control still gives a code block its header");
-  CHECK((chromeForProps(ControlBits::TableDownload, false, none) & kChromeTableToolbar) != 0,
+  CHECK((chromeForProps(ControlBits::CodeExpand, unwrapped) & kChromeCodeHeader) != 0,
+        "an expand control alone still gives a code block its header");
+  CHECK((chromeForProps(ControlBits::TableDownload, unwrapped) & kChromeTableToolbar) != 0,
         "a table download still gives a table its toolbar");
-  CHECK((chromeForProps(0, false, none) & (kChromeCodeHeader | kChromeTableToolbar)) == 0,
+  CHECK((chromeForProps(0, unwrapped) & (kChromeCodeHeader | kChromeTableToolbar)) == 0,
         "no controls means no chrome at all");
+
+  // The wrap control being off is a different thing from the prop being off: the
+  // button disappears but the layout the prop asked for stays.
+  CHECK((chromeForProps(0, wrapped) & kChromeCodeWrap) == 0, "no wrap control means no wrap bit");
+}
+
+// ----------------------------------------------------------- line numbers
+
+/// Every combination of the prop, the fence's meta, and the reader's choices,
+/// which is the whole table `resolveCodeBlock` has to answer.
+void testCodeBlockLayout() {
+  const FenceMeta plain;
+  FenceMeta hidden;
+  hidden.noLineNumbers = true;
+  FenceMeta tenth;
+  tenth.startLine = 10;
+
+  CodeLayout layout;
+  CodeLayout noNumbers = layout;
+  noNumbers.props.lineNumbers = false;
+  CodeLayout capped = layout;
+  capped.props.maxHeight = 400;
+
+  auto numbers = [](const CodeLayout &value, uint32_t ordinal, const FenceMeta &meta) {
+    return resolveCodeBlock(value, ordinal, meta);
+  };
+
+  CHECK(numbers(layout, 0, plain).lineNumbers, "numbers are on by default");
+  CHECK(!numbers(noNumbers, 0, plain).lineNumbers, "the prop turns numbers off");
+  // The prop wins over the meta, as Streamdown's `lineNumbers={false}` does over
+  // its own meta string.
+  CHECK(!numbers(noNumbers, 0, FenceMeta{}).lineNumbers, "the prop wins over a fence that asked for numbers");
+  CHECK(!numbers(layout, 0, hidden).lineNumbers, "noLineNumbers hides them for one block");
+  CHECK(numbers(layout, 1, plain).lineNumbers, "one block's meta does not affect its neighbour");
+
+  CHECK(numbers(layout, 0, tenth).firstNumber == 10, "the fence's start line reaches the gutter");
+  CHECK(numbers(layout, 0, plain).firstNumber == 1, "no start line means line one");
+
+  // The cap, and the expand choice that removes it for one block.
+  CHECK(numbers(capped, 0, plain).maxHeight == 400.0f, "the cap prop reaches the block");
+  CodeLayout expanded = capped;
+  expanded.choices.expanded = {1};
+  CHECK(numbers(expanded, 1, plain).maxHeight == 0.0f, "an expanded block has no cap");
+  CHECK(numbers(expanded, 0, plain).maxHeight == 400.0f, "one expanded block does not cap its neighbour");
+  CHECK(numbers(capped, 0, plain).maxHeight == 400.0f, "an uncapped layout leaves the cap alone");
+
+  // A prop of 0 is no cap, and it must reach the block as the same 0 an
+  // expanded block uses rather than as a truthy "off".
+  CodeLayout uncapped = layout;
+  uncapped.props.maxHeight = 0;
+  CHECK(numbers(uncapped, 0, plain).maxHeight == 0.0f, "a zero cap is no cap");
+  CHECK(numbers(uncapped, 0, plain).maxHeight == numbers(expanded, 1, plain).maxHeight,
+        "uncapped and expanded are the same value to the card");
+}
+
+/// The gutter is as wide as the widest number it draws, and never narrower than
+/// two digits, which is what keeps Streamdown's "over 100" bug out.
+void testGutterDigits() {
+  CHECK(gutterDigits(1, 1) == 2, "one line is at least two digits");
+  CHECK(gutterDigits(1, 9) == 2, "nine lines are two digits");
+  CHECK(gutterDigits(1, 10) == 2, "line ten is still two digits");
+  CHECK(gutterDigits(1, 99) == 2, "line 99 is two digits");
+  CHECK(gutterDigits(1, 100) == 3, "line 100 is three digits");
+  CHECK(gutterDigits(1, 1000) == 4, "line 1000 is four digits");
+  // The last number decides, not the first, so a block that starts at 998 shows
+  // 998, 999, and 1000 in a gutter wide enough for all of them.
+  CHECK(gutterDigits(998, 3) == 4, "a start line past 999 widens the gutter");
+  CHECK(gutterDigits(998, 1) == 3, "a start line of 998 on its own is three digits");
+  CHECK(gutterDigits(1000000, 1) == 7, "the largest start line is seven digits");
+  // An empty fence draws one numbered line, like Streamdown's empty row.
+  CHECK(gutterDigits(7, 0) == 2, "an empty fence numbers its one line");
+  CHECK(gutterDigits(7, 0) == gutterDigits(7, 1), "an empty fence is one line");
+}
+
+/// The card height is `header + min(body + 2 * padding, cap)`, with a floor at
+/// five lines so a cap cannot shrink a block to two lines at an accessibility
+/// text size.
+void testCodeCardHeight() {
+  const float header = 32;
+  const float padding = 10;
+  const float line = 16;
+  CodeBlockLayout block;
+  block.maxHeight = 400;
+
+  CHECK(codeCardHeight(block, header, padding, 100, line) == header + 100 + 2 * padding,
+        "a body under the cap is header plus body plus padding");
+  CHECK(codeCardHeight(block, header, padding, 1000, line) == header + 400, "a body over the cap is capped");
+  CHECK(codeCardHeight(block, 0, padding, 1000, line) == 400, "no header means no header");
+
+  CodeBlockLayout uncapped = block;
+  uncapped.maxHeight = 0;
+  CHECK(codeCardHeight(uncapped, header, padding, 1000, line) == header + 1000 + 2 * padding,
+        "a zero cap grows with the body");
+
+  // The floor: a cap below five lines plus padding is raised to it, so at the
+  // largest text size a capped block is still five lines rather than two.
+  const float largeLine = 40;
+  CodeBlockLayout small = block;
+  small.maxHeight = 200;
+  CHECK(codeCardHeight(small, header, padding, 1000, largeLine) == header + 5 * largeLine + 2 * padding,
+        "the floor is five lines plus padding");
+  // A cap above the floor is not lowered by it.
+  CHECK(codeCardHeight(block, header, padding, 100, line) == header + 100 + 2 * padding,
+        "the floor never grows a card past its body");
+
+  // A body shorter than the floor lays out at its own height: the floor raises a
+  // cap, and it is not a minimum height for the card itself.
+  CHECK(codeCardHeight(small, header, padding, 40, line) == header + 40 + 2 * padding,
+        "the floor does not pad a short block");
+}
+
+/// Logical line starts, which the gutter walks. An empty fence still has one.
+void testCodeLineStarts() {
+  const std::vector<uint32_t> single = codeLineStarts(u"a");
+  CHECK(single.size() == 1 && single[0] == 0, "one line starts at zero");
+
+  const std::vector<uint32_t> three = codeLineStarts(u"a\nb\nc");
+  CHECK(three.size() == 3 && three[0] == 0 && three[1] == 2 && three[2] == 4, "a start after each newline");
+
+  // A trailing newline ends a line the writer wrote, so it starts one.
+  const std::vector<uint32_t> trailing = codeLineStarts(u"a\n");
+  CHECK(trailing.size() == 2 && trailing[1] == 2, "a trailing newline starts a last empty line");
+
+  const std::vector<uint32_t> empty = codeLineStarts(u"");
+  CHECK(empty.size() == 1 && empty[0] == 0, "an empty block has one line to number");
 }
 
 // ------------------------------------------------------------- code export
@@ -393,6 +529,10 @@ int main() {
   CHECK(inlineRunsInRange({}, 0, 10).empty(), "an empty run list has no overlaps");
   testSegmentPlan();
   testWrapChoices();
+  testCodeBlockLayout();
+  testGutterDigits();
+  testCodeCardHeight();
+  testCodeLineStarts();
   testCodeExport();
   testDelimited();
   testMarkdown();

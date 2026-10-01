@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CodeLayout.h"
 #include "Document.h"
 #include "RenderPreparer.h"
 #include "theme/Theme.h"
@@ -31,35 +32,34 @@ public:
   static void prepare(const downstream::DocumentHandle &document, const std::vector<downstream::LayoutHint> &hints);
 
   /// Returns the content size for the document at the given width. Results
-  /// are cached by document id, font scale, width, chrome, the reader's wrap
-  /// choices, and the theme's *layout* key; a new source, font scale, width,
-  /// chrome, set of choices, or size-changing theme value is always measured
-  /// again.
+  /// are cached by document id, font scale, width, chrome, the code layout, and
+  /// the theme's *layout* key; a new source, font scale, width, chrome, layout,
+  /// or size-changing theme value is always measured again.
   ///
-  /// The wrap choices are part of the key and part of the call because a
-  /// document can hold wrapped and unwrapped code at once, and a block's height
-  /// depends on which it is. The platform decides each block through
-  /// `downstream::codeWraps`, the same function the view draws with.
+  /// The code layout is part of the key and part of the call because a document
+  /// can hold wrapped and unwrapped code at once, capped and uncapped code at
+  /// once, and code with and without a gutter at once, and a block's height
+  /// depends on which. The platform decides each block through
+  /// `downstream::resolveCodeBlock`, the same function the view draws with.
   ///
-  /// The theme keys on `layoutKey` and not on `id`, so a color-only change
+  /// The theme keys on `themeLayoutKey` and not on `id`, so a color-only change
   /// reuses every measured size and Yoga sees nothing at all: the drawing
   /// objects are rebuilt, but no measurement is.
   Size measure(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
-               const LayoutConstraints &layoutConstraints, SurfaceId surfaceId, uint32_t chrome, bool codeBlockWrap,
-               const std::vector<uint32_t> &wrapToggles, const downstream::Theme::Handle &theme) const;
+               const LayoutConstraints &layoutConstraints, SurfaceId surfaceId, uint32_t chrome,
+               const downstream::CodeLayout &code, const downstream::Theme::Handle &theme) const;
 
 private:
   Size measurePlatform(const downstream::DocumentHandle &document, Float fontSizeMultiplier, Float maximumWidth,
-                       SurfaceId surfaceId, uint32_t chrome, bool codeBlockWrap,
-                       const std::vector<uint32_t> &wrapToggles, const downstream::Theme::Handle &theme) const;
+                       SurfaceId surfaceId, uint32_t chrome, const downstream::CodeLayout &code,
+                       const downstream::Theme::Handle &theme) const;
 
   struct CacheEntry {
     uint64_t documentId;
     Float fontSizeMultiplier;
     Float maximumWidth;
     uint32_t chrome;
-    bool codeBlockWrap;
-    std::vector<uint32_t> wrapToggles;
+    downstream::CodeLayout code;
     /// The theme's layout key, which is 0 for the default theme.
     uint64_t themeLayoutKey;
     Size size;
