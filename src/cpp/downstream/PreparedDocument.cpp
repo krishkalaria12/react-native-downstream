@@ -53,12 +53,17 @@ void PreparedDocument::noteHint(const LayoutHint &hint) {
 std::vector<LayoutHint> PreparedDocument::hintsForPrepare() const {
   const std::vector<LayoutHint> recent = RenderPreparer::recentLayouts();
   std::lock_guard<std::mutex> lock(hintMutex_);
+  if (hints_.empty()) {
+    return recent;
+  }
   std::vector<LayoutHint> hints;
-  // This source's own hints come first, so a theme asked for here is prepared
-  // even when the recent layouts are full of another view's.
+  // Prepare this source's own themes and controls. Recent layouts supply only
+  // geometry for a view that has not yet been measured.
   for (const LayoutHint &noted : hints_) {
     if (noted.width > 0) {
-      hints.push_back(noted);
+      if (std::find(hints.begin(), hints.end(), noted) == hints.end()) {
+        hints.push_back(noted);
+      }
       continue;
     }
     // A hint with no width yet is a view that has not been measured, which is
@@ -70,17 +75,9 @@ std::vector<LayoutHint> PreparedDocument::hintsForPrepare() const {
       LayoutHint expanded = noted;
       expanded.width = at.width;
       expanded.fontScale = at.fontScale;
-      expanded.chrome = at.chrome;
-      expanded.wrapToggles = at.wrapToggles;
-      expanded.codeBlockWrap = at.codeBlockWrap;
       if (std::find(hints.begin(), hints.end(), expanded) == hints.end()) {
         hints.push_back(std::move(expanded));
       }
-    }
-  }
-  for (const LayoutHint &at : recent) {
-    if (std::find(hints.begin(), hints.end(), at) == hints.end()) {
-      hints.push_back(at);
     }
   }
   return hints;

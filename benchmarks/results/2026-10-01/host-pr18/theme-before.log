@@ -1,0 +1,65 @@
+
+ RUN  v5.0.2 /Users/krish/Desktop/Coding/Packages/react-native-downstream
+
+stderr | benchmarks/theme-resolve.bench.ts > theme resolution > full theme
+Benchmark Warning
+Benchmark "theme resolution > empty theme" accessed module export getters too many times.
+
+This can make results unreliable because export getters add overhead.
+See https://vitest.dev/guide/benchmarking#module-runner-overhead
+
+Tracked exports:
+  - src/theme.ts > resolveTheme
+
+ ✓ |bench| benchmarks/theme-resolve.bench.ts > theme resolution > empty theme 1ms
+   name                     hz     min     max    mean     p75     p99    p995    p999     rme   samples
+   no overrides  17,424,453.52  0.0000  3.0680  0.0001  0.0001  0.0001  0.0001  0.0002  ±0.61%  15150480
+ ✓ |bench| benchmarks/theme-resolve.bench.ts > theme resolution > color-only theme 1ms
+   name              hz     min     max    mean     p75     p99    p995    p999     rme  samples
+   6 colors  168,559.34  0.0055  1.1741  0.0060  0.0060  0.0076  0.0093  0.0252  ±0.25%   166608
+ ✓ |bench| benchmarks/theme-resolve.bench.ts > theme resolution > full theme 7395ms
+   name                                 hz     min     max    mean     p75     p99    p995    p999     rme  samples
+   every slot at both altitudes  49,299.52  0.0191  0.0869  0.0204  0.0203  0.0277  0.0489  0.0575  ±0.12%    48902
+ ✓ |bench| benchmarks/theme-resolve.bench.ts > theme resolution > preset 1304ms
+   name                    hz     min     max    mean     p75     p99    p995    p999     rme  samples
+   presets.github  228,581.48  0.0040  0.2424  0.0044  0.0045  0.0058  0.0076  0.0132  ±0.18%   225356
+stderr | benchmarks/theme-resolve.bench.ts > wire shape > a resolved theme sorts and packs
+Benchmark Warning
+Benchmark "theme resolution > slot table size" accessed module export getters too many times.
+
+This can make results unreliable because export getters add overhead.
+See https://vitest.dev/guide/benchmarking#module-runner-overhead
+
+Tracked exports:
+  - src/themeSlots.ts > THEME_SLOTS
+
+ ✓ |bench| benchmarks/theme-resolve.bench.ts > theme resolution > merged arrays 1263ms
+   name                    hz     min     max    mean     p75     p99    p995    p999     rme  samples
+   3 layers merged  40,234.03  0.0232  0.3157  0.0251  0.0252  0.0322  0.0348  0.1073  ±0.17%    39903
+ ✓ |bench| benchmarks/theme-resolve.bench.ts > theme resolution > slot table size 0ms
+   name                 hz     min     max    mean     p75     p99    p995    p999     rme  samples
+   172 slots  2,984,228.86  0.0002  0.1236  0.0003  0.0003  0.0005  0.0005  0.0006  ±0.05%  2949551
+ ✓ |bench| benchmarks/theme-resolve.bench.ts > wire shape > a resolved theme sorts and packs 3165ms
+   name                           hz     min     max    mean     p75     p99    p995    p999     rme  samples
+   full theme, sorted ids  48,365.94  0.0198  0.2794  0.0208  0.0207  0.0260  0.0289  0.0950  ±0.16%    48033
+stderr | benchmarks/theme-resolve.bench.ts
+Benchmark Warning
+Benchmark "syntax conversion > an unrecognised theme" accessed module export getters too many times.
+
+This can make results unreliable because export getters add overhead.
+See https://vitest.dev/guide/benchmarking#module-runner-overhead
+
+Tracked exports:
+  - src/syntaxTheme.ts > syntaxColorsFromTheme
+
+ ✓ |bench| benchmarks/theme-resolve.bench.ts > syntax conversion > a VS Code theme 1383ms
+   name               hz     min     max    mean     p75     p99    p995    p999     rme  samples
+   10 scopes  529,369.56  0.0017  0.1208  0.0019  0.0020  0.0023  0.0025  0.0090  ±0.20%   517364
+ ✓ |bench| benchmarks/theme-resolve.bench.ts > syntax conversion > an unrecognised theme 0ms
+   name                       hz     min     max    mean     p75     p99    p995    p999     rme  samples
+   no scopes match  2,293,225.86  0.0003  0.2840  0.0004  0.0005  0.0006  0.0007  0.0009  ±0.19%  2240505
+
+ Test Files  1 passed (1)
+      Tests  9 passed (9)
+   Start at  22:36:28
+   Duration  16.51s (tests 99%, environment 1%)

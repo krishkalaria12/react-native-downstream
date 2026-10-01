@@ -420,10 +420,38 @@ void testInterning() {
   CHECK(recolored->id() != repainted->id(), "and changes the drawing id");
   CHECK(recolored->layoutKey() == first->layoutKey(), "a color adds nothing to the layout key");
 
+  const Theme::Handle palette = make({kSlotParagraphColor, kSlotLinkColor}, {0xff112233, 0xff445566});
+  const Theme::Handle otherPalette = make({kSlotParagraphColor, kSlotLinkColor}, {0xff778899, 0xffaabbcc});
+  const Theme::Handle darkPalette = make({kSlotDark[kSlotParagraphColor - 1]}, {0xff112233});
+  CHECK(palette->layoutKey() == emptyTheme()->layoutKey(), "color-only themes reuse default measurements");
+  CHECK(otherPalette->layoutKey() == emptyTheme()->layoutKey(), "another palette keeps default measurements");
+  CHECK(darkPalette->layoutKey() == emptyTheme()->layoutKey(), "dark-only colors reuse default measurements");
+  CHECK(palette->id() != emptyTheme()->id() && palette->id() != otherPalette->id() &&
+            palette->id() != darkPalette->id(),
+        "color-only themes still have distinct drawing ids");
+
   // A size change changes both.
   const Theme::Handle resized = make({kSlotParagraphFontSize, kSlotLinkColor}, {21, 0xff0000ff});
   CHECK(resized->layoutKey() != recolored->layoutKey(), "a size change changes the layout key");
   CHECK(resized->id() != recolored->id(), "and the drawing id");
+
+  // The numeric font value addresses the family's entry in the parallel font
+  // array. Equal indices with different arrays must invalidate text and size.
+  const Theme::Handle inter = make({kSlotParagraphFontFamily}, {0}, {"Inter"});
+  const Theme::Handle georgia = make({kSlotParagraphFontFamily}, {0}, {"Georgia"});
+  CHECK(inter.get() != georgia.get(), "different font families are different themes");
+  CHECK(inter->id() != georgia->id(), "a font family changes the drawing id");
+  CHECK(inter->layoutKey() != georgia->layoutKey(), "a font family invalidates measured layout");
+  CHECK(georgia->font(kSlotParagraphFontFamily) == "Georgia", "the second family resolves independently");
+  CHECK(make({kSlotParagraphFontFamily}, {0}, {"Inter"}).get() == inter.get(),
+        "equal font arrays share one theme");
+  const Theme::Handle reordered = make({kSlotParagraphFontFamily}, {0}, {"Georgia", "Inter"});
+  const Theme::Handle ordered = make({kSlotParagraphFontFamily}, {0}, {"Inter", "Georgia"});
+  CHECK(reordered->layoutKey() != ordered->layoutKey(), "font array order is part of layout identity");
+  CHECK(reordered->font(kSlotParagraphFontFamily) == "Georgia", "font indices retain array addressing");
+  CHECK(make({kSlotParagraphFontFamily}, {1}, {"ab", "c"})->id() !=
+            make({kSlotParagraphFontFamily}, {1}, {"a", "bc"})->id(),
+        "font names are hashed with their boundaries");
 
   // A pair is two slots, so both appearances are hashed.
   const Theme::Handle light = make({kSlotLinkColor}, {0xff112233});

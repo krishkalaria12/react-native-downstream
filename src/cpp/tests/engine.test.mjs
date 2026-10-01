@@ -64,6 +64,7 @@ before(async () => {
         incremental,
         downstream('PreparedDocument.cpp'),
         ...pool,
+        ...theme,
         ...engine,
       ],
     ],

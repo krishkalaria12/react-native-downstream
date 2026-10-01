@@ -116,6 +116,59 @@ bool preparedDocumentsAreSharedAndPrepared() {
   return calls == 2 || fail("Prepared document was not prepared at the recent widths");
 }
 
+bool preparedDocumentsUseTheirOwnHints() {
+  const auto unrelated = ThemeRegistry::intern({theme::kSlotParagraphFontSize}, {30}, {});
+  const auto requested = ThemeRegistry::intern({theme::kSlotParagraphFontSize}, {18}, {});
+  RenderPreparer::install(&recordPrepare);
+  RenderPreparer::noteLayout({2, 280, kChromeCodeWrap, {9}, true, unrelated});
+  RenderPreparer::noteLayout({1.5f, 320, kChromeTableToolbar, {7}, false, unrelated});
+
+  const LayoutHint owned{1, 0, kChromeCodeHeader, {1, 3}, true, requested};
+  const auto prepared = PreparedDocument::request("Owned theme and code controls.", owned);
+  prepared->runOrWait();
+  bool valid = true;
+  size_t calls = 0;
+  {
+    std::lock_guard<std::mutex> lock(preparedMutex);
+    for (const auto &[id, hint] : preparedCalls) {
+      if (id != prepared->result().document->id) continue;
+      calls++;
+      valid &= hint.themeId() == owned.themeId() && hint.chrome == owned.chrome &&
+          hint.wrapToggles == owned.wrapToggles && hint.codeBlockWrap == owned.codeBlockWrap;
+      valid &= (hint.width == 320 && hint.fontScale == 1.5f) || (hint.width == 280 && hint.fontScale == 2);
+    }
+  }
+
+  // Recent layouts with identical geometry but different themes/controls seed
+  // only one owned preparation, rather than repeating the same text work.
+  RenderPreparer::noteLayout({1.5f, 320, kChromeCodeWrap, {}, true, unrelated});
+  const auto deduped = PreparedDocument::request("One layout per owned geometry.", owned);
+  deduped->runOrWait();
+  size_t distinctCalls = 0;
+  {
+    std::lock_guard<std::mutex> lock(preparedMutex);
+    for (const auto &[id, hint] : preparedCalls) {
+      if (id == deduped->result().document->id) distinctCalls++;
+    }
+  }
+
+  const LayoutHint measured{1, 410, kChromeNone, {}, false, requested};
+  const auto exact = PreparedDocument::request("A known width needs no speculative preparation.", measured);
+  exact->runOrWait();
+  size_t exactCalls = 0;
+  {
+    std::lock_guard<std::mutex> lock(preparedMutex);
+    for (const auto &[id, hint] : preparedCalls) {
+      if (id != exact->result().document->id) continue;
+      exactCalls++;
+      valid &= hint == measured;
+    }
+  }
+  RenderPreparer::install(nullptr);
+  return (valid && calls == 2 && distinctCalls == 1 && exactCalls == 1) ||
+      fail("Prepared document used unrelated themes/controls or repeated owned layouts");
+}
+
 // Many streams share the bounded pool, and each ends with its own document.
 bool sessionsShareThePool() {
   constexpr int kSessions = 16;
@@ -205,6 +258,7 @@ int main() {
   CHECK(waiterRunsQueuedTask(), "a waiter runs its queued task");
   CHECK(preparedDocumentsAreSharedAndPrepared(),
         "prepared documents are shared and prepared");
+  CHECK(preparedDocumentsUseTheirOwnHints(), "prepared documents use only their own themes and controls");
   CHECK(sessionsShareThePool(), "sessions share the pool");
   CHECK(fastStreamStillPublishes(), "a fast stream still publishes");
   return ds_check_result();

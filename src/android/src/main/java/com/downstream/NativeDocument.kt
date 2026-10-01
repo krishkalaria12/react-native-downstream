@@ -22,12 +22,17 @@ internal class NativeDocument(
    * Each block's resolved typography and margins, one entry per block per
    * [BLOCK_LAYOUT_STRIDE] fields. Resolved in C++ by the same rules iOS calls, so
    * a theme means one thing rather than one thing per platform.
+   * A final field holds the preceding block's bottom margin for this slice.
    */
   private val layouts: DoubleArray,
 ) {
   val blockCount: Int get() = blocks.size / BLOCK_STRIDE
   val runCount: Int get() = runs.size / RUN_STRIDE
   val tokenCount: Int get() = tokens.size / TOKEN_STRIDE
+
+  /** The preceding block's resolved bottom margin, in points before scaling. */
+  val previousBottomMargin: Float
+    get() = layouts.getOrElse(blockCount * BLOCK_LAYOUT_STRIDE) { 0.0 }.toFloat()
 
   fun blockKind(block: Int) = blocks[block * BLOCK_STRIDE]
   fun headingLevel(block: Int) = blocks[block * BLOCK_STRIDE + 1]
@@ -46,16 +51,21 @@ internal class NativeDocument(
    * Which block an offset in the flattened text falls in.
    *
    * A run's face starts as its block's, so a run has to find the block it sits
-   * in. One pass over the block table, which is short; a run count table would
-   * be another array to keep in step with the blocks one.
+   * in. Find the last start at or before the offset without building an index.
+   * Offsets before the first block and an empty document return zero.
    */
   fun blockOf(offset: Int): Int {
-    for (block in 0 until blockCount) {
-      if (offset >= blockStart(block)) {
-        return block
+    var low = 0
+    var high = blockCount
+    while (low < high) {
+      val middle = low + (high - low) / 2
+      if (blockStart(middle) <= offset) {
+        low = middle + 1
+      } else {
+        high = middle
       }
     }
-    return 0
+    return (low - 1).coerceAtLeast(0)
   }
 
   /** The fence language as written, or empty for an indented block. */
