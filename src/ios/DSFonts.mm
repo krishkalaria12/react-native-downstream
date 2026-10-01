@@ -95,6 +95,10 @@ struct FontCache {
       RCTFontProperties properties;
       properties.family = key.family.empty() ? nil : @(key.family.c_str());
       properties.size = key.size;
+      // The size is already scaled. The resolver does not default the
+      // multiplier, so leaving it NaN asserts in debug and draws a NaN-sized
+      // face in release.
+      properties.sizeMultiplier = 1.0;
       properties.weight = weightFor(weight);
       properties.style = styleFor(italic);
       font = RCTFontWithFontProperties(properties);
