@@ -11,7 +11,7 @@ This is the Phase 0 contract for the native Markdown component. `src/types.ts` h
 | GFM task lists                      | Readable checkbox state and accessibility label; display only                  | Interactive toggling                                                   | Mutation of Markdown by tapping                            |
 | Raw HTML                            | Escaped, visible source text                                                   | None planned                                                           | HTML rendering, scripts, embedded content                  |
 | Images                              | Alt text remains readable; no network request                                  | HTTPS images after complete URL validation, placeholders, cancellation | `data:`, `file:`, and custom schemes                       |
-| Code                                | Inline code, progressively visible fenced/indented blocks, syntax highlighting by the fence's language, and a header with copy, download, and wrap controls | Per-block token colors beyond the theme | Executing code, and highlighting above 64 KiB of code       |
+| Code                                | Inline code, progressively visible fenced/indented blocks, syntax highlighting by the fence's language, line numbers, fence titles, a header with copy, download, wrap, and expand controls, and a capped height that scrolls inside the card | Drawing line marks; a theme that can override token colors | Executing code, and highlighting above 64 KiB of code       |
 | Math                                | Literal delimiter/source text                                                  | Native math layout after separate review                               | Executing macros or loading remote math content            |
 | Links                               | Valid complete `https:`, `http:`, and `mailto:` links; press callback          | Long press actions                                                     | Automatic opening of custom schemes                        |
 | Custom renderers                    | None                                                                           | None planned                                                           | Per-node React render callbacks in the native display path |
@@ -57,6 +57,13 @@ previewed.append('hello **wor');
 // Every long line wraps, and the code header gains a per-block wrap button.
 <DownstreamMarkdown markdown={message} codeBlockWrap />;
 
+// Line numbers are on by default. `false` hides them for every block.
+<DownstreamMarkdown markdown={message} lineNumbers={false} />;
+
+// A code block's body stops at 400 points and scrolls inside its card.
+// `0` removes the cap, and the header's expand button lifts it per block.
+<DownstreamMarkdown markdown={message} codeBlockMaxHeight={0} />;
+
 // `selectable` is on by default. An app that opens its own message menu on a
 // long press turns it off, or the platform's selection menu wins the gesture.
 <DownstreamMarkdown markdown={message} selectable={false} />;
@@ -94,6 +101,7 @@ type MarkdownControls =
                   onError?: (e) => void;
                 };
             wrap?: boolean | { onToggle?: (e) => void };
+            expand?: boolean | { onToggle?: (e) => void };
           };
       table?:
         | boolean
@@ -111,7 +119,7 @@ type MarkdownControls =
     };
 ```
 
-A code block's header shows copy, download, and wrap. A table shows a toolbar whose copy and download buttons open a format menu: Markdown, CSV, and TSV for copy, CSV and Markdown for download. A control turns on as soon as its own block is settled, so a finished code block can be copied while the rest of the message is still streaming. A block that is still being written shows its controls disabled, because its content can still change.
+A code block's header shows copy, download, wrap, and expand. Expand appears only on a block taller than `codeBlockMaxHeight`, because that is the block it can do anything for. A table shows a toolbar whose copy and download buttons open a format menu: Markdown, CSV, and TSV for copy, CSV and Markdown for download. A control turns on as soon as its own block is settled, so a finished code block can be copied while the rest of the message is still streaming. A block that is still being written shows its controls disabled, because its content can still change.
 
 Copying is native and needs no permission. A code block copies its plain text, with a zero-width placeholder removed, so an empty fence copies as an empty string. A table copies as a `text/html` flavor first, so pasting into a spreadsheet or a document keeps the rows, columns, and alignment, and falls back to plain text for targets that do not take HTML. A value is quoted in CSV only when it holds the separator, a quote, or a line break, and an inner quote is doubled, which is what Streamdown's web component does; a value in TSV is never quoted, because a tab inside a cell would read as a new column, so a tab, a newline, and a carriage return become the two-character escapes `\t`, `\n`, and `\r` that a spreadsheet shows as text.
 
@@ -121,16 +129,17 @@ Copying is native and needs no permission. A code block copies its plain text, w
 
 Downloading opens the platform's own save dialog: `UIDocumentPickerViewController` for exporting on iOS, and a `CreateDocument` `ActivityResultContract` on Android. The user chooses the location, and the library never picks one. A cancelled dialog is not an error and reports nothing.
 
-`translations` overrides the button labels, the menu items, and the spoken announcements, using Streamdown's key names (`copyCode`, `downloadFile`, `copied`, `wrapCode`, `unwrapCode`, `copyTable`, `copyTableAsCsv`, and the rest). `defaultTranslations` holds the English defaults. Unknown keys are ignored.
+`translations` overrides the button labels, the menu items, and the spoken announcements, using Streamdown's key names (`copyCode`, `downloadFile`, `copied`, `wrapCode`, `unwrapCode`, `copyTable`, `copyTableAsCsv`, and the rest) plus `expandCode` and `collapseCode` for the expand button. `defaultTranslations` holds the English defaults. Unknown keys are ignored.
 
 Every press reaches the matching callback as one `MarkdownControlEvent`:
 
 ```ts
 type MarkdownControlEvent = {
   block: 'code' | 'table';
-  action: 'copy' | 'download' | 'wrap';
+  action: 'copy' | 'download' | 'wrap' | 'expand';
   format?: 'text' | 'markdown' | 'csv' | 'tsv';
   wrapped?: boolean; // wrap only
+  expanded?: boolean; // expand only
   language: string; // fence language as written; '' for tables
   filename?: string; // downloads
 };
@@ -138,7 +147,7 @@ type MarkdownControlEvent = {
 
 `language` is the fence's language in the case the writer used: `ts`, `TS`, and `Ts` all come back as written, so compare it case-insensitively. The download name is the one that is case-insensitive, not this field.
 
-`onCopy` and `onDownload` observe a press the library has already carried out, so an app can log, toast, or undo. `onToggle` on `wrap` reports the block's layout after the press and takes over nothing: the button still changes the layout, and the event is a report. `codeBlockWrap` sets the starting state for every code block; the button changes one block and does not change the prop. A press on a document that has since been replaced is dropped, so a handler never sees an event for content the reader is no longer looking at.
+`onCopy` and `onDownload` observe a press the library has already carried out, so an app can log, toast, or undo. `onToggle` on `wrap` reports the block's layout after the press, and `onToggle` on `expand` reports whether the block's cap is lifted after it; neither takes over anything: the button still changes the block, and the event is a report. `codeBlockWrap` sets the starting state for every code block and the button changes one block without changing the prop; `codeBlockMaxHeight` is the cap for all of them and expand lifts it for one block. A press on a document that has since been replaced is dropped, so a handler never sees an event for content the reader is no longer looking at.
 
 A control that fails reports `control_failed` to that control's own `onError`, and to the view's `onError` when the control has none, so an app can watch every failure in one place without giving up per-control handling. The error carries `block` and `action` naming the control that failed, so nothing has to be parsed out of the message.
 
@@ -251,6 +260,30 @@ Theming is on both platforms. A theme is interned by content in the shadow node,
 
 The rules that decide what a block draws with are written once, in the engine, and both renderers call them. A document read resolves each block's typography, its element, and its two margins on the C++ side and hands the result to the platform, so a theme means one thing rather than one thing per platform. A theme slot that nothing reads is a value that resolves, interns, redraws, and never appears, which is why `pnpm test:native` fails when one is added.
 
+### Line numbers, titles, and the height cap
+
+`lineNumbers` is on by default, as in Streamdown. Numbers are drawn beside the code in a gutter that does not scroll sideways with it, so a long line stays readable while the code scrolls. They are drawn rather than typed: they are never selected, never copied, and never read aloud. The gutter draws in the theme's own `codeBlock.color`, dimmed, in the theme's code font and size, and the card's padding, background, radius, and border are the theme's, so a theme restyles a code block and its numbers together. There is no separate gutter slot: the numbers annotate the code, so they follow it. `lineNumbers={false}` hides them for every block; a fence's own `noLineNumbers` hides them for that block only, and the prop wins over it.
+
+A fence's info string is parsed once by the engine, and the header label, the gutter, and the download name all read that one result. The grammar, and the spellings each renderer uses, are:
+
+| Token | Effect |
+| --- | --- |
+| `startLine=N` | Numbers begin at N, from 1 to 1000000. Below 1 or above that bound is ignored, so the gutter stays a readable width. |
+| `showLineNumbers=N`, `showLineNumbers{N}` | The same, as Docusaurus and rehype-pretty code write it. `startLine` wins if both appear. |
+| `noLineNumbers` | Hides numbers for that block. An exact token. |
+| `title="…"`, `title='…'`, `title=bare`, `filename="…"` | The header's label, replacing the language. The first one wins. Docusaurus, rehype-pretty code, Expressive Code, and Nextra spell it this way. |
+| `lang:path` in the first word | The label, when no `title=` is present. |
+| `{1,3-5}` | Parsed and kept, so a mark list can never reach a title. Drawing them is not part of this release. |
+
+Anything else in the info string is ignored and stays available to a custom renderer. A title loses control characters and the bidi embedding, override, and isolate characters, and is capped at 96 UTF-16 units, so a model cannot write a label that reads as though it named something else. While a fence is still being written, a title with no closing quote yet shows the language instead of a wrong name.
+
+`codeBlockMaxHeight` is the tallest a code block's body grows before it scrolls inside its own card, in points. It is 400 by default, as in Streamdown. `0`, `'0'`, `'none'`, `Infinity`, and `'Infinity'` remove the cap. A number is points, as React Native's own layout props are; a CSS length has no meaning here and falls back to the default with a development warning, as do a negative and a `NaN`.
+
+A capped block is never shorter than five lines, whatever the text size, because a 400-point cap at the largest Dynamic Type size would otherwise show two. While a capped block is still streaming it follows its newest line, so a reader watching a long fence arrive sees its end rather than its beginning; scrolling away stops that, scrolling back resumes it, and the block keeps its position once the stream settles. A vertical drag at a capped block's edge scrolls the surrounding list instead, so a scroll view inside a chat list does not trap the gesture.
+
+The expand button lifts the cap for one block, and is the way out of scrolling inside a scrolling chat on a phone. It appears only on a block taller than the cap, and clears on a new generation.
+
+
 A control turns on as soon as its own block is settled. A controlled document settles every block; a stream settles the blocks it has proven closed, and settles the rest when it finishes. So a finished code block in a still-streaming answer can be copied immediately, and a block that is still being written shows its controls disabled. Settling is a property of the parse, not of the controls, and no control button ever changes whether a block is settled.
 
 ### Threading
@@ -271,5 +304,5 @@ Parsing and platform text preparation run on one shared pool of worker threads: 
 | Selection | `selectable` enables native selection and copy in text segments. **It is on by default**, applied per settled segment, so text that is still streaming is never selectable. Copy is plain visible text; `getSource()` returns the complete canonical stream source. Selection cannot span a table or completed segment boundary. `controls` adds a per-block copy and download, described under [controls](#controls). | An app that opens its own message menu on a long press must pass `selectable={false}`. |
 | Accessibility | VoiceOver and TalkBack expose reading stops for text blocks, table rows, and links, with heading and link roles and spoken task state. | Rich table navigation if needed. |
 | RTL | Text uses natural writing direction. List markers, quote bars, code backgrounds, rules, and table columns mirror for RTL content. | None |
-| Code blocks | Fenced blocks are colored from a shared token palette modeled on GitHub's light and dark code themes, so iOS and Android agree. A streaming block is colored from the text it has, and its settled tokens are the same whether it arrived in one piece or a thousand. Selection and copy return the plain code text. Each fenced block also gets a header with copy, download, and a per-block wrap button; `codeBlockWrap` sets the starting state for all of them. | A theme that can override token colors. |
+| Code blocks | Fenced blocks are colored from a shared token palette modeled on GitHub's light and dark code themes, so iOS and Android agree. A streaming block is colored from the text it has, and its settled tokens are the same whether it arrived in one piece or a thousand. Selection and copy return the plain code text. Each fenced block gets a header with copy, download, a per-block wrap button, and an expand button that appears only on a block past the cap; `codeBlockWrap` sets the starting state for all of them. `lineNumbers` is on by default and draws a gutter that stays put while the code scrolls sideways, numbered from the fence's `startLine` and widened when the last number gains a digit. `codeBlockMaxHeight` caps a block's body at 400 points and lets it scroll inside its card, which follows its newest line while it streams. A fence's `title=` replaces the language in the header, truncating in the middle so a path keeps its file name. None of this changes copied text, selection, or what a screen reader reads. | Drawing `meta.marks` as line backgrounds. A theme that can override token colors. |
 | Colors | System colors follow light and dark appearance on both platforms. | Style customization after the feature set is fixed. |

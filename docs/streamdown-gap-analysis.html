@@ -139,9 +139,9 @@
                 <td>Shipped in <a href="syntax-highlighting-plan.html">the syntax highlighting plan</a>: vendored Lexilla lexers in <code>src/cpp/lexilla/</code> tokenize on the shared worker pool, iOS and Android read one GitHub-themed palette, and the 64 KiB cap and no-auto-detect rule are kept. Fidelity is Notepad++-like rather than Shiki's: a per-line post-pass promotes a call, a property, and a PascalCase type, and JSX tags are the weakest case.</td>
               </tr>
               <tr>
-                <td>Code block header, line numbers, max height<br /><span class="tag new">not planned</span></td>
-                <td>Code card header with the language, copy, download and wrap; the fence info string is kept in <code>Block::info</code> but read only for download names</td>
-                <td>Language label, <code>lineNumbers</code>, <code>startLine=</code> read from the fence meta string, <code>codeBlockMaxHeight</code> (default 400) that keeps scrolling to the bottom while the block streams, and a placeholder while highlighting loads. Native highlighting needs no placeholder. See <a href="code-block-chrome-plan.html">the code block chrome plan</a>.</td>
+                <td>Code block header, line numbers, max height<br /><span class="tag done">shipped</span></td>
+                <td>Code card header with the fence title or language, copy, download, wrap and expand; <code>lineNumbers</code> on by default with <code>startLine=</code> read from the fence meta; <code>codeBlockMaxHeight</code> (default 400) that keeps scrolling to the newest line while the block streams</td>
+                <td>Shipped in <a href="code-block-chrome-plan.html">the code block chrome plan</a>: one C++ parser for the fence meta string feeds the header label, the gutter and the download name, the gutter is drawn beside the code so copy and accessibility text are unchanged, and the cap scrolls inside the card with a drag hand-off to the surrounding list. The expand button is the one part Streamdown does not have, and a placeholder while highlighting loads was not needed because tokens arrive with the snapshot.</td>
               </tr>
               <tr>
                 <td>Copy and download controls<br /><span class="tag planned">planned</span></td>
@@ -262,7 +262,7 @@
         </div>
         <ol class="order">
           <li><b>Theme and style prop</b><span>Unblocks adoption; every later feature needs styling hooks anyway.</span></li>
-          <li><b>Code block header, copy, meta string, max height</b><span>Keep the fence meta string in the parser and add a code segment with its own chrome.</span></li>
+          <li><b>Code block header, copy, meta string, max height</b><span>Keep the fence meta string in the parser and add a code segment with its own chrome.</span><span class="tag done">shipped</span></li>
           <li><b>Syntax highlighting</b><span>Shipped. Kept here so the order reads as it was planned.</span></li>
           <li><b>Streaming caret and fade-in</b><span>The biggest perceived-quality gap in chat.</span></li>
           <li><b>Fence-language renderers</b><span>Needs a contract change and a React-hosting segment; opens the door to diagrams without core dependencies.</span></li>

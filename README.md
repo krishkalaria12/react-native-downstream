@@ -98,6 +98,30 @@ const converted = syntaxColorsFromTheme(await import('./dracula.json'));
 
 `presets.github` and `presets.streamdown` are the two themes the renderers are checked against. See [theming](docs/api.md#theming) for the whole surface.
 
+### Line numbers, titles, and a capped height
+
+Code blocks get the chrome a documentation site's do, and it all comes from the fence's own info string:
+
+````tsx
+```ts title="src/app/load.ts" startLine=10
+export async function load(id: string) {
+  const res = await fetch(`/api/${id}`);
+  return res.json();
+}
+```
+````
+
+The header shows `src/app/load.ts` instead of `ts`, and the gutter numbers from 10. The same `title=`, `filename=`, and `lang:path` spellings the Docusaurus, rehype-pretty code, and Expressive Code docs use are all accepted, along with `showLineNumbers=N`, `showLineNumbers{N}`, and `noLineNumbers`.
+
+```tsx
+<DownstreamMarkdown markdown={message} lineNumbers={false} />
+<DownstreamMarkdown markdown={message} codeBlockMaxHeight={0} />
+```
+
+`lineNumbers` is on by default, as in Streamdown, and a fence's `noLineNumbers` turns them off for one block. Numbers are drawn in a gutter beside the code rather than typed into it, so they are never selected, copied, or read aloud: copied text is byte-identical with numbers on or off. The gutter stays still while the code scrolls sideways, and widens by one digit as a block crosses 99. It draws in the theme's own code color, dimmed, in the theme's code font at the theme's code size, and the card's padding and border are the theme's too, so a theme restyles a code block and its numbers together.
+
+`codeBlockMaxHeight` is 400 points, as in Streamdown, and `0` removes it. A taller block scrolls inside its own card rather than filling the screen, and while it is still streaming it follows its newest line until the reader scrolls away. A vertical drag at the card's edge scrolls the surrounding list instead, so a scroll view inside a chat list does not trap the gesture. The header's expand button lifts the cap for one block; it appears only on a block past the cap. See [the plan](docs/code-block-chrome-plan.html) for the grammar and why the gutter is drawn rather than typed.
+
 ### Copy and download controls
 
 Every code block gets a header and every table gets a toolbar, with no setup. `controls` takes Streamdown's shape, so a value written for it works as it is:
@@ -115,7 +139,7 @@ Every code block gets a header and every table gets a toolbar, with no setup. `c
 />
 ```
 
-Code copies as plain text; a table copies as `text/html` first, so pasting into a spreadsheet keeps the rows, columns, and alignment, and falls back to plain text for targets that do not take HTML. A code block's header also has a per-block wrap button, and `codeBlockWrap` sets the starting state for all of them. `controls={false}` removes the header and the toolbar without changing any block's layout.
+Code copies as plain text; a table copies as `text/html` first, so pasting into a spreadsheet keeps the rows, columns, and alignment, and falls back to plain text for targets that do not take HTML. A code block's header has a per-block wrap button and, on a block past the cap, an expand button; `codeBlockWrap` and `codeBlockMaxHeight` set the starting state for all of them. `controls={false}` removes the header and the toolbar without changing any block's layout.
 
 A download opens the platform's own save dialog and the user picks the location, so the library never writes to a path it chose. `filename` is a base name; the extension comes from the block, not from the name. Every press reaches the matching callback, and a failure reports `control_failed` to that control's `onError` or to the view's. A control turns on as soon as its own block is settled, so a finished code block can be copied while the rest of the answer is still streaming. See [controls](docs/api.md#controls) for the whole shape.
 
