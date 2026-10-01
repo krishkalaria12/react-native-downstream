@@ -1130,7 +1130,7 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     headerBackground = segment.colors.headerBackground
     headerBorder = segment.colors.headerBorderColor
     language.setTextColor(segment.colors.headerColor)
-    language.textSize = segment.headerSize
+    language.setTextSize(TypedValue.COMPLEX_UNIT_PX, segment.headerSize)
     language.typeface = segment.headerFace
     // A selected wrap button takes the text color, so its state is visible. The
     // buttons take the theme's own button color where it gave them one.
