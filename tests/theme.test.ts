@@ -352,6 +352,20 @@ function resetsLightOnly(
 }
 
 describe('markdownStyle', () => {
+  it('takes a light and dark pair on an element color, over the token', () => {
+    // An element style wins over a token, and a pair is how an element color
+    // follows the appearance, so dropping it would leave the token showing.
+    const resolved = resolveTheme(
+      { colors: { muted: '#1e293b' } },
+      {
+        codeBlock: { backgroundColor: { light: '#ffffff', dark: '#020817' } },
+      }
+    );
+    const light = slot('codeBlock.backgroundColor');
+    expect(resolved.values[resolved.slots.indexOf(light)]).toBe(0xffffffff);
+    expect(resolved.values[resolved.slots.indexOf(light + 1)]).toBe(0xff020817);
+  });
+
   it('maps every element key this renderer draws onto its slots', () => {
     const resolved = resolveTheme(
       {},
