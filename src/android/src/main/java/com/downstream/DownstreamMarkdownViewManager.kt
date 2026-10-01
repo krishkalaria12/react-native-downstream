@@ -43,7 +43,8 @@ class DownstreamMarkdownViewManager :
     view.onControlFailure = { target, block, action, message ->
       dispatchControlFailure(target, block, action, message)
     }
-    view.onWrapToggle = { target, wrapped -> dispatchWrapToggle(target, wrapped) }
+    view.onWrapToggle = { target, ordinal, wrapped -> dispatchWrapToggle(target, ordinal, wrapped) }
+    view.onExpandToggle = { target, ordinal, expanded -> dispatchExpandToggle(target, ordinal, expanded) }
     return view
   }
 
@@ -93,9 +94,13 @@ class DownstreamMarkdownViewManager :
     view.setSyntaxHighlighting(value)
   }
 
-  override fun setCodeBlockWrap(view: DownstreamMarkdownView, value: Boolean) {
-    view.setCodeBlockWrap(value)
-  }
+  // The shadow node parses these into the state; the view reads the result from
+  // there, because a height belongs to the measurement rather than to a prop.
+  override fun setCodeBlockWrap(view: DownstreamMarkdownView, value: Boolean) = Unit
+
+  override fun setLineNumbers(view: DownstreamMarkdownView, value: Boolean) = Unit
+
+  override fun setCodeBlockMaxHeight(view: DownstreamMarkdownView, value: Double) = Unit
 
   override fun setControls(view: DownstreamMarkdownView, value: Int) {
     view.setControls(value)
@@ -131,17 +136,18 @@ class DownstreamMarkdownViewManager :
   ): Any? {
     val state = stateWrapper.stateData ?: return null
     view.setStateWrapper(stateWrapper)
-    val toggles = state.getArray("wrapToggles")
-    val ordinals = mutableSetOf<Int>()
-    if (toggles != null) {
-      for (index in 0 until toggles.size()) {
-        ordinals.add(toggles.getDouble(index).toInt())
-      }
-    }
-    // The prop's own wrap setting travels beside the set, because together they
-    // decide each block's layout and neither half can be inferred from `chrome`.
-    view.setCodeBlockWrap((state.getDouble("codeBlockWrap") ?: 0.0) != 0.0)
-    view.setCodeWrapToggles(ordinals)
+    // The whole code layout arrives in one map: the props and the reader's own
+    // per-block choices together, because between them they decide each card's
+    // height and neither half can be inferred from `chrome`.
+    view.setCodeProps(
+      (state.getDouble("codeBlockWrap") ?: 0.0) != 0.0,
+      (state.getDouble("lineNumbers") ?: 1.0) != 0.0,
+      state.getDouble("codeBlockMaxHeight") ?: 400.0,
+    )
+    view.setCodeChoices(
+      state.getOrdinals("wrapToggles"),
+      state.getOrdinals("expanded"),
+    )
     view.setChrome(state.getDouble("chrome").toInt())
     // The theme travels as its id, the way the document does, so a state update
     // carries one number rather than every slot the theme sets.
@@ -151,6 +157,12 @@ class DownstreamMarkdownViewManager :
       state.getDouble("themeId")?.toLong() ?: 0L,
     )
     return null
+  }
+
+  /** One sorted choice set from the state, as `renderedDocument` reads it. */
+  private fun ReadableMap.getOrdinals(key: String): IntArray {
+    val array = getArray(key) ?: return IntArray(0)
+    return IntArray(array.size()) { array.getDouble(it).toInt() }.also { it.sort() }
   }
 
   override fun prepareToRecycleView(reactContext: ThemedReactContext, view: DownstreamMarkdownView): DownstreamMarkdownView {
@@ -176,34 +188,37 @@ class DownstreamMarkdownViewManager :
     // The theme id the view mounts with, so this measures the same rendering the
     // view draws rather than an unthemed one it would measure again.
     val themeId = localData?.getDouble("themeId")?.toLong() ?: 0L
-    // The reader's wrap choices travel in the state beside the document, because
-    // a code block's height depends on whether it wraps and a document can hold
-    // both kinds at once. Measuring without them would measure a different
-    // layout from the one the view draws.
-    val codeBlockWrap = (localData?.getDouble("codeBlockWrap") ?: 0.0) != 0.0
-    val toggles = localData?.getArray("wrapToggles")
-    val wrapToggles = if (toggles == null) {
-      IntArray(0)
-    } else {
-      IntArray(toggles.size()) { toggles.getDouble(it).toInt() }
-    }
+    // The whole code layout travels in the state beside the document, because a
+    // code block's height depends on whether it wraps, whether its cap applies, and
+    // whether it has a gutter, and one document can hold every combination at once.
+    // Measuring without them would measure a different layout from the one the view
+    // draws.
+    val code = localData?.toCodeLayout() ?: CodeLayout()
     if (DownstreamNative.preparationContext?.get() !== context) {
       DownstreamNative.preparationContext = WeakReference(context)
     }
     val rendered = RenderedDocument.obtain(context, documentId, fontScale, themeId = themeId)
       ?: return YogaMeasureOutput.make(0f, 0f)
     val layoutWidth = if (widthMode == YogaMeasureMode.UNDEFINED || !width.isFinite()) {
-      rendered.desiredWidth(chrome, codeBlockWrap, wrapToggles)
+      rendered.desiredWidth(code)
     } else {
       width.toInt()
     }
     return YogaMeasureOutput.make(
       PixelUtil.toDIPFromPixel(layoutWidth.toFloat()),
-      PixelUtil.toDIPFromPixel(
-        rendered.height(layoutWidth, chrome, codeBlockWrap, wrapToggles).toFloat(),
-      ),
+      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth, chrome, code).toFloat()),
     )
   }
+
+  /** The map the shadow node hands measure, read as the one code layout. */
+  private fun ReadableMap.toCodeLayout(): CodeLayout = CodeLayout(
+    CodeLayoutProps(
+      (getDouble("codeBlockWrap") ?: 0.0) != 0.0,
+      (getDouble("lineNumbers") ?: 1.0) != 0.0,
+      PixelUtil.toPixelFromDIP(getDouble("codeBlockMaxHeight") ?: 400.0).toFloat(),
+    ),
+    CodeChoices(getOrdinals("wrapToggles"), getOrdinals("expanded")),
+  )
 
   override fun getExportedCustomDirectEventTypeConstants(): MutableMap<String, Any> = mutableMapOf(
     LinkPressEvent.NAME to mapOf("registrationName" to "onLinkPress"),
@@ -241,6 +256,9 @@ class DownstreamMarkdownViewManager :
         format,
         language,
         filename,
+        // A copy, download or format action leaves both choices as they were, so
+        // the reader's state is reported rather than implied.
+        false,
         false,
         view.currentGeneration(),
       ),
@@ -269,14 +287,33 @@ class DownstreamMarkdownViewManager :
     )
   }
 
-  private fun dispatchWrapToggle(view: DownstreamMarkdownView, wrapped: Boolean) {
-    // The height changed, and only Yoga and the chat list around the message can
-    // know that, so the change goes back through a Fabric state update rather
-    // than a React render: no parse, no JavaScript work, and no re-measure of
-    // the text, which is laid out again only for the block that changed.
-    val ordinal = view.nextUnwrappedOrdinal()
-    if (ordinal < 0) return
+  /**
+   * A wrap or expand press changes a card's height, and only Yoga and the chat
+   * list around the message can know that, so the change goes back through a Fabric
+   * state update rather than a React render: no parse, no JavaScript work, and no
+   * re-measure of the text, which is laid out again only for the block that
+   * changed. The button has already acted by the time the event is reported.
+   */
+  private fun dispatchWrapToggle(view: DownstreamMarkdownView, ordinal: Int, wrapped: Boolean) {
+    val toggled = view.nextToggledOrdinal()
+    if (toggled < 0) return
     view.toggleWrap(ordinal)
+    dispatchControlAction(view, "wrap", wrapped = wrapped)
+  }
+
+  private fun dispatchExpandToggle(view: DownstreamMarkdownView, ordinal: Int, expanded: Boolean) {
+    val toggled = view.nextToggledOrdinal()
+    if (toggled < 0) return
+    view.toggleExpand(ordinal)
+    dispatchControlAction(view, "expand", expanded = expanded)
+  }
+
+  private fun dispatchControlAction(
+    view: DownstreamMarkdownView,
+    action: String,
+    wrapped: Boolean = false,
+    expanded: Boolean = false,
+  ) {
     val context = view.context as? ReactContext ?: return
     dispatch(
       view,
@@ -284,11 +321,12 @@ class DownstreamMarkdownViewManager :
         UIManagerHelper.getSurfaceId(context),
         view.id,
         "code",
-        "wrap",
+        action,
         "",
         "",
         "",
         wrapped,
+        expanded,
         view.currentGeneration(),
       ),
     )
@@ -328,6 +366,7 @@ private class ControlActionEvent(
   private val language: String,
   private val filename: String,
   private val wrapped: Boolean = false,
+  private val expanded: Boolean = false,
   private val generation: Int,
 ) : Event<ControlActionEvent>(surfaceId, viewTag) {
   override fun getEventName() = NAME
@@ -339,6 +378,7 @@ private class ControlActionEvent(
     putString("language", language)
     putString("filename", filename)
     putBoolean("wrapped", wrapped)
+    putBoolean("expanded", expanded)
     putInt("generation", generation)
   }
 

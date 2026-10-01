@@ -15,6 +15,31 @@ using namespace facebook::jni;
 
 namespace {
 
+folly::dynamic ordinalArray(const std::vector<uint32_t> &ordinals) {
+  auto array = folly::dynamic::array();
+  for (const uint32_t ordinal : ordinals) {
+    array.push_back(static_cast<double>(ordinal));
+  }
+  return array;
+}
+
+/// The document id, font scale, chrome, code layout, and theme id as the map the
+/// view manager reads. `measure`, `updateState`, and the state wrapper all
+/// resolve this same shape, so a measurement and a mount cannot disagree about a
+/// height or about the colors it drew it with.
+folly::dynamic codeLayoutData(uint64_t documentId, Float fontScale, uint32_t chrome,
+                              const downstream::CodeLayout &code,
+                              const downstream::Theme::Handle &theme = nullptr) {
+  return folly::dynamic::object("documentId", static_cast<double>(documentId))(
+      "fontScale", static_cast<double>(fontScale))("chrome", static_cast<double>(chrome))(
+      // The booleans travel as numbers, so the whole map is one type across JNI.
+      "codeBlockWrap", code.props.wrap ? 1.0 : 0.0)("lineNumbers", code.props.lineNumbers ? 1.0 : 0.0)(
+      "codeBlockMaxHeight", static_cast<double>(code.props.maxHeight))(
+      "wrapToggles", ordinalArray(code.choices.wrapToggles))("expanded", ordinalArray(code.choices.expanded))(
+      // By id, as the document is: no slot value is copied on every measurement.
+      "themeId", static_cast<double>(theme ? theme->id() : 0));
+}
+
 // DownstreamNative.prepare, resolved on a Java thread by nativeInstallPreparer.
 // Worker threads are attached by the pool, so FindClass would use the system
 // class loader there and miss the app's classes.
@@ -23,6 +48,17 @@ JavaVM *javaVm = nullptr;
 jclass nativeClass = nullptr;
 jmethodID prepareMethod = nullptr;
 std::atomic<bool> javaReady{false};
+
+/// A sorted choice set as a Java array. An empty set becomes an empty array,
+/// which is what `binarySearch` on the Kotlin side reads as "nothing chosen".
+jintArray ordinalsToJava(JNIEnv *env, const std::vector<uint32_t> &ordinals) {
+  jintArray array = env->NewIntArray(static_cast<jsize>(ordinals.size()));
+  if (array != nullptr && !ordinals.empty()) {
+    std::vector<jint> values(ordinals.begin(), ordinals.end());
+    env->SetIntArrayRegion(array, 0, static_cast<jsize>(values.size()), values.data());
+  }
+  return array;
+}
 
 /// The JNIEnv for a pool thread, attaching it for the rest of its life.
 JNIEnv *attachedEnv() {
@@ -50,7 +86,9 @@ Java_com_downstream_DownstreamNative_nativeInstallPreparer(JNIEnv *env, jclass c
   if (javaReady.load(std::memory_order_relaxed)) {
     return;
   }
-  const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JFFIZI[IJ)V");
+  // documentId, fontScale, width, chrome, codeBlockWrap, lineNumbers,
+  // codeBlockMaxHeight, wrapToggles, expanded, themeId.
+  const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JFFIZZF[I[IJ)V");
   if (method == nullptr || env->GetJavaVM(&javaVm) != JNI_OK) {
     env->ExceptionClear();
     return;
@@ -68,12 +106,13 @@ namespace facebook::react {
 // StaticLayout configuration the view draws with.
 Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHandle &document,
                                                   Float fontSizeMultiplier, Float maximumWidth,
-                                                  SurfaceId surfaceId, uint32_t chrome, bool codeBlockWrap,
-                                                  const std::vector<uint32_t> &wrapToggles,
+                                                  SurfaceId surfaceId, uint32_t chrome,
+                                                  const downstream::CodeLayout &code,
                                                   const downstream::Theme::Handle &theme) const {
   // Java resolves the theme through the registry by id, the way it resolves the
   // document, so no slot value is copied across JNI on a measurement. Zero is
   // the default theme's own id.
+
   downstream::DocumentRegistry::add(document);
   const auto &fabricUIManager = contextContainer_->at<jni::global_ref<jobject>>("FabricUIManager");
   static const auto measure =
@@ -81,20 +120,18 @@ Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHand
           ->getMethod<jlong(jint, jstring, ReadableMap::javaobject, ReadableMap::javaobject, ReadableMap::javaobject,
                             jfloat, jfloat, jfloat, jfloat)>("measure");
 
-  // The chrome and the reader's wrap choices travel with the document, so the
-  // view manager measures at the height the same layout produces, which is what
-  // the view then lays out. A code block's height depends on whether it wraps,
-  // and a document can hold wrapped and unwrapped code at once, so the choices
-  // are part of the measurement rather than something the view resolves later.
-  folly::dynamic toggleArray = folly::dynamic::array();
-  for (const uint32_t ordinal : wrapToggles) {
-    toggleArray.push_back(static_cast<double>(ordinal));
-  }
-  folly::dynamic localData = folly::dynamic::object("documentId", static_cast<double>(document->id))(
-      "fontScale", static_cast<double>(fontSizeMultiplier))("chrome", static_cast<double>(chrome))(
-      "codeBlockWrap", codeBlockWrap ? 1.0 : 0.0)("wrapToggles", std::move(toggleArray))(
-      "themeId", static_cast<double>(theme ? theme->id() : 0));
-  auto localDataMap = ReadableNativeMap::newObjectCxxArgs(std::move(localData));
+  // The chrome, the whole code layout, and the theme's id travel with the
+  // document, so the view manager measures at the height the same layout
+  // produces, which is what the view then lays out. A code block's height depends
+  // on whether it wraps, whether its cap applies, and whether it has a gutter,
+  // and one document can hold every combination at once, so all of it is part of
+  // the measurement rather than something the view resolves later.
+  //
+  // The same map shape is what the view manager reads in `updateState` and in
+  // `measure`, so all three resolve one layout rather than three.
+  auto localDataMap = ReadableNativeMap::newObjectCxxArgs(
+      codeLayoutData(document->id, fontSizeMultiplier, chrome, code, theme));
+
   auto propsMap = ReadableNativeMap::newObjectCxxArgs(folly::dynamic::object());
   auto componentName = make_jstring("DownstreamMarkdownView");
 
@@ -119,19 +156,19 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
   }
   downstream::DocumentRegistry::add(document);
   for (const auto &hint : hints) {
-    // The wrap choices come with the hint, because a prepared height is only
-    // the height of the layout the reader actually has.
-    jintArray toggles = env->NewIntArray(static_cast<jsize>(hint.wrapToggles.size()));
-    if (toggles != nullptr && !hint.wrapToggles.empty()) {
-      std::vector<jint> values(hint.wrapToggles.begin(), hint.wrapToggles.end());
-      env->SetIntArrayRegion(toggles, 0, static_cast<jsize>(values.size()), values.data());
-    }
+    // The whole code layout comes with the hint, because a prepared height is
+    // only the height of the layout the reader actually has.
+    jintArray toggles = ordinalsToJava(env, hint.code.choices.wrapToggles);
+    jintArray expanded = ordinalsToJava(env, hint.code.choices.expanded);
     env->CallStaticVoidMethod(nativeClass, prepareMethod, static_cast<jlong>(document->id),
                               static_cast<jfloat>(hint.fontScale), static_cast<jfloat>(hint.width),
                               static_cast<jint>(hint.chrome),
-                              static_cast<jboolean>(hint.codeBlockWrap ? JNI_TRUE : JNI_FALSE), toggles,
+                              static_cast<jboolean>(hint.code.props.wrap ? JNI_TRUE : JNI_FALSE),
+                              static_cast<jboolean>(hint.code.props.lineNumbers ? JNI_TRUE : JNI_FALSE),
+                              static_cast<jfloat>(hint.code.props.maxHeight), toggles, expanded,
                               static_cast<jlong>(hint.themeId()));
     env->DeleteLocalRef(toggles);
+    env->DeleteLocalRef(expanded);
     if (env->ExceptionCheck()) {
       env->ExceptionClear();
       return;

@@ -18,6 +18,7 @@ import android.text.Layout
 import android.text.PrecomputedText
 import android.text.Spanned
 import android.text.TextPaint
+import android.text.TextUtils
 import android.text.style.AbsoluteSizeSpan
 import android.text.style.ForegroundColorSpan
 import android.text.style.StrikethroughSpan
@@ -32,11 +33,13 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
+import android.widget.ScrollView
 import android.widget.TextView
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeProvider
 import java.lang.ref.WeakReference
 import com.facebook.react.bridge.Arguments
+import com.facebook.react.uimanager.PixelUtil
 import com.facebook.react.uimanager.StateWrapper
 
 private const val HIT_SLOP = 8f
@@ -68,6 +71,7 @@ internal const val CONTROL_CODE_DOWNLOAD = 2
 internal const val CONTROL_TABLE_COPY = 4
 internal const val CONTROL_TABLE_DOWNLOAD = 8
 internal const val CONTROL_CODE_WRAP = 16
+internal const val CONTROL_CODE_EXPAND = 32
 
 // How long a copy button shows its check before going back, as in Streamdown.
 private const val COPIED_DURATION_MS = 2_000L
@@ -75,6 +79,9 @@ private const val COPIED_DURATION_MS = 2_000L
 // Indexes into the label array `src/controls.ts` sends, in the same order.
 private val DEFAULT_LABELS = listOf(
   "Copy Code", "Download file", "Copied", "Wrap lines", "Don't wrap lines",
+  // Appended, not inserted: `src/controls.ts` sends the labels positionally, so a
+  // new key goes at the end rather than moving every later one.
+  "Show all lines", "Show fewer lines",
   "Copy table", "Copy table as Markdown", "Copy table as CSV", "Copy table as TSV",
   "Download table", "Download table as CSV", "Download table as Markdown",
   "Markdown", "CSV", "TSV",
@@ -84,11 +91,16 @@ private const val LABEL_DOWNLOAD_FILE = 1
 private const val LABEL_COPIED = 2
 private const val LABEL_WRAP_CODE = 3
 private const val LABEL_UNWRAP_CODE = 4
-private const val LABEL_COPY_TABLE = 5
-private const val LABEL_DOWNLOAD_TABLE = 9
-private const val LABEL_FORMAT_MARKDOWN = 12
-private const val LABEL_FORMAT_CSV = 13
-private const val LABEL_FORMAT_TSV = 14
+private const val LABEL_EXPAND_CODE = 5
+private const val LABEL_COLLAPSE_CODE = 6
+private const val LABEL_COPY_TABLE = 7
+private const val LABEL_DOWNLOAD_TABLE = 11
+private const val LABEL_FORMAT_MARKDOWN = 14
+private const val LABEL_FORMAT_CSV = 15
+private const val LABEL_FORMAT_TSV = 16
+
+/** How far a line number is dimmed below the code it numbers. Mirrors `kGutterAlpha` on iOS. */
+private const val GUTTER_ALPHA = 0.5f
 
 /**
  * What a control button did. The segment views hold no document, so they hand
@@ -105,6 +117,7 @@ internal interface ControlHost {
   )
 
   fun onToggleWrap(ordinal: Int, language: String, wrapped: Boolean)
+  fun onToggleExpand(ordinal: Int, language: String, expanded: Boolean)
   fun onControlFailed(kind: Int, action: String, message: String)
 }
 
@@ -153,7 +166,8 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       filename: String) -> Unit)? = null
   internal var onControlFailure:
     ((view: DownstreamMarkdownView, block: String, action: String, message: String) -> Unit)? = null
-  internal var onWrapToggle: ((view: DownstreamMarkdownView, wrapped: Boolean) -> Unit)? = null
+  internal var onWrapToggle: ((view: DownstreamMarkdownView, ordinal: Int, wrapped: Boolean) -> Unit)? = null
+  internal var onExpandToggle: ((view: DownstreamMarkdownView, ordinal: Int, expanded: Boolean) -> Unit)? = null
 
   private var documentId = 0L
   private var fontScale = 1f
@@ -172,18 +186,17 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   private var rendered: RenderedDocument? = null
   private var selectable = true
   private var syntaxHighlighting = true
+  // Every control on, which is the default and matches the codegen default.
   private var controls = CONTROL_CODE_COPY or CONTROL_CODE_DOWNLOAD or CONTROL_TABLE_COPY or
-    CONTROL_TABLE_DOWNLOAD or CONTROL_CODE_WRAP
+    CONTROL_TABLE_DOWNLOAD or CONTROL_CODE_WRAP or CONTROL_CODE_EXPAND
   private var controlLabels: List<String> = DEFAULT_LABELS
   private var chrome = 0
-  private var codeBlockWrap = false
-  private var codeWrapToggles = emptySet<Int>()
   /**
-   * `codeWrapToggles` in the ascending form `RenderedDocument.codeWraps` and the
-   * measurement both read, so the frame a card is given and the layout it draws
-   * inside it are one decision.
+   * The whole code layout: the props and the reader's own per-block choices. One
+   * value, so the frame a card is given and the layout it draws inside it are one
+   * decision, and so a measurement and a mount cannot disagree about a height.
    */
-  private var wrapToggleOrdinals = IntArray(0)
+  private var codeLayout = CodeLayout()
   private var csvSeparator = ","
   private var codeFilename = "file"
   private var tableFilename = "table"
@@ -209,8 +222,13 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   private fun sourceChanged() {
     sourceEpoch++
+    // A new generation has nothing left to pin and no offsets worth keeping, so
+    // every reader scroll position goes, tables' and code cards' alike.
     for (index in 0 until childCount) {
-      (getChildAt(index) as? TableSegmentView)?.resetScroll()
+      when (val child = getChildAt(index)) {
+        is TableSegmentView -> child.resetScroll()
+        is CodeSegmentView -> child.resetScroll()
+      }
     }
   }
 
@@ -310,10 +328,29 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     csvSeparator = value
   }
 
-  fun setCodeBlockWrap(wrap: Boolean) {
-    if (wrap == codeBlockWrap) return
-    codeBlockWrap = wrap
+  /**
+   * The code layout props, which the shadow node measures with and the view draws
+   * with. The heights here are pixels, because the platforms measure in pixels.
+   */
+  fun setCodeProps(wrap: Boolean, lineNumbers: Boolean, maxHeightDp: Double) {
+    val props = CodeLayoutProps(
+      wrap,
+      lineNumbers,
+      PixelUtil.toPixelFromDIP(maxHeightDp).toFloat(),
+    )
+    if (props == codeLayout.props) return
+    codeLayout = CodeLayout(props, codeLayout.choices)
     applySettledState()
+    requestLayout()
+  }
+
+  /** The reader's own per-block choices, as the state carries them. */
+  fun setCodeChoices(wrapToggles: IntArray, expanded: IntArray) {
+    val choices = CodeChoices(wrapToggles, expanded)
+    if (choices == codeLayout.choices) return
+    codeLayout = CodeLayout(codeLayout.props, choices)
+    applySettledState()
+    requestLayout()
   }
 
   fun setChrome(value: Int) {
@@ -322,12 +359,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     applySettledState()
   }
 
-  fun setCodeWrapToggles(toggles: Set<Int>) {
-    codeWrapToggles = toggles
-    wrapToggleOrdinals = toggles.sorted().toIntArray()
-    applySettledState()
-    requestLayout()
-  }
+
 
   /**
    * Turns on a segment's controls and its selection once every block it covers
@@ -343,18 +375,18 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       when (val child = getChildAt(index)) {
         is TextSegmentView -> child.setSelectable(selectable && settled)
         is CodeSegmentView -> {
-          // The same helper the measurement used, so the frame this card is
+          // The same two calls the measurement used, so the frame this card is
           // given and the layout it draws inside it are one decision.
           val ordinal = child.ordinal
           child.setControls(controls)
           child.setControlsEnabled(settled)
-          child.setWrapped(
-            if (ordinal >= 0) {
-              RenderedDocument.codeWraps(codeBlockWrap, wrapToggleOrdinals, ordinal)
-            } else {
-              codeBlockWrap
-            },
-          )
+          if (ordinal >= 0) {
+            child.setLayout(resolveCodeBlock(codeLayout, ordinal, child.fenceMeta))
+          }
+          // A block that is settled keeps its offset and stops following its
+          // newest line. The plan carries the same settled count the parser does,
+          // so a card and the parser cannot disagree about whether it closed.
+          child.setStreaming(!settled)
           child.setHeaderVisible(chrome and RenderedDocument.CHROME_CODE_HEADER != 0)
         }
         is TableSegmentView -> {
@@ -480,11 +512,6 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     }
   }
 
-  override fun onToggleWrap(ordinal: Int, language: String, wrapped: Boolean) {
-    nextWrappedOrdinal = ordinal
-    onWrapToggle?.invoke(this, wrapped)
-  }
-
   override fun onControlFailed(kind: Int, action: String, message: String) {
     onControlFailure?.invoke(this, if (kind == BLOCK_CODE) "code" else "table", action, message)
   }
@@ -522,9 +549,11 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     generation = 0
     sessionId = null
     sourceEpoch++
+    codeLayout = CodeLayout()
     onControl = null
     onControlFailure = null
     onWrapToggle = null
+    onExpandToggle = null
     // A recycled view has no emitter any more. Already opened saves finish,
     // while their callbacks drop events belonging to the previous source.
     exporter.release()
@@ -554,66 +583,93 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   fun currentGeneration(): Int = generation
 
   /**
-   * The ordinal of the code block whose wrap button was pressed, or -1 when the
-   * view cannot tell which one it was. -1 happens after a recycle, where a
-   * toggle would name a block in a document that is no longer mounted.
+   * The ordinal of the code block whose button was pressed, or -1 when the view
+   * cannot tell which one it was. -1 happens after a recycle, where a toggle
+   * would name a block in a document that is no longer mounted.
+   *
+   * One slot rather than one per button, because a press is one press and the
+   * delegate reads it immediately after the callback returns.
    */
-  fun nextUnwrappedOrdinal(): Int {
-    val toggled = nextWrappedOrdinal
+  fun nextToggledOrdinal(): Int {
+    val toggled = nextOrdinal
     if (toggled < 0) return -1
-    nextWrappedOrdinal = -1
+    nextOrdinal = -1
     return toggled
   }
 
-  private var nextWrappedOrdinal = -1
+  private var nextOrdinal = -1
 
-  /** Hands a new state back with `ordinal` toggled. */
-  fun toggleWrap(ordinal: Int) {
+  override fun onToggleWrap(ordinal: Int, language: String, wrapped: Boolean) {
+    nextOrdinal = ordinal
+    onWrapToggle?.invoke(this, ordinal, wrapped)
+  }
+
+  override fun onToggleExpand(ordinal: Int, language: String, expanded: Boolean) {
+    nextOrdinal = ordinal
+    onExpandToggle?.invoke(this, ordinal, expanded)
+  }
+
+  /**
+   * Hands a new state back with [ordinal]'s wrap choice toggled, through the same
+   * Fabric state path the wrap button uses.
+   *
+   * The height changes, and only Yoga and the chat list around the message can
+   * know that, so a state update is the one path that relayouts without a React
+   * render. The whole code layout travels with it, because together the props and
+   * the sets decide each block's height.
+   */
+  fun toggleWrap(ordinal: Int) = updateChoice { it.copyWith(ordinal) }
+
+  /** The same, for the cap the expand button lifts. */
+  fun toggleExpand(ordinal: Int) = updateChoice { it.copyWithExpand(ordinal) }
+
+  private fun updateChoice(toggle: (CodeChoices) -> CodeChoices) {
     val wrapper = stateWrapper ?: return
-    val toggles = codeWrapToggles.toMutableSet()
-    if (!toggles.add(ordinal)) {
-      toggles.remove(ordinal)
-    }
+    val choices = toggle(codeLayout.choices)
+    val layout = CodeLayout(codeLayout.props, choices)
+    chrome = chromeFor(layout)
+    codeLayout = layout
     val map = Arguments.createMap()
     map.putDouble("documentId", documentId.toDouble())
     map.putDouble("fontScale", fontScale.toDouble())
-    map.putDouble("chrome", chromeForToggles(toggles).toDouble())
-    val array = Arguments.createArray()
-    for (value in toggles) {
-      array.pushInt(value)
-    }
-    map.putArray("wrapToggles", array)
-    // The prop's own setting travels beside the set, because together they
-    // decide each block's layout and neither half can be inferred from chrome.
-    map.putDouble("codeBlockWrap", if (codeBlockWrap) 1.0 else 0.0)
-    codeWrapToggles = toggles
-    wrapToggleOrdinals = toggles.sorted().toIntArray()
-    chrome = chromeForToggles(toggles)
+    map.putDouble("chrome", chrome.toDouble())
+    map.putDouble("codeBlockWrap", if (layout.props.wrap) 1.0 else 0.0)
+    map.putDouble("lineNumbers", if (layout.props.lineNumbers) 1.0 else 0.0)
+    // The cap crosses as points, because that is the unit the prop and the
+    // shadow node use; this side converts to pixels when it lays out.
+    map.putDouble("codeBlockMaxHeight", PixelUtil.toDIPFromPixel(layout.props.maxHeight).toDouble())
+    map.putArray("wrapToggles", intArrayOf(choices.wrapToggles))
+    map.putArray("expanded", intArrayOf(choices.expanded))
     applySettledState()
     requestLayout()
     wrapper.updateState(map)
   }
 
   /**
-   * The chrome for a set of toggles, with the same rule the shadow node uses:
-   * a header and a toolbar are bits, and the wrap bit says every code block
-   * wraps, which stops being true as soon as the reader has made one block
-   * differ from the prop. A mixed document's per-block layout comes from
-   * `codeWraps`, not from a bit.
+   * The chrome a layout draws with, with the same rule the shadow node uses: a
+   * header and a toolbar are bits, and the wrap bit says every code block wraps,
+   * which stops being true as soon as the reader has made one block differ from
+   * the prop. A mixed document's per-block layout comes from `resolveCodeBlock`,
+   * not from a bit.
    */
-  private fun chromeForToggles(toggles: Set<Int>): Int {
+  private fun chromeFor(layout: CodeLayout): Int {
     var chrome = 0
-    if (controls and (CONTROL_CODE_COPY or CONTROL_CODE_DOWNLOAD or CONTROL_CODE_WRAP) != 0) {
+    if (controls and (CONTROL_CODE_COPY or CONTROL_CODE_DOWNLOAD or CONTROL_CODE_WRAP or
+      CONTROL_CODE_EXPAND) != 0
+    ) {
       chrome = chrome or RenderedDocument.CHROME_CODE_HEADER
     }
     if (controls and (CONTROL_TABLE_COPY or CONTROL_TABLE_DOWNLOAD) != 0) {
       chrome = chrome or RenderedDocument.CHROME_TABLE_TOOLBAR
     }
-    if (controls and CONTROL_CODE_WRAP != 0 && codeBlockWrap && toggles.isEmpty()) {
+    if (controls and CONTROL_CODE_WRAP != 0 && layout.props.wrap && layout.choices.wrapToggles.isEmpty()) {
       chrome = chrome or RenderedDocument.CHROME_CODE_WRAP
     }
     return chrome
   }
+
+  private fun intArrayOf(values: IntArray): com.facebook.react.bridge.WritableArray =
+    Arguments.createArray().also { array -> for (value in values) array.pushInt(value) }
 
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
@@ -673,7 +729,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     if (width <= 0) {
       return
     }
-    val frames = document.frames(width, chrome, codeBlockWrap, wrapToggleOrdinals)
+    val frames = document.frames(width, chrome, codeLayout)
     for (index in 0 until minOf(childCount, frames.size / 2)) {
       val child = getChildAt(index)
       val top = paddingTop + frames[index * 2]
@@ -993,9 +1049,222 @@ internal class TextSegmentView(context: Context) : TextView(context) {
 
 
 /**
- * One code block: a fixed header row above a horizontally scrolling body. The
- * body is a text segment view, so selection, plain-text copy, token colors, and
- * link hit testing inside the code are the ones a text segment already has.
+ * The line numbers beside a code block, drawn rather than typed.
+ *
+ * A TextView here would put numbers into the selection, the clipboard, and the
+ * accessibility tree, which is exactly what a line number must not be. Drawing
+ * them keeps copied text byte-identical with numbers on or off, and keeps a screen
+ * reader from reading them.
+ *
+ * The gutter scrolls vertically with the code and never sideways, so the numbers
+ * stay legible while a long line scrolls under them.
+ */
+internal class CodeGutterView(context: Context) : View(context) {
+  private var segment: CodeSegment? = null
+  private var body: TextSegmentView? = null
+  private var layout: CodeBlockLayout? = null
+  private var color = 0
+  private val numberPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
+
+  init {
+    setWillNotDraw(false)
+    // Numbers are decoration beside the code, not text in the document, so they
+    // are never a focus stop and never read aloud.
+    importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+    isClickable = false
+    isFocusable = false
+  }
+
+  fun update(
+    segment: CodeSegment,
+    body: TextSegmentView,
+    layout: CodeBlockLayout,
+    codeTextSize: Int,
+    codeFace: Typeface,
+    color: Int,
+  ) {
+    this.segment = segment
+    this.body = body
+    this.layout = layout
+    this.color = color
+    // The code's own size and face, so a number's digits line up with the code's
+    // monospaced columns and a theme that names a mono family gets its numbers in
+    // it rather than in the platform default.
+    numberPaint.textSize = codeTextSize.toFloat()
+    numberPaint.typeface = codeFace
+    numberPaint.color = color
+    invalidate()
+  }
+
+  override fun onDraw(canvas: Canvas) {
+    val segment = this.segment ?: return
+    val layout = this.layout ?: return
+    val body = this.body ?: return
+    val textLayout = body.layout ?: return
+    val color = this.color
+    if (segment.lineStarts.isEmpty() || color == 0) return
+    // The gutter is as tall as the code and sits beside it, so a line's y here is
+    // its y in the body's own layout.
+    val starts = segment.lineStarts
+    val width = width.toFloat()
+    val height = height.toFloat()
+
+    // Only the numbers whose lines intersect the dirty rect are drawn, so a block
+    // with two thousand lines costs the same per frame as one with twenty.
+    val dirty = canvas.clipBounds
+    val first = firstVisibleLine(textLayout, starts, dirty.top, height.toInt())
+    for (index in first until starts.size) {
+      val line = textLayout.getLineForOffset(starts[index].coerceAtMost(textLayout.text.length))
+      val baseline = textLayout.getLineBaseline(line)
+      if (baseline - textLayout.getLineAscent(line) > dirty.bottom) break
+      val number = (layout.firstNumber + index).toString()
+      // Right-aligned against the gap, so the numbers line up on their last digit
+      // as they do in GitHub and VS Code.
+      canvas.drawText(number, width - numberPaint.measureText(number) - 2f, baseline.toFloat(), numberPaint)
+    }
+  }
+
+  /**
+   * The first logical line whose baseline is below [top].
+   *
+   * Found from the line starts rather than by walking glyphs from the top of the
+   * block, so scrolling into the middle of a long fence does not cost a pass over
+   * every line above it.
+   */
+  private fun firstVisibleLine(textLayout: Layout, starts: IntArray, top: Int, height: Int): Int {
+    var index = 0
+    while (index + 1 < starts.size) {
+      val next = textLayout.getLineForOffset(starts[index + 1].coerceAtMost(textLayout.text.length))
+      if (textLayout.getLineBaseline(next) - textLayout.getLineAscent(next) > top) break
+      index++
+    }
+    return index
+  }
+}
+
+/**
+ * The vertical scroll view around a capped code card's gutter and body.
+ *
+ * It exists on every card, not only a capped one, so a block that crosses the cap
+ * mid-stream is never re-parented and keeps its selection and offsets.
+ * Whether it scrolls at all is what differs.
+ *
+ * A drag belongs to this view only while it can scroll that way. Android's parent
+ * intercepts a vertical drag before this view finishes seeing it, so the hand-off
+ * is done with `requestDisallowInterceptTouchEvent` on each move: claimed while the
+ * card can scroll that direction, released at the edge.
+ */
+internal class CodeViewport(context: Context) : ScrollView(context) {
+  /** A pinned card is one whose reader has not scrolled away from the bottom. */
+  private var pinned = true
+  /** Set when the card asks for a pin, applied at the next layout. */
+  private var needsPin = false
+
+  /** Only a touch-driven scroll unpins; a pin this view applied must not unpin itself. */
+  private var touchScrolling = false
+
+  /** True while this block's fence is open, which is what makes a capped card follow. */
+  var streaming: Boolean = false
+    set(value) {
+      if (field == value) return
+      field = value
+      if (value && isVerticalScrollBarEnabled) {
+        pinned = true
+        requestPin()
+      }
+    }
+
+  /**
+   * This card's content height, which is the protected `computeVerticalScrollRange`
+   * the host needs to decide whether a block is past its cap. A scroll range rather
+   * than a child height, because it is what the card can actually scroll through.
+   */
+  fun verticalScrollRange(): Int = computeVerticalScrollRange()
+
+  init {
+    isHorizontalScrollBarEnabled = false
+    isFillViewport = false
+    overScrollMode = OVER_SCROLL_NEVER
+    // The platform's own fading edge says there is more below, which is both
+    // cheaper and more familiar than a fade this view draws over its own code.
+    // Enabling it is enough: the length comes from the app's own
+    // `fadingEdgeLength`, so the fade matches every other scrolling view.
+    isVerticalFadingEdgeEnabled = true
+  }
+
+  override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+    super.onLayout(changed, left, top, right, bottom)
+    if (!needsPin) return
+    needsPin = false
+    if (pinned) pinToBottom()
+  }
+
+  override fun computeScroll() {
+    if (touchScrolling) {
+      pinned = isNearBottom()
+    }
+    super.computeScroll()
+  }
+
+  override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
+    if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+      touchScrolling = true
+    }
+    return super.onInterceptTouchEvent(event)
+  }
+
+  override fun onTouchEvent(event: MotionEvent): Boolean {
+    if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+      touchScrolling = false
+    }
+    return super.onTouchEvent(event)
+  }
+
+  /**
+   * Claims a vertical drag from the surrounding list while this card can still
+   * scroll that way, and releases it at the edge.
+   *
+   * `canScrollVertically` is negative for "toward the top", so a downward drag at
+   * the top edge releases and the chat list scrolls instead. An uncapped card never
+   * claims a vertical drag, which is today's behavior.
+   */
+  fun updateIntercept(direction: Int) {
+    val parent = parent
+    if (parent is ViewGroup) {
+      parent.requestDisallowInterceptTouchEvent(direction != 0 && canScrollVertically(direction))
+    }
+  }
+
+  private fun isNearBottom(): Boolean {
+    val range = computeVerticalScrollRange() - computeVerticalScrollExtent()
+    return range - scrollY <= PIN_THRESHOLD
+  }
+
+  private fun pinToBottom() {
+    val range = computeVerticalScrollRange() - computeVerticalScrollExtent()
+    if (range > 0) scrollTo(0, range)
+  }
+
+  /** Moves to the newest line at the next layout, unless the reader has left. */
+  fun requestPin() {
+    needsPin = true
+    requestLayout()
+  }
+
+  companion object {
+    /** Streamdown's threshold: how far from the bottom is still "following". */
+    private const val PIN_THRESHOLD = 8
+  }
+}
+
+/**
+ * One code block: a header row above a card that scrolls sideways and, when the
+ * block is past `codeBlockMaxHeight`, vertically inside its own frame.
+ *
+ * The body is a text segment view, so selection, plain-text copy, token colors,
+ * and link hit testing inside the code are the ones a text segment already has.
+ * The gutter is a sibling that draws numbers rather than holding text, so there is
+ * nothing to select, copy, or read aloud.
  */
 internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   private val header = LinearLayout(context).apply {
@@ -1008,11 +1277,17 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     gravity = Gravity.CENTER_VERTICAL or Gravity.START
     setPadding((12 * resources.displayMetrics.density).toInt(), 0, 0, 0)
     isSingleLine = true
+    // A fence's title can be a long path, so it truncates in the middle and keeps
+    // its file name rather than losing the name to an ellipsis.
+    ellipsize = TextUtils.TruncateAt.MIDDLE
   }
   private val buttons = LinearLayout(context).apply {
     orientation = LinearLayout.HORIZONTAL
     gravity = Gravity.CENTER_VERTICAL
   }
+  private val viewport = CodeViewport(context)
+  private val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+  private val gutter = CodeGutterView(context)
   private val scroll = HorizontalScrollView(context).apply {
     isHorizontalScrollBarEnabled = false
     isFillViewport = false
@@ -1028,26 +1303,41 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   private var controlLabels: List<String> = DEFAULT_LABELS
   private var controls = 0
   private var controlsEnabled = false
-  private var wrapped = false
+  private var layout: CodeBlockLayout? = null
   private var copied = false
   private var savedOffset = 0
+  private var savedVerticalOffset = 0
   private var restoreScroll = false
   private var controlHost: ControlHost? = null
   /** The header row's fill, from the theme, or null where it set none. */
   private var headerBackground: Int? = null
   /** The rule under the header row, from the theme, or null where it set none. */
   private var headerBorder: Int? = null
+  /** True while the fence is open, which is what makes a capped card follow. */
+  private var streaming = false
+  /**
+   * Whether the last button pass saw a capped card, so the layout that changes
+   * the answer can rebuild the header rather than doing it twice per snapshot.
+   */
+  private var lastCapped = false
 
   /**
-   * The block's ordinal among the document's code blocks, which a toggle is
-   * keyed by. It comes from the segment rather than from a count the view walks,
-   * so it is the same number the measurement used.
+   * The block's ordinal among the document's code blocks, which a toggle is keyed
+   * by. It comes from the segment rather than from a count the view walks, so it is
+   * the same number the measurement used.
    */
   var ordinal: Int = -1
+
+  /** The fence's parsed meta, so the host resolves the layout the same way. */
+  val fenceMeta: FenceMeta get() = segment?.fenceMeta ?: FenceMeta()
 
   private val copyButton = controlButton(R.drawable.ds_ic_copy, LABEL_COPY_CODE)
   private val downloadButton = controlButton(R.drawable.ds_ic_download, LABEL_DOWNLOAD_FILE)
   private val wrapButton = controlButton(R.drawable.ds_ic_wrap, LABEL_WRAP_CODE)
+  private val expandButton = controlButton(R.drawable.ds_ic_expand, LABEL_EXPAND_CODE)
+
+  private val allButtons: List<ImageButton>
+    get() = listOf(expandButton, wrapButton, downloadButton, copyButton)
 
   private val clearCopied = Runnable {
     copied = false
@@ -1057,21 +1347,37 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   init {
     setWillNotDraw(false)
     addView(header)
-    addView(scroll)
+    addView(viewport)
     // The label takes the slack, which keeps the buttons at the trailing edge.
     header.addView(language, LinearLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
     header.addView(buttons, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
+    // A fixed order, so the expand button does not shift the others as it appears
+    // and disappears with a block's height.
+    buttons.addView(expandButton)
     buttons.addView(wrapButton)
     buttons.addView(downloadButton)
     buttons.addView(copyButton)
+    viewport.addView(row, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
+    row.addView(gutter, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
+    row.addView(scroll, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
     scroll.addView(body, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
+    viewport.setOnTouchListener { view, event ->
+      if (event.actionMasked == MotionEvent.ACTION_MOVE) {
+        // A downward drag wants to go up the content, and the other way round.
+        val direction = if (event.y - view.height / 2f > 0) -1 else 1
+        viewport.updateIntercept(direction)
+      }
+      false
+    }
   }
 
-  private fun controlButton(drawable: Int, label: Int): ImageButton = newControlButton(context, drawable).apply {
+  private fun controlButton(drawable: Int, label: Int): ImageButton =
+    newControlButton(context, drawable).apply {
     contentDescription = controlLabels[label]
     setOnClickListener {
       when (it) {
-        wrapButton -> controlHost?.onToggleWrap(ordinal, segment?.language.orEmpty(), !wrapped)
+        wrapButton -> controlHost?.onToggleWrap(ordinal, segment?.language.orEmpty(), !(layout?.wraps ?: false))
+        expandButton -> controlHost?.onToggleExpand(ordinal, segment?.language.orEmpty(), !isCapped())
         downloadButton -> controlHost?.onControl(
           BLOCK_CODE,
           segment?.blockIndex ?: 0,
@@ -1107,11 +1413,15 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   fun setSegment(segment: CodeSegment, rendered: RenderedDocument) {
     this.rendered = rendered
     if (segment === this.segment) return
-    // The tail block is rebuilt on every snapshot while its fence is open, so
-    // the offset is kept only while the block still looks like the same one.
+    // The tail block is rebuilt on every snapshot while its fence is open, so both
+    // offsets are kept only while the block still looks like the same one.
     val same = this.segment != null && this.segment?.firstLine == segment.firstLine
     savedOffset = if (same) scroll.scrollX else 0
+    savedVerticalOffset = if (same) viewport.scrollY else 0
     restoreScroll = true
+    // A new block arrives unsettled, so a capped card starts pinned to its newest
+    // line. `setStreaming` turns that off once the fence closes.
+    streaming = true
     ordinal = segment.codeOrdinal
     this.segment = segment
     // The card's own fill, and the header row's three colors, all from the
@@ -1132,18 +1442,33 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     language.setTextColor(segment.colors.headerColor)
     language.setTextSize(TypedValue.COMPLEX_UNIT_PX, segment.headerSize)
     language.typeface = segment.headerFace
-    // A selected wrap button takes the text color, so its state is visible. The
-    // buttons take the theme's own button color where it gave them one.
+    // A selected button takes the text color, so its state is visible. The buttons
+    // take the theme's own button color where it gave them one.
     val tint = ColorStateList(
       arrayOf(intArrayOf(android.R.attr.state_selected), intArrayOf()),
       intArrayOf(segment.colors.text, segment.colors.headerButtonColor),
     )
-    for (button in listOf(wrapButton, downloadButton, copyButton)) button.imageTintList = tint
+    for (button in allButtons) button.imageTintList = tint
     body.setContent(segment.text, segment.accessibleBlocks, rendered)
-    language.text = segment.language
+    // A fence's title replaces the language, and the spoken label keeps both plus
+    // the start line, so a screen reader still hears what kind of code this is.
+    language.text = if (segment.title.isNotEmpty()) segment.title else segment.language
+    language.contentDescription = spokenLabel(segment)
     updateButtons()
     requestLayout()
     invalidate()
+  }
+
+  /**
+   * "src/app.ts, ts code, from line 10": both names, and the start line when it is
+   * not the default. The numbers themselves are never read aloud.
+   */
+  private fun spokenLabel(segment: CodeSegment): String {
+    val parts = ArrayList<String>(3)
+    if (segment.title.isNotEmpty() && segment.title != segment.language) parts.add(segment.title)
+    parts.add(if (segment.language.isNotEmpty()) "${segment.language} code" else "code")
+    if (segment.fenceMeta.startLine != 1) parts.add("from line ${segment.fenceMeta.startLine}")
+    return parts.joinToString(", ")
   }
 
   fun setControls(controls: Int) {
@@ -1158,10 +1483,30 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     updateButtons()
   }
 
-  fun setWrapped(wrapped: Boolean) {
-    if (wrapped == this.wrapped) return
-    this.wrapped = wrapped
+  /**
+   * The block's resolved layout, from the props, the reader's choices, and the
+   * fence's own meta. The same value the measurement used, so a measured card and
+   * a drawn card are the same size.
+   */
+  fun setLayout(layout: CodeBlockLayout) {
+    if (this.layout == layout) return
+    this.layout = layout
     updateButtons()
+    requestLayout()
+  }
+
+  /** False once the block's fence has closed, which stops a capped card following. */
+  fun setStreaming(streaming: Boolean) {
+    if (streaming == this.streaming) return
+    this.streaming = streaming
+    viewport.streaming = streaming
+    requestLayout()
+  }
+
+  /** Drops the saved offsets and returns to the top, for a new generation. */
+  fun resetScroll() {
+    savedOffset = 0
+    savedVerticalOffset = 0
     requestLayout()
   }
 
@@ -1173,23 +1518,46 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     requestLayout()
   }
 
+  /**
+   * True when this block's body is taller than its cap, which is what makes the
+   * viewport scroll and the expand button mean something.
+   */
+  private fun isCapped(): Boolean {
+    val layout = this.layout ?: return false
+    if (layout.maxHeight <= 0f) return false
+    return viewport.verticalScrollRange() > layout.maxHeight
+  }
+
   private fun updateButtons() {
     val shown = header.visibility == View.VISIBLE
     buttons.visibility = if (shown) View.VISIBLE else View.GONE
     language.visibility = if (shown) View.VISIBLE else View.GONE
     if (!shown) return
+    val layout = this.layout
+    val capped = isCapped()
+    lastCapped = capped
+    // Expand appears only on a block past the cap, because that is the only block
+    // it can do anything for.
+    expandButton.visibility =
+      if (controls and CONTROL_CODE_EXPAND != 0 && capped) View.VISIBLE else View.GONE
     wrapButton.visibility = if (controls and CONTROL_CODE_WRAP != 0) View.VISIBLE else View.GONE
     downloadButton.visibility = if (controls and CONTROL_CODE_DOWNLOAD != 0) View.VISIBLE else View.GONE
     copyButton.visibility = if (controls and CONTROL_CODE_COPY != 0) View.VISIBLE else View.GONE
-    for (button in listOf(wrapButton, downloadButton, copyButton)) {
+    for (button in allButtons) {
       button.isEnabled = controlsEnabled && button.visibility == View.VISIBLE
       button.alpha = if (button.isEnabled) 1f else 0.4f
     }
     copyButton.setImageResource(if (copied) R.drawable.ds_ic_check else R.drawable.ds_ic_copy)
     copyButton.contentDescription = controlLabels[if (copied) LABEL_COPIED else LABEL_COPY_CODE]
-    wrapButton.isSelected = wrapped
-    wrapButton.contentDescription = controlLabels[if (wrapped) LABEL_UNWRAP_CODE else LABEL_WRAP_CODE]
+    val wraps = layout?.wraps ?: false
+    wrapButton.isSelected = wraps
+    wrapButton.contentDescription = controlLabels[if (wraps) LABEL_UNWRAP_CODE else LABEL_WRAP_CODE]
     wrapButton.stateDescription = wrapButton.contentDescription
+    expandButton.isSelected = capped
+    expandButton.setImageResource(if (capped) R.drawable.ds_ic_collapse else R.drawable.ds_ic_expand)
+    expandButton.contentDescription =
+      controlLabels[if (capped) LABEL_EXPAND_CODE else LABEL_COLLAPSE_CODE]
+    expandButton.stateDescription = expandButton.contentDescription
   }
 
   private fun markCopied() {
@@ -1212,40 +1580,100 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
     val segment = this.segment ?: return
     val rendered = this.rendered ?: return
-    // Children are placed in this view's own coordinates, so the frame the
-    // parent gave (left, top) only supplies the size.
+    val layout = this.layout ?: return
+    // Children are placed in this view's own coordinates, so the frame the parent
+    // gave (left, top) only supplies the size.
     val width = right - left
     val height = bottom - top
     val headerHeight = headerHeight()
     val padding = segment.padding
     val leading = segment.contentLeading
     val cardWidth = (width - leading).coerceAtLeast(0)
-    val bodyWidth = segment.bodyWidth(rendered.paint, cardWidth, wrapped)
-    val bodyHeight = segment.bodyHeight(rendered.paint, cardWidth, wrapped)
+    val gutterWidth = segment.gutterWidth(layout)
+    gutter.visibility = if (gutterWidth > 0) View.VISIBLE else View.GONE
+    // The gutter narrows the width a wrapped body wraps at, which is the only way
+    // numbers change a block's height. An unwrapped body is laid out at its own
+    // length either way, so it never lays code out again on a rotation.
+    val bodyWidth = segment.bodyWidth(rendered.paint, cardWidth, layout.wraps, gutterWidth)
+    val bodyHeight = segment.bodyHeight(rendered.paint, cardWidth, layout.wraps, gutterWidth)
     header.measure(
       MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
       MeasureSpec.makeMeasureSpec(headerHeight, MeasureSpec.EXACTLY),
     )
     header.layout(0, 0, width, headerHeight)
-    val scrollLeft = leading + padding
-    val scrollTop = headerHeight + padding
-    val scrollRight = (width - padding).coerceAtLeast(scrollLeft)
-    val scrollBottom = (height - padding).coerceAtLeast(scrollTop)
-    scroll.measure(
-      MeasureSpec.makeMeasureSpec(scrollRight - scrollLeft, MeasureSpec.EXACTLY),
-      MeasureSpec.makeMeasureSpec(scrollBottom - scrollTop, MeasureSpec.EXACTLY),
+    val viewportLeft = leading + padding
+    val viewportTop = headerHeight + padding
+    val viewportRight = (width - padding).coerceAtLeast(viewportLeft)
+    val viewportBottom = (height - padding).coerceAtLeast(viewportTop)
+    viewport.measure(
+      MeasureSpec.makeMeasureSpec(viewportRight - viewportLeft, MeasureSpec.EXACTLY),
+      MeasureSpec.makeMeasureSpec(viewportBottom - viewportTop, MeasureSpec.EXACTLY),
     )
-    scroll.layout(scrollLeft, scrollTop, scrollRight, scrollBottom)
+    viewport.layout(viewportLeft, viewportTop, viewportRight, viewportBottom)
+    // The row is as tall as the code, so a line's y in the gutter is its y in the
+    // body's layout and the numbers beside the visible lines are the visible ones.
+    row.measure(
+      MeasureSpec.makeMeasureSpec(viewport.width, MeasureSpec.AT_MOST),
+      MeasureSpec.makeMeasureSpec(bodyHeight, MeasureSpec.EXACTLY),
+    )
+    row.layout(0, 0, row.measuredWidth, bodyHeight)
+    gutter.measure(
+      MeasureSpec.makeMeasureSpec(gutterWidth, MeasureSpec.EXACTLY),
+      MeasureSpec.makeMeasureSpec(bodyHeight, MeasureSpec.EXACTLY),
+    )
+    gutter.layout(0, 0, gutterWidth, bodyHeight)
+    scroll.measure(
+      MeasureSpec.makeMeasureSpec(bodyWidth.coerceAtLeast(0), MeasureSpec.EXACTLY),
+      MeasureSpec.makeMeasureSpec(bodyHeight, MeasureSpec.EXACTLY),
+    )
+    scroll.layout(gutterWidth, 0, gutterWidth + bodyWidth, bodyHeight)
     body.measure(
       MeasureSpec.makeMeasureSpec(bodyWidth, MeasureSpec.EXACTLY),
       MeasureSpec.makeMeasureSpec(bodyHeight, MeasureSpec.EXACTLY),
     )
     body.layout(0, 0, bodyWidth, bodyHeight)
+    gutter.update(
+      segment, body, layout, segment.codeTextSize, segment.codeFace,
+      lineNumberColor(segment.colors),
+    )
+    // Whether the block is capped is only known here, and the expand button
+    // depends on it, so this is where a header that appears or disappears is
+    // decided. The header row's height is fixed either way, so nothing moves.
+    if (isCapped() != lastCapped) {
+      updateButtons()
+    }
+
+    // Vertical scrolling turns on only while the block is past its cap, which is
+    // the whole difference between a capped card and an uncapped one.
+    val capped = layout.maxHeight > 0f && bodyHeight + 2 * padding > layout.maxHeight
+    viewport.isVerticalScrollBarEnabled = capped
+    viewport.streaming = streaming
     if (restoreScroll) {
       val maximum = (bodyWidth - scroll.width).coerceAtLeast(0)
       scroll.scrollTo(savedOffset.coerceIn(0, maximum), 0)
+      val verticalMaximum = (bodyHeight - viewport.height).coerceAtLeast(0)
+      viewport.scrollTo(0, savedVerticalOffset.coerceIn(0, verticalMaximum))
       restoreScroll = false
+    } else if (capped && streaming) {
+      // Follow the newest line, which is Streamdown's pinned scroll: a card the
+      // reader has scrolled away from is not pinned and does not move.
+      viewport.requestPin()
     }
+    invalidate()
+  }
+
+  /**
+   * The code's own color, dimmed, which is what the numbers draw in.
+   *
+   * They annotate the code beside them rather than styling themselves, so a theme
+   * that restyles `codeBlock.color` restyles its line numbers in step. This is
+   * Streamdown's `muted-foreground/50` gutter expressed against the theme's own
+   * code color rather than a fixed gray. Mirrors `kGutterAlpha` on iOS.
+   */
+  private fun lineNumberColor(colors: Palette): Int {
+    val base = colors.codeText
+    val alpha = ((base ushr 24) * GUTTER_ALPHA).toInt().coerceIn(0, 255)
+    return (alpha shl 24) or (base and 0x00FFFFFF)
   }
 
   override fun onDetachedFromWindow() {

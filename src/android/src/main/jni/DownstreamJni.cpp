@@ -286,8 +286,10 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
     layouts[layoutFields] = theme->number(previous.marginBottom);
   }
 
-  // Block languages are the only UTF-8 fields a platform reads per block, so
-  // they ride in the string table and the blocks point into it.
+  // Block languages and fence titles are the only UTF-8 fields a platform reads
+  // per block, so they ride in the string table and the blocks point into it.
+  // The meta itself is parsed by the engine, so Kotlin reads the values rather
+  // than scanning the info string a second way.
   auto intern = [&strings](const std::string &value) -> jint {
     if (value.empty()) {
       return -1;
@@ -317,6 +319,9 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
                                     static_cast<jint>(block.table),
                                     isAdmonitionTitle(*document, index) ? 1 : 0,
                                     intern(block.language),
+                                    intern(block.meta.title),
+                                    static_cast<jint>(block.meta.startLine),
+                                    block.meta.noLineNumbers ? 1 : 0,
                                 });
     theme_layout::writeBlockLayout(
       *theme, theme_layout::blockLayout(*theme, block), layouts,
@@ -517,7 +522,7 @@ Java_com_downstream_DownstreamNative_nativeDownloadName(JNIEnv *env, jclass /*cl
   const Block &block = document->blocks[static_cast<size_t>(index)];
   const char *configuredText = configured != nullptr ? env->GetStringUTFChars(configured, nullptr) : nullptr;
   const char *fallbackText = fallback != nullptr ? env->GetStringUTFChars(fallback, nullptr) : nullptr;
-  const std::string name = downloadName(block.info, block.language,
+  const std::string name = downloadName(block.meta, block.language,
                                         configuredText != nullptr ? configuredText : "",
                                         fallbackText != nullptr ? fallbackText : "file");
   if (configuredText != nullptr) {
