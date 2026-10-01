@@ -73,6 +73,9 @@ struct CodeBlockLayout {
   /// The cap this block actually has, in points. 0 when uncapped or expanded,
   /// which is what makes "no cap" one case rather than two.
   float maxHeight;
+  /// The reader lifted this block's cap. The card is uncapped either way, but an
+  /// expanded one keeps its button, as a collapse button, so the cap can return.
+  bool expanded = false;
 };
 
 /// The layout of the code block at `ordinal`, from the props, the reader's
@@ -121,6 +124,12 @@ inline uint32_t gutterDigits(uint32_t firstNumber, uint32_t lineCount) {
 /// readable block. The floor lives here rather than in either platform, so the
 /// number is the one the measurement and the view agree on.
 inline constexpr float kMinVisibleLines = 5;
+
+/// The space between the line-number gutter and the code, in points. A constant
+/// rather than a theme slot, because it separates two parts of one card rather
+/// than styling either of them. The gutter's width includes it, and its numbers
+/// end where it begins. Mirrored by `GUTTER_GAP` in CodeLayout.kt.
+inline constexpr float kGutterGap = 12;
 
 /**
  * The height of one code card: its header plus `min(body + 2 * padding, cap)`.

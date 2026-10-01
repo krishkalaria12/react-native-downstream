@@ -123,7 +123,7 @@ internal class NativeTheme private constructor(
    * is what CSS font matching does and the reason a theme can name 250 rather
    * than only the hundred steps.
    */
-  fun typeface(slot: Int, weight: Float, italic: Boolean, monospaced: Boolean = false): Typeface =
+  fun slotTypeface(slot: Int, weight: Float, italic: Boolean, monospaced: Boolean = false): Typeface =
     resolveTypeface(family(slot), weight, italic, monospaced)
 
   private fun resolveTypeface(name: String, weight: Float, italic: Boolean, monospaced: Boolean): Typeface {
