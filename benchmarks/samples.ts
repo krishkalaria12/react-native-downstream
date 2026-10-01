@@ -95,6 +95,18 @@ const playback = [
     chunks: codeChunks(),
   },
   {
+    id: 'code-chrome',
+    description:
+      'Fence meta arriving a few bytes at a time: a title, a start line, and the numbers a gutter draws',
+    chunks: chromeChunks(),
+  },
+  {
+    id: 'code-capped',
+    description:
+      'A fence past codeBlockMaxHeight, so its body scrolls inside the card',
+    chunks: cappedChunks(),
+  },
+  {
     id: 'code-languages',
     description: 'One small fence per language the first release colors',
     chunks: languageChunks(),
@@ -150,6 +162,59 @@ function codeChunks(): string[] {
       chunks.push(line.slice(at, at + 7));
     }
     chunks.push('\n');
+  }
+  chunks.push('```\n');
+  return chunks;
+}
+
+/**
+ * A fence whose meta arrives a few bytes at a time, so every snapshot reparses a
+ * partially typed info string. This is the sample that shows what parsing the meta
+ * once, where the block is reported, costs against scanning it again per snapshot.
+ */
+function chromeChunks(): string[] {
+  const lines = [
+    'const start = line.offset;',
+    'const end = line.start + line.length;',
+    '',
+    'if (start < 0 || end > text.length) {',
+    '  throw new RangeError("out of range");',
+    '}',
+  ];
+  // The opener is typed a few bytes at a time, which is the worst case for the
+  // parser: every prefix of a half-written quote and brace.
+  const opener = '```ts title="src/segments/lines.ts" startLine=120 {1,3-5}';
+  const chunks: string[] = [opener.slice(0, 7)];
+  for (let at = 7; at < opener.length; at += 6) {
+    chunks.push(opener.slice(at, at + 6));
+  }
+  chunks.push('\n');
+  for (const line of lines) {
+    chunks.push(line + '\n');
+  }
+  chunks.push('```\n');
+  return chunks;
+}
+
+/**
+ * A fence long enough to pass the 400-point cap, so a card scrolls inside.
+ *
+ * The lines arrive in batches rather than one at a time: the benches replay every
+ * earlier operation on each flush, so a few hundred single-line appends makes
+ * them quadratic and measures the harness rather than the engine.
+ */
+function cappedChunks(): string[] {
+  const chunks = ['```ts title="a/tall/block.ts"\n'];
+  let batch = '';
+  for (let index = 1; index <= 300; index++) {
+    batch += `const value${index} = ${index} * 2;\n`;
+    if (index % 20 === 0) {
+      chunks.push(batch);
+      batch = '';
+    }
+  }
+  if (batch !== '') {
+    chunks.push(batch);
   }
   chunks.push('```\n');
   return chunks;
