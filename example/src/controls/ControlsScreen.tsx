@@ -1,10 +1,12 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
+  createMarkdownStream,
   DownstreamMarkdown,
   type MarkdownControlEvent,
   type MarkdownControls,
   type MarkdownErrorEvent,
+  type MarkdownStreamController,
 } from 'react-native-downstream';
 
 import { Badge, Button, ButtonRow, ChipRow, Group, Notice } from '../ui/kit';
@@ -46,6 +48,40 @@ const configuration = { retries: 3, backoffMs: 250, timeoutMs: 30_000, endpoint:
 | Table copy | markdown, csv, tsv | Copy table |
 | Table download | csv, markdown | Download table |
 `;
+
+/**
+ * Appended when the document is held mid-stream: a fence that never closes, so
+ * its block is still being written and its controls stay off while every block
+ * above it is settled and usable.
+ */
+const OPEN_TAIL = `
+## A block still being written
+
+\`\`\`ts
+export function pending(`;
+
+const STATES = [
+  { value: 'finished', label: 'Finished' },
+  { value: 'open', label: 'Held mid-stream' },
+] as const;
+
+type StreamState = (typeof STATES)[number]['value'];
+
+/** A stream holding the document open, or null when it is shown finished. */
+function useHeldStream(state: StreamState): MarkdownStreamController | null {
+  const [stream, setStream] = useState<MarkdownStreamController | null>(null);
+  useEffect(() => {
+    if (state !== 'open') {
+      setStream(null);
+      return undefined;
+    }
+    const controller = createMarkdownStream();
+    controller.append(SOURCE + OPEN_TAIL);
+    setStream(controller);
+    return () => controller.dispose();
+  }, [state]);
+  return stream;
+}
 
 const MODES = [
   { value: 'defaults', label: 'Defaults' },
@@ -124,6 +160,8 @@ export function ControlsScreen() {
   const [mode, setMode] = useState<Mode>('defaults');
   const [separator, setSeparator] = useState<Separator>('auto');
   const [wrap, setWrap] = useState(false);
+  const [streamState, setStreamState] = useState<StreamState>('finished');
+  const stream = useHeldStream(streamState);
   const { entries, push, clear } = useLog();
 
   const onError = useCallback(
@@ -179,6 +217,11 @@ export function ControlsScreen() {
         </SectionLabel>
         <View style={styles.controls}>
           <ChipRow options={MODES} value={mode} onChange={setMode} />
+          <ChipRow
+            options={STATES}
+            value={streamState}
+            onChange={setStreamState}
+          />
           <View style={styles.row}>
             <Text style={[t.s.caption, styles.rowLabel]}>CSV separator</Text>
           </View>
@@ -211,6 +254,14 @@ export function ControlsScreen() {
               </Notice>
             </View>
           )}
+          {streamState === 'open' && (
+            <View style={styles.notice}>
+              <Notice tone="accent" title="Held mid-stream">
+                The last fence never closes, so its controls stay off. Every
+                block above it is settled and its controls work.
+              </Notice>
+            </View>
+          )}
           {mode === 'titled' && (
             <View style={styles.notice}>
               <Notice tone="accent" title="Custom file names">
@@ -224,12 +275,21 @@ export function ControlsScreen() {
 
         <SectionLabel>Document</SectionLabel>
         <View style={[t.s.card, styles.card]}>
-          <DownstreamMarkdown
-            markdown={SOURCE}
-            controls={controls()}
-            codeBlockWrap={wrap}
-            onError={onError}
-          />
+          {stream ? (
+            <DownstreamMarkdown
+              stream={stream}
+              controls={controls()}
+              codeBlockWrap={wrap}
+              onError={onError}
+            />
+          ) : (
+            <DownstreamMarkdown
+              markdown={SOURCE}
+              controls={controls()}
+              codeBlockWrap={wrap}
+              onError={onError}
+            />
+          )}
         </View>
 
         <SectionLabel
@@ -262,7 +322,7 @@ const styles = StyleSheet.create({
     padding: space.lg,
     borderRadius: radius.card,
   },
-  log: { gap: space.xs },
+  log: { gap: space.xs, padding: space.lg },
   logEmpty: { padding: space.lg },
   logLine: { opacity: 0.75 },
   foot: { height: space.xxl },
