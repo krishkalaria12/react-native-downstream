@@ -1,8 +1,13 @@
 export { DownstreamMarkdown } from './DownstreamMarkdown';
 export { createMarkdownStream } from './createMarkdownStream';
+export { presets } from './presets';
+export { syntaxColorsFromTheme } from './syntaxTheme';
 export { defaultTranslations } from './types';
 export type { DownstreamMarkdownProps } from './DownstreamMarkdown';
+export type { SyntaxColorsFromTheme } from './syntaxTheme';
 export type {
+  EnrichedSyntaxKey,
+  MarkdownColor,
   MarkdownControlAction,
   MarkdownControlEvent,
   MarkdownControlKind,
@@ -11,12 +16,18 @@ export type {
   MarkdownDownloadControl,
   MarkdownErrorCode,
   MarkdownErrorEvent,
+  MarkdownFontWeight,
   MarkdownLinkPressEvent,
+  MarkdownOperationError,
+  MarkdownPreset,
   MarkdownPreviewOptions,
   MarkdownSourceRange,
   MarkdownStreamController,
   MarkdownStreamOptions,
-  MarkdownOperationError,
+  MarkdownStyle,
+  MarkdownTheme,
+  MarkdownTokenClass,
   MarkdownTranslations,
   MarkdownViewProps,
 } from './types';
+export type { VSCodeThemeJson, VSCodeTokenColor } from './vscodeTheme';

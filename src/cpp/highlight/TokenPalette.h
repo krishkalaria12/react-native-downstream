@@ -8,36 +8,35 @@
 namespace downstream {
 
 /// GitHub's Primer "prettylights" colors, the palette behind Shiki's
-/// `github-light` and `github-dark` themes, which are Streamdown's defaults.
-/// Both platforms read this one table, so a token class cannot drift between
-/// iOS and Android.
+/// `github-light-default` and `github-dark-default` themes. Both platforms read
+/// this one table, so a token class cannot drift between iOS and Android.
 ///
-/// Values are 0xAARRGGBB. `kTokenColors[0]` is the code text color for
-/// Operator and Plain, so those need no entry of their own.
+/// Values are 0xAARRGGBB, in `TokenClass` order. Plain and Operator are the
+/// code text color, as punctuation is in GitHub's themes, so a platform needs no
+/// entry of its own for either.
 struct TokenColors {
   uint32_t light;
   uint32_t dark;
 };
 
 inline constexpr TokenColors kTokenColors[static_cast<size_t>(TokenClass::Count)] = {
-    [static_cast<size_t>(TokenClass::Plain)] = {0xff1f2328, 0xfff0f6fc},
-    [static_cast<size_t>(TokenClass::Comment)] = {0xff6e7781, 0xff8b949e},
-    [static_cast<size_t>(TokenClass::Keyword)] = {0xffcf222e, 0xffff7b72},
-    [static_cast<size_t>(TokenClass::Type)] = {0xff8250df, 0xffd2a8ff},
-    [static_cast<size_t>(TokenClass::String)] = {0xff0a3069, 0xffa5d6ff},
-    [static_cast<size_t>(TokenClass::Number)] = {0xff0550ae, 0xff79c0ff},
-    [static_cast<size_t>(TokenClass::Constant)] = {0xff0550ae, 0xff79c0ff},
-    [static_cast<size_t>(TokenClass::Regex)] = {0xff116329, 0xff7ee787},
-    [static_cast<size_t>(TokenClass::Function)] = {0xff8250df, 0xffd2a8ff},
-    [static_cast<size_t>(TokenClass::Property)] = {0xff0550ae, 0xff79c0ff},
-    // Punctuation stays the code text color, as in GitHub's themes.
-    [static_cast<size_t>(TokenClass::Operator)] = {0xff1f2328, 0xfff0f6fc},
-    [static_cast<size_t>(TokenClass::Preprocessor)] = {0xff953800, 0xffffa657},
-    [static_cast<size_t>(TokenClass::Tag)] = {0xff116329, 0xff7ee787},
-    [static_cast<size_t>(TokenClass::Attribute)] = {0xff0550ae, 0xff79c0ff},
-    [static_cast<size_t>(TokenClass::Inserted)] = {0xff116329, 0xff7ee787},
-    [static_cast<size_t>(TokenClass::Deleted)] = {0xff82071e, 0xffffa198},
-    [static_cast<size_t>(TokenClass::Heading)] = {0xff0550ae, 0xff79c0ff},
+    {0xff1f2328, 0xfff0f6fc}, // Plain
+    {0xff6e7781, 0xff8b949e}, // Comment
+    {0xffcf222e, 0xffff7b72}, // Keyword
+    {0xff8250df, 0xffd2a8ff}, // Type
+    {0xff0a3069, 0xffa5d6ff}, // String
+    {0xff0550ae, 0xff79c0ff}, // Number
+    {0xff0550ae, 0xff79c0ff}, // Constant
+    {0xff116329, 0xff7ee787}, // Regex
+    {0xff8250df, 0xffd2a8ff}, // Function
+    {0xff0550ae, 0xff79c0ff}, // Property
+    {0xff1f2328, 0xfff0f6fc}, // Operator
+    {0xff953800, 0xffffa657}, // Preprocessor
+    {0xff116329, 0xff7ee787}, // Tag
+    {0xff0550ae, 0xff79c0ff}, // Attribute
+    {0xff116329, 0xff7ee787}, // Inserted
+    {0xff82071e, 0xffffa198}, // Deleted
+    {0xff0550ae, 0xff79c0ff}, // Heading
 };
 
 inline constexpr size_t kTokenColorsCount = static_cast<size_t>(TokenClass::Count);

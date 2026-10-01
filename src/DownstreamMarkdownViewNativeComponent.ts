@@ -78,6 +78,27 @@ export interface NativeProps extends ViewProps {
   csvSeparator?: string;
   /** Control labels in a fixed key order; see src/controls.ts. */
   controlLabels?: ReadonlyArray<string>;
+  /**
+   * Slot ids from src/themeSlots.ts, sorted ascending, one entry per override.
+   *
+   * Three arrays rather than a codegen object prop: a struct of every field
+   * would force the full normalization that loses platform default colors, grow
+   * a field per new slot, and give the shadow node nothing cheaper to compare
+   * than the struct itself. Three arrays compare as vectors and cost nothing
+   * when empty, which is what makes "no theme" structural rather than a path.
+   */
+  themeSlots?: ReadonlyArray<CodegenTypes.Int32>;
+  /**
+   * One value per slot: a number, an ARGB color, or an index into themeFonts.
+   * A color that differs between appearances takes two slots, light then dark.
+   */
+  themeValues?: ReadonlyArray<CodegenTypes.Double>;
+  /**
+   * Font family names referenced by font slots. `Double` rather than `Float` for
+   * the values, because a Float holds 24 bits of mantissa and cannot carry a
+   * 32-bit ARGB value exactly.
+   */
+  themeFonts?: ReadonlyArray<string>;
   onLinkPress?: CodegenTypes.DirectEventHandler<NativeLinkPressEvent>;
   onMarkdownError?: CodegenTypes.DirectEventHandler<NativeMarkdownErrorEvent>;
   onControlAction?: CodegenTypes.DirectEventHandler<NativeControlActionEvent>;

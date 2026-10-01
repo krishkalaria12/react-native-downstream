@@ -11,6 +11,7 @@ import {
   getStreamState,
 } from '../src/createMarkdownStream';
 import { DownstreamMarkdown } from '../src/DownstreamMarkdown';
+import { presets } from '../src/presets';
 import type { MarkdownViewProps } from '../src/types';
 import { parse, visibleText } from './engine';
 import { createNativeView, type NativeView } from './native-view';
@@ -762,5 +763,152 @@ describe('DownstreamMarkdown controls', () => {
     }
     fire('onControlAction', controlEvent());
     expect(onCopy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DownstreamMarkdown theme', () => {
+  /**
+   * The theme props are usually inline literals, so their identity changes on
+   * every render of the parent. What native must not see is a fresh array for a
+   * configuration that has not changed: it would re-intern and rebuild the
+   * rendering behind every message in a chat.
+   */
+  function themeProps(): {
+    themeSlots?: readonly number[];
+    themeValues?: readonly number[];
+    themeFonts?: readonly string[];
+  } {
+    const props = nativeView.last() as Record<string, unknown>;
+    return {
+      themeSlots: props.themeSlots as readonly number[] | undefined,
+      themeValues: props.themeValues as readonly number[] | undefined,
+      themeFonts: props.themeFonts as readonly string[] | undefined,
+    };
+  }
+
+  it('sends nothing at all for a view with no theme', () => {
+    mount(<DownstreamMarkdown markdown="x" />);
+    // Three empty arrays rather than three absent ones: the empty case is the
+    // shape the default theme is, so "no theme" is not a path native takes.
+    expect(themeProps().themeSlots).toEqual([]);
+    expect(themeProps().themeValues).toEqual([]);
+    expect(themeProps().themeFonts).toEqual([]);
+  });
+
+  it('sends the resolved slots for a token', () => {
+    mount(
+      <DownstreamMarkdown
+        markdown="x"
+        theme={{ radius: 12, colors: { primary: '#112233' } }}
+      />
+    );
+    const { themeSlots, themeValues } = themeProps();
+    expect(themeSlots?.length).toBeGreaterThan(0);
+    expect(themeValues?.length).toBe(themeSlots?.length);
+    // Sorted, so the shadow node can compare them as vectors.
+    expect([...(themeSlots ?? [])].sort((a, b) => a - b)).toEqual(themeSlots);
+  });
+
+  it('sends nothing new when an inline theme is equal by value', () => {
+    const theme = { colors: { foreground: '#111111' } };
+    mount(<DownstreamMarkdown markdown="x" theme={theme} />);
+    const first = themeProps();
+    expect(first.themeSlots?.length).toBeGreaterThan(0);
+
+    // A fresh literal with the same contents: the common case, since a theme is
+    // usually written inline.
+    rerender(
+      <DownstreamMarkdown
+        markdown="x"
+        theme={{ colors: { foreground: '#111111' } }}
+      />
+    );
+    expect(themeProps().themeSlots).toEqual(first.themeSlots);
+    expect(themeProps().themeValues).toEqual(first.themeValues);
+    expect(nativeView.count()).toBe(2);
+  });
+
+  it('sends one update when the theme changes', () => {
+    mount(<DownstreamMarkdown markdown="x" theme={{ radius: 12 }} />);
+    const first = themeProps();
+
+    rerender(<DownstreamMarkdown markdown="x" theme={{ radius: 16 }} />);
+    expect(themeProps().themeValues).not.toEqual(first.themeValues);
+    expect(nativeView.count()).toBe(2);
+  });
+
+  it('keeps the theme across a stream rebind', () => {
+    // A stream rebinds its session; the theme has nothing to do with that, so it
+    // must not be re-resolved or re-sent as a new value.
+    const session = stream();
+    session.append('hello');
+    getStreamState(session).flush();
+    mount(
+      <DownstreamMarkdown
+        stream={session}
+        theme={{ colors: { primary: '#445566' } }}
+      />
+    );
+    runFrames();
+    const first = themeProps();
+    expect(first.themeSlots?.length).toBeGreaterThan(0);
+
+    session.append(' world');
+    getStreamState(session).flush();
+    runFrames();
+    expect(themeProps().themeSlots).toEqual(first.themeSlots);
+    expect(themeProps().themeValues).toEqual(first.themeValues);
+  });
+
+  it('carries a light and dark pair as two values', () => {
+    mount(
+      <DownstreamMarkdown
+        markdown="x"
+        theme={{
+          colors: { foreground: { light: '#ffffff', dark: '#000000' } },
+        }}
+      />
+    );
+    const { themeSlots, themeValues } = themeProps();
+    expect(themeSlots?.length).toBe(themeValues?.length);
+    // A pair is two entries, so more values than a single color would send.
+    expect(themeValues?.some((value) => value === 0xffffffff)).toBe(true);
+    expect(themeValues?.some((value) => value === 0xff000000)).toBe(true);
+  });
+
+  it('sends both halves of a composed preset and override', () => {
+    mount(
+      <DownstreamMarkdown
+        markdown="x"
+        theme={[presets.github.theme, { radius: 12 }]}
+        markdownStyle={[
+          presets.github.markdownStyle,
+          { link: { color: '#ffffff' } },
+        ]}
+      />
+    );
+    const { themeSlots, themeValues, themeFonts } = themeProps();
+    expect(themeSlots?.length).toBeGreaterThan(10);
+    // Every preset color plus the override, so a preset is a starting point
+    // rather than a whole replacement.
+    expect(themeValues).toContain(0xffffffff);
+    // The GitHub preset names no font, so an override is what puts one on the wire.
+    expect(themeFonts).toEqual([]);
+  });
+
+  it('sends an element style over a token from the same theme', () => {
+    mount(
+      <DownstreamMarkdown
+        markdown="x"
+        theme={{ colors: { foreground: '#111111' } }}
+        markdownStyle={{ paragraph: { fontSize: 20 } }}
+      />
+    );
+    const { themeSlots, themeValues } = themeProps();
+    // The element style is a size, so it arrives as a metric rather than as a
+    // color, and the token's colors are still there beside it.
+    expect(themeValues).toContain(20);
+    expect(themeValues?.some((value) => value === 0xff111111)).toBe(true);
+    expect(themeSlots?.length).toBe(themeValues?.length);
   });
 });
