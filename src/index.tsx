@@ -2,7 +2,7 @@ export { DownstreamMarkdown } from './DownstreamMarkdown';
 export { createMarkdownStream } from './createMarkdownStream';
 export { presets } from './presets';
 export { syntaxColorsFromTheme } from './syntaxTheme';
-export { defaultTranslations } from './types';
+export { defaultTranslations, resolveMaxHeight } from './types';
 export type { DownstreamMarkdownProps } from './DownstreamMarkdown';
 export type { SyntaxColorsFromTheme } from './syntaxTheme';
 export type {
@@ -29,5 +29,6 @@ export type {
   MarkdownTokenClass,
   MarkdownTranslations,
   MarkdownViewProps,
+  defaultCodeBlockMaxHeight,
 } from './types';
 export type { VSCodeThemeJson, VSCodeTokenColor } from './vscodeTheme';

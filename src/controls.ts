@@ -23,6 +23,7 @@ export const CONTROL_CODE_DOWNLOAD = 1 << 1;
 export const CONTROL_TABLE_COPY = 1 << 2;
 export const CONTROL_TABLE_DOWNLOAD = 1 << 3;
 export const CONTROL_CODE_WRAP = 1 << 4;
+export const CONTROL_CODE_EXPAND = 1 << 5;
 
 /** Every control on, which is the default and the codegen default. */
 export const CONTROL_ALL =
@@ -30,7 +31,8 @@ export const CONTROL_ALL =
   CONTROL_CODE_DOWNLOAD |
   CONTROL_TABLE_COPY |
   CONTROL_TABLE_DOWNLOAD |
-  CONTROL_CODE_WRAP;
+  CONTROL_CODE_WRAP |
+  CONTROL_CODE_EXPAND;
 
 export type CsvSeparator = ',' | ';' | '\t' | 'auto';
 
@@ -47,6 +49,10 @@ export const CONTROL_LABEL_KEYS = [
   'copied',
   'wrapCode',
   'unwrapCode',
+  // Appended rather than inserted: the platforms read this array positionally,
+  // so a new key goes at the end rather than moving every later one.
+  'expandCode',
+  'collapseCode',
   'copyTable',
   'copyTableAsMarkdown',
   'copyTableAsCsv',
@@ -66,6 +72,7 @@ export type ControlHandlers = Readonly<{
   codeDownload?: (event: MarkdownControlEvent) => void;
   codeDownloadError?: (error: MarkdownErrorEvent) => void;
   codeWrap?: (event: MarkdownControlEvent) => void;
+  codeExpand?: (event: MarkdownControlEvent) => void;
   tableCopy?: (event: MarkdownControlEvent) => void;
   tableCopyError?: (error: MarkdownErrorEvent) => void;
   tableDownload?: (event: MarkdownControlEvent) => void;
@@ -131,11 +138,18 @@ export function shouldShowCodeWrap(controls: MarkdownControls): boolean {
   return section(controls, 'code')?.wrap !== false;
 }
 
+/** True when the code header's per-block expand button is on. */
+export function shouldShowCodeExpand(controls: MarkdownControls): boolean {
+  if (typeof controls === 'boolean') return controls;
+  if (!sectionEnabled(controls, 'code')) return false;
+  return section(controls, 'code')?.expand !== false;
+}
+
 /** A control's object form, or undefined when it is a boolean or absent. */
 function detail(
   controls: MarkdownControls,
   key: 'code' | 'table',
-  control: 'copy' | 'download' | 'wrap'
+  control: 'copy' | 'download' | 'wrap' | 'expand'
 ): Section | undefined {
   return section(controls, key)?.[control] as Section | undefined;
 }
@@ -189,10 +203,12 @@ export function resolveControls(
     flags |= CONTROL_TABLE_DOWNLOAD;
   }
   if (shouldShowCodeWrap(controls)) flags |= CONTROL_CODE_WRAP;
+  if (shouldShowCodeExpand(controls)) flags |= CONTROL_CODE_EXPAND;
 
   const codeCopy = detail(controls, 'code', 'copy');
   const codeDownload = detail(controls, 'code', 'download');
   const codeWrap = detail(controls, 'code', 'wrap');
+  const codeExpand = detail(controls, 'code', 'expand');
   const tableCopy = detail(controls, 'table', 'copy');
   const tableDownload = detail(controls, 'table', 'download');
 
@@ -208,6 +224,7 @@ export function resolveControls(
       codeDownload: of(codeDownload, 'onDownload'),
       codeDownloadError: of(codeDownload, 'onError'),
       codeWrap: of(codeWrap, 'onToggle'),
+      codeExpand: of(codeExpand, 'onToggle'),
       tableCopy: of(tableCopy, 'onCopy'),
       tableCopyError: of(tableCopy, 'onError'),
       tableDownload: of(tableDownload, 'onDownload'),

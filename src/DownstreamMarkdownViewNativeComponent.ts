@@ -35,6 +35,8 @@ type NativeControlActionEvent = Readonly<{
   language: string;
   filename: string;
   wrapped: boolean;
+  /** Expand only: whether the block's height cap is lifted after the press. */
+  expanded: boolean;
   /**
    * The source generation the press belongs to, so an event from a document
    * that has since been replaced is dropped rather than delivered to the
@@ -67,9 +69,19 @@ export interface NativeProps extends ViewProps {
   codeBlockWrap?: CodegenTypes.WithDefault<boolean, false>;
   /**
    * Which control buttons to build, as a bitmask of code copy, code
-   * download, table copy, table download, and code wrap.
+   * download, table copy, table download, code wrap, and code expand.
    */
-  controls?: CodegenTypes.WithDefault<CodegenTypes.Int32, 31>;
+  controls?: CodegenTypes.WithDefault<CodegenTypes.Int32, 63>;
+  /**
+   * Draw line numbers beside code. Layout only, and they are never copied,
+   * selected, or spoken.
+   */
+  lineNumbers?: CodegenTypes.WithDefault<boolean, true>;
+  /**
+   * The tallest a code block's body grows, in points, before it scrolls inside
+   * its card. 0 means no cap.
+   */
+  codeBlockMaxHeight?: CodegenTypes.WithDefault<CodegenTypes.Double, 400>;
   /** Base name for a code download, without an extension. */
   codeFilename?: string;
   /** Base name for a table download, without an extension. */

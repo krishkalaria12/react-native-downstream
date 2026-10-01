@@ -454,6 +454,33 @@ describe('DownstreamMarkdown controls', () => {
     expect(nativeView.last()?.codeBlockWrap).toBe(true);
   });
 
+  it('passes lineNumbers and codeBlockMaxHeight through, normalized', () => {
+    // Numbers are on and the cap is 400 by default, as in Streamdown, and every
+    // "off" spelling of the cap reaches native as the single 0 it reads.
+    mount(<DownstreamMarkdown markdown={SOURCE} />);
+    expect(nativeView.last()?.lineNumbers).toBe(true);
+    expect(nativeView.last()?.codeBlockMaxHeight).toBe(400);
+
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        lineNumbers={false}
+        codeBlockMaxHeight="none"
+      />
+    );
+    expect(nativeView.last()?.lineNumbers).toBe(false);
+    expect(nativeView.last()?.codeBlockMaxHeight).toBe(0);
+
+    // A value that is not a height falls back rather than reaching native.
+    mount(
+      <DownstreamMarkdown
+        markdown={SOURCE}
+        codeBlockMaxHeight={'50vh' as unknown as number}
+      />
+    );
+    expect(nativeView.last()?.codeBlockMaxHeight).toBe(400);
+  });
+
   it('selects by default', () => {
     mount(<DownstreamMarkdown markdown="x" />);
     expect(nativeView.last()?.selectable).toBe(true);

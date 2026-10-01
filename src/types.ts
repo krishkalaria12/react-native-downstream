@@ -104,7 +104,7 @@ export interface MarkdownStreamController {
 export type MarkdownControlKind = 'code' | 'table';
 
 /** What a control button did. */
-export type MarkdownControlAction = 'copy' | 'download' | 'wrap';
+export type MarkdownControlAction = 'copy' | 'download' | 'wrap' | 'expand';
 
 /** What a native control button did, reported to the matching callback. */
 export type MarkdownControlEvent = Readonly<{
@@ -114,6 +114,8 @@ export type MarkdownControlEvent = Readonly<{
   format?: 'text' | 'markdown' | 'csv' | 'tsv';
   /** Wrap only: the block's layout after the press. */
   wrapped?: boolean;
+  /** Expand only: whether the block's height cap is lifted after the press. */
+  expanded?: boolean;
   /**
    * Fence language as written, in the case the writer used: `ts`, `TS`, and
    * `Ts` all come back as written. It is not a normalized key, so compare
@@ -161,6 +163,17 @@ export type MarkdownControls =
               | Readonly<{
                   onToggle?: (event: MarkdownControlEvent) => void;
                 }>;
+            /**
+             * Per-block expand button in the code header, which lifts
+             * `codeBlockMaxHeight` for one block. It appears only on a block
+             * taller than the cap, so it is the way out of scrolling inside a
+             * scrolling chat.
+             */
+            expand?:
+              | boolean
+              | Readonly<{
+                  onToggle?: (event: MarkdownControlEvent) => void;
+                }>;
           }>;
       table?:
         | boolean
@@ -186,6 +199,10 @@ export type MarkdownTranslations = Readonly<{
   wrapCode: string;
   /** Turn off the code header's wrap button. */
   unwrapCode: string;
+  /** Show all of a code block taller than `codeBlockMaxHeight`. */
+  expandCode: string;
+  /** Put the code block's height cap back. */
+  collapseCode: string;
   /** Open the table's copy menu. */
   copyTable: string;
   copyTableAsMarkdown: string;
@@ -201,12 +218,43 @@ export type MarkdownTranslations = Readonly<{
   tableFormatTsv: string;
 }>;
 
+/**
+ * The tallest a code block's body grows, in points. 400 by default, as in
+ * Streamdown.
+ *
+ * Streamdown's `resolveMaxHeight`, narrowed to numbers. It accepts a CSS
+ * length, which has no meaning in a native layout, so every value that is not
+ * a non-negative finite number becomes the default instead.
+ */
+export const defaultCodeBlockMaxHeight = 400;
+
+/** The values that remove the cap rather than setting one. */
+const UNCAPPED: ReadonlySet<string> = new Set(['0', 'none', 'Infinity']);
+
+export function resolveMaxHeight(
+  value: number | '0' | 'none' | 'Infinity' | undefined
+): number {
+  if (value === undefined) return defaultCodeBlockMaxHeight;
+  if (typeof value === 'number') {
+    // `Infinity` is Streamdown's own "no cap", and native reads 0 as no cap.
+    if (value === Infinity) return 0;
+    // A negative, `NaN`, or fractional value is not a height, and silently
+    // clamping it would draw a card the caller never asked for.
+    return Number.isFinite(value) && value >= 0
+      ? value
+      : defaultCodeBlockMaxHeight;
+  }
+  return UNCAPPED.has(value) ? 0 : defaultCodeBlockMaxHeight;
+}
+
 export const defaultTranslations: MarkdownTranslations = {
   copyCode: 'Copy Code',
   downloadFile: 'Download file',
   copied: 'Copied',
   wrapCode: 'Wrap lines',
   unwrapCode: "Don't wrap lines",
+  expandCode: 'Show all lines',
+  collapseCode: 'Show fewer lines',
   copyTable: 'Copy table',
   copyTableAsMarkdown: 'Copy table as Markdown',
   copyTableAsCsv: 'Copy table as CSV',
@@ -475,6 +523,24 @@ type MarkdownViewBaseProps = Readonly<{
    * as in Streamdown and GitHub. Changes layout only, never copied text.
    */
   codeBlockWrap?: boolean;
+  /**
+   * Line numbers beside fenced and indented code. On by default, as in
+   * Streamdown.
+   *
+   * A fence's `noLineNumbers` hides them for one block; `false` hides them for
+   * all of them. Numbers are drawn beside the code and are never copied,
+   * selected, or read aloud.
+   */
+  lineNumbers?: boolean;
+  /**
+   * The tallest a code block's body grows, in points, before it scrolls inside
+   * its card. 400 by default, as in Streamdown.
+   *
+   * `0`, `'0'`, `'none'`, `Infinity`, and `'Infinity'` remove the cap. A
+   * capped block that is still streaming follows its newest line until the
+   * reader scrolls away. An app that prefers full-height code passes `0`.
+   */
+  codeBlockMaxHeight?: number | '0' | 'none' | 'Infinity';
   /**
    * Copy and download buttons on code blocks and tables. On by default.
    *
