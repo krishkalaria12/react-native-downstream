@@ -2,7 +2,9 @@ package com.downstream
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.ColorStateList
 import android.content.res.Configuration
+import android.graphics.Typeface
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
@@ -106,10 +108,24 @@ internal interface ControlHost {
   fun onControlFailed(kind: Int, action: String, message: String)
 }
 
-// A 28dp glyph in a 48dp target, which is the smallest comfortable touch
-// target the platform asks for.
-private val GLYPH_SIZE = 28
-private val TOUCH_SIZE = 48
+// A control is square and fills the 32dp chrome row it sits in, with its glyph
+// drawn at 18dp, about the size of the iOS symbol.
+private const val CONTROL_BUTTON_DP = 32f
+private const val CONTROL_GLYPH_DP = 18f
+
+/** One code header or table toolbar button, sized in dp and tinted later. */
+private fun newControlButton(context: Context, drawable: Int): ImageButton = ImageButton(context).apply {
+  val density = context.resources.displayMetrics.density
+  val size = (CONTROL_BUTTON_DP * density).toInt()
+  val inset = ((CONTROL_BUTTON_DP - CONTROL_GLYPH_DP) / 2 * density).toInt()
+  layoutParams = LinearLayout.LayoutParams(size, size)
+  setImageResource(drawable)
+  scaleType = ImageView.ScaleType.FIT_CENTER
+  setPadding(inset, inset, inset, inset)
+  val ripple = TypedValue()
+  context.theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, ripple, true)
+  setBackgroundResource(ripple.resourceId)
+}
 
 /** Link index at a point in a laid-out text, or -1. */
 private fun linkAt(layout: Layout, x: Float, y: Float): Int {
@@ -597,7 +613,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       when (segment) {
         is TextSegment -> (view as TextSegmentView).setSegment(segment, rendered!!)
         is CodeSegment -> (view as CodeSegmentView).setSegment(segment, rendered!!)
-        is TableSegment -> (view as TableSegmentView).setSegment(segment, sourceEpoch)
+        is TableSegment -> (view as TableSegmentView).setSegment(segment, sourceEpoch, rendered!!.style.chromeRowHeight)
       }
     }
     while (childCount > segments.size) {
@@ -938,8 +954,17 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     orientation = LinearLayout.HORIZONTAL
     gravity = Gravity.CENTER_VERTICAL
   }
-  private val language = TextView(context).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f) }
-  private val buttons = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+  private val language = TextView(context).apply {
+    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+    typeface = Typeface.MONOSPACE
+    gravity = Gravity.CENTER_VERTICAL or Gravity.START
+    setPadding((12 * resources.displayMetrics.density).toInt(), 0, 0, 0)
+    isSingleLine = true
+  }
+  private val buttons = LinearLayout(context).apply {
+    orientation = LinearLayout.HORIZONTAL
+    gravity = Gravity.CENTER_VERTICAL
+  }
   private val scroll = HorizontalScrollView(context).apply {
     isHorizontalScrollBarEnabled = false
     isFillViewport = false
@@ -981,23 +1006,16 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     setWillNotDraw(false)
     addView(header)
     addView(scroll)
-    header.addView(
-      language,
-      LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT).apply { gravity = Gravity.START },
-    )
-    header.addView(buttons, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
+    // The label takes the slack, which keeps the buttons at the trailing edge.
+    header.addView(language, LinearLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
+    header.addView(buttons, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
     buttons.addView(wrapButton)
     buttons.addView(downloadButton)
     buttons.addView(copyButton)
     scroll.addView(body, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
   }
 
-  private fun controlButton(drawable: Int, label: Int): ImageButton = ImageButton(context).apply {
-    setImageResource(drawable)
-    minimumWidth = TOUCH_SIZE
-    minimumHeight = TOUCH_SIZE
-    setPadding(0, 0, 0, 0)
-    scaleType = ImageView.ScaleType.CENTER
+  private fun controlButton(drawable: Int, label: Int): ImageButton = newControlButton(context, drawable).apply {
     contentDescription = controlLabels[label]
     setOnClickListener {
       when (it) {
@@ -1045,6 +1063,13 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     ordinal = segment.codeOrdinal
     this.segment = segment
     cardBackground.setColor(segment.colors.codeBackground)
+    language.setTextColor(segment.colors.secondary)
+    // A selected wrap button takes the text color, so its state is visible.
+    val tint = ColorStateList(
+      arrayOf(intArrayOf(android.R.attr.state_selected), intArrayOf()),
+      intArrayOf(segment.colors.text, segment.colors.secondary),
+    )
+    for (button in listOf(wrapButton, downloadButton, copyButton)) button.imageTintList = tint
     body.setContent(segment.text, segment.accessibleBlocks, rendered)
     language.text = segment.language
     updateButtons()
@@ -1106,19 +1131,42 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     updateButtons()
   }
 
+  /**
+   * The header row's height: the one the measurement reserved, not the header's
+   * own measured height, which as a frame child would be the whole card.
+   */
+  private fun headerHeight(): Int {
+    val rendered = this.rendered ?: return 0
+    return if (header.visibility == View.VISIBLE) rendered.style.chromeRowHeight else 0
+  }
+
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
     val segment = this.segment ?: return
     val rendered = this.rendered ?: return
-    val headerHeight = if (header.visibility == View.VISIBLE) header.measuredHeight else 0
+    // Children are placed in this view's own coordinates, so the frame the
+    // parent gave (left, top) only supplies the size.
+    val width = right - left
+    val height = bottom - top
+    val headerHeight = headerHeight()
     val padding = segment.padding
     val leading = segment.contentLeading
-    val cardWidth = (right - left - leading).coerceAtLeast(0)
+    val cardWidth = (width - leading).coerceAtLeast(0)
     val bodyWidth = segment.bodyWidth(rendered.paint, cardWidth, wrapped)
     val bodyHeight = segment.bodyHeight(rendered.paint, cardWidth, wrapped)
-    header.layout(left, top, right, top + headerHeight)
-    val scrollLeft = left + leading + padding
-    val scrollRight = (right - padding).coerceAtLeast(scrollLeft)
-    scroll.layout(scrollLeft, top + headerHeight + padding, scrollRight, (bottom - padding).coerceAtLeast(top))
+    header.measure(
+      MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+      MeasureSpec.makeMeasureSpec(headerHeight, MeasureSpec.EXACTLY),
+    )
+    header.layout(0, 0, width, headerHeight)
+    val scrollLeft = leading + padding
+    val scrollTop = headerHeight + padding
+    val scrollRight = (width - padding).coerceAtLeast(scrollLeft)
+    val scrollBottom = (height - padding).coerceAtLeast(scrollTop)
+    scroll.measure(
+      MeasureSpec.makeMeasureSpec(scrollRight - scrollLeft, MeasureSpec.EXACTLY),
+      MeasureSpec.makeMeasureSpec(scrollBottom - scrollTop, MeasureSpec.EXACTLY),
+    )
+    scroll.layout(scrollLeft, scrollTop, scrollRight, scrollBottom)
     body.measure(
       MeasureSpec.makeMeasureSpec(bodyWidth, MeasureSpec.EXACTLY),
       MeasureSpec.makeMeasureSpec(bodyHeight, MeasureSpec.EXACTLY),
@@ -1141,9 +1189,10 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
     val segment = this.segment ?: return
-    cardBackground.setBounds(0, 0, width, height)
+    val headerHeight = headerHeight()
+    // The card starts below the header, which sits on the page, as on iOS.
+    cardBackground.setBounds(segment.contentLeading, headerHeight, width, height)
     cardBackground.draw(canvas)
-    val headerHeight = if (header.visibility == View.VISIBLE) header.measuredHeight else 0
     val firstLine = segment.accessibleBlocks.firstOrNull()
     for (container in segment.containers) {
       val bar = container.barColor
@@ -1180,20 +1229,8 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     orientation = LinearLayout.HORIZONTAL
     gravity = Gravity.END or Gravity.CENTER_VERTICAL
   }
-  private val copyButton = ImageButton(context).apply {
-    setImageResource(R.drawable.ds_ic_copy)
-    minimumWidth = TOUCH_SIZE
-    minimumHeight = TOUCH_SIZE
-    setPadding(0, 0, 0, 0)
-    scaleType = ImageView.ScaleType.CENTER
-  }
-  private val downloadButton = ImageButton(context).apply {
-    setImageResource(R.drawable.ds_ic_download)
-    minimumWidth = TOUCH_SIZE
-    minimumHeight = TOUCH_SIZE
-    setPadding(0, 0, 0, 0)
-    scaleType = ImageView.ScaleType.CENTER
-  }
+  private val copyButton = newControlButton(context, R.drawable.ds_ic_copy)
+  private val downloadButton = newControlButton(context, R.drawable.ds_ic_download)
   private var segment: TableSegment? = null
   private var sourceEpoch = -1
   private var pendingLeadingDistance: Int? = 0
@@ -1201,6 +1238,8 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
   private var controls = 0
   private var controlsEnabled = false
   private var controlHost: ControlHost? = null
+  /** The toolbar row the measurement reserved, from the document's style. */
+  private var chromeRowHeight = 0
 
   init {
     setWillNotDraw(false)
@@ -1287,7 +1326,11 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     menu.show()
   }
 
-  fun setSegment(segment: TableSegment, sourceEpoch: Int) {
+  fun setSegment(segment: TableSegment, sourceEpoch: Int, chromeRowHeight: Int) {
+    if (chromeRowHeight != this.chromeRowHeight) {
+      this.chromeRowHeight = chromeRowHeight
+      requestLayout()
+    }
     if (segment === this.segment) {
       return
     }
@@ -1304,6 +1347,9 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     }
     this.segment = segment
     this.sourceEpoch = sourceEpoch
+    val tint = ColorStateList.valueOf(segment.colors.secondary)
+    copyButton.imageTintList = tint
+    downloadButton.imageTintList = tint
     grid.updateSegment(segment, resetFocus = !sameTable)
     requestLayout()
     invalidate()
@@ -1315,10 +1361,18 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     requestLayout()
   }
 
+  private fun toolbarHeight(): Int = if (toolbar.visibility == View.VISIBLE) chromeRowHeight else 0
+
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
     val segment = segment ?: return
-    val toolbarHeight = if (toolbar.visibility == View.VISIBLE) toolbar.measuredHeight else 0
-    toolbar.layout(left, top, right, top + toolbarHeight)
+    // In this view's own coordinates, and at the reserved row height rather than
+    // the toolbar's measured one, which as a frame child is the whole table.
+    val toolbarHeight = toolbarHeight()
+    toolbar.measure(
+      MeasureSpec.makeMeasureSpec(right - left, MeasureSpec.EXACTLY),
+      MeasureSpec.makeMeasureSpec(toolbarHeight, MeasureSpec.EXACTLY),
+    )
+    toolbar.layout(0, 0, right - left, toolbarHeight)
     val leading = segment.contentLeading.toInt()
     val width = (right - left - leading).coerceAtLeast(0)
     val height = (bottom - top - toolbarHeight).coerceAtLeast(0)
@@ -1351,7 +1405,7 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     super.onDraw(canvas)
     val segment = segment ?: return
     val density = segment.density
-    val toolbarHeight = if (toolbar.visibility == View.VISIBLE) toolbar.measuredHeight else 0
+    val toolbarHeight = toolbarHeight()
     for (container in segment.containers) {
       val barColor = container.barColor
       if (barColor != null) {
