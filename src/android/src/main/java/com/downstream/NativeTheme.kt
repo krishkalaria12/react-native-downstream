@@ -25,6 +25,8 @@ internal class NativeTheme private constructor(
   private val set: BooleanArray,
   /** The families a font slot names, in the engine's order. */
   val families: List<String>,
+  /** Which halves of a color the theme named: light in bit 0, dark in bit 1. */
+  private val halves: ByteArray,
 ) {
   /** A metric, weight or flag as a float, in points before font scaling. */
   fun number(slot: Int): Float = numbers[slot - 1].toFloat()
@@ -64,6 +66,19 @@ internal class NativeTheme private constructor(
     // Either half of a pair resolves to the same pair, so a caller that happens
     // to hold the dark id reads the same color it would read at the light one.
     val at = if (slot in light.indices) slot - 1 else return null
+    // A theme may name one appearance only, and the other then draws the
+    // caller's default for that appearance, as an unset slot does.
+    val named = (halves[at].toInt() and (if (night) 2 else 1)) != 0
+    if (!named) return null
+    return if (night) dark[at] else light[at]
+  }
+
+  /**
+   * The value a color slot holds when the theme left it unset. Only a syntax slot
+   * has one, the engine's palette; a role slot's is zero and means nothing.
+   */
+  fun unsetColor(slot: Int, night: Boolean): Int {
+    val at = slot - 1
     return if (night) dark[at] else light[at]
   }
 
@@ -165,6 +180,7 @@ internal class NativeTheme private constructor(
         dark = parts[2] as IntArray,
         set = parts[3] as BooleanArray,
         families = (parts[4] as Array<*>).map { it as String },
+        halves = parts[5] as ByteArray,
       )
     }
 

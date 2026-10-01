@@ -254,13 +254,14 @@ describe('colors', () => {
     expect(valueOf(resolved, 'table.borderColor')).toBe(0xff445566);
   });
 
-  it('sends one entry for a color that is the same in both appearances', () => {
-    // One entry rather than two is what tells the platform the color does not
-    // change with appearance, and it is also smaller.
+  it('sends both halves for a color that is the same in both appearances', () => {
+    // A light id on its own means "only light mode", so a plain color names
+    // both halves rather than relying on the engine to copy one.
     const resolved = resolveTheme({ colors: { primary: '#112233' } });
     const light = slot('link.color');
-    expect(resolved.slots).toContain(light);
-    expect(resetsLightOnly(resolved, light)).toBe(true);
+    expect(resetsLightOnly(resolved, light)).toBe(false);
+    expect(resolved.values[resolved.slots.indexOf(light)]).toBe(0xff112233);
+    expect(resolved.values[resolved.slots.indexOf(light + 1)]).toBe(0xff112233);
   });
 
   it('sends two slots for a light and dark pair', () => {
@@ -279,19 +280,45 @@ describe('colors', () => {
     expect(resolved.values[darkIndex]).toBe(0xff000000);
   });
 
-  it('treats a pair whose halves match as one entry', () => {
-    const resolved = resolveTheme({
+  it('sends a pair whose halves match the way it sends one color', () => {
+    const pair = resolveTheme({
       colors: { primary: { light: '#112233', dark: '#112233' } },
     });
-    expect(resetsLightOnly(resolved, slot('link.color'))).toBe(true);
+    const plain = resolveTheme({ colors: { primary: '#112233' } });
+    expect(pair).toEqual(plain);
   });
 
-  it('takes one half of a partial pair as both appearances', () => {
+  it('sends only the light half of a light-only pair', () => {
+    // The dark half is left to the default for dark mode, as the type promises,
+    // rather than frozen to the light color.
     const resolved = resolveTheme({
       colors: { primary: { light: '#112233' } },
     });
     expect(resetsLightOnly(resolved, slot('link.color'))).toBe(true);
     expect(valueOf(resolved, 'link.color')).toBe(0xff112233);
+  });
+
+  it('sends only the dark half of a dark-only pair', () => {
+    // Light mode keeps its default. Sending the dark color for both would draw
+    // a dark theme's near-white text on a light background.
+    const resolved = resolveTheme({
+      colors: { foreground: { dark: '#e6e1e5' } },
+    });
+    const light = slot('paragraph.color');
+    expect(resolved.slots).not.toContain(light);
+    expect(resolved.values[resolved.slots.indexOf(light + 1)]).toBe(0xffe6e1e5);
+  });
+
+  it('keeps the other half when a later value names one', () => {
+    // Merged per leaf: a dark-only override on top of a preset changes dark mode
+    // and leaves the preset's light color where it was.
+    const resolved = resolveTheme([
+      { colors: { foreground: { light: '#111111', dark: '#222222' } } },
+      { colors: { foreground: { dark: '#333333' } } },
+    ]);
+    const light = slot('paragraph.color');
+    expect(resolved.values[resolved.slots.indexOf(light)]).toBe(0xff111111);
+    expect(resolved.values[resolved.slots.indexOf(light + 1)]).toBe(0xff333333);
   });
 
   it('warns once about a value it cannot draw, and keeps the default', () => {

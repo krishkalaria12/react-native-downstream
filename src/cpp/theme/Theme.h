@@ -23,8 +23,14 @@ public:
   /// draws `defaultRole` instead of a value: a platform color on iOS, the
   /// engine's token table for a syntax slot, or nothing at all for a role that
   /// means "inherit". That is why a default is a role rather than an integer.
+  ///
+  /// A theme may name one half only. `lightSet` and `darkSet` say which, and
+  /// an appearance whose half is unset draws the default, so `{ dark }` themes
+  /// dark mode without freezing light mode. `set` is either half.
   struct Color {
     bool set{false};
+    bool lightSet{false};
+    bool darkSet{false};
     uint32_t light{0};
     uint32_t dark{0};
     /// A `theme::ColorRole`, or `theme::kRoleTokenClassBase + a TokenClass`.
@@ -91,6 +97,9 @@ public:
     const int32_t index = fonts_[id - 1];
     return index < 0 ? kNoFont : fontNames_[index];
   }
+
+  /// A font slot's index into `fontNames()`, or -1 for the system font.
+  int32_t fontIndex(uint32_t id) const { return fonts_[id - 1]; }
 
   /// Every family the theme names, in slot order. A platform that has to build
   /// its own font objects reads one string per family rather than a string per

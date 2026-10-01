@@ -272,7 +272,7 @@ internal object DownstreamNative {
   }
 
   /** Returns null when the document is no longer alive. */
-  fun readDocument(id: Long, from: Int, to: Int, themeId: Long = 0L): NativeDocument? {
+  fun readDocument(id: Long, from: Int, to: Int, themeId: Long): NativeDocument? {
     val parts = nativeReadDocument(id, from, to, themeId) ?: return null
     @Suppress("UNCHECKED_CAST")
     return NativeDocument(
