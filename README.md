@@ -53,6 +53,53 @@ Fenced code is colored by the language in its info string, on the same worker th
 
 `ts`, `tsx`, `js`, `java`, `c`, `cpp`, `cs`, `go`, `swift`, `kt`, `dart`, `scala`, `objc`, `py`, `sh`, `json`, `html`, `xml`, `css`, `sql`, `rs`, `yaml`, `toml`, `rb`, `lua`, `diff`, and `md` are colored; anything else renders plain, as it does in Streamdown. The palette follows GitHub's light and dark code themes and is the same on both platforms. A block with no language, an unknown language, and a block over 64 KiB of code stay plain, and a document with no fenced code never loads a lexer. Highlighting only sets colors, so selection, copy, and accessibility text are unchanged; see [the plan](docs/syntax-highlighting-plan.html) for how a streaming block stays cheap.
 
+### Theming
+
+`theme` sets colors, fonts and metrics; `markdownStyle` sets one element at a time. Both take one value or an array merged left to right, so a preset is an override you extend rather than replace:
+
+```tsx
+import { DownstreamMarkdown, presets } from 'react-native-downstream';
+
+// A preset is `{ theme, markdownStyle }`, so it spreads.
+<DownstreamMarkdown markdown={message} {...presets.github} />
+
+// One array element overrides the one before it.
+<DownstreamMarkdown
+  markdown={message}
+  theme={[{ colors: { foreground: '#101418' } }, presets.streamdown.theme]}
+  markdownStyle={{ h1: { fontWeight: 700 } }}
+/>
+```
+
+A color is a string or `{ light, dark }`, and either half may be left out to keep the default for that appearance. What is left unset keeps the platform's own color, so it still follows the appearance and increased contrast without a render:
+
+```tsx
+theme={{
+  colors: { foreground: { light: '#1b1b1f' }, primary: '#7a3e9d' },
+  fonts: { heading: 'Georgia', mono: 'JetBrainsMono-Regular' },
+  radius: 8,
+}}
+```
+
+Both renderers read one slot table, so a theme draws the same on each platform. Only metrics change layout, and only those are measured again: a colors-only change redraws without a single remeasure. `maxFontSizeMultiplier` caps the platform font scale, as `<Text>`'s does; it cannot turn scaling off. Any other key is reported once in development rather than ignored, so a value written for another renderer does not look like it took effect.
+
+`theme.syntax` takes the engine's token classes. For a full editor theme, read Shiki's own JSON and convert it:
+
+```tsx
+import { syntaxColorsFromTheme } from 'react-native-downstream';
+
+const converted = syntaxColorsFromTheme(await import('./dracula.json'));
+<DownstreamMarkdown
+  markdown={message}
+  theme={{
+    syntax: converted.syntax,
+    colors: { foreground: converted.codeBlock.color, muted: converted.codeBlock.backgroundColor },
+  }}
+/>
+```
+
+`presets.github` and `presets.streamdown` are the two themes the renderers are checked against. See [theming](docs/api.md#theming) for the whole surface.
+
 ### Copy and download controls
 
 Every code block gets a header and every table gets a toolbar, with no setup. `controls` takes Streamdown's shape, so a value written for it works as it is:
