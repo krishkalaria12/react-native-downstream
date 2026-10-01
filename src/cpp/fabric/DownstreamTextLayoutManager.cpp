@@ -15,8 +15,7 @@ constexpr size_t kMeasurementCacheCapacity = 64;
 
 Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
                                           const LayoutConstraints &layoutConstraints, SurfaceId surfaceId,
-                                          uint32_t chrome, bool codeBlockWrap,
-                                          const std::vector<uint32_t> &wrapToggles,
+                                          uint32_t chrome, const downstream::CodeLayout &code,
                                           const downstream::Theme::Handle &theme) const {
   const Float maximumWidth = layoutConstraints.maximumSize.width;
   // The theme can cap the platform's font scale, and the cap is applied before
@@ -35,8 +34,7 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
       std::lock_guard<std::mutex> lock(cacheMutex_);
       for (const auto &entry : cache_) {
         if (entry.documentId == document->id && entry.fontSizeMultiplier == scale &&
-            entry.maximumWidth == maximumWidth && entry.chrome == chrome &&
-            entry.codeBlockWrap == codeBlockWrap && entry.wrapToggles == wrapToggles &&
+            entry.maximumWidth == maximumWidth && entry.chrome == chrome && entry.code == code &&
             entry.themeLayoutKey == themeLayoutKey) {
           size = entry.size;
           cached = true;
@@ -46,12 +44,12 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
     }
 
     if (!cached) {
-      size = measurePlatform(document, scale, maximumWidth, surfaceId, chrome, codeBlockWrap, wrapToggles, theme);
+      size = measurePlatform(document, scale, maximumWidth, surfaceId, chrome, code, theme);
       std::lock_guard<std::mutex> lock(cacheMutex_);
       if (cache_.size() >= kMeasurementCacheCapacity) {
         cache_.erase(cache_.begin());
       }
-      cache_.push_back({document->id, scale, maximumWidth, chrome, codeBlockWrap, wrapToggles, themeLayoutKey, size});
+      cache_.push_back({document->id, scale, maximumWidth, chrome, code, themeLayoutKey, size});
     } else {
       downstream::SessionTrace::recordDocument(document->id, "measure_cache_hit");
     }

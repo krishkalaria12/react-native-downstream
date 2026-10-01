@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CodeLayout.h"
 #include "Controls.h"
 #include "Document.h"
 #include "DocumentRegistry.h"
@@ -28,20 +29,18 @@ using downstream::chromeForProps;
 namespace ControlBits = downstream::ControlBits;
 
 /// Mounting state: the parsed document, the font scale it was measured with,
-/// and the reader's per-block wrap choices. The view renders exactly this, so a
+/// and the code layout the reader is at. The view renders exactly this, so a
 /// mounted frame never mixes content from one revision with a size from another.
 class DownstreamMarkdownState final {
 public:
   DownstreamMarkdownState() = default;
 
   DownstreamMarkdownState(downstream::DocumentHandle document, Float fontSizeMultiplier, uint32_t chrome = 0,
-                          std::vector<uint32_t> wrapToggles = {}, bool codeBlockWrap = false,
-                          downstream::Theme::Handle theme = nullptr)
+                          downstream::CodeLayout code = {}, downstream::Theme::Handle theme = nullptr)
       : document(std::move(document)),
         fontSizeMultiplier(fontSizeMultiplier),
         chrome(chrome),
-        wrapToggles(std::move(wrapToggles)),
-        codeBlockWrap(codeBlockWrap),
+        code(std::move(code)),
         theme(std::move(theme)) {}
 
   downstream::DocumentHandle document;
@@ -49,18 +48,14 @@ public:
   /// See `chromeForProps`. The resolved value travels with the state so the view
   /// lays out at the height the node measured.
   uint32_t chrome{downstream::kChromeNone};
-  /// The code blocks whose layout differs from `codeBlockWrap`, keyed by the
-  /// block's ordinal among the document's code blocks, sorted. Ordinals are
-  /// stable across append-only snapshots, so a choice survives streaming.
+  /// The code layout: the `lineNumbers`, `codeBlockWrap`, and `codeBlockMaxHeight`
+  /// props, plus the reader's own per-block wrap and expand choices.
   ///
-  /// The set is the reader's own state rather than a revision of it, because
+  /// The choices are the reader's state rather than a revision of it, because
   /// the platforms need the decisions themselves, not a number that says they
-  /// changed. `chrome` cannot stand in for it: it says every code block wraps
-  /// or that not all of them do, and a document with a mix needs the set.
-  std::vector<uint32_t> wrapToggles;
-  /// The `codeBlockWrap` prop, so the two halves of the decision travel
-  /// together and a platform never has to infer one from the other.
-  bool codeBlockWrap{false};
+  /// changed. `chrome` cannot stand in for them: it says every code block wraps
+  /// or that not all of them do, and a document with a mix needs the sets.
+  downstream::CodeLayout code;
   /// The theme the node measured with. It travels with the state so a mounted
   /// frame cannot mix sizes from one theme with drawing from another, the same
   /// way `chrome` does. Null means the default theme.
@@ -75,46 +70,47 @@ public:
   /// The theme's id, or 0 for the default one, which is its id too.
   uint64_t themeId() const { return theme ? theme->id() : 0; }
 
-  /// True when the code block at `ordinal` is laid out at the card's width
-  /// rather than at its own length.
-  bool isWrapped(uint32_t ordinal) const {
-    return downstream::codeWraps(codeBlockWrap, wrapToggles, ordinal);
+  /// The layout of the code block at `ordinal`, from the code layout and that
+  /// block's own fence meta. The one definition both platforms call.
+  downstream::CodeBlockLayout layoutOf(uint32_t ordinal, const downstream::FenceMeta &meta) const {
+    return downstream::resolveCodeBlock(code, ordinal, meta);
   }
 
   /// A copy with `ordinal` toggled and its chrome resolved again.
-  DownstreamMarkdownState toggled(uint32_t ordinal, uint32_t controls) const {
+  DownstreamMarkdownState toggledWrap(uint32_t ordinal, uint32_t controls) const {
     DownstreamMarkdownState next(*this);
-    const auto entry = std::find(next.wrapToggles.begin(), next.wrapToggles.end(), ordinal);
-    if (entry != next.wrapToggles.end()) {
-      next.wrapToggles.erase(entry);
-    } else {
-      next.wrapToggles.push_back(ordinal);
-      // Sorted, so two states with the same set compare the same however they
-      // were reached, and so `codeWraps` can binary-search it.
-      std::sort(next.wrapToggles.begin(), next.wrapToggles.end());
-    }
-    next.chrome = chromeForProps(controls, next.codeBlockWrap, next.wrapToggles);
+    downstream::toggleChoice(next.code.choices.wrapToggles, ordinal);
+    next.chrome = chromeForProps(controls, next.code);
+    return next;
+  }
+
+  /// A copy with the cap lifted for `ordinal`, or put back, and its chrome
+  /// resolved again.
+  DownstreamMarkdownState toggledExpand(uint32_t ordinal, uint32_t controls) const {
+    DownstreamMarkdownState next(*this);
+    downstream::toggleChoice(next.code.choices.expanded, ordinal);
+    next.chrome = chromeForProps(controls, next.code);
     return next;
   }
 
   /// A copy with the same choices and a chrome resolved for different props,
-  /// which is what a change to `controls` or `codeBlockWrap` needs.
-  DownstreamMarkdownState rechromed(uint32_t controls, bool wrap) const {
+  /// which is what a change to `controls` or a code layout prop needs.
+  DownstreamMarkdownState recoded(uint32_t controls, downstream::CodeLayoutProps props) const {
     DownstreamMarkdownState next(*this);
-    next.codeBlockWrap = wrap;
-    next.chrome = chromeForProps(controls, wrap, next.wrapToggles);
+    next.code.props = props;
+    next.chrome = chromeForProps(controls, next.code);
     return next;
   }
 
 #ifdef RN_SERIALIZABLE_STATE
   /// The view hands a new state back through StateWrapper, so the choices the
-  /// reader just made have to survive the round trip through JNI.
+  /// reader just made have to survive the round trip through JNI. The arrays are
+  /// read back sorted, because the platform resolves them by binary search.
   DownstreamMarkdownState(const DownstreamMarkdownState &previous, folly::dynamic data)
       : document(previous.document),
         fontSizeMultiplier(previous.fontSizeMultiplier),
         chrome(previous.chrome),
-        wrapToggles(previous.wrapToggles),
-        codeBlockWrap(previous.codeBlockWrap),
+        code(previous.code),
         theme(previous.theme) {
     if (!data.isObject()) {
       return;
@@ -123,38 +119,62 @@ public:
       chrome = static_cast<uint32_t>(value->asDouble());
     }
     if (auto value = data.get_ptr("codeBlockWrap")) {
-      codeBlockWrap = value->asDouble() != 0;
+      code.props.wrap = value->asDouble() != 0;
+    }
+    if (auto value = data.get_ptr("lineNumbers")) {
+      code.props.lineNumbers = value->asDouble() != 0;
+    }
+    if (auto value = data.get_ptr("codeBlockMaxHeight")) {
+      code.props.maxHeight = static_cast<float>(value->asDouble());
     }
     if (auto value = data.get_ptr("wrapToggles")) {
-      if (value->isArray()) {
-        std::vector<uint32_t> toggles;
-        toggles.reserve(value->size());
-        for (const auto &entry : *value) {
-          toggles.push_back(static_cast<uint32_t>(entry.asDouble()));
-        }
-        wrapToggles = std::move(toggles);
-      }
+      code.choices.wrapToggles = readOrdinals(*value);
+    }
+    if (auto value = data.get_ptr("expanded")) {
+      code.choices.expanded = readOrdinals(*value);
     }
   }
 
   /// Java resolves the document through the native registry by id rather than
   /// copying the render model across JNI on every update.
+  ///
+  /// The booleans travel as numbers, so the whole state crosses JNI as one type.
   folly::dynamic getDynamic() const {
     downstream::DocumentRegistry::add(document);
-    auto array = folly::dynamic::array();
-    for (const uint32_t ordinal : wrapToggles) {
-      array.push_back(static_cast<double>(ordinal));
-    }
     return folly::dynamic::object("documentId", document ? static_cast<double>(document->id) : 0.0)(
         "fontScale", static_cast<double>(fontSizeMultiplier))("chrome", static_cast<double>(chrome))(
-        // A number rather than a bool, so the state crosses JNI as one type.
-        "codeBlockWrap", codeBlockWrap ? 1.0 : 0.0)("wrapToggles", std::move(array))(
+        // The booleans travel as numbers, so the whole state crosses JNI as one
+        // type.
+        "codeBlockWrap", code.props.wrap ? 1.0 : 0.0)("lineNumbers", code.props.lineNumbers ? 1.0 : 0.0)(
+        "codeBlockMaxHeight", static_cast<double>(code.props.maxHeight))(
+        "wrapToggles", writeOrdinals(code.choices.wrapToggles))("expanded", writeOrdinals(code.choices.expanded))(
         // By id, as the document is: Java resolves the theme through the
         // registry rather than copying its values across JNI on every update.
         "themeId", static_cast<double>(themeId()));
   }
 #endif
 
+private:
+  static std::vector<uint32_t> readOrdinals(const folly::dynamic &array) {
+    std::vector<uint32_t> ordinals;
+    if (!array.isArray()) {
+      return ordinals;
+    }
+    ordinals.reserve(array.size());
+    for (const auto &entry : array) {
+      ordinals.push_back(static_cast<uint32_t>(entry.asDouble()));
+    }
+    std::sort(ordinals.begin(), ordinals.end());
+    return ordinals;
+  }
+
+  static folly::dynamic writeOrdinals(const std::vector<uint32_t> &ordinals) {
+    auto array = folly::dynamic::array();
+    for (const uint32_t ordinal : ordinals) {
+      array.push_back(static_cast<double>(ordinal));
+    }
+    return array;
+  }
 };
 
 } // namespace facebook::react

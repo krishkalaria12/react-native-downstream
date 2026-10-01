@@ -116,8 +116,7 @@ downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale,
   return downstream::LayoutHint{static_cast<float>(fontScale),
                                 static_cast<float>(width),
                                 chromeFor(state),
-                                state.wrapToggles,
-                                props.codeBlockWrap,
+                                codeLayout(state),
                                 theme_};
 }
 
@@ -204,9 +203,19 @@ void DownstreamMarkdownShadowNode::relayoutWhenPrepared() const {
   });
 }
 
-uint32_t DownstreamMarkdownShadowNode::chromeFor(const DownstreamMarkdownState &state) const {
+/// The code layout the props and the state's choices together describe.
+downstream::CodeLayout DownstreamMarkdownShadowNode::codeLayout(const DownstreamMarkdownState &state) const {
   const auto &props = getConcreteProps();
-  return chromeForProps(props.controls, props.codeBlockWrap, state.wrapToggles);
+  downstream::CodeLayout code;
+  // Measuring reads the props rather than the state's copy of them, because a
+  // prop change lands in props a revision before the state that records it does.
+  code.props = {props.codeBlockWrap, props.lineNumbers, static_cast<float>(props.codeBlockMaxHeight)};
+  code.choices = state.code.choices;
+  return code;
+}
+
+uint32_t DownstreamMarkdownShadowNode::chromeFor(const DownstreamMarkdownState &state) const {
+  return chromeForProps(getConcreteProps().controls, codeLayout(state));
 }
 
 Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutContext,
@@ -214,9 +223,9 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
   const auto &props = getConcreteProps();
   const auto &state = getStateData();
   const uint32_t chrome = chromeFor(state);
-  // The layout is the prop's default plus the reader's own choices, so a hint
-  // carries both. Measuring reads the prop rather than the state's copy of it,
-  // because a `codeBlockWrap` change lands in props a revision before the state
+  // The layout is the props' defaults plus the reader's own choices, so a hint
+  // carries both. Measuring reads the props rather than the state's copy of them,
+  // because a code layout prop change lands in props a revision before the state
   // that records it does. The hint carries the theme too, so the worker builds
   // the rendering this measurement will mount rather than one Fabric discards.
   const downstream::LayoutHint hint =
@@ -226,7 +235,7 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
     downstream::SessionRegistry::noteLayout(props.sessionId, hint);
   }
   return layoutManager_->measure(getDocument(), layoutContext.fontSizeMultiplier, layoutConstraints,
-                                 getSurfaceId(), chrome, props.codeBlockWrap, state.wrapToggles, theme_);
+                                 getSurfaceId(), chrome, codeLayout(state), theme_);
 }
 
 void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
@@ -240,15 +249,16 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   const auto &props = getConcreteProps();
   const auto &state = getStateData();
   const uint32_t chrome = chromeFor(state);
-  // Compared by id rather than by pointer, so a view whose theme resolved to an
-  // equal value it already had does not ask for a state update at all.
+  // The theme is compared by id rather than by pointer, so a view whose theme
+  // resolved to an equal value it already had does not ask for a state update.
+  const downstream::CodeLayout code = codeLayout(state);
   if (state.document != document || state.fontSizeMultiplier != layoutContext.fontSizeMultiplier ||
-      state.chrome != chrome || state.codeBlockWrap != props.codeBlockWrap || state.themeId() != themeId()) {
+      state.chrome != chrome || state.code != code || state.themeId() != themeId()) {
     DownstreamMarkdownState next{state};
     next.document = document;
     next.fontSizeMultiplier = layoutContext.fontSizeMultiplier;
     next.chrome = chrome;
-    next.codeBlockWrap = props.codeBlockWrap;
+    next.code = code;
     next.theme = theme_;
     setStateData(std::move(next));
   }

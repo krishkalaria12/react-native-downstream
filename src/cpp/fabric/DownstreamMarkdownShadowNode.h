@@ -88,6 +88,10 @@ private:
   bool themeUnchanged(const DownstreamMarkdownViewProps &previous) const;
   /// The theme's id, or 0 for the default one, which is its id too.
   uint64_t themeId() const;
+  /// The code layout the props and the state's choices together describe. The
+  /// props are read here rather than from the state, because a prop change
+  /// lands in props a revision before the state that records it does.
+  downstream::CodeLayout codeLayout(const DownstreamMarkdownState &state) const;
 
   std::shared_ptr<const DownstreamTextLayoutManager> layoutManager_;
   std::shared_ptr<ControlledSource> controlled_;
