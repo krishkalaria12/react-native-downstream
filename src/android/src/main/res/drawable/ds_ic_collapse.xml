@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Symbols "unfold_less", from https://fonts.google.com/icons, licensed under
+  the Apache License 2.0. Drawn as a template so it takes the button's tint. The
+  expand button's pressed state: the cap is lifted, so the arrows point together.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?android:attr/colorControlNormal">
+  <path
+      android:fillColor="@android:color/white"
+      android:pathData="M12,14.5l5.5,-5.5 -1.42,-1.42L12,11.16 7.92,7.58 6.5,9 12,14.5z M12,20l5.5,-5.5 -1.42,-1.42L12,16.16 7.92,12.58 6.5,14 12,20z" />
+</vector>

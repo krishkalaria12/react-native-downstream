@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Symbols "unfold_more", from https://fonts.google.com/icons, licensed under
+  the Apache License 2.0. Drawn as a template so it takes the button's tint. The
+  expand button's resting state: the block's cap is still on, so the arrows point
+  apart and more of it would grow.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?android:attr/colorControlNormal">
+  <path
+      android:fillColor="@android:color/white"
+      android:pathData="M12,9.5l-5.5,5.5 1.42,1.42L12,12.84l4.08,3.58 1.42,-1.42L12,9.5z M12,4l-5.5,5.5 1.42,1.42L12,6.84l4.08,3.58 1.42,-1.42L12,4z" />
+</vector>

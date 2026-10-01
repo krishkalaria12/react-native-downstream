@@ -453,6 +453,28 @@ internal class CodeSegment(
   val accessibleBlocks: List<AccessibleBlock>,
   /** The fence language as written, or empty for an indented block. */
   val language: String,
+  /** The fence's title, or empty. Replaces the language in the header. */
+  val title: String,
+  /**
+   * The meta the engine parsed from the fence's info string, and the only copy
+   * this side reads: numbers, the start line, and the cap all resolve through
+   * [resolveCodeBlock] against it rather than by parsing the raw string again.
+   */
+  val fenceMeta: FenceMeta,
+  /**
+   * The UTF-16 offset of each logical line, found once where the segment is
+   * built so the gutter's draw pass never searches the text. Always at least one
+   * entry, so an empty fence still has a line to number.
+   */
+  val lineStarts: IntArray,
+  /** The code block's own font size in pixels, which the gutter's numbers draw at. */
+  val codeTextSize: Int,
+  /**
+   * The code block's own face, which the gutter draws its numbers in so a digit
+   * lines up with the code's own columns. Themed, so a theme that names a mono
+   * family gets its numbers in it rather than in the platform default.
+   */
+  val codeFace: Typeface,
   val blockIndex: Int,
   /**
    * The block's ordinal among the document's code blocks, which is what a
@@ -481,14 +503,25 @@ internal class CodeSegment(
   val markerGap: Float,
   gapBefore: Int,
 ) : Segment(gapBefore) {
+  private var codePaintCache: TextPaint? = null
   private var wrappedWidth = -1
   private var wrappedHeight = 0
   private var unwrappedHeight = 0
   private var unwrappedWidth = 0
 
-  /** The width the body lays out at: the card's inner width, or unbounded. */
-  private fun layoutWidth(cardWidth: Int, wrapped: Boolean): Int =
-    if (wrapped) (cardWidth - contentLeading - 2 * padding).coerceAtLeast(0) else Int.MAX_VALUE
+  /**
+   * The width the body lays out at: the card's inner width, or unbounded.
+   *
+   * [gutterWidth] comes off the wrapped width, which is the only way line numbers
+   * change a block's height. An unwrapped body is laid out at its own length
+   * either way, so it still does not lay out again on a rotation.
+   */
+  private fun layoutWidth(cardWidth: Int, wrapped: Boolean, gutterWidth: Int = 0): Int =
+    if (wrapped) {
+      (cardWidth - contentLeading - 2 * padding - gutterWidth).coerceAtLeast(0)
+    } else {
+      Int.MAX_VALUE
+    }
 
   /**
    * Body height at a card width. Unwrapped, it is the line count times the line
@@ -496,8 +529,8 @@ internal class CodeSegment(
    * lay code out again.
    */
   @Synchronized
-  fun bodyHeight(paint: TextPaint, cardWidth: Int, wrapped: Boolean): Int {
-    val width = layoutWidth(cardWidth, wrapped)
+  fun bodyHeight(paint: TextPaint, cardWidth: Int, wrapped: Boolean, gutterWidth: Int = 0): Int {
+    val width = layoutWidth(cardWidth, wrapped, gutterWidth)
     if (wrapped) {
       if (width != wrappedWidth) {
         wrappedHeight = RenderedDocument.buildLayout(text, paint, width, Layout.Alignment.ALIGN_NORMAL).height
@@ -529,13 +562,46 @@ internal class CodeSegment(
 
   /** Body width at a card width, which is what the horizontal scroll view scrolls. */
   @Synchronized
-  fun bodyWidth(paint: TextPaint, cardWidth: Int, wrapped: Boolean): Int {
+  fun bodyWidth(paint: TextPaint, cardWidth: Int, wrapped: Boolean, gutterWidth: Int = 0): Int {
     if (!wrapped) {
       bodyHeight(paint, cardWidth, false)
       return unwrappedWidth
     }
-    return layoutWidth(cardWidth, true)
+    return layoutWidth(cardWidth, true, gutterWidth)
   }
+
+  /**
+   * The gutter's width: its widest number's digits in the code font, plus the gap
+   * before the code. Zero when this block draws no numbers.
+   *
+   * A digit's advance is measured in the code paint rather than assumed, so the
+   * gutter is exactly as wide as its widest number and no wider.
+   */
+  fun gutterWidth(layout: CodeBlockLayout): Int {
+    if (!layout.lineNumbers) return 0
+    val digits = gutterDigits(layout.firstNumber, lineStarts.size)
+    val advance = codePaint().measureText("0")
+    return ceil(digits * advance + GUTTER_GAP).toInt()
+  }
+
+  /** The line height the height floor needs, in the code's own face and size. */
+  fun lineHeight(): Int {
+    val metrics = codePaint().fontMetricsInt
+    return metrics.descent - metrics.ascent
+  }
+
+  /**
+   * The paint the code block's own face and size make, built once per rendering.
+   *
+   * The gutter's digit advance and the card's line height are both code metrics,
+   * so they are measured here rather than in the body paint a frame hands in: a
+   * theme that resizes code moves the gutter and the height floor with it.
+   */
+  private fun codePaint(): TextPaint =
+    codePaintCache ?: TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+      textSize = codeTextSize.toFloat()
+      typeface = codeFace
+    }.also { codePaintCache = it }
 }
 
 /**
@@ -600,8 +666,7 @@ internal class RenderedDocument(
 ) {
   private var cachedWidth = -1
   private var cachedChrome = -1
-  private var cachedCodeBlockWrap = false
-  private var cachedWrapToggles = IntArray(0)
+  private var cachedCode: CodeLayout? = null
   private var cachedFrames = IntArray(0)
 
   fun createTextLayout(segment: TextSegment, width: Int): StaticLayout =
@@ -610,26 +675,35 @@ internal class RenderedDocument(
   /**
    * The height of one segment at a view width, including its control row.
    *
-   * A code block's own layout comes from the reader's wrap choices rather than
-   * from `chrome`, because a document can hold wrapped and unwrapped code at
-   * once and `chrome` says only whether every block wraps. The decision is the
-   * one in `Controls.h`, mirrored by [codeWraps] here, so a block's measured
-   * height and its drawn height cannot disagree.
+   * A code block's own layout comes from the whole code layout rather than from
+   * `chrome`, because a document can hold wrapped and unwrapped code at once and
+   * `chrome` says only whether every block wraps.
    */
-  private fun heightOf(
-    segment: Segment,
-    width: Int,
-    chrome: Int,
-    codeBlockWrap: Boolean,
-    wrapToggles: IntArray,
-  ): Int = when (segment) {
-    is TextSegment -> segment.height(width, paint)
-    is CodeSegment ->
-      2 * segment.padding + segment.bodyHeight(paint, width, codeWraps(codeBlockWrap, wrapToggles, segment.codeOrdinal)) +
-        (if (chrome and CHROME_CODE_HEADER != 0) style.chromeRowHeight else 0)
-    is TableSegment ->
-      segment.tableHeight + (if (chrome and CHROME_TABLE_TOOLBAR != 0) style.chromeRowHeight else 0)
-  }
+  private fun heightOf(segment: Segment, width: Int, chrome: Int, code: CodeLayout): Int =
+    when (segment) {
+      is TextSegment -> segment.height(width, paint)
+      is CodeSegment -> {
+        // The one definition: the props, the reader's choices, and this block's
+        // own fence meta all meet in `resolveCodeBlock`, and `codeCardHeight` is
+        // the only function that turns that into a height. The view calls the
+        // same two, which is what keeps a measured card and a drawn card the same
+        // size.
+        val layout = resolveCodeBlock(code, segment.codeOrdinal, segment.fenceMeta)
+        val gutter = segment.gutterWidth(layout)
+        val body = segment.bodyHeight(
+          paint, width, layout.wraps, gutter,
+        )
+        codeCardHeight(
+          layout,
+          if (chrome and CHROME_CODE_HEADER != 0) style.chromeRowHeight else 0,
+          segment.padding,
+          body,
+          segment.lineHeight(),
+        )
+      }
+      is TableSegment ->
+        segment.tableHeight + (if (chrome and CHROME_TABLE_TOOLBAR != 0) style.chromeRowHeight else 0)
+    }
 
   /**
    * Top and height of each segment at a width, as [top0, height0, top1, ...].
@@ -639,15 +713,10 @@ internal class RenderedDocument(
    * spans. A measurement only holds for the choices it was made under.
    */
   @Synchronized
-  fun frames(
-    width: Int,
-    chrome: Int = 0,
-    codeBlockWrap: Boolean = false,
-    wrapToggles: IntArray = IntArray(0),
-  ): IntArray {
-    if (width == cachedWidth && chrome == cachedChrome && codeBlockWrap == cachedCodeBlockWrap &&
-      wrapToggles.contentEquals(cachedWrapToggles)
-    ) {
+  fun frames(width: Int, chrome: Int = 0, code: CodeLayout = CodeLayout()): IntArray {
+    // A measurement only holds for the layout it was made under, so the whole
+    // code layout is part of the key rather than the rendering.
+    if (width == cachedWidth && chrome == cachedChrome && code == cachedCode) {
       return cachedFrames
     }
     val frames = IntArray(segments.size * 2)
@@ -655,24 +724,18 @@ internal class RenderedDocument(
     segments.forEachIndexed { index, segment ->
       y += segment.gapBefore
       frames[index * 2] = y
-      frames[index * 2 + 1] = heightOf(segment, width, chrome, codeBlockWrap, wrapToggles)
+      frames[index * 2 + 1] = heightOf(segment, width, chrome, code)
       y += frames[index * 2 + 1]
     }
     cachedWidth = width
     cachedChrome = chrome
-    cachedCodeBlockWrap = codeBlockWrap
-    cachedWrapToggles = wrapToggles
+    cachedCode = code
     cachedFrames = frames
     return frames
   }
 
-  fun height(
-    width: Int,
-    chrome: Int = 0,
-    codeBlockWrap: Boolean = false,
-    wrapToggles: IntArray = IntArray(0),
-  ): Int {
-    val frames = frames(width, chrome, codeBlockWrap, wrapToggles)
+  fun height(width: Int, chrome: Int = 0, code: CodeLayout = CodeLayout()): Int {
+    val frames = frames(width, chrome, code)
     return if (frames.isEmpty()) 0 else frames[frames.size - 2] + frames[frames.size - 1]
   }
 
@@ -680,19 +743,19 @@ internal class RenderedDocument(
    * Width for an unconstrained measure: the widest thing that does not fit a
    * view, which is a table's columns or a code line that scrolls sideways.
    */
-  fun desiredWidth(chrome: Int = 0, codeBlockWrap: Boolean = false, wrapToggles: IntArray = IntArray(0)): Int {
+  fun desiredWidth(code: CodeLayout = CodeLayout()): Int {
     var width = 0f
     for (segment in segments) {
       val candidate = when (segment) {
         is TextSegment -> Layout.getDesiredWidth(segment.text, paint)
-        is CodeSegment -> (
-          segment.contentLeading + 2 * segment.padding +
-            segment.bodyWidth(
-              paint,
-              UNCONSTRAINED_WIDTH,
-              codeWraps(codeBlockWrap, wrapToggles, segment.codeOrdinal),
-            )
-          ).toFloat()
+        is CodeSegment -> {
+          val layout = resolveCodeBlock(code, segment.codeOrdinal, segment.fenceMeta)
+          val gutter = segment.gutterWidth(layout)
+          (
+            segment.contentLeading + 2 * segment.padding + gutter +
+              segment.bodyWidth(paint, UNCONSTRAINED_WIDTH, layout.wraps, gutter)
+            ).toFloat()
+        }
         is TableSegment -> (segment.contentLeading + segment.tableWidth).toFloat()
       }
       if (candidate > width) {
@@ -714,20 +777,6 @@ internal class RenderedDocument(
     // Worker threads prepare every document in a commit before Fabric
     // measures them, so this holds at least a screenful of messages.
     private val cache = LruCache<String, RenderedDocument>(128)
-
-    /**
-     * The layout of the code block at [ordinal]: laid out at the card's width,
-     * so long lines wrap, or at its own length, so they scroll sideways.
-     *
-     * [wrapToggles] holds the ordinals whose layout differs from
-     * [codeBlockWrap] in ascending order, so the choice is one membership test.
-     * This mirrors `downstream::codeWraps` in `Controls.h` exactly, and
-     * `testWrapChoices` in `src/cpp/tests/test_export.cpp` is the table of cases
-     * both sides have to agree on.
-     */
-    @JvmStatic
-    fun codeWraps(codeBlockWrap: Boolean, wrapToggles: IntArray, ordinal: Int): Boolean =
-      (wrapToggles.binarySearch(ordinal) >= 0) != codeBlockWrap
 
     /**
      * Committed segments by first block identity, block count, font scale,
@@ -1323,6 +1372,22 @@ internal class RenderedDocument(
           from,
           codeOrdinal,
           gapBefore,
+          // A code segment is one block, so it is block 0 of the slice this
+          // function was handed. `from` is its index in the whole document, which
+          // is what the view needs for a download and not what these read.
+          //
+          // The engine parsed the info string, so the title, the start line and
+          // `noLineNumbers` come back as one value rather than being rescanned here,
+          // and the metrics are the block's themed ones rather than constants, so a
+          // theme that resizes code resizes its gutter with it.
+          document.blockFenceMeta(0),
+          ceil(style.px(document.blockFontSize(0))).toInt(),
+          theme.typeface(
+            document.blockFontFamily(0),
+            document.blockFontWeight(0),
+            false,
+            true,
+          ),
         )
       }
       return TextSegment(displayText, accessibleBlocks, gapBefore)
@@ -1348,6 +1413,9 @@ internal class RenderedDocument(
       blockIndex: Int,
       codeOrdinal: Int,
       gapBefore: Int,
+      fenceMeta: FenceMeta = FenceMeta(),
+      codeTextSize: Int,
+      codeFace: Typeface,
     ): CodeSegment {
       val newline = text.indexOfFirst { it == '\n' }
       val firstLine = text.substring(0, if (newline < 0) text.length else newline).toString()
@@ -1355,6 +1423,13 @@ internal class RenderedDocument(
         text = displayText,
         accessibleBlocks = accessibleBlocks,
         language = language,
+        title = fenceMeta.title,
+        fenceMeta = fenceMeta,
+        // Found once here, on whichever thread built the rendering, so the
+        // gutter's draw pass never searches the text for newlines.
+        lineStarts = codeLineStarts(text),
+        codeTextSize = codeTextSize,
+        codeFace = codeFace,
         blockIndex = blockIndex,
         codeOrdinal = codeOrdinal,
         containers = containers.first,

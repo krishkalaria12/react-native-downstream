@@ -104,6 +104,16 @@ internal class NativeDocument(
   private fun layout(block: Int, field: Int): Double =
     layouts.getOrElse(block * BLOCK_LAYOUT_STRIDE + field) { FALLBACK_LAYOUT[field] }
 
+  /**
+   * The fence meta the engine parsed from this block's info string, so nothing
+   * here scans that string a second way.
+   */
+  fun blockFenceMeta(block: Int) = FenceMeta(
+    title = blocks[block * BLOCK_STRIDE + 13].let { if (it >= 0) strings[it] else "" },
+    startLine = blocks[block * BLOCK_STRIDE + 14],
+    noLineNumbers = blocks[block * BLOCK_STRIDE + 15] != 0,
+  )
+
   private fun cell(block: Int, column: Int) = (blocks[block * BLOCK_STRIDE + 8] + column) * CELL_STRIDE
 
   fun cellStart(block: Int, column: Int) = cells[cell(block, column)]
@@ -128,7 +138,7 @@ internal class NativeDocument(
   fun tokenClass(token: Int) = tokens[token * TOKEN_STRIDE + 2]
 
   companion object {
-    private const val BLOCK_STRIDE = 13
+    private const val BLOCK_STRIDE = 16
     private const val CELL_STRIDE = 3
     private const val CONTAINER_STRIDE = 5
     private const val RUN_STRIDE = 4
@@ -251,8 +261,11 @@ internal object DownstreamNative {
   /**
    * Builds and measures a document's rendering on a worker thread after it is
    * parsed (DownstreamTextLayoutManager.cpp), so Fabric's measurement on the
-   * JavaScript thread and the view's mount find it in the cache. [width] is
-   * in points, as Fabric passes it to measure.
+   * JavaScript thread and the view's mount find it in the cache.
+   *
+   * [width] is in points, as Fabric passes it to measure. The whole code layout
+   * comes along, because a prepared height is only the height of the layout the
+   * reader actually has.
    */
   @JvmStatic
   @DoNotStrip
@@ -262,19 +275,21 @@ internal object DownstreamNative {
     width: Float,
     chrome: Int,
     codeBlockWrap: Boolean,
+    lineNumbers: Boolean,
+    codeBlockMaxHeight: Float,
     wrapToggles: IntArray,
+    expanded: IntArray,
     themeId: Long,
   ) {
     val context = preparationContext?.get() ?: return
     try {
       val rendered = RenderedDocument.obtain(context, documentId, fontScale, themeId = themeId) ?: return
       if (width.isFinite() && width > 0) {
-        rendered.height(
-          PixelUtil.toPixelFromDIP(width).toInt(),
-          chrome,
-          codeBlockWrap,
-          wrapToggles,
+        val layout = CodeLayout(
+          CodeLayoutProps(codeBlockWrap, lineNumbers, PixelUtil.toPixelFromDIP(codeBlockMaxHeight.toDouble()).toFloat()),
+          CodeChoices(wrapToggles, expanded),
         )
+        rendered.height(PixelUtil.toPixelFromDIP(width).toInt(), chrome, layout)
       }
     } catch (error: RuntimeException) {
       // Measurement builds the rendering again on its own thread.
