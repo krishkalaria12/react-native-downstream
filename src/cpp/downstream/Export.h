@@ -44,14 +44,14 @@ std::u16string exportCodeText(const Document &document, size_t index);
 
 /// The file name a code download saves as, extension included.
 ///
-/// The base name is the fence's own name, taken from `title="app.ts"` or from
-/// the path after `lang:`; failing that the caller's configured base, and
-/// failing that `fallback`. Only the last path component is kept, reserved
-/// characters and control characters are removed, the result is capped, and it
-/// never starts with a dot. A fence name that already carries an extension
-/// keeps it; otherwise the extension comes from the language, and an unknown
-/// language or an indented block gets `txt`.
-std::string downloadName(std::string_view info, std::string_view language, const std::string &configuredBase,
+/// The base name is `meta.title`, which the parser already resolved from
+/// `title="app.ts"`, `filename="app.ts"`, or the path after `lang:`; failing
+/// that the caller's configured base, and failing that `fallback`. Only the last
+/// path component is kept, reserved characters and control characters are
+/// removed, the result is capped, and it never starts with a dot. A fence name
+/// that already carries an extension keeps it; otherwise the extension comes
+/// from the language, and an unknown language or an indented block gets `txt`.
+std::string downloadName(const FenceMeta &meta, std::string_view language, const std::string &configuredBase,
                          const std::string &fallback);
 
 /// The file name a table download saves as: `<base>.<extension>`, with the

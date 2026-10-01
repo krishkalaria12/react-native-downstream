@@ -141,6 +141,12 @@ const TARGETS = {
     ...ENGINE,
     ...MD4C_SOURCES,
   ],
+  'downstream-fence-meta': [
+    join(CPP, 'tests', 'test_fence_meta.cpp'),
+    join(CPP, 'downstream', 'SegmentPlan.cpp'),
+    ...ENGINE,
+    ...MD4C_SOURCES,
+  ],
 };
 
 /** Build the engine once before Vitest workers request native binaries. */

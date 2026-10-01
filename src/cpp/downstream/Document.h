@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "FenceMeta.h"
+
 namespace downstream {
 
 /// Half-open range of UTF-16 code units in the canonical source string.
@@ -152,9 +154,13 @@ struct Block {
   /// Fenced code info string language, UTF-8.
   std::string language;
   /// The whole fence info string, UTF-8, as written after the backticks.
-  /// `language` is its first word; this keeps the rest, so a download can take
-  /// a name from `title="app.ts"` or `ts:src/app.ts` without another parse.
+  /// `language` is its first word. Kept whole so a renderer receives the raw
+  /// meta string, as Streamdown's `CustomRendererProps.meta` does.
   std::string info;
+  /// What `info` says about presentation, parsed once where md4c reported the
+  /// block. The header label, the gutter, and the download name all read this
+  /// one struct rather than each scanning `info` its own way. CodeBlock only.
+  FenceMeta meta;
   /// CodeBlock only: syntax tokens. Empty when the language is unknown, the
   /// block is over the highlight limit, or highlighting is disabled. Tokens
   /// live here rather than in runs so the open-fence fast path and inline-code

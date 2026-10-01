@@ -7,6 +7,7 @@
 #include "CodeBlocks.h"
 #include "CodeHighlighter.h"
 #include "Controls.h"
+#include "FenceMeta.h"
 #include "Export.h"
 #include "InlineRuns.h"
 #include "MarkdownParser.h"
@@ -92,7 +93,10 @@ void checkExport(std::string_view expected, const char *label, std::string_view 
 
 void checkName(const char *label, const char *expected, std::string_view info, std::string_view language,
                std::string_view configured = "", std::string_view fallback = "file") {
-  check(expected, label, downloadName(info, language, std::string(configured), std::string(fallback)));
+  // The name comes from the parsed meta, so a fence's own title, path, and
+  // language all reach this one call. #16's file-name goldens below are unchanged.
+  check(expected, label,
+        downloadName(parseFenceMeta(info), language, std::string(configured), std::string(fallback)));
 }
 
 // ------------------------------------------------------------- segment plan
@@ -356,7 +360,7 @@ void testNames() {
   checkName("a language that is only case still resolves", "file.js", "Js", "Js");
 
   const std::string longName(200, 'a');
-  CHECK(downloadName("ts", "ts", longName, "file").size() == 96 + 3, "a long name is capped");
+  CHECK(downloadName(parseFenceMeta("ts"), "ts", longName, "file").size() == 96 + 3, "a long name is capped");
   const std::string table = tableDownloadName("report", "csv");
   expectEq(table, "report.csv", "a table name takes its extension");
   const std::string unnamed = tableDownloadName("", "md");

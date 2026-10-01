@@ -178,6 +178,9 @@ public:
         beginLeaf(BlockKind::CodeBlock);
         current_->language = attributeToUtf8(code->lang);
         current_->info = attributeToUtf8(code->info);
+        // Parsed once, here, so the open-fence fast path copies a parsed meta
+        // rather than re-parsing the string on every snapshot.
+        current_->meta = parseFenceMeta(current_->info);
         break;
       }
       case MD_BLOCK_HTML:
