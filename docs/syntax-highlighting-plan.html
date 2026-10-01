@@ -485,7 +485,7 @@ struct Block {
                 <li>iOS: in <code>DSRenderedDocument.mm</code>, after <code>applyRuns</code> for a code block, add <code>NSForegroundColorAttributeName</code> per token with a cached dynamic <code>UIColor</code> per class.</li>
                 <li>Android: add a seventh <code>tokens</code> array to <code>nativeReadDocument</code> in <code>DownstreamJni.cpp</code>, add <code>tokenCount</code>, <code>tokenStart</code>, <code>tokenEnd</code> and <code>tokenClass</code> to <code>NativeDocument.kt</code>, and add a <code>ForegroundColorSpan</code> per token in <code>RenderedDocument.kt</code> before <code>PrecomputedText</code> is built, picking the palette with the existing <code>night</code> flag.</li>
                 <li>Add <code>syntaxHighlighting?: boolean</code> (default <code>true</code>) to <code>MarkdownViewProps</code>, <code>DownstreamMarkdownViewNativeComponent.ts</code>, the iOS view and <code>DownstreamMarkdownViewManager.kt</code>, and include it in both platforms' rendering cache keys.</li>
-                <li>Add code-heavy samples to <code>__benchmarks__/samples.ts</code>: TypeScript, Python, Bash, JSON, a diff and a long streaming fence. The Example, Testing and Bench screens pick them up.</li>
+                <li>Add code-heavy samples to <code>benchmarks/samples.ts</code>: TypeScript, Python, Bash, JSON, a diff and a long streaming fence. The Example, Testing and Bench screens pick them up.</li>
               </ul>
               <p class="exit"><b>Exit:</b> on the Simulator and the emulator, highlighted code renders in both appearances and survives an appearance switch, a font-scale change, rotation, cell recycling and a stream reset. Selection and copy return plain code text. TalkBack on the emulator and the Accessibility Inspector on the Simulator read code unchanged.</p>
             </div>
@@ -520,7 +520,7 @@ struct Block {
               <li><b>Offsets.</b> Samples with emoji, CJK, RTL text and CRLF inside code. Every run must lie inside the block text on UTF-16 surrogate boundaries.</li>
               <li><b>Boundaries.</b> Unknown language, empty fence, language in a different case (<code>```TypeScript</code>), an info string with a meta string (<code>```ts title="x"</code>), a block at exactly 64 KiB and one byte over, and an indented code block (no language, so plain).</li>
               <li><b>Isolation.</b> A prose-only document never creates a lexer. A counter checked by the test proves it.</li>
-              <li><b>Benchmarks.</b> Add a code-heavy case to <code>__benchmarks__/stream-append.bench.ts</code> and compare Bench screen traces before and after on the Simulator and emulator.</li>
+              <li><b>Benchmarks.</b> Add a code-heavy case to <code>benchmarks/stream-append.bench.ts</code> and compare Bench screen traces before and after on the Simulator and emulator.</li>
             </ul>
           </section>
 

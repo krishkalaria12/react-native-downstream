@@ -4,12 +4,12 @@
  *
  * These assertions are about what a reader sees: the visible text, the links
  * that can be opened, the block structure, and the inline styles. They run the
- * real C++ engine through `__tests__/engine.ts`, so a regression in parsing
+ * real C++ engine through `tests/engine.ts`, so a regression in parsing
  * fails here rather than on a device.
  */
 import { describe, expect, it } from 'vitest';
 
-import { samples } from '../__benchmarks__/samples';
+import { samples } from '../benchmarks/samples';
 import {
   assertStreamingMatchesFullParse,
   CONTAINER,

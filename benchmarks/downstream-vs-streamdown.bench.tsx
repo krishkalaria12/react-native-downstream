@@ -3,7 +3,7 @@
  *
  * What this measures: the cost each renderer pays to show a document that is
  * still arriving. Both sides run for real here. Downstream's TurboModule is the
- * engine-backed one in `__tests__/real-engine-module.ts`, so its row includes
+ * engine-backed one in `tests/real-engine-module.ts`, so its row includes
  * the actual C++ parse; Streamdown renders through a real React root, so its
  * row includes its whole-document reparse and commit on every update.
  *
@@ -20,7 +20,7 @@
 // includes the parse it would really do.
 vi.mock(
   '../src/NativeDownstreamSession',
-  async () => (await import('../__tests__/real-engine-module')).realEngineModule
+  async () => (await import('../tests/real-engine-module')).realEngineModule
 );
 
 import { describe, test, vi } from 'vitest';

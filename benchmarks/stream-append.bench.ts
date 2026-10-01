@@ -10,7 +10,7 @@
 // includes the parse it would really do.
 vi.mock(
   '../src/NativeDownstreamSession',
-  async () => (await import('../__tests__/real-engine-module')).realEngineModule
+  async () => (await import('../tests/real-engine-module')).realEngineModule
 );
 
 import { describe, test, vi } from 'vitest';

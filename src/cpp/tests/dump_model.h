@@ -1,5 +1,5 @@
 // The render model as JSON, shared by the host test drivers so every one of
-// them describes a document the same way. `__tests__/engine.ts` reads this
+// them describes a document the same way. `tests/engine.ts` reads this
 // shape, and a test that asserts on the text a reader would see can only do
 // that if the drivers agree on what a field means.
 

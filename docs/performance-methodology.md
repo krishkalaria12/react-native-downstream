@@ -47,7 +47,7 @@ full trace export, the native session markers, and the JSON the summarizer reads
    all samples in order, including pairs where the run failed.
 5. Alternate candidate order, parse mode, and tracing on/off. Keep native traces
    and screen recordings for each Bench run next to its JSON in
-   `__benchmarks__/results/`. The Testing screen has no JSON export; transcribe its
+   `benchmarks/results/`. The Testing screen has no JSON export; transcribe its
    table into the run notes.
 
 ## Metadata and clocks
@@ -75,7 +75,7 @@ them reliably. Mark any unavailable measurement as unavailable.
 
 ## Analysis and decision
 
-Run `node __benchmarks__/summarize.mjs <export-1.json> <export-2.json> ...` on Bench
+Run `node benchmarks/summarize.mjs <export-1.json> <export-2.json> ...` on Bench
 exports. Keep one device, build revision, and cold/warm cohort together. The tool
 prints per-run p50/p95/p99 and repeat-run variation for sampled JS estimates
 and paired native queue, parse, measurement, and apply intervals. It counts

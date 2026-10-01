@@ -3,8 +3,8 @@
   "exclude": [
     "example",
     "lib",
-    "__tests__",
-    "__benchmarks__",
+    "tests",
+    "benchmarks",
     "scripts",
     "vitest.config.mts"
   ]

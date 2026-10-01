@@ -3,7 +3,7 @@
  * The JavaScript half of the provisional-styling pass: the option a caller
  * passes, the call that reaches the native session, and what a reader sees.
  *
- * `__tests__/real-engine-module.ts` replays each session through the real
+ * `tests/real-engine-module.ts` replays each session through the real
  * `IncrementalParser`, in the mode the stream was created with, so these assert
  * on the document the engine would publish rather than on a mock's call log or
  * on the double's own copy of the finish rule. The pass itself is covered in

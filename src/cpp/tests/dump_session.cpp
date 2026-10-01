@@ -2,7 +2,7 @@
 // IncrementalParser and prints the document its last pass published, as the
 // JSON `dump_document` prints.
 //
-// `__tests__/real-engine-module.ts` drives this, so a TypeScript suite asserts
+// `tests/real-engine-module.ts` drives this, so a TypeScript suite asserts
 // on what the session's parser actually does in the mode the stream asked for,
 // finish and preview policy included, rather than on the test double's idea of
 // those rules.

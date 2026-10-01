@@ -7,4 +7,4 @@ export {
   sampleById as fixtureById,
   samples as fixtures,
   type Sample as Fixture,
-} from '../../../__benchmarks__/samples';
+} from '../../../benchmarks/samples';

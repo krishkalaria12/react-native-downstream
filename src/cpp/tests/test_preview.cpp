@@ -5,7 +5,7 @@
 // are not. remend asserts on a repaired string, which encodes its own choices
 // about what a half-written document should look like; several of those choices
 // are not CommonMark, and a few are pinned as wrong by
-// __tests__/streaming-preview.test.ts. So each case here states what this engine
+// tests/streaming-preview.test.ts. So each case here states what this engine
 // should show and, where that differs from remend, says why in the comment.
 //
 // What the port does keep is the coverage. remend's suite is a few hundred

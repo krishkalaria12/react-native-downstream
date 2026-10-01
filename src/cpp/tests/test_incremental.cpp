@@ -505,7 +505,7 @@ static bool readDocument(std::vector<std::string> &chunks, bool *truncated) {
   }
 }
 
-/* Sweeps many documents in one process. The corpus in __tests__ is far larger
+/* Sweeps many documents in one process. The corpus in tests/ is far larger
    than the per-run budget of a single document, and spawning a process per
    case would dominate the suite. Every document is checked, so one run reports
    every regression rather than only the first. */

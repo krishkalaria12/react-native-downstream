@@ -115,7 +115,7 @@ stream.setPreview({ inlineCode: true });
 
 `PreviewOptions{}` has no features, which makes the pass inert: every open span
 renders literally, exactly as the engine did before this existed. That default
-is what `__tests__/streaming-preview.test.ts` pins, so this module could be
+is what `tests/streaming-preview.test.ts` pins, so this module could be
 merged without changing a single currently-passing test.
 
 `preview` accepts `true` for every feature, `false` for none, or an object
@@ -139,7 +139,7 @@ same inputs reach the same answers without rewriting the source.
 
 | remend handler | Why it is not ported |
 | --- | --- |
-| `singleTilde` | md4c's GitHub dialect reads `~x~` as strikethrough, so remend escapes the tilde to stop it. The pass refuses to treat a single tilde as an opener at all, which is the same answer without touching the source. `__tests__/streaming-preview.test.ts` pins `~hello` as literal. |
+| `singleTilde` | md4c's GitHub dialect reads `~x~` as strikethrough, so remend escapes the tilde to stop it. The pass refuses to treat a single tilde as an opener at all, which is the same answer without touching the source. `tests/streaming-preview.test.ts` pins `~hello` as literal. |
 | `comparisonOperators` | remend rewrites `- > 25` to `- \> 25`. CommonMark says the `>` is a quote, so the item really is a list item containing a blockquote, and the test at `streaming-preview.test.ts:351` pins that. Escaping it would break the document. |
 | `setextHeadings` | remend injects U+200B after a partial `---` underline because it cannot tell a heading from a rule until both arrive. md4c waits for the line, which is the same answer without an invisible character. |
 | `htmlTags` | remend strips a partial tag off the end of the text. This engine already renders raw HTML as visible text, never executed, so a partial tag is text and stays text. Stripping it would delete characters the writer sent. |
@@ -183,7 +183,7 @@ scanners, and `downstream::remend` is the part that is remend's.
 
 ## Tests
 
-`src/cpp/tests/test_preview.cpp` and `__tests__/preview.test.ts`, built and run
+`src/cpp/tests/test_preview.cpp` and `tests/preview.test.ts`, built and run
 by `pnpm test:native` and `pnpm test`.
 
 The inputs are ported from remend's own suite — several hundred shapes of
@@ -199,7 +199,7 @@ replaced code that had tests and the replacement has to earn them back, and a
 
 The TypeScript file covers the other half: the option a caller passes, the
 bitmask that reaches the session, the mid-stream change, and the same stream in
-both parse modes. `__tests__/real-engine-module.ts` records what the native
+both parse modes. `tests/real-engine-module.ts` records what the native
 worker would apply to its parser and replays it through a real
 `IncrementalParser` with `dump_session`, so the finish rule and the preview
 policy under test are the engine's, not a restatement of them in JavaScript.

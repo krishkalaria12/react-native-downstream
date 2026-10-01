@@ -84,9 +84,9 @@ Phase 0 defines the [API contract](docs/api.md) and [streaming behavior](docs/st
 ## Tests and benchmarks
 
 `pnpm test` runs the TypeScript suites with vitest. They run the real engine:
-`__tests__/engine.ts` compiles `src/cpp` and the session TurboModule in the
+`tests/engine.ts` compiles `src/cpp` and the session TurboModule in the
 tests is backed by that parser, so a test asserts on the text a reader sees
-rather than on a mock's call log. `__tests__/native-view.ts` stands in for the
+rather than on a mock's call log. `tests/native-view.ts` stands in for the
 native view by rendering the real parse as DOM.
 
 `pnpm test:native` builds the C++ engine and runs its own suites, including the

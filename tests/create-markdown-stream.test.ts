@@ -1,7 +1,7 @@
 /**
  * The stream controller, driven against the real C++ engine.
  *
- * `__tests__/real-engine-module.ts` keeps a real source per session and parses
+ * `tests/real-engine-module.ts` keeps a real source per session and parses
  * it with the parser that ships in the app, so every assertion here is about
  * what a document becomes. The few remaining call-count checks are the
  * controller's own contract: it must not send more work to native than the

@@ -45,14 +45,14 @@ export default defineConfig({
       // A stub keeps unit tests and benchmarks off a device without a preset
       // that would drag the whole React Native runtime in.
       'react-native': fileURLToPath(
-        new URL('./__tests__/react-native.ts', import.meta.url)
+        new URL('./tests/react-native.ts', import.meta.url)
       ),
       // Streamdown's dependency declares `main` as "./lib/module/index" with no
       // extension, and ships some of its output as .ts. Metro accepts both;
       // Node's ESM resolver does not, so point at the real entry here.
       // Node has no worklet runtime, and Streamdown creates one at import time.
       'react-native-worklets': fileURLToPath(
-        new URL('./__benchmarks__/worklets-stub.ts', import.meta.url)
+        new URL('./benchmarks/worklets-stub.ts', import.meta.url)
       ),
       'react-native-enriched-markdown': fileURLToPath(
         new URL('./node_modules/react-native-enriched-markdown/lib/module/index.js', import.meta.url)
@@ -77,21 +77,21 @@ export default defineConfig({
     testTimeout: 30_000,
     hookTimeout: 60_000,
     include: [
-      '__tests__/**/*.test.ts',
-      '__tests__/**/*.test.tsx',
+      'tests/**/*.test.ts',
+      'tests/**/*.test.tsx',
       'example/src/**/*.test.ts',
       'example/src/**/*.test.tsx',
     ],
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts', 'src/**/*.tsx'],
-      exclude: ['**/__tests__/**', '**/__benchmarks__/**', '**/*.config.ts'],
+      exclude: ['**/tests/**', '**/benchmarks/**', '**/*.config.ts'],
       reporter: ['text', 'html'],
     },
     benchmark: {
       include: [
-        '__benchmarks__/**/*.bench.ts',
-        '__benchmarks__/**/*.bench.tsx',
+        'benchmarks/**/*.bench.ts',
+        'benchmarks/**/*.bench.tsx',
       ],
     },
   },
