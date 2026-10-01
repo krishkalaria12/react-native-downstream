@@ -511,15 +511,41 @@ constexpr CGFloat kPinThreshold = 8;
   if (CGRectIsEmpty(visible)) {
     return;
   }
-  // The first logical line at or below the top of the dirty rect, found from the
-  // line starts rather than by walking glyphs from the top of the block.
-  uint32_t first = 0;
+  // The logical line holding the character at the top of the dirty rect: one
+  // glyph lookup for the point, then a search of the line starts, rather than a
+  // walk over every glyph above it.
   const uint32_t *starts = (const uint32_t *)self.lineStarts.bytes;
-  while (first + 1 < self.lineCount && starts[first + 1] <= (uint32_t)MAX(visible.origin.y, 0)) {
-    first++;
-  }
+  const NSUInteger topGlyph = [manager glyphIndexForPoint:CGPointMake(0, MAX(visible.origin.y, 0))
+                                          inTextContainer:body.textContainer];
+  const auto topCharacter = static_cast<uint32_t>([manager characterIndexForGlyphAtIndex:topGlyph]);
+  const uint32_t *after = std::upper_bound(starts, starts + self.lineCount, topCharacter);
+  const uint32_t first = after == starts ? 0 : static_cast<uint32_t>(after - starts - 1);
   // Each logical line starts at the first visual line its first glyph is on. A
   // wrapped continuation line gets no number, as in GitHub and VS Code.
+  // A blank line's only glyph is its newline, which TextKit places below where a
+  // drawn glyph's baseline sits, so its number would drop toward the next one. Code
+  // is one face at one size, so every line's baseline is at the same height in its
+  // fragment: a blank line borrows it from the nearest line with text.
+  NSString *const text = body.textStorage.string;
+  const auto isBlank = [&](uint32_t line) {
+    return starts[line] >= text.length || [text characterAtIndex:starts[line]] == '\n';
+  };
+  const auto glyphAt = [&](uint32_t line) {
+    return [manager glyphRangeForCharacterRange:NSMakeRange(starts[line], 0) actualCharacterRange:NULL].location;
+  };
+  CGFloat textBaseline = -1;
+  const auto baselineInFragment = [&](uint32_t line) -> CGFloat {
+    if (!isBlank(line)) {
+      textBaseline = [manager locationForGlyphAtIndex:glyphAt(line)].y;
+      return textBaseline;
+    }
+    for (uint32_t next = line + 1; textBaseline < 0 && next < self.lineCount; next++) {
+      if (!isBlank(next) && glyphAt(next) < manager.numberOfGlyphs) {
+        textBaseline = [manager locationForGlyphAtIndex:glyphAt(next)].y;
+      }
+    }
+    return textBaseline >= 0 ? textBaseline : font.ascender;
+  };
   for (uint32_t line = first; line < self.lineCount; line++) {
     const uint32_t offset = starts[line];
     if (offset >= manager.numberOfGlyphs && line > 0) {
@@ -531,7 +557,7 @@ constexpr CGFloat kPinThreshold = 8;
       break;
     }
     const CGRect fragment = [manager lineFragmentRectForGlyphAtIndex:glyph effectiveRange:NULL];
-    const CGFloat baseline = CGRectGetMinY(fragment) + [manager locationForGlyphAtIndex:glyph].y;
+    const CGFloat baseline = CGRectGetMinY(fragment) + baselineInFragment(line);
     if (baseline - font.ascender > CGRectGetMaxY(visible) && line > first) {
       break;
     }
@@ -544,7 +570,8 @@ constexpr CGFloat kPinThreshold = 8;
     const CGSize size = [number sizeWithAttributes:attributes];
     // Right-aligned against the gap, so the numbers line up on their last digit
     // as they do in GitHub and VS Code.
-    [number drawAtPoint:CGPointMake(std::max<CGFloat>(0, width - size.width - 2), baseline - font.ascender)
+    [number drawAtPoint:CGPointMake(std::max<CGFloat>(0, width - downstream::kGutterGap - size.width),
+                                    baseline - font.ascender)
           withAttributes:attributes];
   }
 }
@@ -586,6 +613,9 @@ constexpr CGFloat kPinThreshold = 8;
     self.alwaysBounceVertical = NO;
     self.directionalLockEnabled = YES;
     self.delaysContentTouches = NO;
+    // No reader has scrolled away yet, so a block that grows past its cap while
+    // streaming follows its newest line from the moment it crosses.
+    _pinned = YES;
   }
   return self;
 }
@@ -597,8 +627,8 @@ constexpr CGFloat kPinThreshold = 8;
   _streaming = streaming;
   // A settled block keeps whatever offset it has, which is Streamdown's "a
   // pending pin survives the stream ending". A block that starts unsettled
-  // follows its newest line.
-  if (streaming && self.scrollEnabled) {
+  // follows its newest line, whether or not it is past its cap yet.
+  if (streaming) {
     _pinned = YES;
     _needsPin = YES;
   }
@@ -997,10 +1027,12 @@ constexpr CGFloat kPinThreshold = 8;
   [self buildButtonsIfNeeded];
   NSArray<UIButton *> *all = _buttons.arrangedSubviews;
   // Expand appears only on a block past the cap, because that is the only block
-  // it can do anything for, and a hidden button is cheaper than a wrong one.
+  // it can do anything for, and a hidden button is cheaper than a wrong one. An
+  // expanded block keeps it as a collapse button, so the cap can come back.
   const BOOL capped = [self isCapped];
   _lastCapped = capped;
-  const BOOL showExpand = (_controls & CodeExpand) != 0 && capped;
+  const BOOL expanded = _layout.expanded;
+  const BOOL showExpand = (_controls & CodeExpand) != 0 && (capped || expanded);
   const BOOL showWrap = (_controls & CodeWrap) != 0;
   ((UIButton *)all[0]).hidden = !showExpand;
   ((UIButton *)all[1]).hidden = !showWrap;
@@ -1011,10 +1043,10 @@ constexpr CGFloat kPinThreshold = 8;
   }
 
   UIButton *expand = (UIButton *)all[0];
-  expand.selected = !capped;
-  [expand setImage:controlImage(symbolForExpand(!capped)) forState:UIControlStateNormal];
-  expand.accessibilityLabel = capped ? [self label:DSControlLabelExpandCode]
-                                     : [self label:DSControlLabelCollapseCode];
+  expand.selected = expanded;
+  [expand setImage:controlImage(symbolForExpand(expanded)) forState:UIControlStateNormal];
+  expand.accessibilityLabel = expanded ? [self label:DSControlLabelCollapseCode]
+                                       : [self label:DSControlLabelExpandCode];
   // No explicit traits: UIButton derives Selected and Not Enabled itself, and a
   // fixed value would tell VoiceOver a disabled button can be pressed.
 
@@ -1075,7 +1107,7 @@ constexpr CGFloat kPinThreshold = 8;
   if ([button.action isEqualToString:@"expand"]) {
     [self.controlDelegate didToggleExpandAtOrdinal:_segmentStorage.codeOrdinal
                                           language:_segmentStorage.language
-                                          expanded:![self isCapped]];
+                                          expanded:!_layout.expanded];
     return;
   }
   if ([button.action isEqualToString:@"copy"]) {
@@ -1180,9 +1212,12 @@ constexpr CGFloat kPinThreshold = 8;
     const CGFloat verticalMaximum = std::max<CGFloat>(0, _viewport.contentSize.height - viewport.size.height);
     _viewport.contentOffset = CGPointMake(0, std::clamp(_savedVerticalOffset, 0.0, verticalMaximum));
     _needsScrollRestore = NO;
-  } else if (capped && _streaming) {
-    // Follow the newest line, which is Streamdown's pinned scroll: after each
-    // snapshot's layout, a pinned card goes to the bottom.
+  }
+  // Follow the newest line, which is Streamdown's pinned scroll: after each
+  // snapshot's layout, a pinned card goes to the bottom. Not an alternative to
+  // the restore above: an open fence is rebuilt on every snapshot, so the restore
+  // runs every time, and the pin has to land on top of it.
+  if (capped && _streaming) {
     [_viewport requestPin];
   }
   [self setNeedsDisplay];

@@ -32,11 +32,6 @@ UIFont *runFont(const BlockFont &font, CGFloat size, bool monospaced) {
   return DSMakeFont(font.family, size, font.weight, font.italic, monospaced);
 }
 
-/// The space between the line-number gutter and the code. A constant rather than
-/// a theme slot, because it separates two parts of one card rather than styling
-/// either of them. Mirrored in RenderedDocument.kt.
-constexpr CGFloat kGutterGap = 12;
-
 /// The size an inline code span draws at, which follows a themed body size
 /// unless the theme set an absolute one. A fraction of the block's own size, so
 /// inline code keeps its proportions when the theme changes the body size.
@@ -720,7 +715,7 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
     return 0;
   }
   const uint32_t digits = gutterDigits(layout.firstNumber, self.lineCount);
-  return digits * self.digitAdvance + kGutterGap;
+  return digits * self.digitAdvance + downstream::kGutterGap;
 }
 
 @end

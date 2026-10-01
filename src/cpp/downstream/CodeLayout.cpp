@@ -11,9 +11,12 @@ CodeBlockLayout resolveCodeBlock(const CodeLayout &layout, uint32_t ordinal, con
   // where a fence asked for them.
   block.lineNumbers = layout.props.lineNumbers && !meta.noLineNumbers;
   block.firstNumber = meta.startLine;
+  // A block is expanded only while there is a cap to lift, so a choice left over
+  // from before the prop went to 0 does not offer to collapse an uncapped block.
+  block.expanded = layout.props.maxHeight > 0 && hasChoice(layout.choices.expanded, ordinal);
   // An expanded block has no cap, and so has an uncapped one: both reach the
   // card as the single "no cap" value.
-  block.maxHeight = hasChoice(layout.choices.expanded, ordinal) ? 0.0f : layout.props.maxHeight;
+  block.maxHeight = block.expanded ? 0.0f : layout.props.maxHeight;
   return block;
 }
 

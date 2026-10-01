@@ -83,6 +83,41 @@ jobs:
       - name: Run native engine tests
         run: node --test src/cpp/tests/engine.test.mjs
 
+  # The Kotlin mirror of CodeLayout.h answers the same case table as the engine,
+  # so a drift between the two copies fails here rather than on a device.
+  test-kotlin:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      # Node built-ins only, as in test-native, so pnpm is never installed.
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Setup Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # The runner image ships kotlinc; fetch a pinned compiler only if it stops.
+      - name: Ensure a Kotlin compiler
+        run: |
+          if ! command -v kotlinc >/dev/null; then
+            curl -fsSL -o "$RUNNER_TEMP/kotlin.zip" \
+              https://github.com/JetBrains/kotlin/releases/download/v2.2.20/kotlin-compiler-2.2.20.zip
+            unzip -q "$RUNNER_TEMP/kotlin.zip" -d "$RUNNER_TEMP"
+            echo "KOTLIN_HOME=$RUNNER_TEMP/kotlinc" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run Kotlin layout checks
+        run: node tests/android/run.mjs
+
   build-library:
     runs-on: ubuntu-latest
 

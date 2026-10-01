@@ -56,10 +56,12 @@ internal class CodeChoices(
           if (source < index) values[source] else values[source + 1]
         }
       }
+      // A miss is `-(insertion point) - 1`, so the new entry goes there.
+      val insertAt = -index - 1
       val next = IntArray(values.size + 1)
       var source = 0
       for (target in next.indices) {
-        next[target] = if (target == index) ordinal else values[source++]
+        next[target] = if (target == insertAt) ordinal else values[source++]
       }
       return next
     }
@@ -87,6 +89,8 @@ internal data class CodeBlockLayout(
   val firstNumber: Int,
   /** The cap this block actually has, in pixels. 0 means no cap. */
   val maxHeight: Float,
+  /** The reader lifted this block's cap, so its button collapses it again. */
+  val expanded: Boolean = false,
 )
 
 /**
@@ -103,7 +107,10 @@ internal data class FenceMeta(
 /** The lines a capped block still shows, whatever the font scale. */
 internal const val MIN_VISIBLE_LINES = 5f
 
-/** The space between the gutter and the code, in the same points as everything else. */
+/**
+ * The space between the gutter and the code, in points. The gutter's width
+ * includes it, and its numbers end where it begins. Mirrors `downstream::kGutterGap`.
+ */
 internal const val GUTTER_GAP = 12f
 
 /** True when `ordinal` is in `values`, which callers keep ascending. */
@@ -128,8 +135,13 @@ internal fun resolveCodeBlock(
   firstNumber = meta.startLine,
   // An expanded block has no cap, and so has an uncapped one: both reach the card
   // as the single value that means "no cap".
-  maxHeight = if (hasChoice(layout.choices.expanded, ordinal)) 0f else layout.props.maxHeight,
+  maxHeight = if (isExpanded(layout, ordinal)) 0f else layout.props.maxHeight,
+  expanded = isExpanded(layout, ordinal),
 )
+
+/** Expanded only while there is a cap to lift. Mirrors `resolveCodeBlock`. */
+private fun isExpanded(layout: CodeLayout, ordinal: Int): Boolean =
+  layout.props.maxHeight > 0f && hasChoice(layout.choices.expanded, ordinal)
 
 /**
  * The digits a gutter needs for the widest number it will draw.

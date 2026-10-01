@@ -51,10 +51,14 @@ fun main() {
   checkEqF(of(expanded, 1, plain).maxHeight, 0f, "an expanded block has no cap")
   checkEqF(of(expanded, 0, plain).maxHeight, 400f, "one expanded block does not cap its neighbour")
   checkEqF(of(capped, 0, plain).maxHeight, 400f, "an uncapped layout leaves the cap alone")
+  check(of(expanded, 1, plain).expanded, "an expanded block says so, so it can collapse again")
+  check(!of(expanded, 0, plain).expanded, "its neighbour is not expanded")
   val uncapped = CodeLayout(props = CodeLayoutProps(maxHeight = 0f))
   checkEqF(of(uncapped, 0, plain).maxHeight, 0f, "a zero cap is no cap")
   checkEqF(of(uncapped, 0, plain).maxHeight, of(expanded, 1, plain).maxHeight,
     "uncapped and expanded are the same value to the card")
+  val staleExpand = CodeLayout(props = CodeLayoutProps(maxHeight = 0f), choices = CodeChoices(expanded = intArrayOf(0)))
+  check(!of(staleExpand, 0, plain).expanded, "a block with no cap is never expanded")
 
   // Wrap: the whole table from `testWrapChoices`.
   val unwrapped = CodeLayout()
@@ -69,6 +73,16 @@ fun main() {
   check(of(mixedWrapped, 0, plain).wraps, "an untoggled neighbour still follows the prop being on")
   check(!of(mixedUnwrapped, 1, plain).wraps, "a neighbour before the toggle is unaffected")
   check(!of(mixedUnwrapped, 3, plain).wraps, "a neighbour after the toggle is unaffected")
+
+  // Toggling keeps each choice set ascending, which `hasChoice` searches.
+  fun toggledList(values: IntArray, ordinal: Int) = CodeChoices.toggled(values, ordinal).toList()
+  check(toggledList(IntArray(0), 3) == listOf(3), "a first choice is added to an empty set")
+  check(toggledList(intArrayOf(2, 5), 0) == listOf(0, 2, 5), "a choice before the rest goes first")
+  check(toggledList(intArrayOf(2, 5), 4) == listOf(2, 4, 5), "a choice between two goes between them")
+  check(toggledList(intArrayOf(2, 5), 9) == listOf(2, 5, 9), "a choice after the rest goes last")
+  check(toggledList(intArrayOf(2, 4, 5), 4) == listOf(2, 5), "toggling a choice again removes it")
+  check(CodeChoices().copyWithExpand(1).expanded.contentEquals(intArrayOf(1)), "expand adds to an empty set")
+  check(CodeChoices().copyWith(1).wrapToggles.contentEquals(intArrayOf(1)), "wrap adds to an empty set")
 
   checkEq(gutterDigits(1, 1), 2, "one line is at least two digits")
   checkEq(gutterDigits(1, 9), 2, "nine lines are two digits")

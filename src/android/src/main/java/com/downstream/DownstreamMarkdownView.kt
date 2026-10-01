@@ -1116,16 +1116,21 @@ internal class CodeGutterView(context: Context) : View(context) {
     for (index in first until starts.size) {
       val line = textLayout.getLineForOffset(starts[index].coerceAtMost(textLayout.text.length))
       val baseline = textLayout.getLineBaseline(line)
-      if (baseline - textLayout.getLineAscent(line) > dirty.bottom) break
+      if (textLayout.getLineTop(line) > dirty.bottom) break
       val number = (layout.firstNumber + index).toString()
       // Right-aligned against the gap, so the numbers line up on their last digit
       // as they do in GitHub and VS Code.
-      canvas.drawText(number, width - numberPaint.measureText(number) - 2f, baseline.toFloat(), numberPaint)
+      canvas.drawText(
+        number,
+        width - segment.gutterGap - numberPaint.measureText(number),
+        baseline.toFloat(),
+        numberPaint,
+      )
     }
   }
 
   /**
-   * The first logical line whose baseline is below [top].
+   * The first logical line whose last visual line reaches below [top].
    *
    * Found from the line starts rather than by walking glyphs from the top of the
    * block, so scrolling into the middle of a long fence does not cost a pass over
@@ -1135,7 +1140,7 @@ internal class CodeGutterView(context: Context) : View(context) {
     var index = 0
     while (index + 1 < starts.size) {
       val next = textLayout.getLineForOffset(starts[index + 1].coerceAtMost(textLayout.text.length))
-      if (textLayout.getLineBaseline(next) - textLayout.getLineAscent(next) > top) break
+      if (textLayout.getLineTop(next) > top) break
       index++
     }
     return index
@@ -1149,10 +1154,12 @@ internal class CodeGutterView(context: Context) : View(context) {
  * mid-stream is never re-parented and keeps its selection and offsets.
  * Whether it scrolls at all is what differs.
  *
- * A drag belongs to this view only while it can scroll that way. Android's parent
- * intercepts a vertical drag before this view finishes seeing it, so the hand-off
- * is done with `requestDisallowInterceptTouchEvent` on each move: claimed while the
- * card can scroll that direction, released at the edge.
+ * A drag belongs to this view only while it can scroll that way. The list around
+ * it intercepts a vertical drag as soon as it passes the touch slop, before this
+ * view's own scrolling starts, so the drag is claimed on the down and then judged
+ * on each move with `requestDisallowInterceptTouchEvent`: kept while the card can
+ * scroll the way the finger is going, released at the edge, where the list takes
+ * it over from the next move.
  */
 internal class CodeViewport(context: Context) : ScrollView(context) {
   /** A pinned card is one whose reader has not scrolled away from the bottom. */
@@ -1163,23 +1170,21 @@ internal class CodeViewport(context: Context) : ScrollView(context) {
   /** Only a touch-driven scroll unpins; a pin this view applied must not unpin itself. */
   private var touchScrolling = false
 
+  /** The last move's y, so each move knows which way the finger is going. */
+  private var lastTouchY = 0f
+
   /** True while this block's fence is open, which is what makes a capped card follow. */
   var streaming: Boolean = false
     set(value) {
       if (field == value) return
       field = value
-      if (value && isVerticalScrollBarEnabled) {
+      // A block that starts unsettled follows its newest line, whether or not it
+      // is past its cap yet, so it follows from the moment it crosses.
+      if (value) {
         pinned = true
         requestPin()
       }
     }
-
-  /**
-   * This card's content height, which is the protected `computeVerticalScrollRange`
-   * the host needs to decide whether a block is past its cap. A scroll range rather
-   * than a child height, because it is what the card can actually scroll through.
-   */
-  fun verticalScrollRange(): Int = computeVerticalScrollRange()
 
   init {
     isHorizontalScrollBarEnabled = false
@@ -1206,6 +1211,30 @@ internal class CodeViewport(context: Context) : ScrollView(context) {
     super.computeScroll()
   }
 
+  override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+    when (event.actionMasked) {
+      MotionEvent.ACTION_DOWN -> {
+        lastTouchY = event.y
+        // Claimed up front whenever there is somewhere to scroll, because the list
+        // decides at its first move past the slop and would win the race otherwise.
+        // An uncapped card never claims, which is today's behavior.
+        claimDrag(canScrollVertically(1) || canScrollVertically(-1))
+      }
+      MotionEvent.ACTION_MOVE -> {
+        val dy = event.y - lastTouchY
+        lastTouchY = event.y
+        // A finger moving up moves the content toward its bottom, which is the
+        // positive direction for `canScrollVertically`.
+        if (dy != 0f) claimDrag(canScrollVertically(if (dy < 0) 1 else -1))
+      }
+    }
+    return super.dispatchTouchEvent(event)
+  }
+
+  private fun claimDrag(claim: Boolean) {
+    parent?.requestDisallowInterceptTouchEvent(claim)
+  }
+
   override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
     if (event.actionMasked == MotionEvent.ACTION_DOWN) {
       touchScrolling = true
@@ -1218,21 +1247,6 @@ internal class CodeViewport(context: Context) : ScrollView(context) {
       touchScrolling = false
     }
     return super.onTouchEvent(event)
-  }
-
-  /**
-   * Claims a vertical drag from the surrounding list while this card can still
-   * scroll that way, and releases it at the edge.
-   *
-   * `canScrollVertically` is negative for "toward the top", so a downward drag at
-   * the top edge releases and the chat list scrolls instead. An uncapped card never
-   * claims a vertical drag, which is today's behavior.
-   */
-  fun updateIntercept(direction: Int) {
-    val parent = parent
-    if (parent is ViewGroup) {
-      parent.requestDisallowInterceptTouchEvent(direction != 0 && canScrollVertically(direction))
-    }
   }
 
   private fun isNearBottom(): Boolean {
@@ -1249,6 +1263,16 @@ internal class CodeViewport(context: Context) : ScrollView(context) {
   fun requestPin() {
     needsPin = true
     requestLayout()
+  }
+
+  /**
+   * Moves to the newest line now, unless the reader has left. For the card's own
+   * layout pass, which has just laid this view's content out: a layout requested
+   * from inside a React Native view is not run until the next snapshot.
+   */
+  fun followNewestLine() {
+    needsPin = false
+    if (pinned) pinToBottom()
   }
 
   companion object {
@@ -1316,10 +1340,11 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   /** True while the fence is open, which is what makes a capped card follow. */
   private var streaming = false
   /**
-   * Whether the last button pass saw a capped card, so the layout that changes
-   * the answer can rebuild the header rather than doing it twice per snapshot.
+   * Whether the body is past its cap, as the last layout measured it. The header
+   * reads it, and a layout that changes it rebuilds the header before laying it
+   * out, because a button shown after that would get no second layout pass.
    */
-  private var lastCapped = false
+  private var capped = false
 
   /**
    * The block's ordinal among the document's code blocks, which a toggle is keyed
@@ -1361,14 +1386,6 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     row.addView(gutter, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
     row.addView(scroll, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
     scroll.addView(body, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
-    viewport.setOnTouchListener { view, event ->
-      if (event.actionMasked == MotionEvent.ACTION_MOVE) {
-        // A downward drag wants to go up the content, and the other way round.
-        val direction = if (event.y - view.height / 2f > 0) -1 else 1
-        viewport.updateIntercept(direction)
-      }
-      false
-    }
   }
 
   private fun controlButton(drawable: Int, label: Int): ImageButton =
@@ -1377,7 +1394,7 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     setOnClickListener {
       when (it) {
         wrapButton -> controlHost?.onToggleWrap(ordinal, segment?.language.orEmpty(), !(layout?.wraps ?: false))
-        expandButton -> controlHost?.onToggleExpand(ordinal, segment?.language.orEmpty(), !isCapped())
+        expandButton -> controlHost?.onToggleExpand(ordinal, segment?.language.orEmpty(), !(layout?.expanded ?: false))
         downloadButton -> controlHost?.onControl(
           BLOCK_CODE,
           segment?.blockIndex ?: 0,
@@ -1518,28 +1535,18 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     requestLayout()
   }
 
-  /**
-   * True when this block's body is taller than its cap, which is what makes the
-   * viewport scroll and the expand button mean something.
-   */
-  private fun isCapped(): Boolean {
-    val layout = this.layout ?: return false
-    if (layout.maxHeight <= 0f) return false
-    return viewport.verticalScrollRange() > layout.maxHeight
-  }
-
   private fun updateButtons() {
     val shown = header.visibility == View.VISIBLE
     buttons.visibility = if (shown) View.VISIBLE else View.GONE
     language.visibility = if (shown) View.VISIBLE else View.GONE
     if (!shown) return
     val layout = this.layout
-    val capped = isCapped()
-    lastCapped = capped
+    val expanded = layout?.expanded ?: false
     // Expand appears only on a block past the cap, because that is the only block
-    // it can do anything for.
+    // it can do anything for. An expanded block keeps it as a collapse button, so
+    // the cap can come back.
     expandButton.visibility =
-      if (controls and CONTROL_CODE_EXPAND != 0 && capped) View.VISIBLE else View.GONE
+      if (controls and CONTROL_CODE_EXPAND != 0 && (capped || expanded)) View.VISIBLE else View.GONE
     wrapButton.visibility = if (controls and CONTROL_CODE_WRAP != 0) View.VISIBLE else View.GONE
     downloadButton.visibility = if (controls and CONTROL_CODE_DOWNLOAD != 0) View.VISIBLE else View.GONE
     copyButton.visibility = if (controls and CONTROL_CODE_COPY != 0) View.VISIBLE else View.GONE
@@ -1553,10 +1560,10 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     wrapButton.isSelected = wraps
     wrapButton.contentDescription = controlLabels[if (wraps) LABEL_UNWRAP_CODE else LABEL_WRAP_CODE]
     wrapButton.stateDescription = wrapButton.contentDescription
-    expandButton.isSelected = capped
-    expandButton.setImageResource(if (capped) R.drawable.ds_ic_collapse else R.drawable.ds_ic_expand)
+    expandButton.isSelected = expanded
+    expandButton.setImageResource(if (expanded) R.drawable.ds_ic_collapse else R.drawable.ds_ic_expand)
     expandButton.contentDescription =
-      controlLabels[if (capped) LABEL_EXPAND_CODE else LABEL_COLLAPSE_CODE]
+      controlLabels[if (expanded) LABEL_COLLAPSE_CODE else LABEL_EXPAND_CODE]
     expandButton.stateDescription = expandButton.contentDescription
   }
 
@@ -1596,6 +1603,14 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     // length either way, so it never lays code out again on a rotation.
     val bodyWidth = segment.bodyWidth(rendered.paint, cardWidth, layout.wraps, gutterWidth)
     val bodyHeight = segment.bodyHeight(rendered.paint, cardWidth, layout.wraps, gutterWidth)
+    // The viewport scrolls only while the block is past its cap, which is the whole
+    // difference between a capped card and an uncapped one. It is decided before
+    // the header is laid out, because the expand button depends on it.
+    val capped = layout.maxHeight > 0f && bodyHeight + 2 * padding > layout.maxHeight
+    if (capped != this.capped) {
+      this.capped = capped
+      updateButtons()
+    }
     header.measure(
       MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
       MeasureSpec.makeMeasureSpec(headerHeight, MeasureSpec.EXACTLY),
@@ -1636,16 +1651,6 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
       segment, body, layout, segment.codeTextSize, segment.codeFace,
       lineNumberColor(segment.colors),
     )
-    // Whether the block is capped is only known here, and the expand button
-    // depends on it, so this is where a header that appears or disappears is
-    // decided. The header row's height is fixed either way, so nothing moves.
-    if (isCapped() != lastCapped) {
-      updateButtons()
-    }
-
-    // Vertical scrolling turns on only while the block is past its cap, which is
-    // the whole difference between a capped card and an uncapped one.
-    val capped = layout.maxHeight > 0f && bodyHeight + 2 * padding > layout.maxHeight
     viewport.isVerticalScrollBarEnabled = capped
     viewport.streaming = streaming
     if (restoreScroll) {
@@ -1654,10 +1659,13 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
       val verticalMaximum = (bodyHeight - viewport.height).coerceAtLeast(0)
       viewport.scrollTo(0, savedVerticalOffset.coerceIn(0, verticalMaximum))
       restoreScroll = false
-    } else if (capped && streaming) {
-      // Follow the newest line, which is Streamdown's pinned scroll: a card the
-      // reader has scrolled away from is not pinned and does not move.
-      viewport.requestPin()
+    }
+    // Follow the newest line, which is Streamdown's pinned scroll: a card the
+    // reader has scrolled away from is not pinned and does not move. Not an
+    // alternative to the restore above: an open fence is rebuilt on every
+    // snapshot, so the restore runs every time, and the pin has to land on top.
+    if (capped && streaming) {
+      viewport.followNewestLine()
     }
     invalidate()
   }

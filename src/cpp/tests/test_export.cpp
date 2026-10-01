@@ -211,6 +211,8 @@ void testCodeBlockLayout() {
   CHECK(numbers(expanded, 1, plain).maxHeight == 0.0f, "an expanded block has no cap");
   CHECK(numbers(expanded, 0, plain).maxHeight == 400.0f, "one expanded block does not cap its neighbour");
   CHECK(numbers(capped, 0, plain).maxHeight == 400.0f, "an uncapped layout leaves the cap alone");
+  CHECK(numbers(expanded, 1, plain).expanded, "an expanded block says so, so it can collapse again");
+  CHECK(!numbers(expanded, 0, plain).expanded, "its neighbour is not expanded");
 
   // A prop of 0 is no cap, and it must reach the block as the same 0 an
   // expanded block uses rather than as a truthy "off".
@@ -219,6 +221,11 @@ void testCodeBlockLayout() {
   CHECK(numbers(uncapped, 0, plain).maxHeight == 0.0f, "a zero cap is no cap");
   CHECK(numbers(uncapped, 0, plain).maxHeight == numbers(expanded, 1, plain).maxHeight,
         "uncapped and expanded are the same value to the card");
+  // With no cap there is nothing to collapse back to, so a leftover choice does
+  // not turn into a collapse button.
+  CodeLayout staleExpand = uncapped;
+  staleExpand.choices.expanded = {0};
+  CHECK(!numbers(staleExpand, 0, plain).expanded, "a block with no cap is never expanded");
 }
 
 /// The gutter is as wide as the widest number it draws, and never narrower than

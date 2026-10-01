@@ -489,6 +489,8 @@ internal class CodeSegment(
   val firstLine: String,
   /** Padding inside the card, the same on every side. */
   val padding: Int,
+  /** [GUTTER_GAP] in pixels: the space between the line numbers and the code. */
+  val gutterGap: Int,
   val colors: Palette,
   /** The card's corner radius and border width, both from the theme. */
   val radius: Float,
@@ -581,7 +583,7 @@ internal class CodeSegment(
     if (!layout.lineNumbers) return 0
     val digits = gutterDigits(layout.firstNumber, lineStarts.size)
     val advance = codePaint().measureText("0")
-    return ceil(digits * advance + GUTTER_GAP).toInt()
+    return ceil(digits * advance).toInt() + gutterGap
   }
 
   /** The line height the height floor needs, in the code's own face and size. */
@@ -899,7 +901,7 @@ internal class RenderedDocument(
     val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
       textSize = bodySize
       color = colors.text
-      typeface = theme.typeface(
+      typeface = theme.slotTypeface(
         ThemeSlots.SLOT_PARAGRAPH_FONT_FAMILY,
         bodyWeight,
         bodyItalic,
@@ -909,7 +911,7 @@ internal class RenderedDocument(
     val markerSize = px(theme.number(ThemeSlots.SLOT_LIST_MARKER_FONT_SIZE))
     val markerPaint = TextPaint(paint).apply {
       color = colors.marker
-      typeface = theme.typeface(
+      typeface = theme.slotTypeface(
         ThemeSlots.SLOT_LIST_MARKER_FONT_FAMILY,
         theme.number(ThemeSlots.SLOT_LIST_MARKER_FONT_WEIGHT),
         false,
@@ -1383,7 +1385,7 @@ internal class RenderedDocument(
           document.blockFenceMeta(0),
           ceil(style.px(document.blockFontSize(0))).toInt(),
           theme.typeface(
-            document.blockFontFamily(0),
+            theme.familyAt(document.blockFontFamily(0)),
             document.blockFontWeight(0),
             false,
             true,
@@ -1436,10 +1438,11 @@ internal class RenderedDocument(
         contentLeading = containers.second.toInt(),
         firstLine = firstLine,
         padding = style.codePadding,
+        gutterGap = ceil(GUTTER_GAP * style.density).toInt(),
         colors = style.colors,
         radius = style.codeBlockRadius,
         borderWidth = style.codeBlockBorder,
-        headerFace = style.theme.typeface(
+        headerFace = style.theme.slotTypeface(
           ThemeSlots.SLOT_CODE_BLOCK_FONT_FAMILY,
           style.theme.number(ThemeSlots.SLOT_CODE_BLOCK_FONT_WEIGHT),
           false,
@@ -1481,7 +1484,7 @@ internal class RenderedDocument(
             // The header's own weight and family when the theme sets them, and
             // the plain table face when it does not, so a head is never a
             // different size from the column under it.
-            val face = theme.typeface(
+            val face = theme.slotTypeface(
               ThemeSlots.SLOT_TABLE_HEADER_FONT_FAMILY,
               theme.number(ThemeSlots.SLOT_TABLE_HEADER_FONT_WEIGHT),
               false,
