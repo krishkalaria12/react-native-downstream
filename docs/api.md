@@ -218,14 +218,12 @@ import { syntaxColorsFromTheme } from 'react-native-downstream';
 const converted = syntaxColorsFromTheme(vscodeThemeJson);
 <DownstreamMarkdown
   markdown={message}
-  theme={{
-    syntax: converted.syntax,
-    colors: { foreground: converted.codeBlock.color, muted: converted.codeBlock.backgroundColor },
-  }}
+  theme={{ syntax: converted.syntax }}
+  markdownStyle={{ codeBlock: converted.codeBlock }}
 />
 ```
 
-The converter maps TextMate scopes onto the engine's classes and returns the code block's own two colors from `editor.background` and `editor.foreground`. `punctuation` maps to `operator`, and `variable` and `embedded` map to `plain`, which is the rule enriched applies to them. The goldens are the GitHub light and dark code themes plus Dracula, checked against the same table the renderers use.
+The converter maps TextMate scopes onto the engine's classes and returns the code block's own two colors from `editor.background` and `editor.foreground`, for `markdownStyle.codeBlock` rather than `theme.colors`, which would recolor prose and tables too. `punctuation` maps to `operator`, and `variable` and `embedded` map to `plain`, which is the rule enriched applies to them. The goldens are the GitHub light and dark code themes plus Dracula, checked against the same table the renderers use.
 
 ### Presets
 
