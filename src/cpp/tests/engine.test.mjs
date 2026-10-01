@@ -8,8 +8,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { before, describe, test } from 'node:test';
 
 import {
@@ -43,6 +44,7 @@ before(async () => {
   const pool = ['WorkerPool.cpp', 'RenderPreparer.cpp'].map(downstream);
   const incremental = session('IncrementalParser.cpp');
   const registry = session('SessionRegistry.cpp');
+  const theme = ['Theme.cpp', 'ThemeLayout.cpp'].map((name) => join(CPP, 'theme', name));
   const executables = [
     ['dump_document', engine],
     [
@@ -66,6 +68,7 @@ before(async () => {
     ],
     ['test_highlight', engine],
     ['dump_tokens', [downstream('Unicode.cpp')]],
+    ['test_theme', theme],
   ];
   for (const [name, dependencies] of executables) {
     targets[name] = [
@@ -687,6 +690,45 @@ describe('syntax highlighting', () => {
         previous = end;
       }
     }
+  });
+});
+
+describe('themes', () => {
+  // The three generated halves of the slot table are checked in, so a slot added
+  // to the JSON without regenerating would otherwise ship a build that cannot
+  // read it. Regenerating into a scratch directory and comparing is what catches
+  // that here rather than at the first themed frame.
+  test('the slot table matches its source', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'ds-slots-'));
+    const android = join(CPP, '..', 'android', 'src', 'main', 'java', 'com', 'downstream');
+    try {
+      execFileSync(process.execPath, [join(CPP, 'theme', 'generate-theme-slots.mjs')], {
+        env: { ...process.env, DS_THEME_SLOT_OUT: scratch },
+        stdio: 'ignore',
+      });
+      const checkedIn = {
+        'ThemeSlots.h': join(CPP, 'theme', 'ThemeSlots.h'),
+        'themeSlots.ts': join(CPP, '..', 'themeSlots.ts'),
+        'ThemeSlots.kt': join(android, 'ThemeSlots.kt'),
+      };
+      for (const [name, path] of Object.entries(checkedIn)) {
+        assert.equal(
+          readFileSync(join(scratch, name), 'utf8'),
+          readFileSync(path, 'utf8'),
+          `${name} is stale; run node src/cpp/theme/generate-theme-slots.mjs`,
+        );
+      }
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  // The slot table's own invariants, the defaults a platform reads, margin
+  // collapsing, the font scale cap, interning, and lookup by id. These are the
+  // rules both renderers are built on, so they are checked in C++ rather than
+  // through one platform's drawing.
+  test('theme invariants', () => {
+    execFileSync(binary('test_theme'), { timeout: 15_000, stdio: 'inherit' });
   });
 });
 

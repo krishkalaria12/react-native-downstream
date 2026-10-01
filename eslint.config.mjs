@@ -31,6 +31,12 @@ export default defineConfig([
       'example/ios/**',
       'example/android/**',
       'example/dist/**',
+      // The theme slot table is written by a script. Prettier's opinion of it
+      // is not the generator's, so linting it would mean an autofix silently
+      // editing generated output and the drift check failing on the result.
+      'src/cpp/theme/ThemeSlots.h',
+      'src/themeSlots.ts',
+      'src/android/src/main/java/com/downstream/ThemeSlots.kt',
     ],
   },
 ]);

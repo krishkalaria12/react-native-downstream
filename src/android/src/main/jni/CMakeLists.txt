@@ -19,6 +19,8 @@ file(GLOB LIB_ENGINE_SRCS CONFIGURE_DEPENDS
   ${LIB_CPP_DIR}/remend/*.cpp)
 file(GLOB LIB_HIGHLIGHT_SRCS CONFIGURE_DEPENDS
   ${LIB_CPP_DIR}/highlight/*.cpp)
+file(GLOB LIB_THEME_SRCS CONFIGURE_DEPENDS
+  ${LIB_CPP_DIR}/theme/*.cpp)
 file(GLOB LIB_LEXILLA_SRCS CONFIGURE_DEPENDS
   ${LIB_CPP_DIR}/lexilla/lexers/*.cxx
   ${LIB_CPP_DIR}/lexilla/lexlib/*.cxx)
@@ -70,16 +72,21 @@ set_target_properties(downstream_highlight PROPERTIES
 add_library(${LIB_TARGET_NAME} OBJECT
   ${LIB_CODEGEN_SRCS}
   ${LIB_ENGINE_SRCS}
+  ${LIB_THEME_SRCS}
   ${LIB_JNI_SRCS})
 
 # The local ComponentDescriptors.h must shadow the generated one.
 target_include_directories(${LIB_TARGET_NAME} PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
+  # The engine's own root, so a header can spell another as `theme/Theme.h`
+  # the way the sources read, whatever directory it sits in.
+  ${LIB_CPP_DIR}
   ${LIB_CPP_DIR}/downstream
   ${LIB_CPP_DIR}/session
   ${LIB_CPP_DIR}/fabric
   ${LIB_CPP_DIR}/remend
   ${LIB_CPP_DIR}/highlight
+  ${LIB_CPP_DIR}/theme
   ${LIB_GENERATED_JNI_DIR}
   ${LIB_GENERATED_COMPONENTS_DIR})
 

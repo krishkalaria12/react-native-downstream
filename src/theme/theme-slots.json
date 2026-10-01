@@ -1,0 +1,1240 @@
+{
+  "$comment": [
+    "Every themeable value the renderers draw with, listed once.",
+    "",
+    "`id` is stable and append-only: JavaScript sends it, C++ indexes its",
+    "resolved arrays with it, and a slot a later feature adds is a new line at",
+    "the end. An id is never reused and never reordered, so a theme written",
+    "against one release keeps meaning the same thing in the next.",
+    "",
+    "`kind` decides how a value travels and how a platform reads it:",
+    "  metric  a number in points before font scaling",
+    "  color   an ARGB pair, or a platform color role while it is unset",
+    "  font    an index into the theme's font name list",
+    "  weight  a CSS font weight, 100 to 900",
+    "  flag    0 or 1",
+    "",
+    "A color's `id` is the light value's, and the id after it is reserved for",
+    "the dark one. A color that is the same in both appearances sends only the",
+    "light id and the platform uses it for both, so an unset-looking id that",
+    "follows a color is not a mistake in the numbering.",
+    "",
+    "`layout` marks a value that changes size. Those slots alone form the layout",
+    "key, so a color-only change never invalidates a measurement.",
+    "",
+    "A color's `default` is a role rather than a number on purpose. `label` is",
+    "`UIColor.labelColor` on iOS and the existing Palette value on Android, so an",
+    "unset color keeps following increased contrast and appearance, which a",
+    "flattened integer could not. `inherit` means the platform draws nothing and",
+    "the enclosing block's color shows through. `tokens:Class` reads the",
+    "engine's kTokenColors table, which is why the generator copies it out.",
+    "",
+    "Generated into src/cpp/theme/ThemeSlots.h and src/themeSlots.ts by",
+    "src/cpp/theme/generate-theme-slots.mjs. Neither output is edited by hand."
+  ],
+  "roles": [
+    "label",
+    "secondaryLabel",
+    "link",
+    "tertiaryFill",
+    "separator",
+    "gray3",
+    "blue",
+    "green",
+    "purple",
+    "orange",
+    "red",
+    "selection",
+    "clear",
+    "inherit"
+  ],
+  "slots": [
+    {
+      "id": 1,
+      "name": "radius",
+      "kind": "metric",
+      "layout": true,
+      "default": 6
+    },
+    {
+      "id": 2,
+      "name": "maxFontSizeMultiplier",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 3,
+      "name": "selection.color",
+      "kind": "color",
+      "layout": false,
+      "default": "selection"
+    },
+    {
+      "id": 5,
+      "name": "paragraph.fontSize",
+      "kind": "metric",
+      "layout": true,
+      "default": 16
+    },
+    {
+      "id": 6,
+      "name": "paragraph.fontWeight",
+      "kind": "weight",
+      "layout": true,
+      "default": 400
+    },
+    {
+      "id": 7,
+      "name": "paragraph.fontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 8,
+      "name": "paragraph.lineHeight",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 9,
+      "name": "paragraph.color",
+      "kind": "color",
+      "layout": false,
+      "default": "label"
+    },
+    {
+      "id": 11,
+      "name": "paragraph.fontStyle",
+      "kind": "flag",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 12,
+      "name": "paragraph.marginTop",
+      "kind": "metric",
+      "layout": true,
+      "default": 12
+    },
+    {
+      "id": 13,
+      "name": "paragraph.marginBottom",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 14,
+      "name": "heading.1.fontSize",
+      "kind": "metric",
+      "layout": true,
+      "default": 28
+    },
+    {
+      "id": 15,
+      "name": "heading.1.fontWeight",
+      "kind": "weight",
+      "layout": true,
+      "default": 700
+    },
+    {
+      "id": 16,
+      "name": "heading.1.fontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 17,
+      "name": "heading.1.lineHeight",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 18,
+      "name": "heading.1.color",
+      "kind": "color",
+      "layout": false,
+      "default": "label"
+    },
+    {
+      "id": 20,
+      "name": "heading.1.fontStyle",
+      "kind": "flag",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 21,
+      "name": "heading.1.marginTop",
+      "kind": "metric",
+      "layout": true,
+      "default": 20
+    },
+    {
+      "id": 22,
+      "name": "heading.1.marginBottom",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 23,
+      "name": "heading.2.fontSize",
+      "kind": "metric",
+      "layout": true,
+      "default": 24
+    },
+    {
+      "id": 24,
+      "name": "heading.2.fontWeight",
+      "kind": "weight",
+      "layout": true,
+      "default": 700
+    },
+    {
+      "id": 25,
+      "name": "heading.2.fontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 26,
+      "name": "heading.2.lineHeight",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 27,
+      "name": "heading.2.color",
+      "kind": "color",
+      "layout": false,
+      "default": "label"
+    },
+    {
+      "id": 29,
+      "name": "heading.2.fontStyle",
+      "kind": "flag",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 30,
+      "name": "heading.2.marginTop",
+      "kind": "metric",
+      "layout": true,
+      "default": 20
+    },
+    {
+      "id": 31,
+      "name": "heading.2.marginBottom",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 32,
+      "name": "heading.3.fontSize",
+      "kind": "metric",
+      "layout": true,
+      "default": 20
+    },
+    {
+      "id": 33,
+      "name": "heading.3.fontWeight",
+      "kind": "weight",
+      "layout": true,
+      "default": 600
+    },
+    {
+      "id": 34,
+      "name": "heading.3.fontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 35,
+      "name": "heading.3.lineHeight",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 36,
+      "name": "heading.3.color",
+      "kind": "color",
+      "layout": false,
+      "default": "label"
+    },
+    {
+      "id": 38,
+      "name": "heading.3.fontStyle",
+      "kind": "flag",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 39,
+      "name": "heading.3.marginTop",
+      "kind": "metric",
+      "layout": true,
+      "default": 20
+    },
+    {
+      "id": 40,
+      "name": "heading.3.marginBottom",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 41,
+      "name": "heading.4.fontSize",
+      "kind": "metric",
+      "layout": true,
+      "default": 18
+    },
+    {
+      "id": 42,
+      "name": "heading.4.fontWeight",
+      "kind": "weight",
+      "layout": true,
+      "default": 600
+    },
+    {
+      "id": 43,
+      "name": "heading.4.fontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 44,
+      "name": "heading.4.lineHeight",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 45,
+      "name": "heading.4.color",
+      "kind": "color",
+      "layout": false,
+      "default": "label"
+    },
+    {
+      "id": 47,
+      "name": "heading.4.fontStyle",
+      "kind": "flag",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 48,
+      "name": "heading.4.marginTop",
+      "kind": "metric",
+      "layout": true,
+      "default": 20
+    },
+    {
+      "id": 49,
+      "name": "heading.4.marginBottom",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 50,
+      "name": "heading.5.fontSize",
+      "kind": "metric",
+      "layout": true,
+      "default": 16
+    },
+    {
+      "id": 51,
+      "name": "heading.5.fontWeight",
+      "kind": "weight",
+      "layout": true,
+      "default": 600
+    },
+    {
+      "id": 52,
+      "name": "heading.5.fontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 53,
+      "name": "heading.5.lineHeight",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 54,
+      "name": "heading.5.color",
+      "kind": "color",
+      "layout": false,
+      "default": "label"
+    },
+    {
+      "id": 56,
+      "name": "heading.5.fontStyle",
+      "kind": "flag",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 57,
+      "name": "heading.5.marginTop",
+      "kind": "metric",
+      "layout": true,
+      "default": 20
+    },
+    {
+      "id": 58,
+      "name": "heading.5.marginBottom",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 59,
+      "name": "heading.6.fontSize",
+      "kind": "metric",
+      "layout": true,
+      "default": 15
+    },
+    {
+      "id": 60,
+      "name": "heading.6.fontWeight",
+      "kind": "weight",
+      "layout": true,
+      "default": 600
+    },
+    {
+      "id": 61,
+      "name": "heading.6.fontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 62,
+      "name": "heading.6.lineHeight",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 63,
+      "name": "heading.6.color",
+      "kind": "color",
+      "layout": false,
+      "default": "secondaryLabel"
+    },
+    {
+      "id": 65,
+      "name": "heading.6.fontStyle",
+      "kind": "flag",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 66,
+      "name": "heading.6.marginTop",
+      "kind": "metric",
+      "layout": true,
+      "default": 20
+    },
+    {
+      "id": 67,
+      "name": "heading.6.marginBottom",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 68,
+      "name": "blockquote.fontSize",
+      "kind": "metric",
+      "layout": true,
+      "default": 16
+    },
+    {
+      "id": 69,
+      "name": "blockquote.fontWeight",
+      "kind": "weight",
+      "layout": true,
+      "default": 400
+    },
+    {
+      "id": 70,
+      "name": "blockquote.fontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 71,
+      "name": "blockquote.lineHeight",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 72,
+      "name": "blockquote.color",
+      "kind": "color",
+      "layout": false,
+      "default": "secondaryLabel"
+    },
+    {
+      "id": 74,
+      "name": "blockquote.fontStyle",
+      "kind": "flag",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 75,
+      "name": "blockquote.marginTop",
+      "kind": "metric",
+      "layout": true,
+      "default": 12
+    },
+    {
+      "id": 76,
+      "name": "blockquote.marginBottom",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 77,
+      "name": "blockquote.borderWidth",
+      "kind": "metric",
+      "layout": true,
+      "default": 3
+    },
+    {
+      "id": 78,
+      "name": "blockquote.borderColor",
+      "kind": "color",
+      "layout": false,
+      "default": "gray3"
+    },
+    {
+      "id": 80,
+      "name": "blockquote.gapWidth",
+      "kind": "metric",
+      "layout": true,
+      "default": 16
+    },
+    {
+      "id": 81,
+      "name": "list.fontSize",
+      "kind": "metric",
+      "layout": true,
+      "default": 16
+    },
+    {
+      "id": 82,
+      "name": "list.fontWeight",
+      "kind": "weight",
+      "layout": true,
+      "default": 400
+    },
+    {
+      "id": 83,
+      "name": "list.fontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 84,
+      "name": "list.lineHeight",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 85,
+      "name": "list.color",
+      "kind": "color",
+      "layout": false,
+      "default": "label"
+    },
+    {
+      "id": 87,
+      "name": "list.marginTop",
+      "kind": "metric",
+      "layout": true,
+      "default": 12
+    },
+    {
+      "id": 88,
+      "name": "list.marginBottom",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 89,
+      "name": "list.marginLeft",
+      "kind": "metric",
+      "layout": true,
+      "default": 32
+    },
+    {
+      "id": 90,
+      "name": "list.gapWidth",
+      "kind": "metric",
+      "layout": true,
+      "default": 6
+    },
+    {
+      "id": 91,
+      "name": "list.itemSpacing",
+      "kind": "metric",
+      "layout": true,
+      "default": 4
+    },
+    {
+      "id": 92,
+      "name": "list.markerColor",
+      "kind": "color",
+      "layout": false,
+      "default": "secondaryLabel"
+    },
+    {
+      "id": 94,
+      "name": "list.bulletColor",
+      "kind": "color",
+      "layout": false,
+      "default": "secondaryLabel"
+    },
+    {
+      "id": 96,
+      "name": "list.markerFontSize",
+      "kind": "metric",
+      "layout": true,
+      "default": 16
+    },
+    {
+      "id": 97,
+      "name": "list.markerFontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 98,
+      "name": "list.markerFontWeight",
+      "kind": "weight",
+      "layout": true,
+      "default": 400
+    },
+    {
+      "id": 99,
+      "name": "taskList.checkedColor",
+      "kind": "color",
+      "layout": false,
+      "default": "secondaryLabel"
+    },
+    {
+      "id": 101,
+      "name": "taskList.borderColor",
+      "kind": "color",
+      "layout": false,
+      "default": "secondaryLabel"
+    },
+    {
+      "id": 103,
+      "name": "code.sizeScale",
+      "kind": "metric",
+      "layout": true,
+      "default": 0.875
+    },
+    {
+      "id": 104,
+      "name": "code.absoluteSize",
+      "kind": "flag",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 105,
+      "name": "code.fontSize",
+      "kind": "metric",
+      "layout": true,
+      "default": 14
+    },
+    {
+      "id": 106,
+      "name": "code.fontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 107,
+      "name": "code.color",
+      "kind": "color",
+      "layout": false,
+      "default": "label"
+    },
+    {
+      "id": 109,
+      "name": "code.backgroundColor",
+      "kind": "color",
+      "layout": false,
+      "default": "tertiaryFill"
+    },
+    {
+      "id": 111,
+      "name": "codeBlock.fontSize",
+      "kind": "metric",
+      "layout": true,
+      "default": 14
+    },
+    {
+      "id": 112,
+      "name": "codeBlock.fontWeight",
+      "kind": "weight",
+      "layout": true,
+      "default": 400
+    },
+    {
+      "id": 113,
+      "name": "codeBlock.fontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 114,
+      "name": "codeBlock.lineHeight",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 115,
+      "name": "codeBlock.color",
+      "kind": "color",
+      "layout": false,
+      "default": "label"
+    },
+    {
+      "id": 117,
+      "name": "codeBlock.marginTop",
+      "kind": "metric",
+      "layout": true,
+      "default": 12
+    },
+    {
+      "id": 118,
+      "name": "codeBlock.marginBottom",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 119,
+      "name": "codeBlock.backgroundColor",
+      "kind": "color",
+      "layout": false,
+      "default": "tertiaryFill"
+    },
+    {
+      "id": 121,
+      "name": "codeBlock.borderColor",
+      "kind": "color",
+      "layout": false,
+      "default": "separator"
+    },
+    {
+      "id": 123,
+      "name": "codeBlock.borderWidth",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 124,
+      "name": "codeBlock.borderRadius",
+      "kind": "metric",
+      "layout": true,
+      "default": 6
+    },
+    {
+      "id": 125,
+      "name": "codeBlock.padding",
+      "kind": "metric",
+      "layout": true,
+      "default": 10
+    },
+    {
+      "id": 126,
+      "name": "codeBlock.header.fontSize",
+      "kind": "metric",
+      "layout": true,
+      "default": 12
+    },
+    {
+      "id": 127,
+      "name": "codeBlock.header.color",
+      "kind": "color",
+      "layout": false,
+      "default": "secondaryLabel"
+    },
+    {
+      "id": 129,
+      "name": "codeBlock.header.buttonColor",
+      "kind": "color",
+      "layout": false,
+      "default": "secondaryLabel"
+    },
+    {
+      "id": 131,
+      "name": "codeBlock.header.backgroundColor",
+      "kind": "color",
+      "layout": false,
+      "default": "clear"
+    },
+    {
+      "id": 133,
+      "name": "codeBlock.header.borderColor",
+      "kind": "color",
+      "layout": false,
+      "default": "clear"
+    },
+    {
+      "id": 135,
+      "name": "table.fontSize",
+      "kind": "metric",
+      "layout": true,
+      "default": 16
+    },
+    {
+      "id": 136,
+      "name": "table.fontWeight",
+      "kind": "weight",
+      "layout": true,
+      "default": 400
+    },
+    {
+      "id": 137,
+      "name": "table.fontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 138,
+      "name": "table.lineHeight",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 139,
+      "name": "table.color",
+      "kind": "color",
+      "layout": false,
+      "default": "label"
+    },
+    {
+      "id": 141,
+      "name": "table.marginTop",
+      "kind": "metric",
+      "layout": true,
+      "default": 12
+    },
+    {
+      "id": 142,
+      "name": "table.marginBottom",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 143,
+      "name": "table.headerFontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 144,
+      "name": "table.headerFontWeight",
+      "kind": "weight",
+      "layout": true,
+      "default": 700
+    },
+    {
+      "id": 145,
+      "name": "table.headerTextColor",
+      "kind": "color",
+      "layout": false,
+      "default": "label"
+    },
+    {
+      "id": 147,
+      "name": "table.headerBackgroundColor",
+      "kind": "color",
+      "layout": false,
+      "default": "tertiaryFill"
+    },
+    {
+      "id": 149,
+      "name": "table.rowEvenBackgroundColor",
+      "kind": "color",
+      "layout": false,
+      "default": "clear"
+    },
+    {
+      "id": 151,
+      "name": "table.rowOddBackgroundColor",
+      "kind": "color",
+      "layout": false,
+      "default": "clear"
+    },
+    {
+      "id": 153,
+      "name": "table.borderWidth",
+      "kind": "metric",
+      "layout": true,
+      "default": 1
+    },
+    {
+      "id": 154,
+      "name": "table.borderColor",
+      "kind": "color",
+      "layout": false,
+      "default": "separator"
+    },
+    {
+      "id": 156,
+      "name": "table.borderRadius",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 157,
+      "name": "table.cellPaddingHorizontal",
+      "kind": "metric",
+      "layout": true,
+      "default": 12
+    },
+    {
+      "id": 158,
+      "name": "table.cellPaddingVertical",
+      "kind": "metric",
+      "layout": true,
+      "default": 8
+    },
+    {
+      "id": 159,
+      "name": "table.minColumnWidth",
+      "kind": "metric",
+      "layout": true,
+      "default": 56
+    },
+    {
+      "id": 160,
+      "name": "table.maxColumnWidth",
+      "kind": "metric",
+      "layout": true,
+      "default": 280
+    },
+    {
+      "id": 161,
+      "name": "table.toolbar.buttonColor",
+      "kind": "color",
+      "layout": false,
+      "default": "secondaryLabel"
+    },
+    {
+      "id": 163,
+      "name": "link.color",
+      "kind": "color",
+      "layout": false,
+      "default": "link"
+    },
+    {
+      "id": 165,
+      "name": "link.underline",
+      "kind": "flag",
+      "layout": false,
+      "default": 1
+    },
+    {
+      "id": 166,
+      "name": "link.fontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 167,
+      "name": "link.fontWeight",
+      "kind": "weight",
+      "layout": true,
+      "default": 400
+    },
+    {
+      "id": 168,
+      "name": "strong.color",
+      "kind": "color",
+      "layout": false,
+      "default": "inherit"
+    },
+    {
+      "id": 170,
+      "name": "strong.fontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 171,
+      "name": "strong.fontWeight",
+      "kind": "weight",
+      "layout": true,
+      "default": 700
+    },
+    {
+      "id": 172,
+      "name": "em.color",
+      "kind": "color",
+      "layout": false,
+      "default": "inherit"
+    },
+    {
+      "id": 174,
+      "name": "em.fontFamily",
+      "kind": "font",
+      "layout": true
+    },
+    {
+      "id": 175,
+      "name": "em.fontStyle",
+      "kind": "flag",
+      "layout": true,
+      "default": 1
+    },
+    {
+      "id": 176,
+      "name": "strikethrough.color",
+      "kind": "color",
+      "layout": false,
+      "default": "inherit"
+    },
+    {
+      "id": 178,
+      "name": "thematicBreak.color",
+      "kind": "color",
+      "layout": false,
+      "default": "separator"
+    },
+    {
+      "id": 180,
+      "name": "thematicBreak.height",
+      "kind": "metric",
+      "layout": true,
+      "default": 1
+    },
+    {
+      "id": 181,
+      "name": "thematicBreak.marginTop",
+      "kind": "metric",
+      "layout": true,
+      "default": 12
+    },
+    {
+      "id": 182,
+      "name": "thematicBreak.marginBottom",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 183,
+      "name": "footnote.sizeScale",
+      "kind": "metric",
+      "layout": true,
+      "default": 0.75
+    },
+    {
+      "id": 184,
+      "name": "footnote.raise",
+      "kind": "metric",
+      "layout": true,
+      "default": 0.35
+    },
+    {
+      "id": 185,
+      "name": "footnote.color",
+      "kind": "color",
+      "layout": false,
+      "default": "link"
+    },
+    {
+      "id": 187,
+      "name": "imageAlt.color",
+      "kind": "color",
+      "layout": false,
+      "default": "secondaryLabel"
+    },
+    {
+      "id": 189,
+      "name": "admonition.note",
+      "kind": "color",
+      "layout": false,
+      "default": "blue"
+    },
+    {
+      "id": 191,
+      "name": "admonition.tip",
+      "kind": "color",
+      "layout": false,
+      "default": "green"
+    },
+    {
+      "id": 193,
+      "name": "admonition.important",
+      "kind": "color",
+      "layout": false,
+      "default": "purple"
+    },
+    {
+      "id": 195,
+      "name": "admonition.warning",
+      "kind": "color",
+      "layout": false,
+      "default": "orange"
+    },
+    {
+      "id": 197,
+      "name": "admonition.caution",
+      "kind": "color",
+      "layout": false,
+      "default": "red"
+    },
+    {
+      "id": 199,
+      "name": "syntax.plain",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Plain"
+    },
+    {
+      "id": 201,
+      "name": "syntax.comment",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Comment"
+    },
+    {
+      "id": 203,
+      "name": "syntax.keyword",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Keyword"
+    },
+    {
+      "id": 205,
+      "name": "syntax.type",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Type"
+    },
+    {
+      "id": 207,
+      "name": "syntax.string",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:String"
+    },
+    {
+      "id": 209,
+      "name": "syntax.number",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Number"
+    },
+    {
+      "id": 211,
+      "name": "syntax.constant",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Constant"
+    },
+    {
+      "id": 213,
+      "name": "syntax.regex",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Regex"
+    },
+    {
+      "id": 215,
+      "name": "syntax.function",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Function"
+    },
+    {
+      "id": 217,
+      "name": "syntax.property",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Property"
+    },
+    {
+      "id": 219,
+      "name": "syntax.operator",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Operator"
+    },
+    {
+      "id": 221,
+      "name": "syntax.preprocessor",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Preprocessor"
+    },
+    {
+      "id": 223,
+      "name": "syntax.tag",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Tag"
+    },
+    {
+      "id": 225,
+      "name": "syntax.attribute",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Attribute"
+    },
+    {
+      "id": 227,
+      "name": "syntax.inserted",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Inserted"
+    },
+    {
+      "id": 229,
+      "name": "syntax.deleted",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Deleted"
+    },
+    {
+      "id": 231,
+      "name": "syntax.heading",
+      "kind": "color",
+      "layout": false,
+      "default": "tokens:Heading"
+    }
+  ]
+}
