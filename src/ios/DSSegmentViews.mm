@@ -8,12 +8,14 @@
 #include <cmath>
 
 using namespace downstream;
+// The slot names a themed drawing reads. The layout helpers they sit beside live
+// in `theme_layout`, which needs no `using` here: nothing in this file asks for
+// one, because the metrics arrive on the segment rather than as a rule to apply.
+using namespace downstream::theme;
 
 namespace {
 
 constexpr CGFloat kLinkHitSlop = 4;
-constexpr CGFloat kBarWidth = 3;
-constexpr CGFloat kMarkerGap = 6;
 
 NSString *const kPlaceholder = @"\u200b";
 
@@ -171,6 +173,17 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
   _linkDelegate = linkDelegate;
   invalidateAccessibleLinks(_cachedAccessibilityElements);
   _cachedAccessibilityElements = nil;
+}
+
+/// UITextView draws its selection in the view's tint color, which is the only
+/// handle on it that a deployment target still declares: `selectionColor` was
+/// withdrawn from the headers in favour of the iOS 18 highlight attributes,
+/// which color a text selection's own background rather than the selection
+/// itself. Nothing else here is tinted, because this view draws its text, its
+/// links and its own chrome with explicit colors.
+- (void)setSelectionColor:(UIColor *)selectionColor {
+  _selectionColor = selectionColor;
+  self.tintColor = selectionColor;
 }
 
 - (void)layoutSubviews {
@@ -352,6 +365,9 @@ namespace {
   UIScrollView *_scrollView;
   DSTextSegmentView *_body;
   NSArray<NSString *> *_labels;
+  /// The header row's text color, from the theme, which the buttons share so a
+  /// themed header and its controls read as one row.
+  UIColor *_headerColor;
   /// The labels the current buttons and menu items were built from, so a changed
   /// `translations` prop rebuilds them instead of leaving stale strings up.
   NSArray<NSString *> *_builtLabels;
@@ -460,6 +476,18 @@ namespace {
   _language.accessibilityLabel = segment.language.length > 0
       ? [NSString stringWithFormat:@"%@, code", segment.language]
       : @"code";
+  // The header row's own three colors, read once per block rather than per draw,
+  // because the card is redrawn whenever its bounds change.
+  _headerColor = [segment.theme colorForSlot:kSlotCodeBlockHeaderColor fallback:UIColor.secondaryLabelColor];
+  _language.textColor = _headerColor;
+  _language.font = segment.headerFont;
+  _header.backgroundColor = [segment.theme colorForSlot:kSlotCodeBlockHeaderBackgroundColor fallback:nil];
+  // The buttons take their own color when the theme gave them one, so a header
+  // row can have quiet controls and loud text, or the reverse.
+  UIColor *buttonColor = segment.headerButtonColor ?: _headerColor;
+  for (UIView *button in _buttons.arrangedSubviews) {
+    [(UIControl *)button setTintColor:buttonColor];
+  }
   [self updateButtons];
   [self setNeedsLayout];
   [self setNeedsDisplay];
@@ -468,6 +496,11 @@ namespace {
 - (void)setLinkDelegate:(id<DSLinkDelegate>)linkDelegate {
   _linkDelegate = linkDelegate;
   _body.linkDelegate = linkDelegate;
+}
+
+- (void)setSelectionColor:(UIColor *)selectionColor {
+  _selectionColor = selectionColor;
+  _body.selectionColor = selectionColor;
 }
 
 - (void)setShowsHeader:(BOOL)showsHeader {
@@ -637,7 +670,7 @@ namespace {
   }
   const CGFloat headerHeight = self.showsHeader ? kChromeRowHeight : 0;
   const CGFloat leading = _segment.contentLeading;
-  const CGFloat padding = 10;
+  const CGFloat padding = _segment.padding;
   const CGRect card = CGRectMake(leading, headerHeight, self.bounds.size.width - leading, self.bounds.size.height - headerHeight);
   const CGFloat bodyWidth = [_segment bodyWidthForWidth:card.size.width wrapped:_wrapped];
   const CGFloat bodyHeight = [_segment bodyHeightForWidth:card.size.width wrapped:_wrapped];
@@ -659,21 +692,38 @@ namespace {
   }
   const CGFloat leading = _segment.contentLeading;
   const CGFloat headerHeight = self.showsHeader ? kChromeRowHeight : 0;
+  // A rule under the header row, when the theme asked for one. Its color
+  // defaults to clear, so a theme that says nothing draws nothing.
+  UIColor *headerBorder = _segment.headerBorderColor;
+  if (headerBorder != nil && self.showsHeader) {
+    [headerBorder setFill];
+    UIRectFill(CGRectMake(0, headerHeight - 1, self.bounds.size.width, 1));
+  }
   const CGRect card = CGRectMake(leading, headerHeight, self.bounds.size.width - leading,
                                  self.bounds.size.height - headerHeight);
-  [UIColor.tertiarySystemFillColor setFill];
-  [[UIBezierPath bezierPathWithRoundedRect:card cornerRadius:6] fill];
+  // The card's fill, radius and border are all the theme's, and the border is
+  // drawn rather than filled because it sits inside the card's bounds, which is
+  // what keeps a themed card the height the measurement gave it.
+  UIColor *fill = [_segment.theme colorForSlot:kSlotCodeBlockBackgroundColor fallback:UIColor.tertiarySystemFillColor];
+  UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:card cornerRadius:_segment.borderRadius];
+  [fill setFill];
+  [path fill];
+  if (_segment.borderWidth > 0) {
+    [[_segment.theme colorForSlot:kSlotCodeBlockBorderColor fallback:nil] setStroke];
+    path.lineWidth = _segment.borderWidth;
+    [path stroke];
+  }
 
   for (DSContainerInfo *container in _segment.containers) {
-    if (container.barColor != nil) {
+    if (container.barColor != nil && container.barWidth > 0) {
       [container.barColor setFill];
       const CGFloat x = container.leading + 2;
-      UIRectFill(CGRectMake(x, headerHeight, 3, self.bounds.size.height - headerHeight));
+      UIRectFill(CGRectMake(x, headerHeight, container.barWidth, self.bounds.size.height - headerHeight));
     }
     if (container.marker != nil) {
       UIFont *font = [container.marker attribute:NSFontAttributeName atIndex:0 effectiveRange:NULL];
-      const CGFloat baseline = headerHeight + 10 + font.ascender;
-      const CGFloat x = container.leading + container.width - 6 - container.marker.size.width;
+      const CGFloat baseline = headerHeight + _segment.padding + font.ascender;
+      const CGFloat x = container.leading + container.width - container.markerGap - container.marker.size.width;
       [container.marker drawAtPoint:CGPointMake(x, baseline - font.ascender)];
     }
   }
@@ -785,14 +835,20 @@ namespace {
     return;
   }
   const CGSize size = _segment.tableSize;
-  const CGFloat hairline = 1.0 / self.traitCollection.displayScale;
   const NSStringDrawingOptions options = NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading;
+  // A theme's border width is in points, and a hairline is the default: one
+  // physical pixel, so a grid stays one line on every screen density.
+  const CGFloat hairline = _segment.borderWidth > 0 ? _segment.borderWidth
+                                                     : 1.0 / self.traitCollection.displayScale;
 
   if (_segment.hasHeader && _segment.rowHeights.count > 0) {
-    [UIColor.tertiarySystemFillColor setFill];
-    UIRectFill(CGRectMake(0, 0, size.width - 1, _segment.rowHeights[0].doubleValue));
+    [[_segment.theme colorForSlot:kSlotTableHeaderBackgroundColor fallback:UIColor.tertiarySystemFillColor] setFill];
+    UIRectFill(CGRectMake(0, 0, size.width - hairline, _segment.rowHeights[0].doubleValue));
   }
 
+  // The zebra fill is drawn under the cells, per row rather than per cell, so
+  // an empty trailing cell in a short row still gets the row's fill.
+  NSUInteger firstDataRow = _segment.hasHeader ? 1 : 0;
   [_segment.rows enumerateObjectsUsingBlock:^(NSArray<DSTableCell *> *row, NSUInteger rowIndex, BOOL *stop) {
     if (self->_rowOffsets[rowIndex] > CGRectGetMaxY(rect)) {
       *stop = YES;
@@ -800,6 +856,17 @@ namespace {
     }
     if (self->_rowOffsets[rowIndex + 1] < CGRectGetMinY(rect)) {
       return;
+    }
+    if (rowIndex >= firstDataRow) {
+      UIColor *stripe = [self->_segment.theme colorForSlot:(rowIndex - firstDataRow) % 2 == 0
+                                                          ? kSlotTableRowEvenBackgroundColor
+                                                          : kSlotTableRowOddBackgroundColor
+                                                   fallback:nil];
+      if (stripe != nil) {
+        [stripe setFill];
+        UIRectFill(CGRectMake(0, self->_rowOffsets[rowIndex], size.width,
+                              self->_rowOffsets[rowIndex + 1] - self->_rowOffsets[rowIndex]));
+      }
     }
     [row enumerateObjectsUsingBlock:^(DSTableCell *cell, NSUInteger column, BOOL *innerStop) {
       const CGRect content = [self contentRectForRow:rowIndex column:column];
@@ -809,18 +876,18 @@ namespace {
     }];
   }];
 
-  [UIColor.separatorColor setFill];
+  [[_segment.theme colorForSlot:kSlotTableBorderColor fallback:UIColor.separatorColor] setFill];
   CGFloat y = 0;
-  UIRectFill(CGRectMake(0, 0, size.width - 1, hairline));
+  UIRectFill(CGRectMake(0, 0, size.width - hairline, hairline));
   for (NSNumber *height in _segment.rowHeights) {
     y += height.doubleValue;
-    UIRectFill(CGRectMake(0, y, size.width - 1, hairline));
+    UIRectFill(CGRectMake(0, y - hairline, size.width - hairline, hairline));
   }
   CGFloat x = 0;
-  UIRectFill(CGRectMake(_segment.rightToLeft ? size.width - 1 : 0, 0, hairline, y));
+  UIRectFill(CGRectMake(_segment.rightToLeft ? size.width - hairline : 0, 0, hairline, y));
   for (NSNumber *width in _segment.columnWidths) {
     x += width.doubleValue;
-    UIRectFill(CGRectMake(_segment.rightToLeft ? size.width - 1 - x : x, 0, hairline, y));
+    UIRectFill(CGRectMake(_segment.rightToLeft ? size.width - hairline - x : x, 0, hairline, y));
   }
 }
 
@@ -1106,6 +1173,11 @@ namespace {
   _needsScrollRestore = YES;
   _segment = segment;
   _grid.segment = segment;
+  // The toolbar's buttons take the theme's own toolbar color when it set one.
+  UIColor *toolbar = segment.toolbarButtonColor ?: UIColor.secondaryLabelColor;
+  for (UIView *button in _buttons.arrangedSubviews) {
+    [(UIControl *)button setTintColor:toolbar];
+  }
   [self updateButtons];
   [self setNeedsLayout];
   [self setNeedsDisplay];
@@ -1159,20 +1231,23 @@ namespace {
   }
   const CGFloat toolbarHeight = self.showsToolbar ? kChromeRowHeight : 0;
   for (DSContainerInfo *container in _segment.containers) {
-    if (container.barColor != nil) {
+    if (container.barColor != nil && container.barWidth > 0) {
       [container.barColor setFill];
+      // The bar sits two points inside the container, and its width is the
+      // theme's, so a theme that sets a wider bar draws a wider bar here and in
+      // a plain text block alike.
       const CGFloat x = _segment.rightToLeft
-          ? self.bounds.size.width - container.leading - 2 - kBarWidth
+          ? self.bounds.size.width - container.leading - 2 - container.barWidth
           : container.leading + 2;
-      UIRectFill(CGRectMake(x, toolbarHeight, kBarWidth, self.bounds.size.height - toolbarHeight));
+      UIRectFill(CGRectMake(x, toolbarHeight, container.barWidth, self.bounds.size.height - toolbarHeight));
     }
     if (container.marker != nil) {
       UIFont *font = [container.marker attribute:NSFontAttributeName atIndex:0 effectiveRange:NULL];
       const CGSize markerSize = container.marker.size;
       const CGFloat baseline = toolbarHeight + _segment.cellPadding.top + font.ascender;
       const CGFloat x = _segment.rightToLeft
-          ? self.bounds.size.width - container.leading - container.width + kMarkerGap
-          : container.leading + container.width - kMarkerGap - markerSize.width;
+          ? self.bounds.size.width - container.leading - container.width + container.markerGap
+          : container.leading + container.width - container.markerGap - markerSize.width;
       [container.marker drawAtPoint:CGPointMake(x, baseline - font.ascender)];
     }
   }
@@ -1226,6 +1301,8 @@ namespace {
   /// Both the card views and the frame stack read this one copy, so a block's
   /// drawn layout and its measured height are the same decision.
   std::vector<uint32_t> _wrapToggleOrdinals;
+  /// The theme's selection color, applied to every text view in the stack.
+  UIColor *_selectionColor;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -1342,6 +1419,15 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
     (void)text;
     (void)code;
     (void)table;
+    // A view created here has not seen the selection color yet, and a theme can
+    // arrive after the segments do.
+    if (_selectionColor != nil) {
+      if ([view isKindOfClass:DSTextSegmentView.class]) {
+        ((DSTextSegmentView *)view).selectionColor = _selectionColor;
+      } else if ([view isKindOfClass:DSCodeSegmentView.class]) {
+        ((DSCodeSegmentView *)view).selectionColor = _selectionColor;
+      }
+    }
     [self applyStateToSegmentView:view atIndex:index];
   }
   while (_segmentViews.count > segments.count) {
@@ -1352,6 +1438,20 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
     [_codeOrdinals removeLastObject];
   }
   [self setNeedsLayout];
+}
+
+/// TextKit draws its own selection, so a themed `colors.selection` has to reach
+/// the text views rather than the segments: there is no other place to set it.
+- (void)setSelectionColor:(UIColor *)selectionColor {
+  _selectionColor = selectionColor;
+  for (UIView<DSSegmentView> *view in _segmentViews) {
+    if ([view isKindOfClass:DSTextSegmentView.class]) {
+      ((DSTextSegmentView *)view).selectionColor = selectionColor;
+    } else if ([view isKindOfClass:DSCodeSegmentView.class]) {
+      ((DSCodeSegmentView *)view).selectionColor = selectionColor;
+    }
+  }
+  [self setNeedsDisplay];
 }
 
 - (void)setSelectable:(BOOL)selectable {

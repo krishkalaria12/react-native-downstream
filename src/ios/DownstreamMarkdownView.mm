@@ -3,6 +3,7 @@
 #import "DSFileExporter.h"
 #import "DSRenderedDocument.h"
 #import "DSSegmentViews.h"
+#import "DSThemeColors.h"
 #import <QuartzCore/CADisplayLink.h>
 
 #import <React/RCTConvert.h>
@@ -14,6 +15,7 @@
 #include "DownstreamMarkdownComponentDescriptor.h"
 #include "Export.h"
 #include "SegmentPlan.h"
+#include "theme/Theme.h"
 #include "SessionTrace.h"
 #include "WorkerPool.h"
 
@@ -98,6 +100,9 @@ NSString *nameForFormat(NSString *format) {
   DSFileExporter *_exporter;
   DownstreamMarkdownShadowNode::ConcreteState::Shared _state;
   downstream::DocumentHandle _document;
+  downstream::Theme::Handle _theme;
+  /// The theme's id, which is what says whether the theme actually changed.
+  uint64_t _themeId;
   CGFloat _fontScale;
   BOOL _syntaxHighlighting;
   BOOL _selectable;
@@ -122,6 +127,11 @@ NSString *nameForFormat(NSString *format) {
     static const auto defaultProps = std::make_shared<const DownstreamMarkdownViewProps>();
     _props = defaultProps;
 
+    // The default theme, so a view that mounts before its props arrive has
+    // something to build with rather than an unthemed rendering it would then
+    // throw away.
+    _theme = downstream::Theme::defaultTheme();
+    _themeId = _theme->id();
     _syntaxHighlighting = YES;
     _selectable = YES;
     _controls = defaultProps->controls;
@@ -155,8 +165,12 @@ NSString *nameForFormat(NSString *format) {
   for (const uint32_t ordinal : data.wrapToggles) {
     [toggles addObject:@(ordinal)];
   }
-  if (data.document == _document && data.fontSizeMultiplier == _fontScale && data.chrome == _chrome &&
-      [_documentView.codeWrapToggles isEqualToSet:toggles]) {
+  // Read before the early-out below: a theme can change on its own, with the
+  // document, the scale and the wrap choices all the same, and then nothing
+  // else here rebuilds anything.
+  const BOOL themeChanged = [self applyTheme];
+  if (!themeChanged && data.document == _document && data.fontSizeMultiplier == _fontScale &&
+      data.chrome == _chrome && [_documentView.codeWrapToggles isEqualToSet:toggles]) {
     return;
   }
   _document = data.document;
@@ -216,10 +230,29 @@ NSString *nameForFormat(NSString *format) {
   _documentView.chrome = _chrome;
   _documentView.rendered = _document ? [DSRenderedDocument renderedDocumentFor:_document
                                                                   fontScale:_fontScale
-                                                         syntaxHighlighting:_syntaxHighlighting]
+                                                         syntaxHighlighting:_syntaxHighlighting
+                                                                      theme:_theme]
                                      : nil;
 }
 
+/// Adopts the state's theme and reports whether it was a different one.
+///
+/// It comes from the state rather than from the props because the node interned
+/// the theme already: interning again would hash the same slots on the main
+/// thread to get a handle the node is holding, and comparing ids is then enough
+/// to know whether anything changed at all.
+- (BOOL)applyTheme {
+  const uint64_t id = _state ? _state->getData().themeId() : 0;
+  if (id == _themeId) {
+    return NO;
+  }
+  _themeId = id;
+  _theme = _state ? _state->getData().resolvedTheme() : downstream::Theme::defaultTheme();
+  _documentView.selectionColor = [DSThemeColors colorsFor:*_theme].selectionColor;
+  return YES;
+}
+
+/// Interns the theme the props carry, or falls back to the default one.
 - (void)updateProps:(const Props::Shared &)props oldProps:(const Props::Shared &)oldProps {
   const auto &newProps = *std::static_pointer_cast<const DownstreamMarkdownViewProps>(props);
   // Fabric passes no old props when it mounts a new or recycled view; the

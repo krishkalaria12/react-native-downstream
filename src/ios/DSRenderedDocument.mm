@@ -1,110 +1,47 @@
 #import "DSRenderedDocument.h"
 
+#import "DSFonts.h"
+#import "DSThemeColors.h"
+
 #include "Controls.h"
 #include "SegmentPlan.h"
 #include "TokenPalette.h"
+#include "theme/ThemeLayout.h"
 
 #include <algorithm>
 #include <cmath>
 
 using namespace downstream;
+using namespace downstream::theme;
+using namespace downstream::theme_layout;
 
 NSAttributedStringKey const DSBlockInfoAttributeName = @"DSBlockInfo";
 NSAttributedStringKey const DSLinkIndexAttributeName = @"DSLinkIndex";
 
 namespace {
 
-// Base metrics in points at font scale 1. Mirrored in RenderedDocument.kt.
-constexpr CGFloat kBodySize = 16;
-constexpr CGFloat kCodeSize = 14;
-constexpr CGFloat kHeadingSizes[] = {28, 24, 20, 18, 16, 15};
-constexpr CGFloat kGapNormal = 12;
-constexpr CGFloat kGapHeading = 20;
-constexpr CGFloat kGapTight = 4;
-constexpr CGFloat kQuoteIndent = 16;
-constexpr CGFloat kListIndent = 32;
-/// The row a code block's buttons sit in, and the row a table's sit in. Fixed
-/// in both directions so a block does not move when a button appears.
-constexpr CGFloat kChromeRowHeight = 32;
-/// Padding inside a code card, the same on every side.
-constexpr CGFloat kCodePadding = 10;
-constexpr CGFloat kMinColumnWidth = 56;
-constexpr CGFloat kMaxColumnWidth = 280;
-constexpr CGFloat kCellPaddingHorizontal = 12;
-constexpr CGFloat kCellPaddingVertical = 8;
+/// A block's font, with a bold or italic run layered on top of it.
+///
+/// Raising the weight rather than replacing the face is what keeps a `strong`
+/// inside a themed heading a heavier heading, instead of a heading that drops
+/// back to the body face. Two steps for a bold that lands on an already-bold
+/// weight, so bold in a bold heading still reads as emphasis.
+UIFont *runFont(const BlockFont &font, CGFloat size, bool monospaced) {
+  return DSMakeFont(font.family, size, font.weight, font.italic, monospaced);
+}
 
-/// One dynamic color per token class, so switching appearance needs no
-/// rebuild. Plain and Operator share the code text color, as they do in the
-/// engine's palette.
-UIColor *tokenColor(downstream::TokenClass token) {
-  static NSArray<UIColor *> *colors;
-  static dispatch_once_t once;
-  dispatch_once(&once, ^{
-    NSMutableArray<UIColor *> *built = [NSMutableArray arrayWithCapacity:downstream::kTokenColorsCount];
-    for (size_t index = 0; index < downstream::kTokenColorsCount; index++) {
-      const downstream::TokenColors &entry = downstream::kTokenColors[index];
-      const uint32_t light = entry.light;
-      const uint32_t dark = entry.dark;
-      [built addObject:[UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
-        const BOOL night = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
-        return [UIColor colorWithRed:((night ? dark : light) >> 16 & 0xff) / 255.0
-                               green:((night ? dark : light) >> 8 & 0xff) / 255.0
-                                blue:((night ? dark : light) & 0xff) / 255.0
-                               alpha:((night ? dark : light) >> 24 & 0xff) / 255.0];
-      }]];
-    }
-    colors = [built copy];
-  });
-  return colors[static_cast<size_t>(token)];
+/// The size an inline code span draws at, which follows a themed body size
+/// unless the theme set an absolute one. A fraction of the block's own size, so
+/// inline code keeps its proportions when the theme changes the body size.
+CGFloat inlineCodeSizeFor(const Theme &theme, CGFloat blockSize, CGFloat scale) {
+  if (inlineCodeIsAbsolute(theme)) {
+    return theme_layout::inlineCodeSize(theme) * scale;
+  }
+  return blockSize * inlineCodeScale(theme);
 }
 
 NSString *toNSString(const std::u16string &text) {
   return [NSString stringWithCharacters:reinterpret_cast<const unichar *>(text.data()) length:text.size()];
-}
-
-UIFont *makeFont(CGFloat size, bool bold, bool italic, bool monospaced, UIFontWeight baseWeight) {
-  UIFont *font = monospaced ? [UIFont monospacedSystemFontOfSize:size weight:bold ? UIFontWeightBold : baseWeight]
-                            : [UIFont systemFontOfSize:size weight:bold ? UIFontWeightBold : baseWeight];
-  if (italic) {
-    UIFontDescriptor *descriptor = [font.fontDescriptor
-        fontDescriptorWithSymbolicTraits:font.fontDescriptor.symbolicTraits | UIFontDescriptorTraitItalic];
-    if (descriptor != nil) {
-      font = [UIFont fontWithDescriptor:descriptor size:size];
-    }
-  }
-  return font;
-}
-
-/// GitHub alert colors; other quotes use a neutral bar.
-UIColor *admonitionColor(const std::u16string &type) {
-  if (type == u"note") {
-    return UIColor.systemBlueColor;
-  }
-  if (type == u"tip") {
-    return UIColor.systemGreenColor;
-  }
-  if (type == u"important") {
-    return UIColor.systemPurpleColor;
-  }
-  if (type == u"warning") {
-    return UIColor.systemOrangeColor;
-  }
-  if (type == u"caution") {
-    return UIColor.systemRedColor;
-  }
-  return UIColor.systemGray3Color;
-}
-
-CGFloat baseGap(const Block &block, CGFloat scale) {
-  switch (block.spacingBefore) {
-    case BlockSpacing::None:
-      return 0;
-    case BlockSpacing::Tight:
-      return kGapTight * scale;
-    case BlockSpacing::Normal:
-      return (block.kind == BlockKind::Heading ? kGapHeading : kGapNormal) * scale;
-  }
-  return 0;
 }
 
 /// Find the first strong letter. Digits and punctuation do not decide the
@@ -132,9 +69,17 @@ NSWritingDirection writingDirection(const std::u16string &text) {
 
 /// Applies a block's inline runs within [clampStart, clampEnd) to text that
 /// starts at `offset`.
-void applyRuns(NSMutableAttributedString *text, const Block &block, NSUInteger offset, CGFloat baseSize,
-               UIFontWeight baseWeight, bool monospaced, uint32_t clampStart, uint32_t clampEnd) {
+///
+/// Every color here is a slot read through the theme, with the platform's own
+/// color as the fallback. That is what makes an unset slot inherit increased
+/// contrast and appearance changes, which a frozen `UIColor` would not.
+void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockFont &font, const Theme &theme,
+               DSThemeColors *colors, NSUInteger offset, CGFloat size, bool monospaced, uint32_t clampStart,
+               uint32_t clampEnd) {
   const bool isCode = block.kind == BlockKind::CodeBlock;
+  UIColor *inlineCodeBackground = [colors colorForSlot:kSlotCodeBackgroundColor fallback:UIColor.tertiarySystemFillColor];
+  UIColor *footnoteColor = [colors colorForSlot:kSlotFootnoteColor fallback:UIColor.linkColor];
+  const CGFloat footnoteSize = size * footnoteSizeScale(theme);
   for (const InlineRun &run : block.runs) {
     const uint32_t start = std::max(run.start, clampStart);
     const uint32_t end = std::min(run.end, clampEnd);
@@ -144,32 +89,77 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, NSUInteger o
     const NSRange range = NSMakeRange(offset + start - clampStart, end - start);
     const bool code = (run.styles & InlineStyle::Code) != 0 && !isCode;
     const bool footnote = (run.styles & InlineStyle::FootnoteRef) != 0;
-    CGFloat size = baseSize;
-    if (code) {
-      size = baseSize * (kCodeSize / kBodySize);
-    } else if (footnote) {
-      size = baseSize * 0.75;
+    const bool bold = (run.styles & InlineStyle::Strong) != 0;
+    const bool italic = (run.styles & InlineStyle::Emphasis) != 0;
+
+    // The run's face starts as its block's and takes the inline kind's slots on
+    // top, so a `strong` in a themed heading is a heavier heading rather than a
+    // heading that drops back to the body face.
+    BlockFont runTypeface = font;
+    CGFloat runSize = size;
+    if (bold) {
+      runTypeface = strongFont(theme, runTypeface);
     }
-    NSMutableDictionary *attributes = [NSMutableDictionary new];
-    attributes[NSFontAttributeName] = makeFont(size, (run.styles & InlineStyle::Strong) != 0,
-                                               (run.styles & InlineStyle::Emphasis) != 0, code || monospaced,
-                                               baseWeight);
+    if (italic) {
+      runTypeface = emFont(theme, runTypeface);
+    }
     if (code) {
-      attributes[NSBackgroundColorAttributeName] = UIColor.tertiarySystemFillColor;
+      runTypeface = inlineCodeFont(theme, runTypeface);
+      runSize = inlineCodeSizeFor(theme, size, 1);
+    } else if (footnote) {
+      runSize = footnoteSize;
+    }
+    if (run.link >= 0) {
+      runTypeface = linkFont(theme, runTypeface);
+    }
+
+    NSMutableDictionary *attributes = [NSMutableDictionary new];
+    attributes[NSFontAttributeName] = runFont(runTypeface, runSize, code || monospaced);
+    if (code) {
+      attributes[NSBackgroundColorAttributeName] = inlineCodeBackground;
+      attributes[NSForegroundColorAttributeName] =
+          [colors colorForSlot:kSlotCodeColor fallback:nil] ?: attributes[NSForegroundColorAttributeName];
     }
     if (run.styles & InlineStyle::Strikethrough) {
       attributes[NSStrikethroughStyleAttributeName] = @(NSUnderlineStyleSingle);
+      // A theme can recolor a strike without touching the text around it.
+      UIColor *strike = [colors colorForSlot:kSlotStrikethroughColor fallback:nil];
+      if (strike != nil) {
+        attributes[NSStrikethroughColorAttributeName] = strike;
+      }
     }
     if (run.styles & InlineStyle::ImageAlt) {
-      attributes[NSForegroundColorAttributeName] = UIColor.secondaryLabelColor;
+      // Image alt text reads as secondary by design, so the theme's own alt
+      // color wins rather than the block's text color.
+      attributes[NSForegroundColorAttributeName] =
+          [colors colorForSlot:kSlotImageAltColor fallback:UIColor.secondaryLabelColor];
+    }
+    if (bold) {
+      UIColor *strongColor = [colors colorForSlot:kSlotStrongColor fallback:nil];
+      if (strongColor != nil) {
+        attributes[NSForegroundColorAttributeName] = strongColor;
+      }
+    }
+    if (italic) {
+      UIColor *emColor = [colors colorForSlot:kSlotEmColor fallback:nil];
+      if (emColor != nil) {
+        attributes[NSForegroundColorAttributeName] = emColor;
+      }
     }
     if (footnote) {
-      attributes[NSBaselineOffsetAttributeName] = @(baseSize * 0.35);
-      attributes[NSForegroundColorAttributeName] = UIColor.linkColor;
+      attributes[NSBaselineOffsetAttributeName] = @(size * footnoteRaise(theme));
+      attributes[NSForegroundColorAttributeName] = footnoteColor;
     }
     if (run.link >= 0) {
-      attributes[NSForegroundColorAttributeName] = UIColor.linkColor;
-      attributes[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
+      attributes[NSForegroundColorAttributeName] =
+          [colors colorForSlot:kSlotLinkColor fallback:UIColor.linkColor];
+      // A theme can turn the underline off, which is what a link that reads as a
+      // link by color alone wants.
+      if (linkUnderlined(theme)) {
+        attributes[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
+        attributes[NSUnderlineColorAttributeName] =
+            [colors colorForSlot:kSlotLinkColor fallback:UIColor.linkColor];
+      }
       attributes[DSLinkIndexAttributeName] = @(run.link);
     }
     [text addAttributes:attributes range:range];
@@ -179,16 +169,22 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, NSUInteger o
 /// Applies a code block's token colors. Tokens are offsets into the block's own
 /// text and only change color, never a character, so selection, copy, and the
 /// accessibility text are untouched.
-void applyTokens(NSMutableAttributedString *text, const Block &block, NSUInteger offset, uint32_t clampStart,
-                 uint32_t clampEnd) {
+void applyTokens(NSMutableAttributedString *text, const Block &block, DSThemeColors *colors, NSUInteger offset,
+                 uint32_t clampStart, uint32_t clampEnd) {
   for (const TokenRun &run : block.tokens) {
     const uint32_t start = std::max(run.start, clampStart);
     const uint32_t end = std::min(run.end, clampEnd);
     if (start >= end) {
       continue;
     }
+    const UIColor *token = [colors tokenColor:run.token fallback:nil];
+    if (token == nil) {
+      // A token the theme left unset keeps the code block's own color, which is
+      // what a plain run keeps today. Plain and Operator land here.
+      continue;
+    }
     [text addAttribute:NSForegroundColorAttributeName
-                 value:tokenColor(run.token)
+                 value:token
                  range:NSMakeRange(offset + start - clampStart, end - start)];
   }
 }
@@ -202,6 +198,8 @@ void applyTokens(NSMutableAttributedString *text, const Block &block, NSUInteger
 @property (nonatomic, nullable) NSAttributedString *marker;
 @property (nonatomic) BOOL continuesPrevious;
 @property (nonatomic, nullable) UIColor *barColor;
+@property (nonatomic) CGFloat barWidth;
+@property (nonatomic) CGFloat markerGap;
 @end
 
 @implementation DSContainerInfo
@@ -215,10 +213,19 @@ void applyTokens(NSMutableAttributedString *text, const Block &block, NSUInteger
 @property (nonatomic) CGFloat contentLeading;
 @property (nonatomic) BOOL rightToLeft;
 @property (nonatomic) NSArray<DSContainerInfo *> *containers;
+@property (nonatomic, nullable) DSDecorationMetrics *rule;
 @property (nonatomic, nullable) NSString *accessibilityPrefix;
 @end
 
 @implementation DSBlockInfo
+@end
+
+@interface DSDecorationMetrics ()
+@property (nonatomic) UIColor *color;
+@property (nonatomic) CGFloat height;
+@end
+
+@implementation DSDecorationMetrics
 @end
 
 @implementation DSTextKitStack
@@ -242,8 +249,34 @@ void applyTokens(NSMutableAttributedString *text, const Block &block, NSUInteger
 
 #pragma mark - Containers
 
+/// An admonition's bar, from the slot its type names.
+///
+/// Each kind has its own slot, so a theme can make every alert read as one
+/// family, or give each one its own color, which is why this is a slot lookup
+/// rather than a fixed palette in the renderer. A slot the theme left unset
+/// already resolves to its default role color, so a theme that sets no alert
+/// colors gets the platform's five, which is what the renderer used before.
+UIColor *admonitionColor(DSThemeColors *colors, const std::u16string &type) {
+  const uint32_t slot = type == u"note"        ? kSlotAdmonitionNote
+                        : type == u"tip"       ? kSlotAdmonitionTip
+                        : type == u"important" ? kSlotAdmonitionImportant
+                        : type == u"warning"  ? kSlotAdmonitionWarning
+                        : type == u"caution"  ? kSlotAdmonitionCaution
+                                               : 0;
+  if (slot == 0) {
+    // Not one of the five kinds GitHub defines, so it gets the neutral bar an
+    // ordinary quote gets.
+    return nil;
+  }
+  return [colors colorForSlot:slot fallback:nil];
+}
+
 /// Builds container decorations for a block and returns its content leading.
-static CGFloat buildContainers(const Block &block, const Block *previous, CGFloat scale, UIFont *markerFont,
+///
+/// `previous` is the block before this one in the same segment, or null, which
+/// is what decides whether a bar joins across the gap instead of restarting.
+static CGFloat buildContainers(const Block &block, const Block *previous, const Theme &theme, DSThemeColors *colors,
+                               CGFloat scale, UIFont *markerFont, UIColor *markerColor,
                                NSMutableArray<DSContainerInfo *> *containers, NSMutableArray<NSString *> *spoken,
                                bool *inQuote) {
   CGFloat leading = 0;
@@ -254,28 +287,45 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
     info.leading = leading;
     info.continuesPrevious =
         previous != nullptr && previous->containers.size() > depth && previous->containers[depth].id == container.id;
+    info.barWidth = quoteBarWidth(theme) * scale;
+    info.markerGap = markerGap(theme) * scale;
     if (container.kind == ContainerKind::Quote || container.kind == ContainerKind::Admonition) {
       *inQuote = true;
-      info.width = kQuoteIndent * scale;
-      info.barColor =
-          container.kind == ContainerKind::Admonition ? admonitionColor(container.marker) : UIColor.systemGray3Color;
+      info.width = containerIndent(theme, container.kind) * scale;
+      // An alert's own bar when its slot is set, and a quote's neutral bar
+      // otherwise. A zero border width is honored by the draw sites, which is
+      // how a theme removes bars without hiding the indent.
+      info.barColor = container.kind == ContainerKind::Admonition
+          ? (admonitionColor(colors, container.marker)
+             ?: [colors colorForSlot:kSlotBlockquoteBorderColor fallback:UIColor.systemGray3Color])
+          : [colors colorForSlot:kSlotBlockquoteBorderColor fallback:UIColor.systemGray3Color];
     } else {
-      info.width = kListIndent * scale;
+      info.width = containerIndent(theme, container.kind) * scale;
       if (container.showsMarker) {
         NSString *marker = toNSString(container.marker);
+        UIColor *color = markerColor;
         if (container.task == TaskState::Unchecked) {
           marker = @"\u2610";
+          color = [colors colorForSlot:kSlotTaskListBorderColor fallback:markerColor];
           [spoken addObject:@"unchecked"];
         } else if (container.task == TaskState::Checked) {
           marker = @"\u2611";
+          color = [colors colorForSlot:kSlotTaskListCheckedColor fallback:markerColor];
           [spoken addObject:@"checked"];
         } else if (container.kind == ContainerKind::Footnote || marker.length > 1) {
           [spoken addObject:marker];
+        } else if (container.kind == ContainerKind::ListItem) {
+          // An ordered item's number and a bullet share the list marker color
+          // unless the theme separates them.
+          // An ordered item's number takes the bullet's color slot, so a theme
+          // can separate a bullet from a number, or leave them the one color a
+          // list's marker slot already names.
+          color = marker.length > 0 ? [colors colorForSlot:kSlotListBulletColor fallback:markerColor] : markerColor;
         }
         info.marker = [[NSAttributedString alloc] initWithString:marker
                                                       attributes:@{
                                                         NSFontAttributeName : markerFont,
-                                                        NSForegroundColorAttributeName : UIColor.secondaryLabelColor,
+                                                        NSForegroundColorAttributeName : color,
                                                       }];
       }
     }
@@ -293,6 +343,7 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
 @property (nonatomic) CGFloat bottomInset;
 @property (nonatomic) NSArray<DSBlockInfo *> *blocks;
 @property (nonatomic) NSArray<NSValue *> *blockRanges;
+@property (nonatomic) DSThemeColors *theme;
 @end
 
 @implementation DSTextSegment {
@@ -312,12 +363,15 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
 + (instancetype)segmentWithDocument:(const Document &)document
                                from:(size_t)from
                                  to:(size_t)to
+                             theme:(const Theme &)theme
                               scale:(CGFloat)scale
                          markerFont:(UIFont *)markerFont
                   syntaxHighlighting:(BOOL)syntaxHighlighting
                              inCard:(BOOL)inCard {
   DSTextSegment *segment = [DSTextSegment new];
   segment->_measurementLock = [NSLock new];
+  segment.theme = [DSThemeColors colorsFor:theme];
+  DSThemeColors *colors = segment.theme;
   NSMutableAttributedString *text = [NSMutableAttributedString new];
   NSMutableArray<DSBlockInfo *> *blocks = [NSMutableArray arrayWithCapacity:to - from];
   NSMutableArray<NSValue *> *blockRanges = [NSMutableArray arrayWithCapacity:to - from];
@@ -338,10 +392,16 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
     info.rightToLeft = direction == NSWritingDirectionRightToLeft;
     info.decoration = block.kind == BlockKind::ThematicBreak ? DSBlockDecorationRule : DSBlockDecorationNone;
 
+    // The block's typography comes from the theme's slots for its element, so
+    // a themed heading, paragraph and code block each draw with their own size,
+    // weight, family and color rather than one table of constants.
+    const BlockFont font = blockFont(theme, block);
+    UIColor *markerColor = [colors colorForSlot:kSlotListMarkerColor fallback:UIColor.secondaryLabelColor];
     NSMutableArray<DSContainerInfo *> *containers = [NSMutableArray new];
     NSMutableArray<NSString *> *spoken = [NSMutableArray new];
     bool inQuote = false;
-    const CGFloat leading = buildContainers(block, previous, scale, markerFont, containers, spoken, &inQuote);
+    const CGFloat leading =
+        buildContainers(block, previous, theme, colors, scale, markerFont, markerColor, containers, spoken, &inQuote);
     info.containers = containers;
     info.contentLeading = leading;
     info.accessibilityPrefix = spoken.count > 0 ? [spoken componentsJoinedByString:@", "] : nil;
@@ -353,36 +413,35 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
     // follows one starts from the plain gap the document stack adds.
     CGFloat gap = 0;
     if (previous != nullptr && !inCard) {
-      gap = baseGap(block, scale);
+      gap = blockGap(theme, block.spacingBefore, previous, block) * scale;
     }
     info.spacingBefore = gap;
 
-    UIColor *baseColor = inQuote ? UIColor.secondaryLabelColor : UIColor.labelColor;
-    CGFloat baseSize = kBodySize * scale;
-    UIFontWeight baseWeight = UIFontWeightRegular;
-    bool monospaced = false;
-    switch (block.kind) {
-      case BlockKind::Heading: {
-        const size_t level = std::clamp<size_t>(block.headingLevel, 1, 6);
-        baseSize = kHeadingSizes[level - 1] * scale;
-        baseWeight = level <= 2 ? UIFontWeightBold : UIFontWeightSemibold;
-        if (level == 6) {
-          baseColor = UIColor.secondaryLabelColor;
-        }
-        break;
-      }
-      case BlockKind::CodeBlock:
-      case BlockKind::HtmlBlock:
-        baseSize = kCodeSize * scale;
-        monospaced = true;
-        break;
-      default:
-        break;
+    // A block inside a quote is drawn in the quote's own color unless the
+    // theme set one for its element, which is how a themed quote can restyle
+    // the text inside it.
+    // A block inside a quote is drawn in the quote's own color, unless the theme
+    // set a color for the block's own element. Asking the theme rather than the
+    // slot id is what makes that the case: a slot whose value happens to equal
+    // its default is still a slot the theme named.
+    UIColor *baseColor = [colors colorForSlot:font.colorSlot fallback:UIColor.labelColor];
+    if (inQuote && !theme.color(font.colorSlot).set) {
+      baseColor = [colors colorForSlot:kSlotBlockquoteColor fallback:UIColor.secondaryLabelColor];
     }
+    const CGFloat baseSize = font.size * scale;
+    const bool monospaced = elementFor(block) == BlockElement::Code;
     if (isAdmonitionTitle(document, index)) {
-      baseColor = admonitionColor(block.containers.back().marker);
+      baseColor = admonitionColor(colors, block.containers.back().marker) ?: baseColor;
     }
-    UIFont *baseFont = makeFont(baseSize, false, false, monospaced, baseWeight);
+    UIFont *baseFont = runFont(font, baseSize, monospaced);
+    if (block.kind == BlockKind::ThematicBreak) {
+      // A rule's color and thickness are the theme's, and the layout manager
+      // reads them off the block rather than from a literal of its own.
+      DSDecorationMetrics *rule = [DSDecorationMetrics new];
+      rule.color = [colors colorForSlot:kSlotThematicBreakColor fallback:UIColor.separatorColor];
+      rule.height = theme.number(kSlotThematicBreakHeight) * scale;
+      info.rule = rule;
+    }
 
     NSMutableParagraphStyle *style = [NSMutableParagraphStyle new];
     style.lineBreakMode = NSLineBreakByWordWrapping;
@@ -390,6 +449,13 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
     style.firstLineHeadIndent = info.rightToLeft ? 0 : leading;
     style.headIndent = style.firstLineHeadIndent;
     style.tailIndent = -(info.rightToLeft ? leading : 0);
+    // A themed line height is set as a minimum rather than an exact height, so
+    // a line that the platform needs more room for still gets it and no glyph
+    // is clipped. A line height below the face's own is ignored by the platform
+    // anyway, so the default of zero and a small value behave alike.
+    const CGFloat lineHeight = font.lineHeight * scale;
+    style.minimumLineHeight = lineHeight;
+    style.maximumLineHeight = lineHeight > 0 ? lineHeight : 0;
     NSMutableParagraphStyle *firstStyle = [style mutableCopy];
     firstStyle.paragraphSpacingBefore = gap;
 
@@ -410,9 +476,10 @@ static CGFloat buildContainers(const Block &block, const Block *previous, CGFloa
                  value:firstStyle
                  range:NSIntersectionRange(firstParagraph, blockRange)];
 
-    applyRuns(text, block, start, baseSize, baseWeight, monospaced, 0, static_cast<uint32_t>(block.text.size()));
+    applyRuns(text, block, font, theme, colors, start, baseSize, monospaced, 0,
+              static_cast<uint32_t>(block.text.size()));
     if (isCode && syntaxHighlighting) {
-      applyTokens(text, block, start, 0, static_cast<uint32_t>(block.text.size()));
+      applyTokens(text, block, colors, start, 0, static_cast<uint32_t>(block.text.size()));
     }
     [blocks addObject:info];
     [blockRanges addObject:[NSValue valueWithRange:NSMakeRange(start, blockText.length)]];
@@ -515,12 +582,20 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 @property (nonatomic) NSArray<DSContainerInfo *> *containers;
 @property (nonatomic) CGFloat contentLeading;
 @property (nonatomic) NSString *firstLine;
+@property (nonatomic) DSThemeColors *theme;
+@property (nonatomic) CGFloat padding;
+@property (nonatomic) CGFloat borderRadius;
+@property (nonatomic) CGFloat borderWidth;
+@property (nonatomic) UIFont *headerFont;
+@property (nonatomic, nullable) UIColor *headerButtonColor;
+@property (nonatomic, nullable) UIColor *headerBorderColor;
 @end
 
 @implementation DSCodeSegment
 
 + (instancetype)segmentWithDocument:(const Document &)document
                                index:(size_t)index
+                             theme:(const Theme &)theme
                               scale:(CGFloat)scale
                          markerFont:(UIFont *)markerFont
                   syntaxHighlighting:(BOOL)syntaxHighlighting {
@@ -529,16 +604,38 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   segment.text = [DSTextSegment segmentWithDocument:document
                                               from:index
                                                 to:index + 1
-                                             scale:scale
+                                             theme:theme
+                                              scale:scale
                                         markerFont:markerFont
                                  syntaxHighlighting:syntaxHighlighting
                                             inCard:YES];
   segment.language = [NSString stringWithUTF8String:block.language.c_str()];
+  // The header row's own typography and its two remaining colors, all from the
+  // theme rather than from literals in the card view.
+  const BlockFont headerFont = codeHeaderFont(theme);
+  segment.headerFont = DSMakeFont(headerFont.family, headerFont.size * scale, headerFont.weight, headerFont.italic,
+                                  true);
+  // A theme that names the button color gets it; one that names only the row's
+  // text color gets buttons that match, because a header and its controls read
+  // as one row. Both default to the same secondary label.
+  DSThemeColors *colors = segment.theme;
+  segment.headerButtonColor =
+      theme.slotSet(kSlotCodeBlockHeaderButtonColor)
+          ? [colors colorForSlot:kSlotCodeBlockHeaderButtonColor]
+          : [colors colorForSlot:kSlotCodeBlockHeaderColor];
+  segment.headerBorderColor = [colors colorForSlot:kSlotCodeBlockHeaderBorderColor];
   segment.blockIndex = static_cast<NSInteger>(index);
+  segment.theme = segment.text.theme;
+  segment.padding = codeCardPadding(theme) * scale;
+  segment.borderRadius = codeCardRadius(theme) * scale;
+  segment.borderWidth = codeCardBorderWidth(theme) * scale;
   NSMutableArray<DSContainerInfo *> *containers = [NSMutableArray new];
   NSMutableArray<NSString *> *spoken = [NSMutableArray new];
   bool inQuote = false;
-  segment.contentLeading = buildContainers(block, nullptr, scale, markerFont, containers, spoken, &inQuote);
+  segment.contentLeading = buildContainers(block, nullptr, theme, segment.theme, scale, markerFont,
+                                           [segment.theme colorForSlot:kSlotListMarkerColor
+                                                           fallback:UIColor.secondaryLabelColor],
+                                           containers, spoken, &inQuote);
   segment.containers = containers;
   const size_t newline = block.text.find(u'\n');
   segment.firstLine = toNSString(block.text.substr(0, newline == std::u16string::npos ? block.text.size() : newline));
@@ -546,7 +643,7 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 }
 
 - (CGFloat)headerHeight {
-  return kChromeRowHeight;
+  return theme_layout::kChromeRowHeight;
 }
 
 /// The width the body is laid out at: the card's inner width when it wraps, and
@@ -557,7 +654,9 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   if (!wrapped) {
     return CGFLOAT_MAX;
   }
-  const CGFloat inset = self.contentLeading + 2 * kCodePadding;
+  // The card's own padding is part of the inset, so a theme that pads a card
+  // wider makes the body narrower by exactly that much rather than overflowing.
+  const CGFloat inset = self.contentLeading + 2 * self.padding;
   return std::max<CGFloat>(0, width - inset);
 }
 
@@ -594,6 +693,11 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 @property (nonatomic) UIEdgeInsets cellPadding;
 @property (nonatomic) NSInteger blockIndex;
 @property (nonatomic) uint32_t blockCount;
+@property (nonatomic) DSThemeColors *theme;
+@property (nonatomic) CGFloat borderWidth;
+@property (nonatomic) CGFloat borderRadius;
+@property (nonatomic, nullable) UIColor *rowBackgroundColor;
+@property (nonatomic, nullable) UIColor *toolbarButtonColor;
 @end
 
 @implementation DSTableSegment
@@ -601,14 +705,21 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 + (instancetype)segmentWithDocument:(const Document &)document
                                from:(size_t)from
                                  to:(size_t)to
+                             theme:(const Theme &)theme
                               scale:(CGFloat)scale
                          markerFont:(UIFont *)markerFont {
   DSTableSegment *segment = [DSTableSegment new];
+  segment.theme = [DSThemeColors colorsFor:theme];
+  segment.borderWidth = tableBorderWidth(theme) * scale;
+  segment.borderRadius = tableBorderRadius(theme) * scale;
   const Block &first = document.blocks[from];
   NSMutableArray<DSContainerInfo *> *containers = [NSMutableArray new];
   NSMutableArray<NSString *> *spoken = [NSMutableArray new];
   bool inQuote = false;
-  segment.contentLeading = buildContainers(first, nullptr, scale, markerFont, containers, spoken, &inQuote);
+  segment.contentLeading = buildContainers(first, nullptr, theme, segment.theme, scale, markerFont,
+                                           [segment.theme colorForSlot:kSlotListMarkerColor
+                                                           fallback:UIColor.secondaryLabelColor],
+                                           containers, spoken, &inQuote);
   NSWritingDirection direction = NSWritingDirectionNatural;
   for (size_t index = from; index < to && direction == NSWritingDirectionNatural; index++) {
     direction = writingDirection(document.blocks[index].text);
@@ -620,17 +731,31 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   segment.blockCount = static_cast<uint32_t>(to - from);
   segment.containers = containers;
   segment.hasHeader = first.tableHeader;
-  segment.cellPadding = UIEdgeInsetsMake(kCellPaddingVertical * scale, kCellPaddingHorizontal * scale,
-                                         kCellPaddingVertical * scale, kCellPaddingHorizontal * scale);
+  segment.cellPadding = UIEdgeInsetsMake(tableCellPaddingVertical(theme) * scale,
+                                         tableCellPaddingHorizontal(theme) * scale,
+                                         tableCellPaddingVertical(theme) * scale,
+                                         tableCellPaddingHorizontal(theme) * scale);
+  // A theme that sets no zebra striping has no row fills at all, which is a
+  // different thing from setting them transparent, and the grid view checks
+  // for nil rather than comparing to clear.
+  segment.rowBackgroundColor = [segment.theme colorForSlot:kSlotTableRowEvenBackgroundColor fallback:nil];
+  segment.toolbarButtonColor = [segment.theme colorForSlot:kSlotTableToolbarButtonColor];
 
-  const CGFloat size = kBodySize * scale;
-  UIFont *font = makeFont(size, false, false, false, UIFontWeightRegular);
-  UIColor *color = inQuote ? UIColor.secondaryLabelColor : UIColor.labelColor;
+  // A table's own typography, from the table slots, and its header row from the
+  // header slots, so a themed table can restyle its body and its head apart.
+  const BlockFont font = blockFont(theme, first);
+  const CGFloat size = font.size * scale;
+  const BlockFont headerFont = tableHeaderFont(theme);
+  UIFont *bodyFace = runFont(font, size, false);
+  UIFont *headerFace = runFont(headerFont, headerFont.size * scale, false);
+  UIColor *color = [segment.theme colorForSlot:font.colorSlot fallback:UIColor.labelColor];
+  UIColor *headerColor = [segment.theme colorForSlot:kSlotTableHeaderTextColor fallback:color];
   NSMutableArray *rows = [NSMutableArray arrayWithCapacity:to - from];
   size_t columns = 0;
 
   for (size_t index = from; index < to; index++) {
     const Block &block = document.blocks[index];
+    const bool headerRow = segment.hasHeader && index == from;
     NSMutableArray<DSTableCell *> *row = [NSMutableArray arrayWithCapacity:block.cells.size()];
     for (const TableCell &cell : block.cells) {
       NSMutableParagraphStyle *style = [NSMutableParagraphStyle new];
@@ -650,11 +775,12 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
       NSMutableAttributedString *text = [[NSMutableAttributedString alloc]
           initWithString:toNSString(block.text.substr(cell.start, cell.end - cell.start))
               attributes:@{
-                NSFontAttributeName : font,
-                NSForegroundColorAttributeName : color,
+                NSFontAttributeName : headerRow ? headerFace : bodyFace,
+                NSForegroundColorAttributeName : headerRow ? headerColor : color,
                 NSParagraphStyleAttributeName : style,
               }];
-      applyRuns(text, block, 0, size, UIFontWeightRegular, false, cell.start, cell.end);
+      applyRuns(text, block, headerRow ? headerFont : font, theme, segment.theme, 0, size, false, cell.start,
+                cell.end);
       DSTableCell *tableCell = [DSTableCell new];
       tableCell.text = text;
       [row addObject:tableCell];
@@ -668,8 +794,8 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   // produces the same table and wide tables scroll.
   const UIEdgeInsets padding = segment.cellPadding;
   const NSStringDrawingOptions options = NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading;
-  const CGFloat maxWidth = kMaxColumnWidth * scale;
-  std::vector<CGFloat> widths(columns, kMinColumnWidth * scale);
+  const CGFloat maxWidth = tableMaxColumnWidth(theme) * scale;
+  std::vector<CGFloat> widths(columns, tableMinColumnWidth(theme) * scale);
   for (NSArray<DSTableCell *> *row in rows) {
     for (NSUInteger column = 0; column < row.count; column++) {
       const CGRect bounds = [row[column].text boundingRectWithSize:CGSizeMake(maxWidth, CGFLOAT_MAX)
@@ -702,8 +828,10 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   }
   segment.columnWidths = columnWidths;
   segment.rowHeights = rowHeights;
-  // One extra point for the closing grid line.
-  segment.tableSize = CGSizeMake(std::ceil(tableWidth) + 1, std::ceil(tableHeight) + 1);
+  // One border width for the closing grid line, so the last row and column are
+  // not clipped by the view that draws the outer edge.
+  segment.tableSize = CGSizeMake(std::ceil(tableWidth) + segment.borderWidth,
+                                 std::ceil(tableHeight) + segment.borderWidth);
   return segment;
 }
 
@@ -723,6 +851,10 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 @end
 
 @implementation DSCommittedSegment
+@end
+
+@interface DSRenderedDocument ()
+@property (nonatomic) DSThemeColors *theme;
 @end
 
 @implementation DSRenderedDocument {
@@ -767,12 +899,15 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 + (id)committedSegmentFor:(const Document &)document
                      from:(size_t)from
                        to:(size_t)to
+                    theme:(const Theme &)theme
                     scale:(CGFloat)scale
                markerFont:(UIFont *)markerFont
         syntaxHighlighting:(BOOL)syntaxHighlighting {
   const BlockKind kind = document.blocks[from].kind;
-  NSString *key = [NSString stringWithFormat:@"%llu:%zu:%.4f:%d", (unsigned long long)document.blocks[from].identity,
-                                             to - from, scale, syntaxHighlighting];
+  // The theme is in the key because a segment holds resolved colors and
+  // measured sizes, and a second theme must not read the first one's.
+  NSString *key = [NSString stringWithFormat:@"%llu:%zu:%llu:%.4f:%d", (unsigned long long)document.blocks[from].identity,
+                                             to - from, (unsigned long long)theme.id(), scale, syntaxHighlighting];
   DSCommittedSegment *cached = [self.committedSegmentCache objectForKey:key];
   bool matches = cached != nil && cached->identities.size() == to - from;
   for (size_t index = from; matches && index < to; index++) {
@@ -792,12 +927,14 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
       cached->segment = (id)[DSTableSegment segmentWithDocument:document
                                                             from:from
                                                               to:to
+                                                           theme:theme
                                                            scale:scale
                                                       markerFont:markerFont];
       break;
     case BlockKind::CodeBlock:
       cached->segment = (id)[DSCodeSegment segmentWithDocument:document
                                                          index:from
+                                                        theme:theme
                                                         scale:scale
                                                    markerFont:markerFont
                                         syntaxHighlighting:syntaxHighlighting];
@@ -806,7 +943,8 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
       cached->segment = (id)[DSTextSegment segmentWithDocument:document
                                                            from:from
                                                              to:to
-                                                          scale:scale
+                                                          theme:theme
+                                                           scale:scale
                                                      markerFont:markerFont
                                           syntaxHighlighting:syntaxHighlighting
                                                          inCard:NO];
@@ -818,17 +956,27 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 
 + (instancetype)renderedDocumentFor:(const DocumentHandle &)document
                           fontScale:(CGFloat)fontScale
-                 syntaxHighlighting:(BOOL)syntaxHighlighting {
+                 syntaxHighlighting:(BOOL)syntaxHighlighting
+                              theme:(const Theme::Handle &)themeHandle {
   if (!document) {
-    return [[self alloc] initWithDocument:document fontScale:fontScale syntaxHighlighting:syntaxHighlighting];
+    return [[self alloc] initWithDocument:document
+                               fontScale:fontScale
+                      syntaxHighlighting:syntaxHighlighting
+                                   theme:themeHandle ? themeHandle : Theme::defaultTheme()];
   }
-  NSString *key = [NSString stringWithFormat:@"%llu:%.4f:%d", (unsigned long long)document->id, fontScale,
-                                             syntaxHighlighting];
+  // The theme id is in the key rather than the theme itself, because interned
+  // themes are stable for the life of a process and their id is all a cache key
+  // needs to tell two of them apart.
+  NSString *key = [NSString stringWithFormat:@"%llu:%.4f:%d:%llu", (unsigned long long)document->id, fontScale,
+                                             syntaxHighlighting,
+                                             (unsigned long long)(themeHandle ? themeHandle->id()
+                                                                            : Theme::defaultTheme()->id())];
   DSRenderedDocument *rendered = [self.cache objectForKey:key];
   if (rendered == nil) {
     rendered = [[self alloc] initWithDocument:document
-                                    fontScale:fontScale
-                           syntaxHighlighting:syntaxHighlighting];
+                                   fontScale:fontScale
+                          syntaxHighlighting:syntaxHighlighting
+                                    theme:themeHandle ? themeHandle : Theme::defaultTheme()];
     [self.cache setObject:rendered forKey:key];
   }
   return rendered;
@@ -841,16 +989,28 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 
 - (instancetype)initWithDocument:(const DocumentHandle &)documentHandle
                        fontScale:(CGFloat)rawScale
-              syntaxHighlighting:(BOOL)syntaxHighlighting {
+              syntaxHighlighting:(BOOL)syntaxHighlighting
+                            theme:(const Theme::Handle &)themeHandle {
   if (!(self = [super init])) {
     return nil;
   }
   _lock = [NSLock new];
   _cachedWidth = -1;
-  const CGFloat scale = rawScale > 0 ? rawScale : 1;
+  const Theme &theme = *themeHandle;
+  // A theme can cap the platform's font scale but not raise it, so the cap is
+  // applied here once and every measurement below works with the result.
+  const CGFloat scale = static_cast<CGFloat>(fontScale(theme, rawScale > 0 ? rawScale : 1));
   const Document emptyDocument;
   const Document &document = documentHandle ? *documentHandle : emptyDocument;
-  UIFont *markerFont = [UIFont monospacedDigitSystemFontOfSize:kBodySize * scale weight:UIFontWeightRegular];
+  self.theme = [DSThemeColors colorsFor:theme];
+  // A marker uses the theme's own marker slots. With none set it draws as the
+  // body did before theming: monospaced digits at the body's size, which is what
+  // makes a numbered list's numbers line up column to column.
+  const BlockFont marker = listMarkerFont(theme);
+  const BOOL monospaced = marker.family.empty() && theme.font(kSlotCodeBlockFontFamily).empty();
+  UIFont *markerFont = DSMakeFont(marker.family,
+                                  (marker.size > 0 ? marker.size : paragraphFont(theme).size) * scale,
+                                  marker.weight, false, monospaced);
   NSMutableArray *segments = [NSMutableArray new];
   NSMutableArray<NSNumber *> *indexes = [NSMutableArray new];
   _settledBlocks = document.settledBlocks;
@@ -861,12 +1021,14 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
       built = [DSRenderedDocument committedSegmentFor:document
                                                  from:segment.from
                                                    to:segment.to
+                                                theme:theme
                                                 scale:scale
                                            markerFont:markerFont
                                     syntaxHighlighting:syntaxHighlighting];
     } else if (segment.isCode()) {
       built = [DSCodeSegment segmentWithDocument:document
                                            index:segment.from
+                                          theme:theme
                                           scale:scale
                                      markerFont:markerFont
                               syntaxHighlighting:syntaxHighlighting];
@@ -874,16 +1036,18 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
       built = [DSTableSegment segmentWithDocument:document
                                              from:segment.from
                                                to:segment.to
+                                            theme:theme
                                             scale:scale
                                        markerFont:markerFont];
     } else {
       built = [DSTextSegment segmentWithDocument:document
                                             from:segment.from
                                               to:segment.to
-                                           scale:scale
-                                      markerFont:markerFont
-                               syntaxHighlighting:syntaxHighlighting
-                                          inCard:NO];
+                                           theme:theme
+                                            scale:scale
+                                       markerFont:markerFont
+                                syntaxHighlighting:syntaxHighlighting
+                                           inCard:NO];
     }
     // The plan counted the code blocks, so the ordinal comes from there rather
     // than from a walk of the blocks. It is assigned here so a committed segment
@@ -893,7 +1057,9 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
     }
     [segments addObject:built];
     [indexes addObject:@((NSInteger)segment.from)];
-    _gaps.push_back(segment.from == 0 ? 0 : baseGap(document.blocks[segment.from], scale));
+    _gaps.push_back(segment.from == 0 ? 0 : blockGap(theme, document.blocks[segment.from].spacingBefore,
+                                                     &document.blocks[segment.from - 1],
+                                                     document.blocks[segment.from]) * scale);
   }
   _segments = [segments copy];
   _segmentBlockIndexes = [indexes copy];
@@ -932,10 +1098,10 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
     DSCodeSegment *code = segment;
     const BOOL wrapped = codeWraps(codeBlockWrap, wrapToggles, code.codeOrdinal);
     const CGFloat body = [code bodyHeightForWidth:width wrapped:wrapped];
-    return 2 * kCodePadding + body + ((chrome & kChromeCodeHeader) != 0 ? [code headerHeight] : 0);
+    return 2 * code.padding + body + ((chrome & kChromeCodeHeader) != 0 ? [code headerHeight] : 0);
   }
   DSTableSegment *table = segment;
-  return table.tableSize.height + ((chrome & kChromeTableToolbar) != 0 ? kChromeRowHeight : 0);
+  return table.tableSize.height + ((chrome & kChromeTableToolbar) != 0 ? theme_layout::kChromeRowHeight : 0);
 }
 
 /// The width an unconstrained measure takes: the widest thing that does not
@@ -947,7 +1113,7 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   if ([segment isKindOfClass:DSCodeSegment.class]) {
     DSCodeSegment *code = segment;
     const BOOL wrapped = codeWraps(codeBlockWrap, wrapToggles, code.codeOrdinal);
-    return code.contentLeading + 2 * kCodePadding + [code bodyWidthForWidth:width wrapped:wrapped];
+    return code.contentLeading + 2 * code.padding + [code bodyWidthForWidth:width wrapped:wrapped];
   }
   if ([segment isKindOfClass:DSTableSegment.class]) {
     DSTableSegment *table = segment;

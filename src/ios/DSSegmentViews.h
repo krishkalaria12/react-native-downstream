@@ -55,6 +55,9 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 /// that measured it, which gives selection and text navigation.
 @interface DSTextSegmentView : UITextView <DSSegmentView>
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
+/// The theme's selection highlight. TextKit draws the selection itself, so this
+/// is the only way a themed `colors.selection` reaches the platform's drawing.
+@property (nonatomic) UIColor *selectionColor;
 - (instancetype)init;
 - (void)setSegment:(DSTextSegment *)segment;
 @end
@@ -71,6 +74,8 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 @property (nonatomic) uint32_t controls;
 /// The block's current layout: wrapping or scrolling sideways.
 @property (nonatomic, getter=isWrapped) BOOL wrapped;
+/// The theme's selection highlight, applied to the body text view.
+@property (nonatomic) UIColor *selectionColor;
 - (void)setSegment:(DSCodeSegment *)segment;
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
 @end
@@ -103,6 +108,10 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 - (void)setChrome:(uint32_t)chrome;
 - (void)resetTableScrollPositions;
 - (NSInteger)linkIndexAtPoint:(CGPoint)point;
+/// The selection highlight, from the view's theme. Applied to every text view,
+/// so a themed `colors.selection` reaches the platform's own selection drawing
+/// rather than only the parts this library draws itself.
+@property (nonatomic) UIColor *selectionColor;
 @end
 
 NS_ASSUME_NONNULL_END
