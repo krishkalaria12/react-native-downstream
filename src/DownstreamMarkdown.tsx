@@ -27,6 +27,7 @@ import type {
   MarkdownTranslations,
   MarkdownViewProps,
 } from './types';
+import { resolveMaxHeight } from './types';
 
 export type DownstreamMarkdownProps = MarkdownViewProps;
 
@@ -47,6 +48,7 @@ type NativeControlAction = Readonly<{
   language: string;
   filename: string;
   wrapped: boolean;
+  expanded: boolean;
   generation: number;
 }>;
 
@@ -68,6 +70,7 @@ const CONTROL_ACTIONS: ReadonlySet<string> = new Set<MarkdownControlAction>([
   'copy',
   'download',
   'wrap',
+  'expand',
 ]);
 const CONTROL_FORMATS = new Set(['text', 'markdown', 'csv', 'tsv']);
 
@@ -95,10 +98,13 @@ function toControlEvent(action: NativeControlAction) {
     language: string;
     format?: 'text' | 'markdown' | 'csv' | 'tsv';
     wrapped?: boolean;
+    expanded?: boolean;
     filename?: string;
   } = { block, action: which, language: action.language };
   if (which === 'wrap') {
     event.wrapped = action.wrapped;
+  } else if (which === 'expand') {
+    event.expanded = action.expanded;
   } else {
     if (CONTROL_FORMATS.has(action.format)) {
       event.format = action.format as 'text' | 'markdown' | 'csv' | 'tsv';
@@ -232,6 +238,8 @@ function useControls(
       const { handlers } = latest.current;
       if (event.action === 'wrap') {
         handlers.codeWrap?.(event);
+      } else if (event.action === 'expand') {
+        handlers.codeExpand?.(event);
       } else if (event.action === 'copy') {
         (event.block === 'code' ? handlers.codeCopy : handlers.tableCopy)?.(
           event
@@ -300,6 +308,8 @@ function ControlledMarkdown({
   selectable = true,
   syntaxHighlighting = true,
   codeBlockWrap = false,
+  lineNumbers = true,
+  codeBlockMaxHeight,
   controls,
   translations,
   theme,
@@ -371,6 +381,8 @@ function ControlledMarkdown({
       selectable={selectable}
       syntaxHighlighting={syntaxHighlighting}
       codeBlockWrap={codeBlockWrap}
+      lineNumbers={lineNumbers}
+      codeBlockMaxHeight={resolveMaxHeight(codeBlockMaxHeight)}
       controls={resolved.flags}
       codeFilename={resolved.codeFilename}
       tableFilename={resolved.tableFilename}
@@ -392,6 +404,8 @@ function StreamMarkdown({
   selectable = true,
   syntaxHighlighting = true,
   codeBlockWrap = false,
+  lineNumbers = true,
+  codeBlockMaxHeight,
   controls,
   translations,
   theme,
@@ -462,6 +476,8 @@ function StreamMarkdown({
       selectable={selectable}
       syntaxHighlighting={syntaxHighlighting}
       codeBlockWrap={codeBlockWrap}
+      lineNumbers={lineNumbers}
+      codeBlockMaxHeight={resolveMaxHeight(codeBlockMaxHeight)}
       controls={resolved.flags}
       codeFilename={resolved.codeFilename}
       tableFilename={resolved.tableFilename}
