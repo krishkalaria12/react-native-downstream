@@ -3,6 +3,7 @@ import type { Ionicons } from '@expo/vector-icons';
 
 export type RouteId =
   | 'example'
+  | 'theme'
   | 'controls'
   | 'testing'
   | 'preview'
@@ -32,6 +33,13 @@ export const ROUTES: readonly Route[] = [
     title: 'Example',
     summary: 'Stream a Markdown answer from a live model.',
     icon: 'chatbubbles-outline',
+  },
+  {
+    id: 'theme',
+    label: 'Theme',
+    title: 'Theme',
+    summary: 'Slot-based theming, both presets, and a VS Code theme read in.',
+    icon: 'color-palette-outline',
   },
   {
     id: 'controls',
