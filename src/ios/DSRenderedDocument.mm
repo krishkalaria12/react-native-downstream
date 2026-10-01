@@ -453,9 +453,7 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
     // a line that the platform needs more room for still gets it and no glyph
     // is clipped. A line height below the face's own is ignored by the platform
     // anyway, so the default of zero and a small value behave alike.
-    const CGFloat lineHeight = font.lineHeight * scale;
-    style.minimumLineHeight = lineHeight;
-    style.maximumLineHeight = lineHeight > 0 ? lineHeight : 0;
+    style.minimumLineHeight = font.lineHeight * scale;
     NSMutableParagraphStyle *firstStyle = [style mutableCopy];
     firstStyle.paragraphSpacingBefore = gap;
 
