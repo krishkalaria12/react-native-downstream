@@ -153,6 +153,18 @@ describe('syntaxColorsFromTheme', () => {
     expect(converted.regex).toBe('#222222');
   });
 
+  it('colors numbers from a theme that names only constant.numeric', () => {
+    // Most editor themes color numbers through `constant.numeric` rather than
+    // the bare `constant` GitHub's use, so the representative scope has to be a
+    // real number's scope for the prefix rule to reach either.
+    const only = {
+      tokenColors: [
+        { scope: 'constant.numeric', settings: { foreground: '#111111' } },
+      ],
+    } as VSCodeThemeJson;
+    expect(syntaxColorsFromTheme(only).syntax.number).toBe('#111111');
+  });
+
   it('lets a later entry win for the same scope, as a theme rewrites a rule', () => {
     // Both GitHub themes restate a scope they already used, and the later color
     // is the one Shiki applies.

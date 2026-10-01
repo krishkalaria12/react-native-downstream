@@ -37,7 +37,7 @@ const REPRESENTATIVE_SCOPES: Readonly<
   keyword: ['keyword', 'storage.type', 'storage'],
   type: ['entity.name.function', 'support.type'],
   string: ['string', 'punctuation.definition.string'],
-  number: ['constant', 'support.constant', 'support'],
+  number: ['constant.numeric.decimal', 'support.constant', 'support'],
   constant: ['support.constant', 'constant'],
   regex: [
     'string.regexp constant.character.escape',
