@@ -1,5 +1,7 @@
 #include "Theme.h"
 
+#include "TokenPalette.h"
+
 #include <algorithm>
 #include <cstring>
 #include <list>
@@ -24,6 +26,9 @@ constexpr size_t kRetainedThemes = 16;
 /// only has to change when the summarisation does.
 constexpr uint64_t kHashVersion = 1;
 
+/// The widest integer a double holds exactly.
+constexpr uint64_t kMaxExactDouble = (1ull << 53) - 1;
+
 /// FNV-1a, 64 bit. One round over a theme's slots, twice: once over everything
 /// for `id` and once over the size-changing slots for `layoutKey`. Neither hash
 /// guards anything, so both only have to be stable within a process and cheap.
@@ -40,7 +45,10 @@ public:
   uint64_t digest() const {
     // The number of values folded in goes in too, so a shorter list cannot hash
     // the same as a longer one that starts the same way.
-    const uint64_t mixed = state_ ^ (count_ * 0x9e3779b97f4a7c15ull);
+    // Kept to 53 bits, because the id crosses into Android as a double in the
+    // Fabric state, and a wider one rounds to an id the pool does not hold, so
+    // every themed view silently draws the default theme.
+    const uint64_t mixed = (state_ ^ (count_ * 0x9e3779b97f4a7c15ull)) & kMaxExactDouble;
     // Zero is the empty theme's id, so an empty digest would make two different
     // themes collide with "no theme" and with each other.
     return mixed == 0 ? 1 : mixed;
@@ -50,6 +58,12 @@ private:
   uint64_t state_{0xcbf29ce484222325ull};
   uint64_t count_{0};
 };
+
+/// A color as ARGB bits. Android's `processColor` answers with a signed 32-bit
+/// int and iOS's with an unsigned one; a negative double cast straight to
+/// uint32_t is undefined and comes out as 0 on arm64, a transparent color that
+/// hides every themed run. Through int64 both signs keep their bits.
+uint32_t argbOf(double value) { return static_cast<uint32_t>(static_cast<int64_t>(value)); }
 
 uint64_t bitsOf(double value) {
   uint64_t bits = 0;
@@ -76,15 +90,13 @@ size_t hashOverride(Hasher &id, Hasher &layoutKey, const std::vector<uint32_t> &
     layoutKey.add(slot);
   }
   if (kSlotKinds[slot - 1] == static_cast<uint8_t>(SlotKind::Color)) {
-    id.add(static_cast<uint32_t>(values[index]));
+    id.add(argbOf(values[index]));
     if (kSlotDark[slot - 1] != 0 && index + 1 < slots.size() && slots[index + 1] == kSlotDark[slot - 1]) {
       id.add(slots[index + 1]);
-      id.add(static_cast<uint32_t>(values[index + 1]));
+      id.add(argbOf(values[index + 1]));
       return 2;
     }
-    // One entry is the same color in both appearances, which is what a plain hex
-    // string means, so it is hashed as the pair it draws as.
-    id.add(static_cast<uint32_t>(values[index]));
+    // One half on its own, light or dark: the slot id already says which.
     return 1;
   }
   id.add(bitsOf(values[index]));
@@ -164,7 +176,16 @@ Theme::Handle Theme::create(const std::vector<uint32_t> &slots,
 
   for (size_t index = 0; index < count; index++) {
     if (kSlotKinds[index] == static_cast<uint8_t>(SlotKind::Color)) {
-      theme->colors_[index].defaultRole = kSlotColorDefaults[index];
+      const uint16_t role = kSlotColorDefaults[index];
+      theme->colors_[index].defaultRole = role;
+      if (role >= kRoleTokenClassBase) {
+        // A syntax slot's default is a concrete color rather than a platform
+        // role, so it is filled here, once, and both renderers draw an unset
+        // class from the same palette rather than from nothing.
+        const auto &palette = kTokenColors[role - kRoleTokenClassBase];
+        theme->colors_[index].light = palette.light;
+        theme->colors_[index].dark = palette.dark;
+      }
     } else if (kSlotKinds[index] != static_cast<uint8_t>(SlotKind::Font)) {
       theme->numbers_[index] = kSlotDefaults[index];
     }
@@ -200,26 +221,28 @@ Theme::Handle Theme::create(const std::vector<uint32_t> &slots,
         break;
       }
       case static_cast<uint8_t>(SlotKind::Color): {
-        // A pair is the light id then the dark one; one entry is the same color in
-        // both appearances, which is what a plain hex string means. The resolved
-        // value lives on the light id either way, so reading the dark id returns
-        // the same color rather than an empty one.
+        // Each half arrives on its own id, and only the halves the app named
+        // arrive: a plain color sends both, `{ light }` the light id alone and
+        // `{ dark }` the dark id alone. The resolved value lives on the light id
+        // either way, so reading the dark id returns the same entry.
         const uint32_t own = kSlotLight[slot - 1];
         const uint32_t lightId = own == 0 ? slot : own;
-        const size_t at = lightId - 1;
-        theme->colors_[at].set = true;
-        theme->colors_[at].light = static_cast<uint32_t>(value);
+        Theme::Color &color = theme->colors_[lightId - 1];
+        color.set = true;
         if (own != 0) {
-          // The dark half on its own: a resolver always sends the light half
-          // first, so this only happens for a hand-built array.
-          theme->colors_[at].dark = static_cast<uint32_t>(value);
+          color.dark = argbOf(value);
+          color.darkSet = true;
           break;
         }
+        color.light = argbOf(value);
+        color.lightSet = true;
         const bool hasDark = index + 1 < slots.size() && slots[index + 1] == kSlotDark[slot - 1] &&
             index + 1 < values.size();
-        theme->colors_[at].dark =
-            hasDark ? static_cast<uint32_t>(values[index + 1]) : theme->colors_[at].light;
-        index += hasDark ? 1 : 0;
+        if (hasDark) {
+          color.dark = argbOf(values[index + 1]);
+          color.darkSet = true;
+          index++;
+        }
         break;
       }
       default:

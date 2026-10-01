@@ -469,6 +469,53 @@ void testInterning() {
   CHECK(again->id() == evictedId, "an evicted theme is rebuilt with the same id");
   CHECK(again->layoutKey() == evictedLayout, "and the same layout key");
 
+  // Android receives the id through the Fabric state as a double, so an id a
+  // double cannot hold rounds to one the pool does not have and the view draws
+  // the default theme. Many distinct themes, so a wide hash would show.
+  for (int index = 0; index < 64; index++) {
+    const Theme::Handle themed = make({kSlotParagraphFontSize}, {static_cast<double>(200 + index)});
+    const uint64_t id = themed->id();
+    CHECK(static_cast<uint64_t>(static_cast<double>(id)) == id, "a theme id survives a double");
+    CHECK(ThemeRegistry::find(static_cast<uint64_t>(static_cast<double>(id))).get() == themed.get(),
+          "and the id read back from a double finds the same theme");
+  }
+
+  // Android's `processColor` sends a color as a signed int, iOS's as unsigned.
+  // Both are the same ARGB bits, so both draw the same color, and two different
+  // signed colors stay two themes rather than collapsing to one.
+  const double signedInk = static_cast<double>(static_cast<int32_t>(0xff1f2328u));
+  const double signedRed = static_cast<double>(static_cast<int32_t>(0xffcf222eu));
+  const uint32_t paragraphDark = kSlotDark[kSlotParagraphColor - 1];
+  const Theme::Handle fromAndroid = make({kSlotParagraphColor, paragraphDark}, {signedInk, signedInk});
+  const Theme::Handle fromIos = make({kSlotParagraphColor, paragraphDark},
+                                     {static_cast<double>(0xff1f2328u), static_cast<double>(0xff1f2328u)});
+  CHECK(fromAndroid->color(kSlotParagraphColor).light == 0xff1f2328u, "a signed color keeps its bits");
+  CHECK(fromAndroid->color(kSlotParagraphColor).dark == 0xff1f2328u, "in both appearances");
+  CHECK(fromIos->color(kSlotParagraphColor).light == 0xff1f2328u, "an unsigned one does too");
+  CHECK(make({kSlotParagraphColor, paragraphDark}, {signedRed, signedRed}).get() != fromAndroid.get(),
+        "two signed colors are two themes");
+
+  // A theme may name one appearance only, and the other keeps its default.
+  const Theme::Handle lightOnly = make({kSlotParagraphColor}, {static_cast<double>(0xff111111u)});
+  const Theme::Color &lightHalf = lightOnly->color(kSlotParagraphColor);
+  CHECK(lightHalf.set && lightHalf.lightSet && !lightHalf.darkSet, "a light id alone names light mode only");
+  CHECK(lightHalf.light == 0xff111111u, "with its value");
+  const Theme::Handle darkOnly = make({paragraphDark}, {static_cast<double>(0xff222222u)});
+  const Theme::Color &darkHalf = darkOnly->color(kSlotParagraphColor);
+  CHECK(darkHalf.set && darkHalf.darkSet && !darkHalf.lightSet, "a dark id alone names dark mode only");
+  CHECK(darkHalf.dark == 0xff222222u, "with its value");
+  CHECK(lightOnly.get() != darkOnly.get(), "and the two are different themes");
+  const Theme::Handle both = make({kSlotParagraphColor, paragraphDark},
+                                  {static_cast<double>(0xff111111u), static_cast<double>(0xff111111u)});
+  CHECK(both.get() != lightOnly.get(), "naming both halves is not naming one");
+
+  // A syntax slot named for dark mode only keeps the palette in light mode.
+  const uint32_t keyword = kSyntax[static_cast<size_t>(TokenClass::Keyword)];
+  const Theme::Handle darkKeyword = make({kSlotDark[keyword - 1]}, {static_cast<double>(0xff333333u)});
+  CHECK(darkKeyword->color(keyword).light == kTokenColors[static_cast<size_t>(TokenClass::Keyword)].light,
+        "a dark-only syntax color keeps the light palette");
+  CHECK(darkKeyword->color(keyword).dark == 0xff333333u, "and draws its own in dark mode");
+
   ThemeRegistry::clear();
 }
 
@@ -577,6 +624,12 @@ void testTokenDefaults() {
     CHECK(static_cast<size_t>(klass) == token, "and it is the class the slot is for");
     CHECK(tokenColor(klass, false) == kTokenColors[token].light, "and the engine's light value is what a platform reads");
     CHECK(tokenColor(klass, true) == kTokenColors[token].dark, "and the engine's dark value");
+    // The unset slot carries the palette itself, which is what a renderer reads
+    // for a class the theme left alone.
+    const Theme::Color &color = theme->color(kSyntax[token]);
+    CHECK(!color.set, "an unthemed syntax slot is unset");
+    CHECK(color.light == kTokenColors[token].light, "and holds the palette's light value");
+    CHECK(color.dark == kTokenColors[token].dark, "and its dark value");
   }
 }
 

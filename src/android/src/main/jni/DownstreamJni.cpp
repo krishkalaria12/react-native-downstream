@@ -169,6 +169,9 @@ Java_com_downstream_DownstreamNative_nativeThemeSnapshot(JNIEnv *env, jclass /*c
   std::vector<jint> lightValues(count, 0);
   std::vector<jint> darkValues(count, 0);
   std::vector<jboolean> setValues(count, JNI_FALSE);
+  // Which halves of a color the theme named, light in bit 0 and dark in bit 1,
+  // so an appearance whose half is unset draws its own default.
+  std::vector<jbyte> halfValues(count, 0);
   for (size_t slot = 1; slot < count; slot++) {
     // One flag per slot, whatever kind it is: a color that was set, a font that
     // names a family, a metric that was named. The renderer needs to tell
@@ -179,9 +182,15 @@ Java_com_downstream_DownstreamNative_nativeThemeSnapshot(JNIEnv *env, jclass /*c
       const Theme::Color &color = theme->color(static_cast<uint32_t>(slot));
       lightValues[slot - 1] = static_cast<jint>(color.light);
       darkValues[slot - 1] = static_cast<jint>(color.dark);
+      halfValues[slot - 1] = static_cast<jbyte>((color.lightSet ? 1 : 0) | (color.darkSet ? 2 : 0));
       continue;
     }
-    numberValues[slot - 1] = theme->number(static_cast<uint32_t>(slot));
+    // A font slot's number is its index into the family list, -1 for the
+    // system font. The family lives outside `number`, so reading that would
+    // send 0 and point every unset font slot at the theme's first family.
+    numberValues[slot - 1] = theme::kSlotKinds[slot - 1] == static_cast<uint8_t>(theme::SlotKind::Font)
+        ? static_cast<jdouble>(theme->fontIndex(static_cast<uint32_t>(slot)))
+        : theme->number(static_cast<uint32_t>(slot));
   }
   env->SetDoubleArrayRegion(numbers, 0, static_cast<jsize>(count), numberValues.data());
 
@@ -189,6 +198,8 @@ Java_com_downstream_DownstreamNative_nativeThemeSnapshot(JNIEnv *env, jclass /*c
   jintArray dark = toJavaArray(env, darkValues);
   jbooleanArray set = env->NewBooleanArray(static_cast<jsize>(count));
   env->SetBooleanArrayRegion(set, 0, static_cast<jsize>(count), setValues.data());
+  jbyteArray halves = env->NewByteArray(static_cast<jsize>(count));
+  env->SetByteArrayRegion(halves, 0, static_cast<jsize>(count), halfValues.data());
 
   const std::vector<std::string> &families = theme->fontNames();
   jobjectArray familyArray = env->NewObjectArray(static_cast<jsize>(families.size()),
@@ -201,12 +212,13 @@ Java_com_downstream_DownstreamNative_nativeThemeSnapshot(JNIEnv *env, jclass /*c
     env->DeleteLocalRef(name);
   }
 
-  jobjectArray result = env->NewObjectArray(5, env->FindClass("java/lang/Object"), nullptr);
+  jobjectArray result = env->NewObjectArray(6, env->FindClass("java/lang/Object"), nullptr);
   env->SetObjectArrayElement(result, 0, numbers);
   env->SetObjectArrayElement(result, 1, light);
   env->SetObjectArrayElement(result, 2, dark);
   env->SetObjectArrayElement(result, 3, set);
   env->SetObjectArrayElement(result, 4, familyArray);
+  env->SetObjectArrayElement(result, 5, halves);
   return result;
 }
 

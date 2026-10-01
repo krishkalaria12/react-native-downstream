@@ -394,12 +394,18 @@ internal class Palette(private val theme: NativeTheme, val night: Boolean) {
   /**
    * One token class's color.
    *
-   * A token the theme left unset takes the code block's own text color, which is
-   * what a plain run and an operator take in GitHub's own themes.
+   * An unset class draws the engine's palette, which the theme carries as the
+   * unset value. Plain and Operator are the exception: unset, they take the code
+   * block's own text color, as they do in GitHub's own themes.
    */
   fun token(tokenClass: Int): Int {
     val slot = tokenSlots.getOrNull(tokenClass) ?: return codeText
-    return theme.color(slot, night) ?: codeText
+    theme.color(slot, night)?.let { return it }
+    return if (tokenClass == NativeDocument.TOKEN_PLAIN || tokenClass == NativeDocument.TOKEN_OPERATOR) {
+      codeText
+    } else {
+      theme.unsetColor(slot, night)
+    }
   }
 
   /** GitHub alert colors; a type GitHub does not define gets a neutral bar. */
@@ -768,11 +774,11 @@ internal class RenderedDocument(
      * Zero when the document does not have that block, which is what a
      * vanished document should collapse to rather than throw.
      */
-    private fun bottomMarginAbove(documentId: Long, from: Int, style: Style): Float {
+    private fun bottomMarginAbove(documentId: Long, from: Int, style: Style, themeId: Long): Float {
       if (from <= 0) {
         return 0f
       }
-      val previous = DownstreamNative.readDocument(documentId, from - 1, from) ?: return 0f
+      val previous = DownstreamNative.readDocument(documentId, from - 1, from, themeId) ?: return 0f
       if (previous.blockCount == 0) {
         return 0f
       }
@@ -826,14 +832,16 @@ internal class RenderedDocument(
         val segmentKey =
           "${planned.identity}:${planned.to - planned.from}:$ordinal:$scaled:$night:$syntaxHighlighting:$themeId"
         val segment = (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
-          ?: DownstreamNative.readDocument(documentId, planned.from, planned.to)
+          // The theme id goes with the read, because each block's typography is
+          // resolved against it in C++; without it every block reads the default.
+          ?: DownstreamNative.readDocument(documentId, planned.from, planned.to, themeId)
             ?.let {
               buildSegment(
                 it, style, planned.from, planned.isCode, ordinal, planned.identity, syntaxHighlighting,
                 // The block above this segment is not in the slice, so its
                 // bottom margin is read on its own. One block, one crossing, and
                 // only for a segment that does not start the document.
-                bottomMarginAbove(documentId, planned.from, style),
+                bottomMarginAbove(documentId, planned.from, style, themeId),
               )
             }
             ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }

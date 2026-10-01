@@ -72,6 +72,24 @@ UIColor *roleColor(ColorRole role) {
   return UIColor.labelColor;
 }
 
+/// A color the theme named for one appearance only. The named half draws the
+/// theme's value and the other draws the slot's role, resolved for that
+/// appearance, so `{ dark }` leaves light mode exactly as it was.
+UIColor *halfColor(const Theme::Color &color) {
+  UIColor *themed = dynamicColor(color.light, color.dark);
+  // An "inherit" role has no color of its own to fall back to, and a block's
+  // text color is what it inherits, so it falls back to the label color.
+  UIColor *fallback = roleColor(static_cast<ColorRole>(color.defaultRole)) ?: UIColor.labelColor;
+  const bool lightSet = color.lightSet;
+  const bool darkSet = color.darkSet;
+  return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+    const bool night = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
+    const bool named = night ? darkSet : lightSet;
+    UIColor *source = named ? themed : fallback;
+    return [source resolvedColorWithTraitCollection:traits];
+  }];
+}
+
 } // namespace
 
 @interface DSThemeColors ()
@@ -141,15 +159,24 @@ UIColor *roleColor(ColorRole role) {
         _bySlot[id - 1] = roleColor(static_cast<ColorRole>(role));
         continue;
       }
-      _bySlot[id - 1] = dynamicColor(color.light, color.dark);
+      // A syntax slot's unset half already holds the palette, so only a role
+      // slot named for one appearance needs the role for the other.
+      const bool oneHalf = !(color.lightSet && color.darkSet) && color.defaultRole < kRoleTokenClassBase;
+      _bySlot[id - 1] = oneHalf ? halfColor(color) : dynamicColor(color.light, color.dark);
     }
 
     for (size_t token = 0; token < kTokenColorsCount; token++) {
       // `kSyntax` holds the light id of each class's slot, and `Theme::color`
       // resolves either half of a pair to the same entry, so a themed pair and
       // an unset one are both read through this one id.
+      // An unset class draws the engine's palette, which the theme carries as
+      // the unset value. Plain and Operator are the exception: unset, they keep
+      // the code block's own color, so a themed block text color reaches them.
       const Theme::Color &color = theme.color(kSyntax[token]);
-      _tokens[token] = color.set ? dynamicColor(color.light, color.dark) : nil;
+      const auto klass = static_cast<TokenClass>(token);
+      const bool takesBlockColor = klass == TokenClass::Plain || klass == TokenClass::Operator;
+      const bool drawsOwnColor = color.set || !takesBlockColor;
+      _tokens[token] = drawsOwnColor ? dynamicColor(color.light, color.dark) : nil;
     }
   }
   return self;

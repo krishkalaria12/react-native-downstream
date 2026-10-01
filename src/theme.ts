@@ -90,9 +90,11 @@ const themeSlot = slotFor;
 
 // ---------------------------------------------------------------------- colors
 
+/** A color's ARGB per appearance; a missing half keeps that appearance's default. */
+type ColorHalves = { light?: number; dark?: number };
+
 /**
- * One color as a light and a dark ARGB integer, or undefined when it cannot be
- * drawn.
+ * One color as the ARGB halves it names, or undefined when it cannot be drawn.
  *
  * `processColor` is React Native's own, so every color string `<Text>` accepts
  * works here too. A processed `DynamicColorIOS` arrives as
@@ -101,21 +103,22 @@ const themeSlot = slotFor;
  * fixed integer when props are parsed, so it would not follow a configuration
  * change the way an unset default does.
  */
-function resolveColor(
-  value: unknown,
-  origin: string
-): { light: number; dark: number } | undefined {
+function resolveColor(value: unknown, origin: string): ColorHalves | undefined {
   if (value === undefined || value === null) return undefined;
-  // A pair the app wrote itself. Either half alone is enough, so
-  // `{ light: x }` is a color that does not change with appearance.
+  // A pair the app wrote itself. Either half alone is enough, and the half it
+  // leaves out keeps the default for that appearance, so `{ dark: x }` themes
+  // dark mode without freezing light mode to the same color.
   if (typeof value === 'object' && !Array.isArray(value)) {
     const pair = value as Partial<{ light: unknown; dark: unknown }>;
     if ('light' in pair || 'dark' in pair) {
-      const only = pair.light ?? pair.dark;
-      const light = resolveColor(pair.light ?? only, origin);
-      const dark = resolveColor(pair.dark ?? only, origin);
-      if (light === undefined || dark === undefined) return undefined;
-      return { light: light.light, dark: dark.dark };
+      const light =
+        pair.light == null
+          ? undefined
+          : resolveColor(pair.light, origin)?.light;
+      const dark =
+        pair.dark == null ? undefined : resolveColor(pair.dark, origin)?.dark;
+      if (light === undefined && dark === undefined) return undefined;
+      return { light, dark };
     }
   }
   const processed = processColor(value as never);
@@ -182,11 +185,14 @@ class Slots {
     this.byId.set(slot.id, index);
   }
 
-  color(name: ThemeSlotName, color: { light: number; dark: number }): void {
+  color(name: ThemeSlotName, color: ColorHalves): void {
     const slot = themeSlot(name);
     if (slot === undefined) return;
-    this.byId.set(slot.id, color.light);
-    if (slot.darkId !== undefined && color.dark !== color.light) {
+    // Each half the app named is sent on its own id and a half it left out is
+    // not sent, which is how the engine tells `{ dark }` from one color in both
+    // appearances. A later value for one half leaves the other as it was.
+    if (color.light !== undefined) this.byId.set(slot.id, color.light);
+    if (color.dark !== undefined && slot.darkId !== undefined) {
       // Addressed by the generated dark id, so a rename of the light half cannot
       // leave the pair sending one value.
       this.byId.set(slot.darkId, color.dark);
@@ -670,9 +676,6 @@ export function resolveTheme(
 export function readColor(
   value: MarkdownColor | undefined,
   origin = 'color'
-): {
-  light: number;
-  dark: number;
-} {
-  return resolveColor(value, origin) ?? { light: 0, dark: 0 };
+): ColorHalves {
+  return resolveColor(value, origin) ?? {};
 }
