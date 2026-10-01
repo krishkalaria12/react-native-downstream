@@ -91,10 +91,8 @@ import { syntaxColorsFromTheme } from 'react-native-downstream';
 const converted = syntaxColorsFromTheme(await import('./dracula.json'));
 <DownstreamMarkdown
   markdown={message}
-  theme={{
-    syntax: converted.syntax,
-    colors: { foreground: converted.codeBlock.color, muted: converted.codeBlock.backgroundColor },
-  }}
+  theme={{ syntax: converted.syntax }}
+  markdownStyle={{ codeBlock: converted.codeBlock }}
 />
 ```
 
