@@ -1143,12 +1143,16 @@ internal class RenderedDocument(
         // quote restyle the text inside it. An h6 reads as secondary for the
         // same reason: it is the smallest heading, and a theme that named no
         // color for it gets the muted one rather than full-strength body text.
+        // The theme is asked for this appearance, so a color named for dark mode
+        // only leaves light mode muted.
+        val themed = theme.color(colorSlot, colors.night)
+        val muted = inQuote || (kind == NativeDocument.KIND_HEADING && level == 6)
         val color = when {
           document.isAdmonitionTitle(block) ->
             colors.admonition(document.marker(block, document.containerCount(block) - 1))
-          (inQuote || (kind == NativeDocument.KIND_HEADING && level == 6)) && !theme.colorSet(colorSlot) ->
-            colors.secondary
-          else -> theme.color(colorSlot, colors.night)
+          themed != null -> themed
+          muted -> colors.secondary
+          else -> null
         }
         if (color != null) {
           text.setSpan(ForegroundColorSpan(color), start, end, flags)

@@ -103,6 +103,9 @@ UIColor *halfColor(const Theme::Color &color) {
   std::vector<UIColor *> _bySlot;
   /// The syntax colors, indexed by class, for the same reason.
   std::vector<UIColor *> _tokens;
+  /// Which halves of each color slot the theme named: light in bit 0, dark in
+  /// bit 1.
+  std::vector<uint8_t> _halves;
 }
 
 + (instancetype)colorsFor:(const downstream::Theme &)theme {
@@ -143,12 +146,14 @@ UIColor *halfColor(const Theme::Color &color) {
     // either half to the pair's single entry.
     _bySlot.assign(kSlotIdCount - 1, nil);
     _tokens.assign(kTokenColorsCount, nil);
+    _halves.assign(kSlotIdCount - 1, 0);
 
     for (uint32_t id = 1; id < kSlotIdCount; id++) {
       if (kSlotKinds[id - 1] != static_cast<uint8_t>(SlotKind::Color)) {
         continue;
       }
       const Theme::Color &color = theme.color(id);
+      _halves[id - 1] = static_cast<uint8_t>((color.lightSet ? 1 : 0) | (color.darkSet ? 2 : 0));
       if (!color.set) {
         const uint16_t role = color.defaultRole;
         // A syntax color's default is a token class offset by the base, and a
@@ -192,6 +197,23 @@ UIColor *halfColor(const Theme::Color &color) {
 - (UIColor *)colorForSlot:(uint32_t)slot fallback:(UIColor *)fallback {
   UIColor *color = [self colorForSlot:slot];
   return color != nil ? color : fallback;
+}
+
+- (UIColor *)colorForSlot:(uint32_t)slot namedOr:(UIColor *)fallback {
+  const uint8_t named = slot == 0 || slot > _halves.size() ? 0 : _halves[slot - 1];
+  UIColor *themed = named == 0 ? nil : [self colorForSlot:slot];
+  if (themed == nil) {
+    return fallback;
+  }
+  if (named == 3) {
+    return themed;
+  }
+  return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+    const bool night = traits.userInterfaceStyle == UIUserInterfaceStyleDark;
+    const bool ownHalf = (named & (night ? 2 : 1)) != 0;
+    UIColor *source = ownHalf ? themed : fallback;
+    return [source resolvedColorWithTraitCollection:traits];
+  }];
 }
 
 - (UIColor *)tokenColor:(downstream::TokenClass)token fallback:(UIColor *)fallback {
