@@ -32,6 +32,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// striping" is told from "transparent striping".
 - (UIColor *)colorForSlot:(uint32_t)slot fallback:(nullable UIColor *)fallback;
 
+/// The slot's color in each appearance whose half the theme named, and
+/// `fallback` in each it did not. A slot named for both is its own color, and
+/// one named for neither is `fallback`, so a block inside a quote keeps the
+/// quote's color in an appearance the theme left alone.
+- (UIColor *)colorForSlot:(uint32_t)slot namedOr:(UIColor *)fallback;
+
 /// The color for one token class, or `fallback` when the theme leaves it unset.
 /// A nil `fallback` means the token keeps the code block's own color, which is
 /// what a plain run and an operator keep today.

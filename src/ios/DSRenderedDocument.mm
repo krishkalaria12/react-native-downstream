@@ -417,16 +417,14 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
     }
     info.spacingBefore = gap;
 
-    // A block inside a quote is drawn in the quote's own color unless the
-    // theme set one for its element, which is how a themed quote can restyle
-    // the text inside it.
     // A block inside a quote is drawn in the quote's own color, unless the theme
-    // set a color for the block's own element. Asking the theme rather than the
-    // slot id is what makes that the case: a slot whose value happens to equal
-    // its default is still a slot the theme named.
+    // set a color for the block's own element, which is how a themed quote can
+    // restyle the text inside it. It is asked per appearance, so a color the
+    // theme named for dark mode only leaves light mode's quote text muted.
     UIColor *baseColor = [colors colorForSlot:font.colorSlot fallback:UIColor.labelColor];
-    if (inQuote && !theme.color(font.colorSlot).set) {
-      baseColor = [colors colorForSlot:kSlotBlockquoteColor fallback:UIColor.secondaryLabelColor];
+    if (inQuote) {
+      UIColor *quoteColor = [colors colorForSlot:kSlotBlockquoteColor fallback:UIColor.secondaryLabelColor];
+      baseColor = [colors colorForSlot:font.colorSlot namedOr:quoteColor];
     }
     const CGFloat baseSize = font.size * scale;
     const bool monospaced = elementFor(block) == BlockElement::Code;
