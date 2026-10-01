@@ -1,5 +1,6 @@
 #include "DownstreamTextLayoutManager.h"
 #include "SessionTrace.h"
+#include "theme/ThemeLayout.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,8 +16,16 @@ constexpr size_t kMeasurementCacheCapacity = 64;
 Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
                                           const LayoutConstraints &layoutConstraints, SurfaceId surfaceId,
                                           uint32_t chrome, bool codeBlockWrap,
-                                          const std::vector<uint32_t> &wrapToggles) const {
+                                          const std::vector<uint32_t> &wrapToggles,
+                                          const downstream::Theme::Handle &theme) const {
   const Float maximumWidth = layoutConstraints.maximumSize.width;
+  // The theme can cap the platform's font scale, and the cap is applied before
+  // the scale reaches either the cache key or the platform, so a measurement and
+  // the view that draws it are at the same size.
+  const Float scale = static_cast<Float>(
+      downstream::theme_layout::fontScale(theme ? *theme : *downstream::Theme::defaultTheme(),
+                                          fontSizeMultiplier));
+  const uint64_t themeLayoutKey = theme ? theme->layoutKey() : 0;
   Size size{0, 0};
   if (document) downstream::SessionTrace::recordDocument(document->id, "measure_start");
 
@@ -25,9 +34,10 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
     {
       std::lock_guard<std::mutex> lock(cacheMutex_);
       for (const auto &entry : cache_) {
-        if (entry.documentId == document->id && entry.fontSizeMultiplier == fontSizeMultiplier &&
+        if (entry.documentId == document->id && entry.fontSizeMultiplier == scale &&
             entry.maximumWidth == maximumWidth && entry.chrome == chrome &&
-            entry.codeBlockWrap == codeBlockWrap && entry.wrapToggles == wrapToggles) {
+            entry.codeBlockWrap == codeBlockWrap && entry.wrapToggles == wrapToggles &&
+            entry.themeLayoutKey == themeLayoutKey) {
           size = entry.size;
           cached = true;
           break;
@@ -36,13 +46,12 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
     }
 
     if (!cached) {
-      size = measurePlatform(document, fontSizeMultiplier, maximumWidth, surfaceId, chrome, codeBlockWrap,
-                             wrapToggles);
+      size = measurePlatform(document, scale, maximumWidth, surfaceId, chrome, codeBlockWrap, wrapToggles, theme);
       std::lock_guard<std::mutex> lock(cacheMutex_);
       if (cache_.size() >= kMeasurementCacheCapacity) {
         cache_.erase(cache_.begin());
       }
-      cache_.push_back({document->id, fontSizeMultiplier, maximumWidth, chrome, codeBlockWrap, wrapToggles, size});
+      cache_.push_back({document->id, scale, maximumWidth, chrome, codeBlockWrap, wrapToggles, themeLayoutKey, size});
     } else {
       downstream::SessionTrace::recordDocument(document->id, "measure_cache_hit");
     }

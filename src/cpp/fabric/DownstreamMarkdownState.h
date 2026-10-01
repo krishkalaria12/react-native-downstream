@@ -4,6 +4,7 @@
 #include "Document.h"
 #include "DocumentRegistry.h"
 #include "RenderPreparer.h"
+#include "theme/Theme.h"
 
 #include <react/renderer/graphics/Float.h>
 
@@ -34,12 +35,14 @@ public:
   DownstreamMarkdownState() = default;
 
   DownstreamMarkdownState(downstream::DocumentHandle document, Float fontSizeMultiplier, uint32_t chrome = 0,
-                          std::vector<uint32_t> wrapToggles = {}, bool codeBlockWrap = false)
+                          std::vector<uint32_t> wrapToggles = {}, bool codeBlockWrap = false,
+                          downstream::Theme::Handle theme = nullptr)
       : document(std::move(document)),
         fontSizeMultiplier(fontSizeMultiplier),
         chrome(chrome),
         wrapToggles(std::move(wrapToggles)),
-        codeBlockWrap(codeBlockWrap) {}
+        codeBlockWrap(codeBlockWrap),
+        theme(std::move(theme)) {}
 
   downstream::DocumentHandle document;
   Float fontSizeMultiplier{1.0};
@@ -58,6 +61,19 @@ public:
   /// The `codeBlockWrap` prop, so the two halves of the decision travel
   /// together and a platform never has to infer one from the other.
   bool codeBlockWrap{false};
+  /// The theme the node measured with. It travels with the state so a mounted
+  /// frame cannot mix sizes from one theme with drawing from another, the same
+  /// way `chrome` does. Null means the default theme.
+  downstream::Theme::Handle theme;
+
+  /// The theme to draw with, resolving null to the default so a platform never
+  /// has to check.
+  const downstream::Theme::Handle &resolvedTheme() const {
+    return theme ? theme : downstream::Theme::defaultTheme();
+  }
+
+  /// The theme's id, or 0 for the default one, which is its id too.
+  uint64_t themeId() const { return theme ? theme->id() : 0; }
 
   /// True when the code block at `ordinal` is laid out at the card's width
   /// rather than at its own length.
@@ -98,7 +114,8 @@ public:
         fontSizeMultiplier(previous.fontSizeMultiplier),
         chrome(previous.chrome),
         wrapToggles(previous.wrapToggles),
-        codeBlockWrap(previous.codeBlockWrap) {
+        codeBlockWrap(previous.codeBlockWrap),
+        theme(previous.theme) {
     if (!data.isObject()) {
       return;
     }
@@ -131,7 +148,10 @@ public:
     return folly::dynamic::object("documentId", document ? static_cast<double>(document->id) : 0.0)(
         "fontScale", static_cast<double>(fontSizeMultiplier))("chrome", static_cast<double>(chrome))(
         // A number rather than a bool, so the state crosses JNI as one type.
-        "codeBlockWrap", codeBlockWrap ? 1.0 : 0.0)("wrapToggles", std::move(array));
+        "codeBlockWrap", codeBlockWrap ? 1.0 : 0.0)("wrapToggles", std::move(array))(
+        // By id, as the document is: Java resolves the theme through the
+        // registry rather than copying its values across JNI on every update.
+        "themeId", static_cast<double>(themeId()));
   }
 #endif
 

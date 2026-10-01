@@ -1,8 +1,10 @@
 #pragma once
 
 #include "Document.h"
+#include "theme/Theme.h"
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace downstream {
@@ -40,23 +42,38 @@ struct LayoutHint {
   /// they decide each block's layout: neither half can be inferred from
   /// `chrome`, which only says whether every block wraps.
   bool codeBlockWrap{false};
+  /// The theme this view draws with, or null for the default one. A worker
+  /// builds the rendering the view will mount, so the theme has to be part of
+  /// the hint: without it the worker would prepare an unthemed layout that
+  /// Fabric measures again on the JavaScript thread.
+  Theme::Handle theme;
 
   // Constructors rather than aggregate initialisation, so a caller that names
   // only a width and a scale says so instead of leaving a vector and a flag to
-  // default, and a caller that names all five cannot leave one out by accident.
+  // default, and a caller that names all six cannot leave one out by accident.
   LayoutHint() = default;
   LayoutHint(float scale, float at) : fontScale(scale), width(at) {}
-  LayoutHint(float scale, float at, uint32_t chromeIn, std::vector<uint32_t> toggles, bool wrap)
+  LayoutHint(float scale, float at, uint32_t chromeIn, std::vector<uint32_t> toggles, bool wrap,
+             Theme::Handle themeIn = nullptr)
       : fontScale(scale),
         width(at),
         chrome(chromeIn),
         wrapToggles(std::move(toggles)),
-        codeBlockWrap(wrap) {}
+        codeBlockWrap(wrap),
+        theme(std::move(themeIn)) {}
 
+  /// Equal when two layouts would draw the same sizes. The theme compares by
+  /// id rather than by pointer, so two equal themes are one layout hint and a
+  /// view that switched to a theme with the same values reuses every prepared
+  /// rendering rather than rebuilding them.
   bool operator==(const LayoutHint &other) const {
     return fontScale == other.fontScale && width == other.width && chrome == other.chrome &&
-        codeBlockWrap == other.codeBlockWrap && wrapToggles == other.wrapToggles;
+        codeBlockWrap == other.codeBlockWrap && wrapToggles == other.wrapToggles &&
+        themeId() == other.themeId();
   }
+
+  /// The theme's id, or 0 for the default one, which is its id too.
+  uint64_t themeId() const { return theme ? theme->id() : 0; }
 };
 
 /// Moves platform text work off the JavaScript and UI threads. After a worker
