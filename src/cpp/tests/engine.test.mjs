@@ -55,6 +55,7 @@ before(async () => {
     ['dump_session', [incremental, ...engine]],
     ['dump_export', [downstream('SegmentPlan.cpp'), ...engine]],
     ['test_export', [downstream('SegmentPlan.cpp'), ...engine]],
+    ['test_fence_meta', [downstream('SegmentPlan.cpp'), ...engine]],
     ['test_preview', [incremental, ...engine]],
     ['test_session_registry', [registry, incremental, ...pool, ...engine]],
     [
@@ -817,6 +818,10 @@ describe('input', () => {
     // the ported remend corpus plus the session integration that proves a repair
     // cannot reach a committed block.
     execFileSync(binary('test_preview'), { timeout: 15_000 });
+  });
+
+  test('fence info string meta, prefixes, and identity', () => {
+    execFileSync(binary('test_fence_meta'), { timeout: 30_000, stdio: 'inherit' });
   });
 
   test('rejects malformed UTF-8', () => {

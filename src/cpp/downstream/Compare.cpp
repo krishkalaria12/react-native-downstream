@@ -3,11 +3,15 @@
 namespace downstream::scan {
 
 bool sameBlock(const Block &a, const Block &b) {
+  // `info` and the meta it was parsed into both count. An identity promises that
+  // it names the same content, and a block whose fence title changed is a block
+  // whose header would draw a different label, so a meta-only change has to
+  // give it a new identity or the committed-segment cache would draw the old
+  // title forever.
   if (a.kind != b.kind || a.headingLevel != b.headingLevel || a.tableHeader != b.tableHeader ||
       a.table != b.table || a.spacingBefore != b.spacingBefore || a.text != b.text || a.language != b.language ||
-      a.runs.size() != b.runs.size() || a.cells.size() != b.cells.size() ||
-      a.tokens.size() != b.tokens.size() ||
-      a.containers.size() != b.containers.size()) {
+      a.info != b.info || !(a.meta == b.meta) || a.runs.size() != b.runs.size() || a.cells.size() != b.cells.size() ||
+      a.tokens.size() != b.tokens.size() || a.containers.size() != b.containers.size()) {
     return false;
   }
   for (size_t i = 0; i < a.runs.size(); i++) {

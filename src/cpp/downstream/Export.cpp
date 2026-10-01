@@ -465,44 +465,6 @@ std::string sanitizeBase(std::string_view base) {
   return out;
 }
 
-/// The name inside `title="…"`, or the part of the info string after the
-/// language and its colon. Streamdown takes the extension from the language
-/// alone; the fence's own name is the improvement, because a writer who named
-/// the block meant it.
-std::string_view fenceName(std::string_view info) {
-  const size_t title = info.find("title=");
-  if (title == std::string_view::npos) {
-    return {};
-  }
-  size_t start = title + 6;
-  if (start < info.size() && (info[start] == '"' || info[start] == '\'')) {
-    const char16_t quote = static_cast<char16_t>(info[start]);
-    start++;
-    const size_t end = info.find(static_cast<char>(quote), start);
-    return end == std::string_view::npos ? std::string_view{} : info.substr(start, end - start);
-  }
-  size_t end = start;
-  while (end < info.size() && info[end] != ' ' && info[end] != '\t') {
-    end++;
-  }
-  return info.substr(start, end - start);
-}
-
-/// A fence may write its file name as `ts:src/app.ts`. Only the part after the
-/// first colon is a name, and only when the language before it is the one the
-/// block already has.
-std::string_view pathName(std::string_view info) {
-  const size_t colon = info.find(':');
-  if (colon == std::string_view::npos) {
-    return {};
-  }
-  std::string_view rest = info.substr(colon + 1);
-  while (!rest.empty() && (rest.front() == ' ' || rest.front() == '\t')) {
-    rest.remove_prefix(1);
-  }
-  return rest;
-}
-
 bool hasExtension(std::string_view name) {
   const size_t dot = name.rfind('.');
   if (dot == std::string_view::npos || dot == 0) {
@@ -550,13 +512,13 @@ std::u16string exportBlocks(const Document &document, size_t from, size_t to, Ex
   return out;
 }
 
-std::string downloadName(std::string_view info, std::string_view language, const std::string &configuredBase,
+std::string downloadName(const FenceMeta &meta, std::string_view language, const std::string &configuredBase,
                          const std::string &fallback) {
-  std::string_view fence = fenceName(info);
-  if (fence.empty()) {
-    fence = pathName(info);
-  }
-  std::string base = sanitizeBase(lastComponent(fence));
+  // The title came from `title="…"`, `filename="…"`, or the path after `lang:`,
+  // in that order, all decided once by the parser. Streamdown takes the
+  // extension from the language alone; the fence's own name is the improvement,
+  // because a writer who named the block meant it.
+  std::string base = sanitizeBase(lastComponent(meta.title));
   bool keepExtension = false;
   if (base.empty()) {
     base = sanitizeBase(lastComponent(configuredBase));

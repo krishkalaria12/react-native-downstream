@@ -130,7 +130,7 @@ int main(int argc, char **argv) {
         std::string name = fallback;
         if (block < result.document->blocks.size()) {
           const Block &entry = result.document->blocks[block];
-          name = downloadName(entry.info, entry.language, configured, fallback);
+          name = downloadName(entry.meta, entry.language, configured, fallback);
         }
         testdump::writeString(name);
       } else if (kind == "t") {

@@ -100,6 +100,16 @@ inline bool write(const ParseResult &result) {
     writeString(block.language);
     std::printf(",\"info\":");
     writeString(block.info);
+    // The parsed meta, so a test can assert on the header label, the gutter, and
+    // the download name all reading one struct rather than re-deriving them.
+    std::printf(",\"meta\":{\"title\":");
+    writeString(block.meta.title);
+    std::printf(",\"startLine\":%u,\"noLineNumbers\":%s,\"marks\":[", block.meta.startLine,
+                block.meta.noLineNumbers ? "true" : "false");
+    for (size_t m = 0; m < block.meta.marks.size(); m++) {
+      std::printf("%s[%u,%u]", m ? "," : "", block.meta.marks[m].first, block.meta.marks[m].last);
+    }
+    std::printf("]}");
     std::printf(",\"text\":");
     writeString(block.text);
     std::printf(",\"containers\":[");
