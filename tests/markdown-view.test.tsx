@@ -11,6 +11,11 @@ import {
   getStreamState,
 } from '../src/createMarkdownStream';
 import { DownstreamMarkdown } from '../src/DownstreamMarkdown';
+import {
+  CONTROL_ALL,
+  CONTROL_CODE_DOWNLOAD,
+  CONTROL_LABEL_KEYS,
+} from '../src/controls';
 import { presets } from '../src/presets';
 import { themeSlot } from '../src/themeSlots';
 import type { MarkdownViewProps } from '../src/types';
@@ -404,7 +409,7 @@ describe('DownstreamMarkdown controls', () => {
 
   it('sends every control on by default', () => {
     mount(<DownstreamMarkdown markdown={SOURCE} />);
-    expect(nativeView.last()?.controls).toBe(31);
+    expect(nativeView.last()?.controls).toBe(CONTROL_ALL);
   });
 
   it('sends the resolved bitmask rather than the prop', () => {
@@ -414,7 +419,9 @@ describe('DownstreamMarkdown controls', () => {
         controls={{ code: { download: false } }}
       />
     );
-    expect(nativeView.last()?.controls).toBe(31 & ~2);
+    expect(nativeView.last()?.controls).toBe(
+      CONTROL_ALL & ~CONTROL_CODE_DOWNLOAD
+    );
   });
 
   it('sends the file names, the separator, and the labels', () => {
@@ -434,7 +441,7 @@ describe('DownstreamMarkdown controls', () => {
     expect(props?.csvSeparator).toBe(';');
     const labels = props?.controlLabels as string[];
     expect(labels[0]).toBe('Copiar');
-    expect(labels).toHaveLength(15);
+    expect(labels).toHaveLength(CONTROL_LABEL_KEYS.length);
   });
 
   it('does not wrap code by default', () => {
