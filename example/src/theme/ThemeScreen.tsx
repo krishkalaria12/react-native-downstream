@@ -1,5 +1,12 @@
 import { useMemo, useState } from 'react';
-import { StyleSheet, Switch, Text, View, useColorScheme } from 'react-native';
+import {
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  View,
+  useColorScheme,
+} from 'react-native';
 import {
   DownstreamMarkdown,
   presets,
@@ -9,8 +16,14 @@ import {
   type VSCodeThemeJson,
 } from 'react-native-downstream';
 
-import { Badge, Button, ButtonRow, ChipRow, Group, Notice } from '../ui/kit';
-import { Hero, Screen, SectionLabel, useScreenScroll } from '../ui/screen';
+import { Badge, ChipRow, Group, Notice } from '../ui/kit';
+import {
+  Hero,
+  Screen,
+  SectionLabel,
+  useBottomInset,
+  useScreenScroll,
+} from '../ui/screen';
 import { radius, space, useTheme } from '../ui/theme';
 
 /**
@@ -142,6 +155,15 @@ const VSCODE_JSON = {
   ],
 } as unknown as VSCodeThemeJson;
 
+/** A code block drawn with nothing but the converter's output. */
+const CODE_SAMPLE = `\`\`\`ts
+// The converter maps TextMate scopes onto token classes.
+export function convert(theme: Theme): number {
+  const name = 'demo';
+  return theme.tokenColors.length + 42;
+}
+\`\`\``;
+
 /** What the screen switches between, in the order it offers them. */
 const MODES = [
   { value: 'none', label: 'No theme' },
@@ -154,7 +176,9 @@ const MODES = [
 type Mode = (typeof MODES)[number]['value'];
 
 export function ThemeScreen() {
+  const t = useTheme();
   const scroll = useScreenScroll();
+  const bottom = useBottomInset();
   const scheme = useColorScheme();
   const [mode, setMode] = useState<Mode>('github');
   const [capScale, setCapScale] = useState(false);
@@ -192,81 +216,99 @@ export function ThemeScreen() {
 
   return (
     <Screen title="Theme" scroll={scroll}>
-      <Hero
-        title="Theme"
-        summary="Slot-based theming, both presets, and a VS Code theme read in."
-      />
-
-      <SectionLabel>Theme</SectionLabel>
-      <ChipRow options={MODES} value={mode} onChange={setMode} />
-
-      <Group title="Appearance">
-        <Text style={styles.note}>
-          The device is in {scheme === 'dark' ? 'dark' : 'light'} right now. A
-          theme follows it without a render, because every color it names is a
-          pair and the platform resolves that pair when it draws.
-        </Text>
-      </Group>
-
-      <Group title="Font scale">
-        <View style={styles.row}>
-          <Text style={styles.rowLabel}>Cap at 1.15</Text>
-          <Switch value={capScale} onValueChange={setCapScale} />
-        </View>
-        <Text style={styles.note}>
-          Caps the platform&apos;s font scale, as{' '}
-          <Text style={styles.code}>maxFontSizeMultiplier</Text> does.
-        </Text>
-      </Group>
-
-      <ButtonRow>
-        <Button label="github" onPress={() => setMode('github')} />
-        <Button label="streamdown" onPress={() => setMode('streamdown')} />
-      </ButtonRow>
-
-      <SectionLabel>Rendered</SectionLabel>
-      <DownstreamMarkdown markdown={SOURCE} {...capped} />
-
-      <SectionLabel>From a VS Code theme</SectionLabel>
-      <Text style={styles.note}>
-        <Text style={styles.code}>syntaxColorsFromTheme</Text> reads
-        Shiki&apos;s own format and answers with the engine&apos;s token
-        classes. A scope it cannot resolve is listed as unresolved rather than
-        quietly drawn as something else.
-      </Text>
-      <Group title="Converted token colors">
-        {(
-          [
-            'comment',
-            'keyword',
-            'string',
-            'type',
-            'number',
-            'function',
-          ] as const
-        ).map((token) => (
-          <View key={token} style={styles.row}>
-            <Text style={styles.rowLabel}>{token}</Text>
-            <Swatch color={converted.syntax[token]} />
-          </View>
-        ))}
-      </Group>
-
-      <View style={styles.spacer} />
-
-      {mode !== 'none' && (
-        <Notice tone="accent" title="Only what it names">
-          A theme changes only the slots it sets. Everything else keeps the
-          platform&apos;s own color, so it still follows the appearance and
-          increased contrast.
-        </Notice>
-      )}
-      {mode === 'dark-only' && (
-        <Badge
-          label="Only the dark half is set here, on purpose."
-          tone="warn"
+      <ScrollView
+        onScroll={scroll.onScroll}
+        scrollEventThrottle={16}
+        contentContainerStyle={[styles.content, { paddingBottom: bottom }]}
+      >
+        <Hero
+          title="Theme"
+          summary="Slot-based theming, both presets, and a VS Code theme read in."
         />
-      )}
+
+        <SectionLabel>Theme</SectionLabel>
+        <ChipRow options={MODES} value={mode} onChange={setMode} />
+
+        <View style={styles.controls}>
+          <Group title="Appearance">
+            <Text style={[t.s.caption, styles.groupBody]}>
+              The device is in {scheme === 'dark' ? 'dark' : 'light'} right now.
+              A theme follows it without a render, because every color it names
+              is a pair and the platform resolves that pair when it draws.
+            </Text>
+          </Group>
+
+          <Group title="Font scale">
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Cap at 1.15</Text>
+              <Switch
+                accessibilityLabel="Cap font scale at 1.15"
+                value={capScale}
+                onValueChange={setCapScale}
+              />
+            </View>
+            <Text style={[t.s.caption, styles.groupBody]}>
+              Caps the platform&apos;s font scale, as{' '}
+              <Text style={t.s.mono}>maxFontSizeMultiplier</Text> does.
+            </Text>
+          </Group>
+
+          {mode !== 'none' && (
+            <Notice tone="accent" title="Only what it names">
+              A theme changes only the slots it sets. Everything else keeps the
+              platform&apos;s own color, so it still follows the appearance and
+              increased contrast.
+            </Notice>
+          )}
+          {mode === 'dark-only' && (
+            <Badge
+              label="Only the dark half is set here, on purpose."
+              tone="warn"
+            />
+          )}
+        </View>
+
+        <SectionLabel>Rendered</SectionLabel>
+        <View style={[t.s.card, styles.card]}>
+          <DownstreamMarkdown markdown={SOURCE} {...capped} />
+        </View>
+
+        <SectionLabel>From a VS Code theme</SectionLabel>
+        <View style={styles.controls}>
+          <Text style={t.s.caption}>
+            <Text style={t.s.mono}>syntaxColorsFromTheme</Text> reads
+            Shiki&apos;s own format and answers with the engine&apos;s token
+            classes. A scope it cannot resolve is listed as unresolved rather
+            than quietly drawn as something else.
+          </Text>
+          <Group title="Converted token colors">
+            <View style={styles.groupBody}>
+              {(
+                [
+                  'comment',
+                  'keyword',
+                  'string',
+                  'type',
+                  'number',
+                  'function',
+                ] as const
+              ).map((token) => (
+                <View key={token} style={styles.swatchLine}>
+                  <Text style={styles.rowLabel}>{token}</Text>
+                  <Swatch color={converted.syntax[token]} />
+                </View>
+              ))}
+            </View>
+          </Group>
+        </View>
+        <View style={[t.s.card, styles.card]}>
+          <DownstreamMarkdown
+            markdown={CODE_SAMPLE}
+            theme={{ syntax: converted.syntax }}
+            markdownStyle={{ codeBlock: converted.codeBlock }}
+          />
+        </View>
+      </ScrollView>
     </Screen>
   );
 }
@@ -282,27 +324,40 @@ function Swatch({ color }: { color: string | undefined }) {
           { backgroundColor: color ?? t.c.sunken, borderColor: t.c.lineSoft },
         ]}
       />
-      <Text style={styles.code}>{color ?? 'unresolved'}</Text>
+      <Text style={t.s.mono}>{color ?? 'unresolved'}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  content: { paddingTop: space.sm },
+  controls: {
+    paddingHorizontal: space.xl,
+    paddingTop: space.md,
+    paddingBottom: space.md,
+    gap: space.md,
+  },
+  groupBody: {
+    paddingHorizontal: space.lg,
+    paddingBottom: space.lg,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: space.md,
     minHeight: 44,
+    paddingHorizontal: space.lg,
+  },
+  swatchLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.md,
+    minHeight: 36,
   },
   rowLabel: {
     flexShrink: 1,
-  },
-  note: {
-    marginTop: space.xs,
-  },
-  code: {
-    fontFamily: 'monospace',
   },
   swatchRow: {
     flexDirection: 'row',
@@ -315,7 +370,10 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     borderWidth: StyleSheet.hairlineWidth,
   },
-  spacer: {
-    height: space.xxl,
+  card: {
+    marginHorizontal: space.xl,
+    marginTop: space.md,
+    padding: space.lg,
+    borderRadius: radius.card,
   },
 });
