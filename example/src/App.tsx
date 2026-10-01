@@ -8,6 +8,7 @@ import { StressScreen } from './bench/StressScreen';
 import { ChatScreen } from './example/ChatScreen';
 import { ControlsScreen } from './controls/ControlsScreen';
 import { ROUTES, routeById, type RouteId } from './navigation';
+import { ThemeScreen } from './theme/ThemeScreen';
 import { CompareScreen } from './testing/CompareScreen';
 import { PreviewScreen, type PreviewLaunch } from './testing/PreviewScreen';
 import { NavigationDrawer } from './ui/drawer';
@@ -117,6 +118,8 @@ function Navigation() {
           >
             {route.id === 'example' ? (
               <ChatScreen />
+            ) : route.id === 'theme' ? (
+              <ThemeScreen />
             ) : route.id === 'controls' ? (
               <ControlsScreen />
             ) : route.id === 'testing' ? (
