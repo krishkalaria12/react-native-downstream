@@ -23,6 +23,7 @@ import android.text.style.LineHeightSpan
 import android.text.style.MetricAffectingSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StrikethroughSpan
+import android.text.style.UnderlineSpan
 import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
 import android.util.LruCache
@@ -38,7 +39,7 @@ import kotlin.math.min
  * Marks a link's text. Taps are hit-tested by the views; accessibility
  * services activate links through ClickableSpan.onClick.
  */
-internal class LinkSpan(val index: Int, val color: Int) : ClickableSpan() {
+internal class LinkSpan(val index: Int, val color: Int, val underlined: Boolean = true) : ClickableSpan() {
   override fun onClick(widget: View) {
     var parent: Any? = widget
     while (parent is View) {
@@ -52,7 +53,7 @@ internal class LinkSpan(val index: Int, val color: Int) : ClickableSpan() {
 
   override fun updateDrawState(paint: TextPaint) {
     paint.color = color
-    paint.isUnderlineText = true
+    paint.isUnderlineText = underlined
   }
 }
 
@@ -96,12 +97,42 @@ private class InlineCodeLineSpan(private val ascent: Int, private val descent: I
  */
 internal class InlineCodeBackgroundSpan(val color: Int, val ascent: Int, val descent: Int)
 
+/**
+ * A strikethrough in a color the theme chose.
+ *
+ * Android's own `StrikethroughSpan` takes no color and draws the current text
+ * color, so a theme that wants a strike in its own color needs a span of its
+ * own. A null color means the text color, which is what the platform's span
+ * does, so an unset slot is still the platform's span rather than this one.
+ */
+internal class ThemedStrikeSpan(val color: Int) : UnderlineSpan() {
+  override fun updateDrawState(ds: TextPaint) {
+    ds.flags = ds.flags or Paint.STRIKE_THRU_TEXT_FLAG
+    ds.color = color
+  }
+}
+
+/**
+ * One nesting level's decoration: its indent, the bar or marker it draws in that
+ * indent, and the two metrics the drawing reads off it.
+ *
+ * The bar's width and the marker gap are here rather than in the view because
+ * they are the theme's, and a view that read its own would be a second place
+ * the values could differ from the measurement's.
+ */
 internal class ContainerDecoration(
   val leading: Float,
   val width: Float,
   val barColor: Int?,
   val continuesPrevious: Boolean,
   val marker: String?,
+  val barWidth: Float = 0f,
+  val markerGap: Float = 0f,
+  /**
+   * The marker's own color, which a theme can set apart from the list's: a
+   * bullet from a number, or a finished task from an unfinished one.
+   */
+  val markerColor: Int? = null,
 )
 
 /** One native block's reading order and role inside a shared text layout. */
@@ -136,6 +167,8 @@ private class BlockSpan(
   private val colors: Palette,
   private val density: Float,
   private val rtl: Boolean,
+  /** A rule's thickness, from the theme, rather than a density-sized hairline. */
+  private val ruleHeight: Float,
 ) : LineHeightSpan, LineBackgroundSpan {
   private fun blockStart(text: CharSequence) = (text as Spanned).getSpanStart(this)
 
@@ -174,18 +207,27 @@ private class BlockSpan(
 
     for (container in containers) {
       val barColor = container.barColor
-      if (barColor != null) {
+      // A zero-width bar is a bar the theme removed, so the width is checked
+      // before drawing rather than only the color.
+      if (barColor != null && container.barWidth > 0f) {
         paint.color = barColor
         val barTop = if (first && !container.continuesPrevious) textTop else top
-        val x = if (rtl) right - container.leading - (2 + BAR_WIDTH) * density
+        val x = if (rtl) right - container.leading - 2 * density - container.barWidth
           else left + container.leading + 2 * density
-        canvas.drawRect(x, barTop.toFloat(), x + BAR_WIDTH * density, bottom.toFloat(), paint)
+        canvas.drawRect(x, barTop.toFloat(), x + container.barWidth, bottom.toFloat(), paint)
       }
       val marker = container.marker
       if (first && marker != null) {
-        val x = if (rtl) right - container.leading - container.width + MARKER_GAP * density
-          else left + container.leading + container.width - MARKER_GAP * density - markerPaint.measureText(marker)
-        canvas.drawText(marker, x, baseline.toFloat(), markerPaint)
+        val x = if (rtl) right - container.leading - container.width + container.markerGap
+          else left + container.leading + container.width - container.markerGap - markerPaint.measureText(marker)
+        // The marker's own color where the theme gave it one, and the shared
+        // marker paint otherwise, so an unset slot draws exactly as it always did.
+        val paint = if (container.markerColor != null) {
+          TextPaint(markerPaint).apply { color = container.markerColor }
+        } else {
+          markerPaint
+        }
+        canvas.drawText(marker, x, baseline.toFloat(), paint)
       }
     }
 
@@ -194,9 +236,12 @@ private class BlockSpan(
     if (decoration == DECORATION_RULE) {
       val x = if (rtl) left.toFloat() else left + contentLeading
       val endX = if (rtl) right - contentLeading else right.toFloat()
-      paint.color = colors.separator
+      // The rule's color and thickness are both the theme's, drawn centered on
+      // the midline, which is where a one-point hairline sat.
+      paint.color = colors.rule
+      val thickness = maxOf(1f, ruleHeight)
       val y = ((textTop + bottom) / 2).toFloat()
-      canvas.drawRect(x, y, endX, y + density, paint)
+      canvas.drawRect(x, y - (thickness - 1) / 2, endX, y - (thickness - 1) / 2 + thickness, paint)
     }
     paint.color = savedColor
     paint.style = savedStyle
@@ -205,50 +250,126 @@ private class BlockSpan(
   companion object {
     const val DECORATION_NONE = 0
     const val DECORATION_RULE = 1
-    const val BAR_WIDTH = 3
-    const val MARKER_GAP = 6
   }
 }
 
-internal class Palette(private val night: Boolean) {
-  val text = if (night) 0xFFFFFFFF.toInt() else 0xFF000000.toInt()
-  val secondary = if (night) 0x99EBEBF5.toInt() else 0x993C3C43.toInt()
-  val link = if (night) 0xFF0A84FF.toInt() else 0xFF007AFF.toInt()
-  val codeBackground = if (night) 0x3D767680 else 0x1F767680
-  val separator = if (night) 0x99545458.toInt() else 0x4A3C3C43
-  val quoteBar = if (night) 0xFF48484A.toInt() else 0xFFC7C7CC.toInt()
+/**
+ * The colors one rendering draws with, for one theme in one appearance.
+ *
+ * Every entry is a slot read, with the value the renderer used before theming
+ * existed as the fallback. That fallback is what makes an unthemed document
+ * pixel-identical to the one this replaced, and it is why the platform's own
+ * night colors sit here rather than in a theme: a theme that sets nothing should
+ * still be right at two o'clock in the morning.
+ */
+internal class Palette(private val theme: NativeTheme, val night: Boolean) {
+  /**
+   * A slot's color, or one of [light] and [dark] when the theme left it unset.
+   *
+   * The pair is the platform's role color rather than one value, because an
+   * unset slot has to follow the appearance the same way a set one does.
+   */
+  fun slot(id: Int, light: Int, dark: Int): Int = theme.color(id, night) ?: if (night) dark else light
 
   /**
-   * GitHub's Primer "prettylights" colors, the palette behind Shiki's
-   * `github-light` and `github-dark` themes and the same table the engine and
-   * iOS read, so a token cannot drift between platforms. Indexed by
-   * NativeDocument.TOKEN_*; Plain and Operator take the code text color, as
-   * punctuation does in GitHub's themes.
+   * A slot's color, or null when neither the theme nor the caller named one.
+   *
+   * Used where a theme's "no fill at all" has to be told from a fill that
+   * happens to be transparent, such as a table's zebra striping.
    */
-  private val tokens = intArrayOf(
-    0xFF1F2328.toInt(), 0xFF6E7781.toInt(), 0xFFCF222E.toInt(), 0xFF8250DF.toInt(), 0xFF0A3069.toInt(),
-    0xFF0550AE.toInt(), 0xFF0550AE.toInt(), 0xFF116329.toInt(), 0xFF8250DF.toInt(), 0xFF0550AE.toInt(),
-    0xFF1F2328.toInt(), 0xFF953800.toInt(), 0xFF116329.toInt(), 0xFF0550AE.toInt(), 0xFF116329.toInt(),
-    0xFF82071E.toInt(), 0xFF0550AE.toInt(),
+  fun slotOrNull(id: Int): Int? = theme.color(id, night)
+
+  val text = slot(ThemeSlots.SLOT_PARAGRAPH_COLOR, 0xFF000000.toInt(), 0xFFFFFFFF.toInt())
+  val secondary = slot(ThemeSlots.SLOT_BLOCKQUOTE_COLOR, 0x993C3C43.toInt(), 0x99EBEBF5.toInt())
+  val link = slot(ThemeSlots.SLOT_LINK_COLOR, 0xFF007AFF.toInt(), 0xFF0A84FF.toInt())
+  val codeBackground = slot(ThemeSlots.SLOT_CODE_BACKGROUND_COLOR, 0x1F767680, 0x3D767680)
+  val codeBlockBackground =
+    slot(ThemeSlots.SLOT_CODE_BLOCK_BACKGROUND_COLOR, 0x1F767680, 0x3D767680)
+  val separator = slot(ThemeSlots.SLOT_TABLE_BORDER_COLOR, 0x4A3C3C43, 0x99545458.toInt())
+  val rule = slot(ThemeSlots.SLOT_THEMATIC_BREAK_COLOR, 0x4A3C3C43, 0x99545458.toInt())
+  val quoteBar = slot(ThemeSlots.SLOT_BLOCKQUOTE_BORDER_COLOR, 0xFFC7C7CC.toInt(), 0xFF48484A.toInt())
+  val marker = slot(ThemeSlots.SLOT_LIST_MARKER_COLOR, 0x993C3C43.toInt(), 0x99EBEBF5.toInt())
+  val codeText = slot(ThemeSlots.SLOT_CODE_BLOCK_COLOR, 0xFF000000.toInt(), 0xFFFFFFFF.toInt())
+  val headerColor = slot(ThemeSlots.SLOT_CODE_BLOCK_HEADER_COLOR, secondary, secondary)
+  val headerBackground =
+    slotOrNull(ThemeSlots.SLOT_CODE_BLOCK_HEADER_BACKGROUND_COLOR)
+  /**
+   * The header's buttons, which a theme can tint apart from the row's text.
+   *
+   * A theme that named only the row's text gets buttons that match, because a
+   * header and its controls read as one row.
+   */
+  val headerButtonColor =
+    slotOrNull(ThemeSlots.SLOT_CODE_BLOCK_HEADER_BUTTON_COLOR) ?: headerColor
+  /** The rule under a code card's header. Clear where a theme set none. */
+  val headerBorderColor = slotOrNull(ThemeSlots.SLOT_CODE_BLOCK_HEADER_BORDER_COLOR)
+
+  /** A table toolbar's buttons, which read as chrome rather than as content. */
+  val toolbarButtonColor = slot(ThemeSlots.SLOT_TABLE_TOOLBAR_BUTTON_COLOR, secondary, secondary)
+
+  /**
+   * The selection highlight.
+   *
+   * The platform's own accent where a theme named none, which is what a reader
+   * expects a selection to look like. `null` means "leave it alone", so a view
+   * that never set one keeps whatever it inherited.
+   */
+  val selectionColor: Int? = theme.color(ThemeSlots.SLOT_SELECTION_COLOR, night)
+  val tableHeaderBackground =
+    slotOrNull(ThemeSlots.SLOT_TABLE_HEADER_BACKGROUND_COLOR) ?:
+      slot(ThemeSlots.SLOT_CODE_BACKGROUND_COLOR, 0x1F767680, 0x3D767680)
+
+  /**
+   * One row's zebra fill, or null where the theme set none.
+   *
+   * `index` counts data rows from zero, so the header row is not counted and the
+   * alternation starts on the first row of the body whichever that is.
+   */
+  fun rowStripe(index: Int): Int? =
+    slotOrNull(
+      if (index % 2 == 0) ThemeSlots.SLOT_TABLE_ROW_EVEN_BACKGROUND_COLOR
+      else ThemeSlots.SLOT_TABLE_ROW_ODD_BACKGROUND_COLOR,
+    )
+
+  /** The syntax slot per engine token class, so a class picks its own color. */
+  private val tokenSlots = intArrayOf(
+    ThemeSlots.SLOT_SYNTAX_PLAIN,
+    ThemeSlots.SLOT_SYNTAX_COMMENT,
+    ThemeSlots.SLOT_SYNTAX_KEYWORD,
+    ThemeSlots.SLOT_SYNTAX_TYPE,
+    ThemeSlots.SLOT_SYNTAX_STRING,
+    ThemeSlots.SLOT_SYNTAX_NUMBER,
+    ThemeSlots.SLOT_SYNTAX_CONSTANT,
+    ThemeSlots.SLOT_SYNTAX_REGEX,
+    ThemeSlots.SLOT_SYNTAX_FUNCTION,
+    ThemeSlots.SLOT_SYNTAX_PROPERTY,
+    ThemeSlots.SLOT_SYNTAX_OPERATOR,
+    ThemeSlots.SLOT_SYNTAX_PREPROCESSOR,
+    ThemeSlots.SLOT_SYNTAX_TAG,
+    ThemeSlots.SLOT_SYNTAX_ATTRIBUTE,
+    ThemeSlots.SLOT_SYNTAX_INSERTED,
+    ThemeSlots.SLOT_SYNTAX_DELETED,
+    ThemeSlots.SLOT_SYNTAX_HEADING,
   )
 
-  private val tokensNight = intArrayOf(
-    0xFFF0F6FC.toInt(), 0xFF8B949E.toInt(), 0xFFFF7B72.toInt(), 0xFFD2A8FF.toInt(), 0xFFA5D6FF.toInt(),
-    0xFF79C0FF.toInt(), 0xFF79C0FF.toInt(), 0xFF7EE787.toInt(), 0xFFD2A8FF.toInt(), 0xFF79C0FF.toInt(),
-    0xFFF0F6FC.toInt(), 0xFFFFA657.toInt(), 0xFF7EE787.toInt(), 0xFF79C0FF.toInt(), 0xFF7EE787.toInt(),
-    0xFFFFA198.toInt(), 0xFF79C0FF.toInt(),
-  )
+  /**
+   * One token class's color.
+   *
+   * A token the theme left unset takes the code block's own text color, which is
+   * what a plain run and an operator take in GitHub's own themes.
+   */
+  fun token(tokenClass: Int): Int {
+    val slot = tokenSlots.getOrNull(tokenClass) ?: return codeText
+    return theme.color(slot, night) ?: codeText
+  }
 
-  fun token(tokenClass: Int): Int =
-    (if (night) tokensNight else tokens)[tokenClass.coerceIn(0, NativeDocument.TOKEN_COUNT - 1)]
-
-  /** GitHub alert colors; other quotes use a neutral bar. */
+  /** GitHub alert colors; a type GitHub does not define gets a neutral bar. */
   fun admonition(type: String?): Int = when (type) {
-    "note" -> 0xFF007AFF.toInt()
-    "tip" -> 0xFF34C759.toInt()
-    "important" -> 0xFFAF52DE.toInt()
-    "warning" -> 0xFFFF9500.toInt()
-    "caution" -> 0xFFFF3B30.toInt()
+    "note" -> slot(ThemeSlots.SLOT_ADMONITION_NOTE, 0xFF007AFF.toInt(), 0xFF0A84FF.toInt())
+    "tip" -> slot(ThemeSlots.SLOT_ADMONITION_TIP, 0xFF34C759.toInt(), 0xFF30D158.toInt())
+    "important" -> slot(ThemeSlots.SLOT_ADMONITION_IMPORTANT, 0xFFAF52DE.toInt(), 0xFFBF5AF2.toInt())
+    "warning" -> slot(ThemeSlots.SLOT_ADMONITION_WARNING, 0xFFFF9500.toInt(), 0xFFFF9F0A.toInt())
+    "caution" -> slot(ThemeSlots.SLOT_ADMONITION_CAUTION, 0xFFFF3B30.toInt(), 0xFFFF453A.toInt())
     else -> quoteBar
   }
 }
@@ -302,6 +423,16 @@ internal class CodeSegment(
   /** Padding inside the card, the same on every side. */
   val padding: Int,
   val colors: Palette,
+  /** The card's corner radius and border width, both from the theme. */
+  val radius: Float,
+  val borderWidth: Float,
+  /** The header row's face, for the language label. */
+  val headerFace: Typeface,
+  val headerSize: Float,
+  /** A list marker's face and size, for the margin beside the card. */
+  val markerFace: Typeface,
+  val markerSize: Float,
+  val markerGap: Float,
   gapBefore: Int,
 ) : Segment(gapBefore) {
   private var wrappedWidth = -1
@@ -377,6 +508,8 @@ internal class TableSegment(
   val markerPaint: TextPaint,
   val colors: Palette,
   val density: Float,
+  /** One grid line's width, from the theme. */
+  val borderWidth: Int,
   val rtl: Boolean,
   val identity: Long,
   /** The segment's first block, which is what a copy or a download reads. */
@@ -384,8 +517,10 @@ internal class TableSegment(
   val blockCount: Int,
   gapBefore: Int,
 ) : Segment(gapBefore) {
-  val tableWidth = columnWidths.sum() + 1
-  val tableHeight = rowHeights.sum() + 1
+  // One border width for the closing grid line, so the outer edge the view draws
+  // sits inside the size the measurement produced.
+  val tableWidth = columnWidths.sum() + borderWidth
+  val tableHeight = rowHeights.sum() + borderWidth
   val rowTops = IntArray(rowHeights.size + 1).also { tops ->
     for (index in rowHeights.indices) tops[index + 1] = tops[index] + rowHeights[index]
   }
@@ -529,20 +664,6 @@ internal class RenderedDocument(
     const val CHROME_CODE_HEADER = 1
     const val CHROME_TABLE_TOOLBAR = 2
     const val CHROME_CODE_WRAP = 4
-    private const val BODY_SIZE = 16f
-    private const val CODE_SIZE = 14f
-    private val HEADING_SIZES = floatArrayOf(28f, 24f, 20f, 18f, 16f, 15f)
-    private const val GAP_NORMAL = 12f
-    private const val GAP_HEADING = 20f
-    private const val GAP_TIGHT = 4f
-    private const val QUOTE_INDENT = 16f
-    private const val LIST_INDENT = 32f
-    private const val CODE_PADDING = 10f
-    private const val CHROME_ROW_HEIGHT_DP = 32f
-    private const val MIN_COLUMN_WIDTH = 56f
-    private const val MAX_COLUMN_WIDTH = 280f
-    private const val CELL_PADDING_HORIZONTAL = 12f
-    private const val CELL_PADDING_VERTICAL = 8f
 
     // Worker threads prepare every document in a commit before Fabric
     // measures them, so this holds at least a screenful of messages.
@@ -597,25 +718,60 @@ internal class RenderedDocument(
     }
 
     /**
+     * The bottom margin of the block before `from`, in points.
+     *
+     * Margin collapsing needs the margin on the block above, and a segment only
+     * holds its own blocks, so a segment that does not start the document reads
+     * that one block here. It is the only block a segment needs from outside
+     * itself, and it is read once per segment rather than once per block.
+     *
+     * Zero when the document does not have that block, which is what a
+     * vanished document should collapse to rather than throw.
+     */
+    private fun bottomMarginAbove(documentId: Long, from: Int, style: Style): Float {
+      if (from <= 0) {
+        return 0f
+      }
+      val previous = DownstreamNative.readDocument(documentId, from - 1, from) ?: return 0f
+      if (previous.blockCount == 0) {
+        return 0f
+      }
+      return style.px(style.theme.number(style.marginBottomSlot(previous, 0)))
+    }
+
+    /**
      * Returns a cached rendering, or null when the document is gone.
      *
      * `syntaxHighlighting` decides whether code blocks carry token colors.
      * Tokens are always computed by the engine, so this only chooses the
      * rendering and it is part of both cache keys. Measurement passes true:
      * colors do not change metrics, so a measurement is valid either way.
+     *
+     * `themeId` is the interned theme the caller draws with. It is in both keys
+     * so a themed rendering is never handed to an unthemed view, and it resolves
+     * the theme's cap on the platform font scale here rather than at every draw.
      */
     fun obtain(
       context: Context,
       documentId: Long,
       fontScale: Float,
       syntaxHighlighting: Boolean = true,
+      themeId: Long = 0L,
     ): RenderedDocument? {
       val night = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
         Configuration.UI_MODE_NIGHT_YES
-      val key = "$documentId:$fontScale:$night:$syntaxHighlighting"
+      val key = "$documentId:$fontScale:$night:$syntaxHighlighting:$themeId"
       cache.get(key)?.let { return it }
       val plan = DownstreamNative.readSegmentPlan(documentId) ?: return null
-      val style = Style(fontScale, Palette(night))
+      // A theme can cap the platform's font scale but cannot raise it, and the
+      // cap is applied once here so every measurement below works with the
+      // result. Resolved in C++ so both platforms read one rule.
+      val scaled = DownstreamNative.fontScaleCap(themeId, fontScale)
+      val theme = NativeTheme.of(themeId)
+      // One style for the shared scale and the paints, which is what a
+      // measurement reads; a segment builds its own for the per-block work that
+      // needs the document.
+      val style = Style(scaled, Palette(theme, night), theme)
       val segments = ArrayList<Segment>(plan.size)
       // Each code segment's ordinal is a property of the plan, so a measurement
       // and the view that draws it read the same number: the ordinal is not
@@ -628,11 +784,17 @@ internal class RenderedDocument(
         // ordinal is in the key because a cached segment is reused only where it
         // would be built identically.
         val segmentKey =
-          "${planned.identity}:${planned.to - planned.from}:$ordinal:$fontScale:$night:$syntaxHighlighting"
+          "${planned.identity}:${planned.to - planned.from}:$ordinal:$scaled:$night:$syntaxHighlighting:$themeId"
         val segment = (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
           ?: DownstreamNative.readDocument(documentId, planned.from, planned.to)
             ?.let {
-              buildSegment(it, style, planned.from, planned.isCode, ordinal, planned.identity, syntaxHighlighting)
+              buildSegment(
+                it, style, planned.from, planned.isCode, ordinal, planned.identity, syntaxHighlighting,
+                // The block above this segment is not in the slice, so its
+                // bottom margin is read on its own. One block, one crossing, and
+                // only for a segment that does not start the document.
+                bottomMarginAbove(documentId, planned.from, style),
+              )
             }
             ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
           ?: return null
@@ -641,19 +803,169 @@ internal class RenderedDocument(
       return RenderedDocument(documentId, segments, plan, style.paint, style).also { cache.put(key, it) }
     }
 
-  /** Paints and metrics for one font scale and appearance. */
-  internal class Style(fontScale: Float, val colors: Palette) {
+  /**
+   * Paints and metrics for one theme at one font scale in one appearance.
+   *
+   * Every metric is read from a slot rather than named here, so the two
+   * renderers cannot disagree about what a theme means: the values come from the
+   * engine's own table over one JNI crossing, and this file only scales them.
+   */
+  internal class Style(fontScale: Float, val colors: Palette, val theme: NativeTheme) {
     val scale = if (fontScale > 0) fontScale else 1f
     val density = PixelUtil.toPixelFromDIP(1f)
+
+    /// The row a code block's buttons sit in, and a table's. A touch target
+    /// rather than a theme setting, so it is fixed in both directions and a block
+    /// does not move when a button appears.
+    val chromeRowHeight = px(32f).toInt()
+
+    val bodySize = px(theme.number(ThemeSlots.SLOT_PARAGRAPH_FONT_SIZE))
+    val bodyWeight = theme.number(ThemeSlots.SLOT_PARAGRAPH_FONT_WEIGHT)
+    val bodyItalic = theme.flag(ThemeSlots.SLOT_PARAGRAPH_FONT_STYLE)
+    val bodyFamily = theme.family(ThemeSlots.SLOT_PARAGRAPH_FONT_FAMILY)
+
     val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-      textSize = px(BODY_SIZE)
+      textSize = bodySize
       color = colors.text
+      typeface = theme.typeface(
+        ThemeSlots.SLOT_PARAGRAPH_FONT_FAMILY,
+        bodyWeight,
+        bodyItalic,
+      )
     }
-    val markerPaint = TextPaint(paint).apply { color = colors.secondary }
-    /// The row a code block's buttons sit in, and a table's. Fixed in both
-    /// directions so a block does not move when a button appears.
-    val chromeRowHeight = px(CHROME_ROW_HEIGHT_DP).toInt()
-    val codePadding = px(CODE_PADDING).toInt()
+    /** A marker's size, from the theme's marker slot. */
+    val markerSize = px(theme.number(ThemeSlots.SLOT_LIST_MARKER_FONT_SIZE))
+    val markerPaint = TextPaint(paint).apply {
+      color = colors.marker
+      typeface = theme.typeface(
+        ThemeSlots.SLOT_LIST_MARKER_FONT_FAMILY,
+        theme.number(ThemeSlots.SLOT_LIST_MARKER_FONT_WEIGHT),
+        false,
+        true,
+      )
+    }
+    val markerGap = px(theme.number(ThemeSlots.SLOT_LIST_GAP_WIDTH))
+    val barWidth = px(theme.number(ThemeSlots.SLOT_BLOCKQUOTE_BORDER_WIDTH))
+    val quoteIndent = px(theme.number(ThemeSlots.SLOT_BLOCKQUOTE_GAP_WIDTH))
+    val listIndent = px(theme.number(ThemeSlots.SLOT_LIST_MARGIN_LEFT))
+    val codePadding = px(theme.number(ThemeSlots.SLOT_CODE_BLOCK_PADDING)).toInt()
+    /** The header row's size, which the theme sets for the language label. */
+    val codeHeaderSize = px(theme.number(ThemeSlots.SLOT_CODE_BLOCK_HEADER_FONT_SIZE))
+    val codeBlockRadius = px(theme.number(ThemeSlots.SLOT_CODE_BLOCK_BORDER_RADIUS))
+    val codeBlockBorder = px(theme.number(ThemeSlots.SLOT_CODE_BLOCK_BORDER_WIDTH))
+    val minColumnWidth = px(theme.number(ThemeSlots.SLOT_TABLE_MIN_COLUMN_WIDTH))
+    val maxColumnWidth = px(theme.number(ThemeSlots.SLOT_TABLE_MAX_COLUMN_WIDTH))
+    val cellPaddingHorizontal = px(theme.number(ThemeSlots.SLOT_TABLE_CELL_PADDING_HORIZONTAL)).toInt()
+    val cellPaddingVertical = px(theme.number(ThemeSlots.SLOT_TABLE_CELL_PADDING_VERTICAL)).toInt()
+    val tableBorder = px(theme.number(ThemeSlots.SLOT_TABLE_BORDER_WIDTH))
+    val tableRadius = px(theme.number(ThemeSlots.SLOT_TABLE_BORDER_RADIUS))
+    val ruleHeight = px(theme.number(ThemeSlots.SLOT_THEMATIC_BREAK_HEIGHT))
+    val footnoteScale = theme.number(ThemeSlots.SLOT_FOOTNOTE_SIZE_SCALE)
+
+    /** A heading level's size, weight, family, slant and color, per level. */
+    fun headingSize(level: Int): Float = px(theme.number(headingSlot(level, ThemeSlots.Heading.FONT_SIZE)))
+
+    fun headingWeight(level: Int): Float = theme.number(headingSlot(level, ThemeSlots.Heading.FONT_WEIGHT))
+
+    fun headingFamily(level: Int): String = theme.family(headingSlot(level, ThemeSlots.Heading.FONT_FAMILY))
+
+    fun headingItalic(level: Int): Boolean = theme.flag(headingSlot(level, ThemeSlots.Heading.FONT_STYLE))
+
+    fun headingColorSlot(level: Int): Int = headingSlot(level, ThemeSlots.Heading.COLOR)
+
+    /**
+     * Which margin slots a block draws with.
+     *
+     * A quote and a list own their own text, so their margins replace the
+     * paragraph's rather than adding to them, which is why a block inside a
+     * quote is not a paragraph with an indent.
+     */
+    fun marginTopSlot(document: NativeDocument, block: Int): Int {
+      val kind = document.blockKind(block)
+      if (kind == NativeDocument.KIND_HEADING) {
+        return headingSlot(document.headingLevel(block), ThemeSlots.Heading.MARGIN_TOP)
+      }
+      for (depth in 0 until document.containerCount(block)) {
+        when (document.containerKind(block, depth)) {
+          NativeDocument.CONTAINER_QUOTE, NativeDocument.CONTAINER_ADMONITION ->
+            return ThemeSlots.SLOT_BLOCKQUOTE_MARGIN_TOP
+          NativeDocument.CONTAINER_LIST_ITEM -> return ThemeSlots.SLOT_LIST_MARGIN_TOP
+        }
+      }
+      return when (kind) {
+        NativeDocument.KIND_CODE, NativeDocument.KIND_HTML -> ThemeSlots.SLOT_CODE_BLOCK_MARGIN_TOP
+        NativeDocument.KIND_TABLE_ROW -> ThemeSlots.SLOT_TABLE_MARGIN_TOP
+        NativeDocument.KIND_RULE -> ThemeSlots.SLOT_THEMATIC_BREAK_MARGIN_TOP
+        else -> ThemeSlots.SLOT_PARAGRAPH_MARGIN_TOP
+      }
+    }
+
+    /** Which bottom margin a block leaves behind, for the block that follows. */
+    fun marginBottomSlot(document: NativeDocument, block: Int): Int {
+      val kind = document.blockKind(block)
+      if (kind == NativeDocument.KIND_HEADING) {
+        return headingSlot(document.headingLevel(block), ThemeSlots.Heading.MARGIN_BOTTOM)
+      }
+      for (depth in 0 until document.containerCount(block)) {
+        when (document.containerKind(block, depth)) {
+          NativeDocument.CONTAINER_QUOTE, NativeDocument.CONTAINER_ADMONITION ->
+            return ThemeSlots.SLOT_BLOCKQUOTE_MARGIN_BOTTOM
+          NativeDocument.CONTAINER_LIST_ITEM -> return ThemeSlots.SLOT_LIST_MARGIN_BOTTOM
+        }
+      }
+      return when (kind) {
+        NativeDocument.KIND_CODE, NativeDocument.KIND_HTML -> ThemeSlots.SLOT_CODE_BLOCK_MARGIN_BOTTOM
+        NativeDocument.KIND_TABLE_ROW -> ThemeSlots.SLOT_TABLE_MARGIN_BOTTOM
+        NativeDocument.KIND_RULE -> ThemeSlots.SLOT_THEMATIC_BREAK_MARGIN_BOTTOM
+        else -> ThemeSlots.SLOT_PARAGRAPH_MARGIN_BOTTOM
+      }
+    }
+
+    /**
+     * The gap above a block, from its own top margin and the bottom margin of
+     * the block above it.
+     *
+     * `previousBottom` is that bottom margin in points, which is what lets the
+     * rule work across a segment boundary: a segment sees only its own blocks,
+     * so the caller reads the block before the segment and passes its margin in.
+     */
+    fun gapAbove(document: NativeDocument, block: Int, previousBottom: Float): Float {
+      val spacing = document.spacingBefore(block)
+      if (spacing == NativeDocument.SPACING_NONE) {
+        return 0f
+      }
+      if (spacing == NativeDocument.SPACING_TIGHT) {
+        // Another line of the same item, so the list's own item spacing.
+        return px(theme.number(ThemeSlots.SLOT_LIST_ITEM_SPACING))
+      }
+      // The two margins collapse, as CSS collapses them, so a theme that gives
+      // every block a top margin does not also give every pair of blocks two.
+      return maxOf(px(theme.number(marginTopSlot(document, block))), previousBottom)
+    }
+
+    /** As above, for a block inside this segment. */
+    fun gapAbove(document: NativeDocument, block: Int, previous: Int): Float {
+      val spacing = document.spacingBefore(block)
+      if (spacing == NativeDocument.SPACING_NONE) {
+        return 0f
+      }
+      if (spacing == NativeDocument.SPACING_TIGHT) {
+        // Another line of the same item, so the list's own item spacing.
+        return px(theme.number(ThemeSlots.SLOT_LIST_ITEM_SPACING))
+      }
+      // The two margins collapse, as CSS collapses them, so a theme that gives
+      // every block a top margin does not also give every pair two.
+      val above = if (previous >= 0) {
+        px(theme.number(marginBottomSlot(document, previous)))
+      } else {
+        0f
+      }
+      return maxOf(px(theme.number(marginTopSlot(document, block))), above)
+    }
+
+    /** Level n's slot for one property, level n at index n - 1. */
+    private fun headingSlot(level: Int, slots: IntArray): Int =
+      slots[level.coerceIn(1, 6) - 1]
 
     fun px(dp: Float) = (dp * density * scale)
   }
@@ -667,8 +979,10 @@ internal class RenderedDocument(
       codeOrdinal: Int,
       identity: Long,
       syntaxHighlighting: Boolean,
+      previousBottom: Float,
     ): Segment {
       val colors = style.colors
+      val theme = style.theme
       val density = style.density
       val paint = style.paint
       val markerPaint = style.markerPaint
@@ -679,12 +993,6 @@ internal class RenderedDocument(
       val accessibleBlocks = ArrayList<AccessibleBlock>(document.blockCount)
       val isTable = document.blockKind(0) == NativeDocument.KIND_TABLE_ROW
       val flags = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-
-      fun baseGap(block: Int) = when (document.spacingBefore(block)) {
-        NativeDocument.SPACING_NONE -> 0f
-        NativeDocument.SPACING_TIGHT -> px(GAP_TIGHT)
-        else -> px(if (document.blockKind(block) == NativeDocument.KIND_HEADING) GAP_HEADING else GAP_NORMAL)
-      }
 
       fun containersOf(block: Int, previous: Int): Triple<List<ContainerDecoration>, Float, Boolean> {
         var leading = 0f
@@ -701,11 +1009,14 @@ internal class RenderedDocument(
             } else {
               colors.quoteBar
             }
-            containers.add(ContainerDecoration(leading, px(QUOTE_INDENT), bar, continues, null))
-            leading += px(QUOTE_INDENT)
+            containers.add(
+              ContainerDecoration(leading, style.quoteIndent, bar, continues, null, style.barWidth, style.markerGap),
+            )
+            leading += style.quoteIndent
           } else {
+            val task = document.taskState(block, depth)
             val marker = if (document.showsMarker(block, depth)) {
-              when (document.taskState(block, depth)) {
+              when (task) {
                 NativeDocument.TASK_UNCHECKED -> "\u2610"
                 NativeDocument.TASK_CHECKED -> "\u2611"
                 else -> document.marker(block, depth)
@@ -713,8 +1024,20 @@ internal class RenderedDocument(
             } else {
               null
             }
-            containers.add(ContainerDecoration(leading, px(LIST_INDENT), null, continues, marker))
-            leading += px(LIST_INDENT)
+            // A task's box takes its own two colors, and anything else takes the
+            // bullet's slot, so a theme can make numbers quieter than bullets.
+            val markerColor = when (task) {
+              NativeDocument.TASK_UNCHECKED -> colors.slot(ThemeSlots.SLOT_TASK_LIST_BORDER_COLOR, colors.marker, colors.marker)
+              NativeDocument.TASK_CHECKED -> colors.slot(ThemeSlots.SLOT_TASK_LIST_CHECKED_COLOR, colors.marker, colors.marker)
+              else -> colors.slotOrNull(ThemeSlots.SLOT_LIST_BULLET_COLOR) ?: colors.marker
+            }
+            containers.add(
+              ContainerDecoration(
+                leading, style.listIndent, null, continues, marker, style.barWidth, style.markerGap,
+                if (marker != null) markerColor else null,
+              ),
+            )
+            leading += style.listIndent
           }
         }
         return Triple(containers, leading, inQuote)
@@ -743,25 +1066,41 @@ internal class RenderedDocument(
         // A code card is its own segment and draws its own padding, so its
         // block never reserves any here, and the block that follows one starts
         // from the plain gap the document stack adds.
-        val gap = if (previous >= 0 && !isCode) baseGap(block) else 0f
+        val gap = if (previous >= 0 && !isCode) style.gapAbove(document, block, previous) else 0f
         val decoration = if (kind == NativeDocument.KIND_RULE) BlockSpan.DECORATION_RULE else BlockSpan.DECORATION_NONE
 
-        var size = px(BODY_SIZE)
-        when (kind) {
-          NativeDocument.KIND_HEADING -> {
-            size = px(HEADING_SIZES[document.headingLevel(block).coerceIn(1, 6) - 1])
-            text.setSpan(StyleSpan(Typeface.BOLD), start, end, flags)
-          }
-          NativeDocument.KIND_CODE, NativeDocument.KIND_HTML -> {
-            size = px(CODE_SIZE)
-            text.setSpan(TypefaceSpan("monospace"), start, end, flags)
-          }
-        }
+        // The block's typography comes back resolved from the engine, from the
+        // same rules iOS calls, so a theme means one thing rather than one thing
+        // per platform. A quote or a list's own slots are already folded in.
+        val level = document.headingLevel(block).coerceIn(1, 6)
+        val size = px(document.blockFontSize(block))
+        val weight = document.blockFontWeight(block)
+        val italic = document.blockItalic(block)
+        val family = theme.familyAt(document.blockFontFamily(block))
+        val colorSlot = document.blockColorSlot(block)
+        val monospaced = document.isCodeElement(block)
         text.setSpan(AbsoluteSizeSpan(size.toInt()), start, spanEnd, flags)
+        if (weight != style.bodyWeight || italic != style.bodyItalic || family != style.bodyFamily || monospaced) {
+          // A face rather than a style span, because the theme's weight is a
+          // number the hundred `Typeface` constants do not cover.
+          text.setSpan(
+            TypefaceSpan(theme.typeface(family, weight, italic, monospaced)),
+            start,
+            end,
+            flags,
+          )
+        }
+        // A block inside a quote takes the quote's own color unless the theme
+        // named a color for the block's element, which is what lets a themed
+        // quote restyle the text inside it. An h6 reads as secondary for the
+        // same reason: it is the smallest heading, and a theme that named no
+        // color for it gets the muted one rather than full-strength body text.
         val color = when {
-          document.isAdmonitionTitle(block) -> colors.admonition(document.marker(block, document.containerCount(block) - 1))
-          inQuote || (kind == NativeDocument.KIND_HEADING && document.headingLevel(block) == 6) -> colors.secondary
-          else -> null
+          document.isAdmonitionTitle(block) ->
+            colors.admonition(document.marker(block, document.containerCount(block) - 1))
+          (inQuote || (kind == NativeDocument.KIND_HEADING && level == 6)) && !theme.colorSet(colorSlot) ->
+            colors.secondary
+          else -> theme.color(colorSlot, colors.night)
         }
         if (color != null) {
           text.setSpan(ForegroundColorSpan(color), start, end, flags)
@@ -772,7 +1111,7 @@ internal class RenderedDocument(
         }
         text.setSpan(
           BlockSpan(gap.toInt(), leading, decoration, containers, markerPaint, colors, density,
-            isCode || startsRightToLeft(text, start, end)),
+            isCode || startsRightToLeft(text, start, end), style.ruleHeight),
           start,
           spanEnd,
           Spanned.SPAN_PARAGRAPH,
@@ -785,15 +1124,81 @@ internal class RenderedDocument(
         val styles = document.runStyles(run)
         val bold = styles and NativeDocument.STYLE_STRONG != 0
         val italic = styles and NativeDocument.STYLE_EMPHASIS != 0
-        when {
-          bold && italic -> text.setSpan(StyleSpan(Typeface.BOLD_ITALIC), start, end, flags)
-          bold -> text.setSpan(StyleSpan(Typeface.BOLD), start, end, flags)
-          italic -> text.setSpan(StyleSpan(Typeface.ITALIC), start, end, flags)
+        val isCode = styles and NativeDocument.STYLE_CODE != 0
+        val linked = document.runLink(run) >= 0
+
+        // The run's face starts as the block's own and takes the inline kind's
+        // slots on top, so a `strong` in a themed heading is a heavier heading
+        // rather than a heading that drops back to the body face. A face rather
+        // than a style span, because a theme's weight is a number the hundred
+        // `Typeface` constants do not cover.
+        val blockIndex = document.blockOf(start)
+        var runWeight = document.blockFontWeight(blockIndex)
+        var runItalic = document.blockItalic(blockIndex)
+        var runFamily = theme.familyAt(document.blockFontFamily(blockIndex))
+        if (bold) {
+          runFamily = theme.family(ThemeSlots.SLOT_STRONG_FONT_FAMILY).ifEmpty { runFamily }
+          // A theme that named a weight means it; one that named only a family
+          // gets the block's weight raised, so bold in bold still reads.
+          runWeight = if (theme.numberSet(ThemeSlots.SLOT_STRONG_FONT_WEIGHT)) {
+            theme.number(ThemeSlots.SLOT_STRONG_FONT_WEIGHT)
+          } else {
+            minOf(900f, runWeight + if (runWeight >= 600f) 200f else 300f)
+          }
+        }
+        if (italic) {
+          runFamily = theme.family(ThemeSlots.SLOT_EM_FONT_FAMILY).ifEmpty { runFamily }
+          if (theme.flag(ThemeSlots.SLOT_EM_FONT_STYLE)) {
+            runItalic = true
+          }
+        }
+        if (linked) {
+          runFamily = theme.family(ThemeSlots.SLOT_LINK_FONT_FAMILY).ifEmpty { runFamily }
+          runWeight = theme.number(ThemeSlots.SLOT_LINK_FONT_WEIGHT)
+        }
+        if (isCode) {
+          runFamily = theme.family(ThemeSlots.SLOT_CODE_FONT_FAMILY)
+        }
+        text.setSpan(
+          TypefaceSpan(
+            theme.typeface(
+              runFamily,
+              runWeight,
+              runItalic,
+              isCode && runFamily.isEmpty(),
+            ),
+          ),
+          start,
+          end,
+          flags,
+        )
+
+        // A theme can recolor each inline kind on its own. The colors default to
+        // "inherit", so an unset one leaves the block's color alone rather than
+        // painting over it.
+        val inlineColor = when {
+          document.isAdmonitionTitle(blockIndex) -> null
+          bold -> theme.color(ThemeSlots.SLOT_STRONG_COLOR, colors.night)
+          italic -> theme.color(ThemeSlots.SLOT_EM_COLOR, colors.night)
+          linked -> theme.color(ThemeSlots.SLOT_LINK_COLOR, colors.night)
+          isCode -> theme.color(ThemeSlots.SLOT_CODE_COLOR, colors.night)
+          else -> null
+        }
+        if (inlineColor != null) {
+          text.setSpan(ForegroundColorSpan(inlineColor), start, end, flags)
         }
         if (styles and NativeDocument.STYLE_STRIKETHROUGH != 0) {
-          text.setSpan(StrikethroughSpan(), start, end, flags)
+          val strike = theme.color(ThemeSlots.SLOT_STRIKETHROUGH_COLOR, colors.night)
+          text.setSpan(
+            // The platform's span when the theme named no color, so an unset
+            // slot keeps drawing in the text color it always did.
+            if (strike != null) ThemedStrikeSpan(strike) else StrikethroughSpan(),
+            start,
+            end,
+            flags,
+          )
         }
-        if (styles and NativeDocument.STYLE_CODE != 0) {
+        if (isCode) {
           val size = text.getSpans(start, end, AbsoluteSizeSpan::class.java).firstOrNull()?.size?.toFloat()
           val metrics = TextPaint(paint).apply { if (size != null) textSize = size }.fontMetricsInt
           text.setSpan(
@@ -802,8 +1207,14 @@ internal class RenderedDocument(
             end,
             flags or (1 shl Spanned.SPAN_PRIORITY_SHIFT),
           )
-          text.setSpan(TypefaceSpan("monospace"), start, end, flags)
-          text.setSpan(RelativeSizeSpan(CODE_SIZE / BODY_SIZE), start, end, flags)
+          // A share of the block's own size, so inline code keeps its
+          // proportions when a theme changes the body size.
+          text.setSpan(
+            RelativeSizeSpan(theme.inlineCodeRatio(px(theme.number(ThemeSlots.SLOT_CODE_FONT_SIZE)))),
+            start,
+            end,
+            flags,
+          )
           // Table cells have no block spacing, and their layouts draw spans.
           text.setSpan(
             if (isTable) {
@@ -817,16 +1228,52 @@ internal class RenderedDocument(
           )
         }
         if (styles and NativeDocument.STYLE_IMAGE_ALT != 0) {
-          text.setSpan(ForegroundColorSpan(colors.secondary), start, end, flags)
+          // Alt text reads as secondary by design, so the theme's own alt color
+          // wins over the block's text color.
+          text.setSpan(
+            ForegroundColorSpan(
+              theme.color(ThemeSlots.SLOT_IMAGE_ALT_COLOR, colors.night) ?: colors.secondary,
+            ),
+            start,
+            end,
+            flags,
+          )
         }
         if (styles and NativeDocument.STYLE_FOOTNOTE != 0) {
-          text.setSpan(RelativeSizeSpan(0.75f), start, end, flags)
-          text.setSpan(BaselineShiftSpan(0.45f), start, end, flags)
-          text.setSpan(ForegroundColorSpan(colors.link), start, end, flags)
+          // A fraction of the block's size, so the reference keeps its
+          // proportions when a theme changes the body size.
+          text.setSpan(
+            RelativeSizeSpan(theme.number(ThemeSlots.SLOT_FOOTNOTE_SIZE_SCALE)),
+            start,
+            end,
+            flags,
+          )
+          text.setSpan(
+            BaselineShiftSpan(theme.number(ThemeSlots.SLOT_FOOTNOTE_RAISE)),
+            start,
+            end,
+            flags,
+          )
+          text.setSpan(
+            ForegroundColorSpan(
+              theme.color(ThemeSlots.SLOT_FOOTNOTE_COLOR, colors.night) ?: colors.link,
+            ),
+            start,
+            end,
+            flags,
+          )
         }
         val link = document.runLink(run)
         if (link >= 0) {
-          text.setSpan(LinkSpan(link, colors.link), start, end, flags)
+          // A theme can turn the underline off, which is what a link that reads
+          // as a link by color alone wants.
+          val linkColor = theme.color(ThemeSlots.SLOT_LINK_COLOR, colors.night) ?: colors.link
+          text.setSpan(
+            LinkSpan(link, linkColor, theme.flag(ThemeSlots.SLOT_LINK_UNDERLINE)),
+            start,
+            end,
+            flags,
+          )
         }
       }
 
@@ -848,11 +1295,12 @@ internal class RenderedDocument(
 
       // A text segment that a committed chunk split off gets the gap it would
       // have inside one segment, so both stack to the same height.
-      val gapBefore = if (from == 0) 0 else baseGap(0).toInt()
+      // The block above the segment is not in this slice, so the caller passes
+      // its bottom margin in; zero at the very top of the document.
+      val gapBefore = style.gapAbove(document, 0, previousBottom).toInt()
       if (isTable) {
         return buildTable(
-          document, text, 0, document.blockCount, paint, markerPaint, colors, density, ::px, containersOf(0, -1),
-          gapBefore, identity, from,
+          document, text, 0, document.blockCount, style, containersOf(0, -1), gapBefore, identity, from,
         )
       }
       val displayText = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -910,6 +1358,18 @@ internal class RenderedDocument(
         firstLine = firstLine,
         padding = style.codePadding,
         colors = style.colors,
+        radius = style.codeBlockRadius,
+        borderWidth = style.codeBlockBorder,
+        headerFace = style.theme.typeface(
+          ThemeSlots.SLOT_CODE_BLOCK_FONT_FAMILY,
+          style.theme.number(ThemeSlots.SLOT_CODE_BLOCK_FONT_WEIGHT),
+          false,
+          true,
+        ),
+        headerSize = style.codeHeaderSize,
+        markerFace = style.markerPaint.typeface,
+        markerSize = style.markerSize,
+        markerGap = style.markerGap,
         gapBefore = gapBefore,
       )
     }
@@ -919,33 +1379,53 @@ internal class RenderedDocument(
       text: Spanned,
       from: Int,
       to: Int,
-      paint: TextPaint,
-      markerPaint: TextPaint,
-      colors: Palette,
-      density: Float,
-      px: (Float) -> Float,
+      style: Style,
       containers: Triple<List<ContainerDecoration>, Float, Boolean>,
       gapBefore: Int,
       identity: Long,
       blockIndex: Int,
     ): TableSegment {
+      val paint = style.paint
+      val markerPaint = style.markerPaint
+      val colors = style.colors
+      val theme = style.theme
+      val density = style.density
+      val px: (Float) -> Float = style::px
       val cellPaint = TextPaint(paint).apply { if (containers.third) color = colors.secondary }
-      val maxWidth = px(MAX_COLUMN_WIDTH)
+      val maxWidth = style.maxColumnWidth
       val columns = (from until to).maxOf { document.cellCount(it) }
-      val widths = FloatArray(columns) { px(MIN_COLUMN_WIDTH) }
+      val widths = FloatArray(columns) { style.minColumnWidth }
       val cellText = (from until to).map { row ->
         (0 until document.cellCount(row)).map { column ->
           val cell = SpannableStringBuilder(text, document.cellStart(row, column), document.cellEnd(row, column))
           if (document.isTableHeader(row)) {
-            cell.setSpan(StyleSpan(Typeface.BOLD), 0, cell.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            // The header's own weight and family when the theme sets them, and
+            // the plain table face when it does not, so a head is never a
+            // different size from the column under it.
+            val face = theme.typeface(
+              ThemeSlots.SLOT_TABLE_HEADER_FONT_FAMILY,
+              theme.number(ThemeSlots.SLOT_TABLE_HEADER_FONT_WEIGHT),
+              false,
+            )
+            if (face != cellPaint.typeface) {
+              cell.setSpan(TypefaceSpan(face), 0, cell.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            val headerColor =
+              theme.color(ThemeSlots.SLOT_TABLE_HEADER_TEXT_COLOR, colors.night) ?: cellPaint.color
+            cell.setSpan(
+              ForegroundColorSpan(headerColor),
+              0,
+              cell.length,
+              Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
           }
           widths[column] = max(widths[column], min(ceil(Layout.getDesiredWidth(cell, cellPaint)), maxWidth))
           cell
         }
       }
 
-      val paddingHorizontal = px(CELL_PADDING_HORIZONTAL).toInt()
-      val paddingVertical = px(CELL_PADDING_VERTICAL).toInt()
+      val paddingHorizontal = style.cellPaddingHorizontal
+      val paddingVertical = style.cellPaddingVertical
       val cells = cellText.mapIndexed { rowIndex, row ->
         row.mapIndexed { column, cell ->
           val alignment = when (document.cellAlign(from + rowIndex, column)) {
@@ -956,6 +1436,9 @@ internal class RenderedDocument(
           buildLayout(cell, cellPaint, ceil(widths[column]).toInt(), alignment)
         }
       }
+      // One border width for the closing grid line, so the last row and column
+      // are not clipped by the view that draws the outer edge.
+      val border = ceil(style.tableBorder).toInt()
       val columnWidths = IntArray(columns) { ceil(widths[it]).toInt() + 2 * paddingHorizontal }
       val rowHeights = IntArray(cells.size) { row -> (cells[row].maxOfOrNull { it.height } ?: 0) + 2 * paddingVertical }
       return TableSegment(
@@ -970,6 +1453,7 @@ internal class RenderedDocument(
         markerPaint = markerPaint,
         colors = colors,
         density = density,
+        borderWidth = border,
         rtl = startsRightToLeft(text, document.blockStart(from), document.blockEnd(from)),
         identity = identity,
         blockIndex = blockIndex,

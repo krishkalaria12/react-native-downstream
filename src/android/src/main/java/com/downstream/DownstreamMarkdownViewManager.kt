@@ -62,6 +62,29 @@ class DownstreamMarkdownViewManager :
 
   override fun setSessionRevision(view: DownstreamMarkdownView, value: Int) = Unit
 
+  // The theme props are interned by the shadow node, and the interned theme
+  // reaches the view as an id in its state, the way the document's id does. The
+  // arrays are kept here only so a view that has been given a theme and has not
+  // yet been given the state for it has something to intern itself, which is the
+  // order props and state actually arrive in.
+  override fun setThemeSlots(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.themeSlots = value?.let { array ->
+      IntArray(array.size()) { array.getInt(it) }
+    }
+  }
+
+  override fun setThemeValues(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.themeValues = value?.let { array ->
+      DoubleArray(array.size()) { array.getDouble(it) }
+    }
+  }
+
+  override fun setThemeFonts(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.themeFonts = value?.let { array ->
+      Array(array.size()) { array.getString(it).orEmpty() }
+    }
+  }
+
   override fun setSelectable(view: DownstreamMarkdownView, value: Boolean) {
     view.setSelectable(value)
   }
@@ -120,7 +143,13 @@ class DownstreamMarkdownViewManager :
     view.setCodeBlockWrap((state.getDouble("codeBlockWrap") ?: 0.0) != 0.0)
     view.setCodeWrapToggles(ordinals)
     view.setChrome(state.getDouble("chrome").toInt())
-    view.setDocument(state.getDouble("documentId").toLong(), state.getDouble("fontScale").toFloat())
+    // The theme travels as its id, the way the document does, so a state update
+    // carries one number rather than every slot the theme sets.
+    view.setDocument(
+      state.getDouble("documentId").toLong(),
+      state.getDouble("fontScale").toFloat(),
+      state.getDouble("themeId")?.toLong() ?: 0L,
+    )
     return null
   }
 
@@ -144,6 +173,9 @@ class DownstreamMarkdownViewManager :
     val documentId = localData?.getDouble("documentId")?.toLong() ?: 0L
     val fontScale = localData?.getDouble("fontScale")?.toFloat() ?: 1f
     val chrome = localData?.getDouble("chrome")?.toInt() ?: 0
+    // The theme id the view mounts with, so this measures the same rendering the
+    // view draws rather than an unthemed one it would measure again.
+    val themeId = localData?.getDouble("themeId")?.toLong() ?: 0L
     // The reader's wrap choices travel in the state beside the document, because
     // a code block's height depends on whether it wraps and a document can hold
     // both kinds at once. Measuring without them would measure a different
@@ -158,7 +190,7 @@ class DownstreamMarkdownViewManager :
     if (DownstreamNative.preparationContext?.get() !== context) {
       DownstreamNative.preparationContext = WeakReference(context)
     }
-    val rendered = RenderedDocument.obtain(context, documentId, fontScale)
+    val rendered = RenderedDocument.obtain(context, documentId, fontScale, themeId = themeId)
       ?: return YogaMeasureOutput.make(0f, 0f)
     val layoutWidth = if (widthMode == YogaMeasureMode.UNDEFINED || !width.isFinite()) {
       rendered.desiredWidth(chrome, codeBlockWrap, wrapToggles)

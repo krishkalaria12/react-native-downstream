@@ -157,6 +157,18 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   private var documentId = 0L
   private var fontScale = 1f
+  /** The interned theme the state carried, which the rendering was built with. */
+  private var themeId = 0L
+  /**
+   * The theme props, kept as sent and interned only when a state has not yet
+   * named a theme. Props arrive before the state that records what the node
+   * resolved them to, so this is the fallback for that window and nothing else:
+   * once a state has named a theme, its id is the authority, because that is the
+   * theme the node measured with.
+   */
+  internal var themeSlots: IntArray? = null
+  internal var themeValues: DoubleArray? = null
+  internal var themeFonts: Array<String>? = null
   private var rendered: RenderedDocument? = null
   private var selectable = true
   private var syntaxHighlighting = true
@@ -202,8 +214,22 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     }
   }
 
-  fun setDocument(documentId: Long, fontScale: Float) {
-    if (documentId == this.documentId && fontScale == this.fontScale && rendered != null) {
+  /**
+   * Mounts the document the state carries, at the font scale and with the theme
+   * it carries.
+   *
+   * The theme id is part of the early-out, so a theme that changes but resolves
+   * to the same font scale still rebuilds once and then stops: the id is what
+   * says the theme is a different one, not what the rendering is.
+   */
+  fun setDocument(documentId: Long, fontScale: Float, stateThemeId: Long = 0L) {
+    // A state that names no theme falls back to the props, interned here. The
+    // default theme's id is zero, so this is also what an app that passes
+    // neither prop gets, and it costs one empty intern.
+    val resolved = if (stateThemeId != 0L) stateThemeId else internProps()
+    if (documentId == this.documentId && fontScale == this.fontScale && resolved == this.themeId &&
+      rendered != null
+    ) {
       return
     }
     if (pendingTraceDocumentId != 0L && pendingTraceDocumentId != documentId) {
@@ -212,10 +238,11 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     }
     this.documentId = documentId
     this.fontScale = fontScale
+    this.themeId = resolved
     val tracing = documentId != 0L && DownstreamNative.isTracingDocument(documentId)
     if (tracing) DownstreamNative.traceDocument(documentId, "apply_start")
     rendered = if (documentId != 0L) {
-      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting)
+      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, resolved)
     } else {
       null
     }
@@ -225,6 +252,13 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       pendingTraceDocumentId = documentId
       scheduleTraceFrame()
     }
+  }
+
+  /** The interned theme id for the props as sent, or zero for the default. */
+  private fun internProps(): Long {
+    val slots = themeSlots ?: return 0L
+    val values = themeValues ?: return 0L
+    return DownstreamNative.internTheme(slots, values, themeFonts ?: emptyArray())
   }
 
   private fun scheduleTraceFrame() {
@@ -463,7 +497,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     if (enabled != syntaxHighlighting) {
       syntaxHighlighting = enabled
       if (documentId != 0L) {
-        rendered = RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting)
+        rendered = RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId)
         syncSegmentViews()
       }
     }
@@ -475,6 +509,14 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       pendingTraceDocumentId = 0L
     }
     documentId = 0L
+    // A recycled view must not keep the theme of the message it last drew, or
+    // the next one would mount with a state the reader never asked for. The
+    // props go too: the next message's props may not have arrived yet, and a
+    // stale theme would be drawn until they did.
+    themeId = 0L
+    themeSlots = null
+    themeValues = null
+    themeFonts = null
     rendered = null
     syntaxHighlighting = true
     generation = 0
@@ -576,7 +618,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
     if (documentId != 0L) {
-      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting)?.let {
+      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId)?.let {
         rendered = it
         syncSegmentViews()
       }
@@ -755,6 +797,12 @@ internal class TextSegmentView(context: Context) : TextView(context) {
       // Selection needs editable spans; plain display takes the cheaper
       // static layout.
       setText(text, if (isTextSelectable) BufferType.SPANNABLE else BufferType.NORMAL)
+    }
+    // A themed selection highlight. `textHighlightColor` is what a TextView
+    // draws its selection in, and it is the only handle on it that has existed
+    // across every supported API level.
+    rendered.style.colors.selectionColor?.let { highlight ->
+      highlightColor = highlight
     }
     readingParts = buildReadingParts(accessibleBlocks)
     accessibility.contentChanged()
@@ -972,7 +1020,7 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   }
   private val body = TextSegmentView(context)
   private val host = Handler(Looper.getMainLooper())
-  private val cardBackground = GradientDrawable().apply { cornerRadius = 6f * resources.displayMetrics.density }
+  private val cardBackground = GradientDrawable()
   private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
   private var segment: CodeSegment? = null
@@ -985,6 +1033,10 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   private var savedOffset = 0
   private var restoreScroll = false
   private var controlHost: ControlHost? = null
+  /** The header row's fill, from the theme, or null where it set none. */
+  private var headerBackground: Int? = null
+  /** The rule under the header row, from the theme, or null where it set none. */
+  private var headerBorder: Int? = null
 
   /**
    * The block's ordinal among the document's code blocks, which a toggle is
@@ -1062,12 +1114,29 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     restoreScroll = true
     ordinal = segment.codeOrdinal
     this.segment = segment
-    cardBackground.setColor(segment.colors.codeBackground)
-    language.setTextColor(segment.colors.secondary)
-    // A selected wrap button takes the text color, so its state is visible.
+    // The card's own fill, and the header row's three colors, all from the
+    // theme. Read once per block rather than per draw, because the card is
+    // redrawn whenever its bounds change.
+    cardBackground.setColor(segment.colors.codeBlockBackground)
+    cardBackground.cornerRadius = segment.radius
+    // A theme that sets no border leaves the card unfilled at its edge, which is
+    // a different thing from a border of zero width in one color.
+    val border = segment.colors.slotOrNull(ThemeSlots.SLOT_CODE_BLOCK_BORDER_COLOR)
+    if (segment.borderWidth > 0f && border != null) {
+      cardBackground.setStroke(segment.borderWidth.toInt(), border)
+    } else {
+      cardBackground.setStroke(0, 0)
+    }
+    headerBackground = segment.colors.headerBackground
+    headerBorder = segment.colors.headerBorderColor
+    language.setTextColor(segment.colors.headerColor)
+    language.textSize = segment.headerSize
+    language.typeface = segment.headerFace
+    // A selected wrap button takes the text color, so its state is visible. The
+    // buttons take the theme's own button color where it gave them one.
     val tint = ColorStateList(
       arrayOf(intArrayOf(android.R.attr.state_selected), intArrayOf()),
-      intArrayOf(segment.colors.text, segment.colors.secondary),
+      intArrayOf(segment.colors.text, segment.colors.headerButtonColor),
     )
     for (button in listOf(wrapButton, downloadButton, copyButton)) button.imageTintList = tint
     body.setContent(segment.text, segment.accessibleBlocks, rendered)
@@ -1193,20 +1262,33 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     // The card starts below the header, which sits on the page, as on iOS.
     cardBackground.setBounds(segment.contentLeading, headerHeight, width, height)
     cardBackground.draw(canvas)
+    // The header row's own fill and rule, drawn under its buttons and label.
+    segment.colors.headerBackground?.let { fill ->
+      barPaint.color = fill
+      canvas.drawRect(0f, 0f, width.toFloat(), headerHeight.toFloat(), barPaint)
+    }
+    if (segment.colors.headerBorderColor != null) {
+      barPaint.color = segment.colors.headerBorderColor
+      canvas.drawRect(0f, headerHeight - 1f, width.toFloat(), headerHeight.toFloat(), barPaint)
+    }
     val firstLine = segment.accessibleBlocks.firstOrNull()
     for (container in segment.containers) {
       val bar = container.barColor
-      if (bar != null) {
+      // A zero-width bar is a bar the theme removed.
+      if (bar != null && container.barWidth > 0f) {
         barPaint.color = bar
         val x = container.leading + 2f
-        val barWidth = 3f * resources.displayMetrics.density
-        canvas.drawRect(x, headerHeight.toFloat(), x + barWidth, height.toFloat(), barPaint)
+        canvas.drawRect(x, headerHeight.toFloat(), x + container.barWidth, height.toFloat(), barPaint)
       }
       val marker = container.marker
       if (marker != null && firstLine != null) {
-        val markerPaint = TextPaint().apply { textSize = 12f * resources.displayMetrics.scaledDensity }
+        // The marker's own family and weight, at the size the theme sets.
+        val markerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+          typeface = segment.markerFace
+          textSize = segment.markerSize
+        }
         val baseline = headerHeight + segment.padding + markerPaint.fontMetrics.ascent
-        val x = container.leading + container.width - 6f - markerPaint.measureText(marker)
+        val x = container.leading + container.width - container.markerGap - markerPaint.measureText(marker)
         canvas.drawText(marker, x, baseline.toFloat(), markerPaint)
       }
     }
@@ -1347,7 +1429,7 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     }
     this.segment = segment
     this.sourceEpoch = sourceEpoch
-    val tint = ColorStateList.valueOf(segment.colors.secondary)
+    val tint = ColorStateList.valueOf(segment.colors.toolbarButtonColor)
     copyButton.imageTintList = tint
     downloadButton.imageTintList = tint
     grid.updateSegment(segment, resetFocus = !sameTable)
@@ -1527,12 +1609,29 @@ private class TableGridView(context: Context) : View(context) {
 
   override fun onDraw(canvas: Canvas) {
     val segment = segment ?: return
-    val width = segment.tableWidth.toFloat() - 1
+    val hairline = segment.borderWidth.coerceAtLeast(1)
+    val width = segment.tableWidth.toFloat() - hairline
     if (segment.hasHeader && segment.rowHeights.isNotEmpty()) {
-      paint.color = segment.colors.codeBackground
+      // The header row's own fill, which a theme can set apart from the body.
+      paint.color = segment.colors.tableHeaderBackground
       canvas.drawRect(0f, 0f, width, segment.rowHeights[0].toFloat(), paint)
     }
     segment.cells.forEachIndexed { row, cells ->
+      // The zebra fill is drawn under the cells, per row rather than per cell,
+      // so an empty trailing cell in a short row still gets the row's fill.
+      if (row >= if (segment.hasHeader) 1 else 0) {
+        val stripe = segment.colors.rowStripe(row - if (segment.hasHeader) 1 else 0)
+        if (stripe != null) {
+          paint.color = stripe
+          canvas.drawRect(
+            0f,
+            segment.rowTops[row].toFloat(),
+            width,
+            segment.rowTops[row + 1].toFloat(),
+            paint,
+          )
+        }
+      }
       cells.forEachIndexed { column, cell ->
         val (x, y) = cellOrigin(segment, row, column)
         canvas.save()
@@ -1543,16 +1642,16 @@ private class TableGridView(context: Context) : View(context) {
     }
     paint.color = segment.colors.separator
     var y = 0f
-    canvas.drawRect(0f, 0f, width, 1f, paint)
+    canvas.drawRect(0f, 0f, width, hairline.toFloat(), paint)
     for (height in segment.rowHeights) {
       y += height
-      canvas.drawRect(0f, y, width, y + 1f, paint)
+      canvas.drawRect(0f, y - hairline, width, y, paint)
     }
     var x = if (segment.rtl) width else 0f
-    canvas.drawRect(x, 0f, x + 1f, y, paint)
+    canvas.drawRect(x, 0f, x + hairline, y, paint)
     for (columnWidth in segment.columnWidths) {
       x += if (segment.rtl) -columnWidth else columnWidth
-      canvas.drawRect(x, 0f, x + 1f, y, paint)
+      canvas.drawRect(x, 0f, x + hairline, y, paint)
     }
   }
 
