@@ -108,7 +108,7 @@ NSString *nameForFormat(NSString *format) {
   BOOL _selectable;
   uint32_t _controls;
   uint32_t _chrome;
-  BOOL _codeBlockWrap;
+  downstream::CodeLayout _codeLayout;
   std::string _codeFilename;
   std::string _tableFilename;
   NSString *_csvSeparator;
@@ -135,7 +135,10 @@ NSString *nameForFormat(NSString *format) {
     _syntaxHighlighting = YES;
     _selectable = YES;
     _controls = defaultProps->controls;
-    _codeBlockWrap = NO;
+    // The default prop values, so a props update that never mentions one of them
+    // compares equal rather than looking like a change.
+    _codeLayout.props = {defaultProps->codeBlockWrap, defaultProps->lineNumbers,
+                         static_cast<float>(defaultProps->codeBlockMaxHeight)};
     _codeFilename = "file";
     _tableFilename = "table";
     _csvSeparator = @",";
@@ -161,22 +164,19 @@ NSString *nameForFormat(NSString *format) {
     return;
   }
   const auto &data = _state->getData();
-  NSMutableSet<NSNumber *> *toggles = [NSMutableSet new];
-  for (const uint32_t ordinal : data.wrapToggles) {
-    [toggles addObject:@(ordinal)];
-  }
   // Read before the early-out below: a theme can change on its own, with the
-  // document, the scale and the wrap choices all the same, and then nothing
-  // else here rebuilds anything.
+  // document, the scale and the code layout all the same, and then nothing else
+  // here rebuilds anything.
   const BOOL themeChanged = [self applyTheme];
   if (!themeChanged && data.document == _document && data.fontSizeMultiplier == _fontScale &&
-      data.chrome == _chrome && [_documentView.codeWrapToggles isEqualToSet:toggles]) {
+      data.chrome == _chrome && data.code == _codeLayout) {
     return;
   }
   _document = data.document;
   _fontScale = data.fontSizeMultiplier;
   _chrome = data.chrome;
-  _documentView.codeWrapToggles = toggles;
+  _codeLayout = data.code;
+  _documentView.codeLayout = _codeLayout;
   const uint64_t documentId = _document ? _document->id : 0;
   const BOOL tracing = documentId && downstream::SessionTrace::enabledDocument(documentId);
   if (tracing) downstream::SessionTrace::recordDocument(documentId, "apply_start");
@@ -260,19 +260,28 @@ NSString *nameForFormat(NSString *format) {
   const auto &previous = *std::static_pointer_cast<const DownstreamMarkdownViewProps>(oldProps ? oldProps : _props);
   if (newProps.sessionId != previous.sessionId || newProps.generation != previous.generation) {
     ++_controlEpoch;
-    [_documentView resetTableScrollPositions];
+    [_documentView resetScrollPositions];
   }
   if (newProps.selectable != _selectable) {
     _selectable = newProps.selectable;
     _documentView.selectable = _selectable;
   }
-  if (newProps.codeBlockWrap != _codeBlockWrap) {
-    _codeBlockWrap = newProps.codeBlockWrap;
-    _documentView.codeBlockWrap = _codeBlockWrap;
-  }
   if (newProps.controls != _controls) {
     _controls = newProps.controls;
     _documentView.controls = _controls;
+  }
+  // The props that decide code layout, gathered into one value. The height and
+  // the gutter are heights, so the shadow node measures with them and the view
+  // draws with them; a change lands in props a revision before the state that
+  // records it does.
+  {
+    downstream::CodeLayout code = _codeLayout;
+    code.props = {newProps.codeBlockWrap, newProps.lineNumbers,
+                  static_cast<float>(newProps.codeBlockMaxHeight)};
+    if (!(code == _codeLayout)) {
+      _codeLayout = code;
+      _documentView.codeLayout = code;
+    }
   }
   if (newProps.codeFilename != previous.codeFilename) {
     _codeFilename = newProps.codeFilename;
@@ -382,6 +391,7 @@ NSString *nameForFormat(NSString *format) {
       .language = std::string(language.UTF8String),
       .filename = std::string(filename.UTF8String),
       .wrapped = static_cast<bool>(wrapped),
+      .expanded = static_cast<bool>(expanded),
       .generation = generation,
   });
 }
@@ -476,7 +486,8 @@ NSString *nameForFormat(NSString *format) {
                           format:format
                         language:language
                         filename:@""
-                         wrapped:NO];
+                         wrapped:NO
+                        expanded:NO];
       return;
     }
     [view->_exporter saveData:data
@@ -526,7 +537,7 @@ NSString *nameForFormat(NSString *format) {
       try {
         text = toNSString(exportBlocks(*document, from, to, exportFormat, separator));
         if (download) {
-          name = isCode ? toNSString(downloadName(document->blocks[from].info, document->blocks[from].language,
+          name = isCode ? toNSString(downloadName(document->blocks[from].meta, document->blocks[from].language,
                                                  codeFilename, "file"))
                         : toNSString(tableDownloadName(tableFilename, std::string_view(nameForFormat(format).UTF8String)));
           NSMutableData *bytes = [NSMutableData data];
@@ -570,11 +581,30 @@ NSString *nameForFormat(NSString *format) {
   // know that, so the change goes back through a Fabric state update rather
   // than a React render: no parse, no JavaScript work, no re-measure of the
   // text, which is laid out again only for the block that changed. The state
-  // carries the prop's own wrap setting, which is the half of the decision the
-  // toggled set completes, so measurement resolves the same way afterwards.
-  DownstreamMarkdownState next = _state->getData().toggled(ordinal, _controls);
+  // carries the whole code layout, which is what the toggled set completes, so
+  // measurement resolves the same way afterwards.
+  DownstreamMarkdownState next = _state->getData().toggledWrap(ordinal, _controls);
   _state->updateState(std::move(next));
   [self emitControlWithBlock:@"code" action:@"wrap" format:@"" language:language filename:@"" wrapped:wrapped];
+}
+
+- (void)didToggleExpandAtOrdinal:(uint32_t)ordinal language:(NSString *)language expanded:(BOOL)expanded {
+  const auto *emitter = [self emitter];
+  if (emitter == nullptr || !_state) {
+    return;
+  }
+  // The same path as wrap, and for the same reason: the card's height changes,
+  // and only Yoga and the chat list can know that. No React render, no parse, and
+  // the button has already acted by the time the event is reported.
+  DownstreamMarkdownState next = _state->getData().toggledExpand(ordinal, _controls);
+  _state->updateState(std::move(next));
+  [self emitControlWithBlock:@"code"
+                      action:@"expand"
+                      format:@""
+                    language:language
+                   filename:@""
+                    wrapped:NO
+                   expanded:expanded];
 }
 
 - (void)didFailControlOfKind:(DSBlockKind)kind action:(NSString *)action message:(NSString *)message {

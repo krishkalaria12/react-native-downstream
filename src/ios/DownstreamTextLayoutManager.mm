@@ -24,8 +24,8 @@ const downstream::Theme::Handle &resolve(const downstream::Theme::Handle &theme)
 // thread, so measurement runs on the layout thread without blocking UIKit.
 Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHandle &document,
                                                   Float fontSizeMultiplier, Float maximumWidth,
-                                                  SurfaceId /*surfaceId*/, uint32_t chrome, bool codeBlockWrap,
-                                                  const std::vector<uint32_t> &wrapToggles,
+                                                  SurfaceId /*surfaceId*/, uint32_t chrome,
+                                                  const downstream::CodeLayout &code,
                                                   const downstream::Theme::Handle &theme) const {
   @autoreleasepool {
     // The view's own theme, so a themed measure and a themed draw are the same
@@ -35,12 +35,10 @@ Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHand
                                                                  fontScale:fontSizeMultiplier
                                                         syntaxHighlighting:YES
                                                                      theme:resolve(theme)];
-    // The wrap choices come along, because a code block's height depends on
-    // whether it wraps and a document can hold both kinds at once.
-    const CGSize size = [rendered sizeForWidth:maximumWidth
-                                        chrome:chrome
-                                 codeBlockWrap:codeBlockWrap
-                                   wrapToggles:wrapToggles];
+    // The whole code layout comes along, because every input that changes a
+    // card's height is in it: wrapping, the cap, the gutter, and the reader's
+    // per-block choices. A document can hold every combination at once.
+    const CGSize size = [rendered sizeForWidth:maximumWidth chrome:chrome code:code];
     return {static_cast<Float>(size.width), static_cast<Float>(size.height)};
   }
 }
@@ -53,10 +51,7 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
                                                                    fontScale:hint.fontScale
                                                       syntaxHighlighting:YES
                                                                        theme:resolve(hint.theme)];
-      [rendered sizeForWidth:hint.width
-                     chrome:hint.chrome
-              codeBlockWrap:hint.codeBlockWrap
-                wrapToggles:hint.wrapToggles];
+      [rendered sizeForWidth:hint.width chrome:hint.chrome code:hint.code];
     }
   }
 }

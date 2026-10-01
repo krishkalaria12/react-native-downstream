@@ -3,6 +3,7 @@
 #import "DSFonts.h"
 #import "DSThemeColors.h"
 
+#include "CodeLayout.h"
 #include "Controls.h"
 #include "InlineRuns.h"
 #include "SegmentPlan.h"
@@ -30,6 +31,11 @@ namespace {
 UIFont *runFont(const BlockFont &font, CGFloat size, bool monospaced) {
   return DSMakeFont(font.family, size, font.weight, font.italic, monospaced);
 }
+
+/// The space between the line-number gutter and the code. A constant rather than
+/// a theme slot, because it separates two parts of one card rather than styling
+/// either of them. Mirrored in RenderedDocument.kt.
+constexpr CGFloat kGutterGap = 12;
 
 /// The size an inline code span draws at, which follows a themed body size
 /// unless the theme set an absolute one. A fraction of the block's own size, so
@@ -577,6 +583,13 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 @interface DSCodeSegment ()
 @property (nonatomic) DSTextSegment *text;
 @property (nonatomic) NSString *language;
+@property (nonatomic) NSString *title;
+/// The parsed meta the engine read from the fence's info string, kept whole so
+/// the view resolves numbers and the cap from the same value the measurement did.
+@property (nonatomic) downstream::FenceMeta fenceMeta;
+@property (nonatomic) const std::vector<uint32_t> *lineStarts;
+@property (nonatomic) uint32_t lineCount;
+@property (nonatomic) CGFloat digitAdvance;
 @property (nonatomic) NSInteger blockIndex;
 @property (nonatomic) uint32_t codeOrdinal;
 @property (nonatomic) NSArray<DSContainerInfo *> *containers;
@@ -589,6 +602,12 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 @property (nonatomic) UIFont *headerFont;
 @property (nonatomic, nullable) UIColor *headerButtonColor;
 @property (nonatomic, nullable) UIColor *headerBorderColor;
+@property (nonatomic) CGFloat lineHeight;
+/// The code font at this scale, which the gutter draws its numbers in so a
+/// number's digits line up with the code's own monospaced columns.
+@property (nonatomic) UIFont *codeFont;
+/// Owns the line starts the segment's pointer above refers to.
+@property (nonatomic) std::vector<uint32_t> *ownedLineStarts;
 @end
 
 @implementation DSCodeSegment
@@ -624,6 +643,32 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
           ? [colors colorForSlot:kSlotCodeBlockHeaderButtonColor]
           : [colors colorForSlot:kSlotCodeBlockHeaderColor];
   segment.headerBorderColor = [colors colorForSlot:kSlotCodeBlockHeaderBorderColor];
+  // The engine parsed the info string once; the header label, the gutter, and the
+  // download name all read this struct rather than each scanning the raw string.
+  segment.title = [NSString stringWithUTF8String:block.meta.title.c_str()] ?: @"";
+  segment.fenceMeta = block.meta;
+  // Found here, on whichever thread built the rendering, so the gutter's draw
+  // pass never searches the text for newlines. Owned because the committed
+  // segment cache outlives the block list it was built from.
+  segment.ownedLineStarts = new std::vector<uint32_t>(codeLineStarts(block.text));
+  segment.lineStarts = segment.ownedLineStarts;
+  segment.lineCount = static_cast<uint32_t>(segment.ownedLineStarts->size());
+  {
+    // The code font at this scale, which is both the metric the gutter measures
+    // its numbers with and the font it draws them in. Themed, so a theme that
+    // resizes code resizes its line numbers with it.
+    const BlockFont codeTypeface = codeFont(theme);
+    UIFont *const face = runFont(codeTypeface, codeTypeface.size * scale, true);
+    segment.codeFont = face;
+    // One digit's advance, which is what makes the gutter exactly as wide as its
+    // widest number needs and no wider.
+    segment.digitAdvance = [@"0" sizeWithAttributes:@{NSFontAttributeName : face}].width;
+    // The body's own line height rather than the font's, because TextKit adds
+    // the leading the body actually drew with. Read from the measurement this
+    // segment caches anyway, so it costs no extra layout pass.
+    const CGFloat lines = std::max<uint32_t>(segment.lineCount, 1);
+    segment.lineHeight = [segment.text heightForWidth:CGFLOAT_MAX] / lines;
+  }
   segment.blockIndex = static_cast<NSInteger>(index);
   segment.theme = segment.text.theme;
   segment.padding = codeCardPadding(theme) * scale;
@@ -646,26 +691,36 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   return theme_layout::kChromeRowHeight;
 }
 
+- (void)dealloc {
+  delete _ownedLineStarts;
+}
+
 /// The width the body is laid out at: the card's inner width when it wraps, and
 /// unbounded when it does not, which is what makes a long line scroll instead
-/// of wrapping. The card's own padding and the container's margin come off the
-/// available width first, so a body never lays out wider than the card.
-- (CGFloat)layoutWidthForWidth:(CGFloat)width wrapped:(BOOL)wrapped {
+/// of wrapping. The card's own padding, the gutter, and the container's margin
+/// come off the available width first, so a body never lays out wider than the
+/// card.
+///
+/// The gutter narrows the width a wrapped body wraps at, which is the only way
+/// line numbers change a block's height. An unwrapped body's height is its line
+/// count times its line height regardless, so a rotation still lays no unwrapped
+/// code out again.
+- (CGFloat)layoutWidthForCard:(CGFloat)cardWidth wrapped:(BOOL)wrapped gutterWidth:(CGFloat)gutterWidth {
   if (!wrapped) {
     return CGFLOAT_MAX;
   }
   // The card's own padding is part of the inset, so a theme that pads a card
   // wider makes the body narrower by exactly that much rather than overflowing.
-  const CGFloat inset = self.contentLeading + 2 * self.padding;
-  return std::max<CGFloat>(0, width - inset);
+  const CGFloat inset = self.contentLeading + 2 * self.padding + gutterWidth;
+  return std::max<CGFloat>(0, cardWidth - inset);
 }
 
-- (CGFloat)bodyHeightForWidth:(CGFloat)width wrapped:(BOOL)wrapped {
-  return [self.text heightForWidth:[self layoutWidthForWidth:width wrapped:wrapped]];
-}
-
-- (CGFloat)bodyWidthForWidth:(CGFloat)width wrapped:(BOOL)wrapped {
-  return [self.text usedWidthForWidth:[self layoutWidthForWidth:width wrapped:wrapped]];
+- (CGFloat)gutterWidthForLayout:(const downstream::CodeBlockLayout &)layout {
+  if (!layout.lineNumbers) {
+    return 0;
+  }
+  const uint32_t digits = gutterDigits(layout.firstNumber, self.lineCount);
+  return digits * self.digitAdvance + kGutterGap;
 }
 
 @end
@@ -865,10 +920,9 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   NSLock *_lock;
   CGFloat _cachedWidth;
   uint32_t _cachedChrome;
-  /// The wrap choices the cached frames were measured under, so a measurement
-  /// is only reused for the choices it was made with.
-  BOOL _cachedCodeBlockWrap;
-  std::vector<uint32_t> _cachedWrapToggles;
+  /// The code layout the cached frames were measured under, so a measurement is
+  /// only reused for the layout it was made with.
+  downstream::CodeLayout _cachedCode;
   bool _hasCachedFrames;
   NSArray<NSValue *> *_cachedFrames;
 }
@@ -1089,16 +1143,22 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 - (CGFloat)heightOf:(id)segment
             atWidth:(CGFloat)width
              chrome:(uint32_t)chrome
-       codeBlockWrap:(BOOL)codeBlockWrap
-         wrapToggles:(const std::vector<uint32_t> &)wrapToggles {
+                code:(const downstream::CodeLayout &)code {
   if ([segment isKindOfClass:DSTextSegment.class]) {
     return [(DSTextSegment *)segment heightForWidth:width];
   }
   if ([segment isKindOfClass:DSCodeSegment.class]) {
-    DSCodeSegment *code = segment;
-    const BOOL wrapped = codeWraps(codeBlockWrap, wrapToggles, code.codeOrdinal);
-    const CGFloat body = [code bodyHeightForWidth:width wrapped:wrapped];
-    return 2 * code.padding + body + ((chrome & kChromeCodeHeader) != 0 ? [code headerHeight] : 0);
+    DSCodeSegment *card = segment;
+    // The one definition: the props, the reader's choices, and this block's own
+    // fence meta all meet in `resolveCodeBlock`, and `codeCardHeight` is the only
+    // function that turns that into a height. The view calls the same two, which
+    // is what keeps a measured card and a drawn card the same size.
+    const downstream::CodeBlockLayout layout = resolveCodeBlock(code, card.codeOrdinal, card.fenceMeta);
+    const CGFloat gutter = [card gutterWidthForLayout:layout];
+    const CGFloat body =
+        [card.text heightForWidth:[card layoutWidthForCard:width wrapped:layout.wraps gutterWidth:gutter]];
+    return codeCardHeight(layout, (chrome & kChromeCodeHeader) != 0 ? [card headerHeight] : 0, card.padding, body,
+                          card.lineHeight);
   }
   DSTableSegment *table = segment;
   return table.tableSize.height + ((chrome & kChromeTableToolbar) != 0 ? theme_layout::kChromeRowHeight : 0);
@@ -1108,12 +1168,15 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 /// fit a view, which is a table's columns or a code line that scrolls.
 - (CGFloat)unconstrainedWidthOf:(id)segment
                         atWidth:(CGFloat)width
-                  codeBlockWrap:(BOOL)codeBlockWrap
-                    wrapToggles:(const std::vector<uint32_t> &)wrapToggles {
+                           code:(const downstream::CodeLayout &)code {
   if ([segment isKindOfClass:DSCodeSegment.class]) {
-    DSCodeSegment *code = segment;
-    const BOOL wrapped = codeWraps(codeBlockWrap, wrapToggles, code.codeOrdinal);
-    return code.contentLeading + 2 * code.padding + [code bodyWidthForWidth:width wrapped:wrapped];
+    DSCodeSegment *card = segment;
+    const downstream::CodeBlockLayout layout = resolveCodeBlock(code, card.codeOrdinal, card.fenceMeta);
+    const CGFloat gutter = [card gutterWidthForLayout:layout];
+    return card.contentLeading + 2 * card.padding + gutter +
+        [card.text usedWidthForWidth:[card layoutWidthForCard:width
+                                                      wrapped:layout.wraps
+                                                 gutterWidth:gutter]];
   }
   if ([segment isKindOfClass:DSTableSegment.class]) {
     DSTableSegment *table = segment;
@@ -1124,14 +1187,12 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 
 - (NSArray<NSValue *> *)segmentFramesForWidth:(CGFloat)width
                                      chrome:(uint32_t)chrome
-                              codeBlockWrap:(BOOL)codeBlockWrap
-                                wrapToggles:(const std::vector<uint32_t> &)wrapToggles {
-  // A measurement only holds for the wrap choices it was made under, so those
-  // are part of the key. The set is empty in every document the reader has not
-  // toggled, so this is one size comparison in practice.
+                                        code:(const downstream::CodeLayout &)code {
+  // A measurement only holds for the layout it was made under, so the whole code
+  // layout is part of the key. The choice sets are empty in every document the
+  // reader has not toggled, so this is one comparison in practice.
   [_lock lock];
-  if (_hasCachedFrames && _cachedWidth == width && _cachedChrome == chrome &&
-      _cachedCodeBlockWrap == codeBlockWrap && _cachedWrapToggles == wrapToggles) {
+  if (_hasCachedFrames && _cachedWidth == width && _cachedChrome == chrome && _cachedCode == code) {
     NSArray *frames = _cachedFrames;
     [_lock unlock];
     return frames;
@@ -1147,16 +1208,11 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   for (NSUInteger index = 0; index < _segments.count; index++) {
     y += _gaps[index];
     id segment = _segments[index];
-    const CGFloat height = [self heightOf:segment
-                                               atWidth:width
-                                                chrome:chrome
-                                          codeBlockWrap:codeBlockWrap
-                                            wrapToggles:wrapToggles];
+    const CGFloat height = [self heightOf:segment atWidth:width chrome:chrome code:code];
     if (!constrained) {
       unconstrainedWidth = std::max(unconstrainedWidth, [self unconstrainedWidthOf:segment
-                                                                        atWidth:width
-                                                                  codeBlockWrap:codeBlockWrap
-                                                                    wrapToggles:wrapToggles]);
+                                                                             atWidth:width
+                                                                                code:code]);
     }
     const CGFloat top = std::ceil(y);
     // Never shorter than the segment. Rounding both edges up loses up to a
@@ -1180,31 +1236,20 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   [_lock lock];
   _cachedWidth = width;
   _cachedChrome = chrome;
-  _cachedCodeBlockWrap = codeBlockWrap;
-  _cachedWrapToggles = wrapToggles;
+  _cachedCode = code;
   _hasCachedFrames = YES;
   _cachedFrames = frames;
   [_lock unlock];
   return frames;
 }
 
-- (CGSize)sizeForWidth:(CGFloat)width
-                chrome:(uint32_t)chrome
-         codeBlockWrap:(BOOL)codeBlockWrap
-           wrapToggles:(const std::vector<uint32_t> &)wrapToggles {
-  NSArray<NSValue *> *frames = [self segmentFramesForWidth:width
-                                                    chrome:chrome
-                                             codeBlockWrap:codeBlockWrap
-                                               wrapToggles:wrapToggles];
+- (CGSize)sizeForWidth:(CGFloat)width chrome:(uint32_t)chrome code:(const downstream::CodeLayout &)code {
+  NSArray<NSValue *> *frames = [self segmentFramesForWidth:width chrome:chrome code:code];
   if (frames.count == 0) {
     return CGSizeZero;
   }
   const CGRect last = frames.lastObject.CGRectValue;
   return CGSizeMake(std::ceil(CGRectGetWidth(last)), std::ceil(CGRectGetMaxY(last)));
-}
-
-- (uint32_t)chromeForControls:(uint32_t)controls codeBlockWrap:(BOOL)codeBlockWrap {
-  return downstream::chromeForProps(controls, codeBlockWrap, {});
 }
 
 @end
