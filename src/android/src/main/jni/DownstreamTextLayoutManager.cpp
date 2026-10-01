@@ -27,7 +27,7 @@ folly::dynamic ordinalArray(const std::vector<uint32_t> &ordinals) {
 /// view manager reads. `measure`, `updateState`, and the state wrapper all
 /// resolve this same shape, so a measurement and a mount cannot disagree about a
 /// height or about the colors it drew it with.
-folly::dynamic codeLayoutData(uint64_t documentId, Float fontScale, uint32_t chrome,
+folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontScale, uint32_t chrome,
                               const downstream::CodeLayout &code,
                               const downstream::Theme::Handle &theme = nullptr) {
   return folly::dynamic::object("documentId", static_cast<double>(documentId))(
