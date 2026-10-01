@@ -11,10 +11,11 @@ This is the Phase 0 contract for the native Markdown component. `src/types.ts` h
 | GFM task lists                      | Readable checkbox state and accessibility label; display only                  | Interactive toggling                                                   | Mutation of Markdown by tapping                            |
 | Raw HTML                            | Escaped, visible source text                                                   | None planned                                                           | HTML rendering, scripts, embedded content                  |
 | Images                              | Alt text remains readable; no network request                                  | HTTPS images after complete URL validation, placeholders, cancellation | `data:`, `file:`, and custom schemes                       |
-| Code                                | Inline code, progressively visible fenced/indented blocks, syntax highlighting by the fence's language, and a header with copy, download, and wrap controls | A theme that can override token colors | Executing code, and highlighting above 64 KiB of code       |
+| Code                                | Inline code, progressively visible fenced/indented blocks, syntax highlighting by the fence's language, and a header with copy, download, and wrap controls | Per-block token colors beyond the theme | Executing code, and highlighting above 64 KiB of code       |
 | Math                                | Literal delimiter/source text                                                  | Native math layout after separate review                               | Executing macros or loading remote math content            |
 | Links                               | Valid complete `https:`, `http:`, and `mailto:` links; press callback          | Long press actions                                                     | Automatic opening of custom schemes                        |
 | Custom renderers                    | None                                                                           | None planned                                                           | Per-node React render callbacks in the native display path |
+| Theming                             | `theme` and `markdownStyle`, per-element precision, both presets, and a VS Code converter | Per-node themes inside one document                             | Style objects, stylesheet context, and cascading selectors  |
 | Selection                           | Select/copy visible text and complete canonical source, plus per-block copy and download on code and table blocks | Long press actions                                            | Editing inside the display view                            |
 | Accessibility                       | Text reading order, heading and link roles, task state, font scaling, RTL text | Rich table navigation if needed                                        | Platform-specific semantics that change source meaning     |
 
@@ -147,6 +148,89 @@ A control that fails reports `control_failed` to that control's own `onError`, a
 
 No parser model or AST is sent to JavaScript for display. The stream controller is a source/session handle, and the view binds by session identity. Native parse and view application both reject stale generation or sequence results.
 
+## Theming
+
+Two props, at two altitudes. `theme` sets what the document is made of: colors, fonts, and metrics. `markdownStyle` sets one element at a time. Both take a single value or an array merged left to right, so a preset is an override you extend rather than a starting point you replace:
+
+```tsx
+<DownstreamMarkdown
+  markdown={message}
+  theme={[{ colors: { foreground: '#101418' } }, presets.streamdown.theme]}
+  markdownStyle={[presets.github.markdownStyle, { h1: { fontWeight: 700 } }]}
+/>
+```
+
+An array is applied left to right and merged per leaf, so a later element sets only what it names. It is the same merge a single value uses internally, so `{...a, ...b}` on two objects is a different and worse thing.
+
+### Colors
+
+A color is a `ColorValue` or `{ light, dark }`, and either half may be left out to keep the default for that appearance:
+
+```tsx
+theme={{
+  colors: {
+    foreground: { light: '#1b1b1f' },          // only the light half
+    primary: { light: '#7a3e9d', dark: '#c39be0' },
+  },
+}}
+```
+
+A color slot the theme does not set draws its platform's own semantic color, so it keeps following the appearance and the reader's increased-contrast setting with no React render. That is the whole reason an unset slot is a role rather than a value: `label` on iOS means the system's label color, not one frozen integer. A `PlatformColor` is refused with one warning, because its resolved value depends on the view it is attached to and the engine resolves slots rather than colors.
+
+Both renderers read one generated slot table, so a theme draws the same on each platform and a token cannot drift between them.
+
+### Metrics and fonts
+
+`theme` also carries the layout numbers: font sizes, weights, families, line heights, margins, indents, gaps, paddings, radii, and border widths. Only metrics change layout, and only those are measured again: a colors-only change redraws without a single remeasure, because the shadow node keys its measurement on a hash of the size-changing slots alone.
+
+`fonts` names three families, `sans`, `heading`, and `mono`, and an element's own `fontFamily` overrides the role. A family that is not registered falls back to the platform font and reports one warning per family, so a font `expo-font` has not loaded yet is visible rather than silently substituted.
+
+A weight is a CSS weight, so any number from 1 to 1000 is accepted and the platform resolves it to the nearest face it has. A weight of 400 is the family itself.
+
+A slot the theme sets and a slot it leaves alone are the same number and mean different things, and the difference is visible. A `strong` that named a weight means exactly that weight; one that named only a family raises the block's own weight instead, so bold inside a bold heading still reads as bolder rather than as the same weight. A `codeBlock.borderRadius` the theme named is final; one it did not falls back to the shared `radius`. An `em` that named no slant keeps the block's, so a quote that is already italic does not lose it to an `em` that never ran.
+
+A quote and a list are elements in their own right. A theme that sets `blockquote.fontSize` restyles the text inside every quote without naming a single block, and `list.fontSize` does the same for list items.
+
+`maxFontSizeMultiplier` caps the platform font scale, as `<Text>`'s does. It can cap Dynamic Type and Android's font scale and cannot turn scaling off; below 1 is the unset value and is ignored, because capping below the current scale would shrink text the reader asked to enlarge.
+
+### markdownStyle
+
+`markdownStyle` uses `react-native-enriched-markdown`'s key and property names for every key this renderer draws, so a value written for the closest native peer works as it is:
+
+```tsx
+markdownStyle={{
+  h1: { fontSize: 32, marginBottom: 16 },
+  blockquote: { borderColor: '#7a3e9d', borderWidth: 3 },
+  list: { bulletColor: '#7a3e9d', marginLeft: 20 },
+  codeBlock: { padding: 16, borderRadius: 8 },
+}}
+```
+
+A key this renderer does not draw is reported once in development rather than ignored, so nobody believes a value took effect. A property it does not draw is dropped without a warning of its own, because the key it belongs to is the useful part of the message.
+
+### Syntax colors
+
+`theme.syntax` takes the engine's token classes, and `markdownStyle.codeBlock.syntaxColors` takes those plus enriched-markdown's own keys. For a full editor theme, read Shiki's own JSON and convert it:
+
+```tsx
+import { syntaxColorsFromTheme } from 'react-native-downstream';
+
+const converted = syntaxColorsFromTheme(vscodeThemeJson);
+<DownstreamMarkdown
+  markdown={message}
+  theme={{
+    syntax: converted.syntax,
+    colors: { foreground: converted.codeBlock.color, muted: converted.codeBlock.backgroundColor },
+  }}
+/>
+```
+
+The converter maps TextMate scopes onto the engine's classes and returns the code block's own two colors from `editor.background` and `editor.foreground`. `punctuation` maps to `operator`, and `variable` and `embedded` map to `plain`, which is the rule enriched applies to them. The goldens are the GitHub light and dark code themes plus Dracula, checked against the same table the renderers use.
+
+### Presets
+
+`presets.github` and `presets.streamdown` are the two themes both renderers are checked against. A preset is `{ theme, markdownStyle }`, so it spreads onto the view.
+
 ## Source ranges and limits
 
 All public offsets are zero-based UTF-16 code units into the canonical raw JavaScript string, with a half-open `[start, end)` convention. Native storage is UTF-8; conversion happens at the boundary. Ranges must satisfy `0 <= start <= end <= source.length` and must not start or end between a high and low surrogate. Invalid ranges report `invalid_input`; they are never rounded. The first release exposes ranges for link events only. Copying all source uses `getSource()` or the controlled prop.
@@ -164,6 +248,10 @@ The first release targets iOS and Android with the New Architecture enabled. The
 The native display path renders complete documents on iOS and Android. Parsing, measurement, and drawing are native.
 
 A document is a vertical stack of segments. A text segment is a run of non-table, non-code blocks in one platform text view. A code segment is one fenced or indented block with its own header. A table segment is one table in a horizontal scroll view. In a stream, completed blocks are grouped into text segments of about 16 blocks that later snapshots reuse, so only the active tail is rebuilt. Incremental mode commits blocks once md4c proves them closed. Full mode reparses the whole source but gives a block that is unchanged since the previous snapshot a stable identity, so both modes rebuild and lay out only the tail.
+
+Theming is on both platforms. A theme is interned by content in the shadow node, so equal themes are one object and a theme change costs one intern rather than one per view. The interned theme travels with the mounting state as its id, the way the parsed document does, so nothing copies 232 slot values across the platform boundary on every update. A color-only change rebuilds the drawing objects and measures nothing; a size change is measured again like any other layout change.
+
+The rules that decide what a block draws with are written once, in the engine, and both renderers call them. A document read resolves each block's typography, its element, and its two margins on the C++ side and hands the result to the platform, so a theme means one thing rather than one thing per platform. A theme slot that nothing reads is a value that resolves, interns, redraws, and never appears, which is why `pnpm test:native` fails when one is added.
 
 A control turns on as soon as its own block is settled. A controlled document settles every block; a stream settles the blocks it has proven closed, and settles the rest when it finishes. So a finished code block in a still-streaming answer can be copied immediately, and a block that is still being written shows its controls disabled. Settling is a property of the parse, not of the controls, and no control button ever changes whether a block is settled.
 
