@@ -110,7 +110,7 @@ type MarkdownControls =
     };
 ```
 
-A code block's header shows copy, download, and wrap. A table shows a toolbar whose copy and download buttons open a format menu: Markdown, CSV, and TSV for copy, CSV and Markdown for download. A control turns on as soon as its own block is settled, so a finished code block can be copied while the rest of the message is still streaming. A block that is still being written shows no control, because its content can still change.
+A code block's header shows copy, download, and wrap. A table shows a toolbar whose copy and download buttons open a format menu: Markdown, CSV, and TSV for copy, CSV and Markdown for download. A control turns on as soon as its own block is settled, so a finished code block can be copied while the rest of the message is still streaming. A block that is still being written shows its controls disabled, because its content can still change.
 
 Copying is native and needs no permission. A code block copies its plain text, with a zero-width placeholder removed, so an empty fence copies as an empty string. A table copies as a `text/html` flavor first, so pasting into a spreadsheet or a document keeps the rows, columns, and alignment, and falls back to plain text for targets that do not take HTML. A value is quoted in CSV only when it holds the separator, a quote, or a line break, and an inner quote is doubled, which is what Streamdown's web component does; a value in TSV is never quoted, because a tab inside a cell would read as a new column, so a tab, a newline, and a carriage return become the two-character escapes `\t`, `\n`, and `\r` that a spreadsheet shows as text.
 
@@ -165,7 +165,7 @@ The native display path renders complete documents on iOS and Android. Parsing, 
 
 A document is a vertical stack of segments. A text segment is a run of non-table, non-code blocks in one platform text view. A code segment is one fenced or indented block with its own header. A table segment is one table in a horizontal scroll view. In a stream, completed blocks are grouped into text segments of about 16 blocks that later snapshots reuse, so only the active tail is rebuilt. Incremental mode commits blocks once md4c proves them closed. Full mode reparses the whole source but gives a block that is unchanged since the previous snapshot a stable identity, so both modes rebuild and lay out only the tail.
 
-A control turns on as soon as its own block is settled. A controlled document settles every block; a stream settles the blocks it has proven closed, and settles the rest when it finishes. So a finished code block in a still-streaming answer can be copied immediately, and a block that is still being written shows no control. Settling is a property of the parse, not of the controls, and no control button ever changes whether a block is settled.
+A control turns on as soon as its own block is settled. A controlled document settles every block; a stream settles the blocks it has proven closed, and settles the rest when it finishes. So a finished code block in a still-streaming answer can be copied immediately, and a block that is still being written shows its controls disabled. Settling is a property of the parse, not of the controls, and no control button ever changes whether a block is settled.
 
 ### Threading
 
