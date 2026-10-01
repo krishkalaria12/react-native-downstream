@@ -2,9 +2,12 @@
 
 #import <UIKit/UIKit.h>
 
+#import "DSThemeColors.h"
+
 #ifdef __cplusplus
 #include "Document.h"
 #include "RenderPreparer.h"
+#include "theme/Theme.h"
 #endif
 
 NS_ASSUME_NONNULL_BEGIN
@@ -33,12 +36,23 @@ typedef NS_ENUM(NSInteger, DSContainerKind) {
 /// container, so bars join across the gap.
 @property (nonatomic, readonly) BOOL continuesPrevious;
 @property (nonatomic, readonly, nullable) UIColor *barColor;
+/// The bar's width and the gap between a marker and the text, from the theme.
+/// Zero-width gaps and bars are what a theme that sets them to zero draws.
+@property (nonatomic, readonly) CGFloat barWidth;
+@property (nonatomic, readonly) CGFloat markerGap;
 @end
 
 typedef NS_ENUM(NSInteger, DSBlockDecoration) {
   DSBlockDecorationNone = 0,
   DSBlockDecorationRule = 1,
 };
+
+/// A rule's own color and thickness, from the theme, rather than a literal the
+/// layout manager would have to know about.
+@interface DSDecorationMetrics : NSObject
+@property (nonatomic, readonly) UIColor *color;
+@property (nonatomic, readonly) CGFloat height;
+@end
 
 @interface DSBlockInfo : NSObject
 @property (nonatomic, readonly) NSInteger index;
@@ -49,6 +63,8 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 @property (nonatomic, readonly) CGFloat contentLeading;
 @property (nonatomic, readonly) BOOL rightToLeft;
 @property (nonatomic, readonly) NSArray<DSContainerInfo *> *containers;
+/// Set when the block draws a rule. Nil otherwise.
+@property (nonatomic, readonly, nullable) DSDecorationMetrics *rule;
 /// Spoken summary of the block's markers, such as "checked".
 @property (nonatomic, readonly, nullable) NSString *accessibilityPrefix;
 @end
@@ -58,6 +74,9 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 @property (nonatomic, readonly) NSAttributedString *attributedString;
 @property (nonatomic, readonly) NSArray<DSBlockInfo *> *blocks;
 @property (nonatomic, readonly) NSArray<NSValue *> *blockRanges;
+/// The theme this segment was built with, so a view draws its chrome from the
+/// same theme as its text.
+@property (nonatomic, readonly) DSThemeColors *theme;
 /// Unrounded layout height at a width; segmentFramesForWidth rounds edges.
 - (CGFloat)heightForWidth:(CGFloat)width;
 /// The width the laid-out text occupies: the container width when the text
@@ -83,6 +102,20 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 /// The block's first line, which identifies it across snapshots while a fence
 /// is still growing.
 @property (nonatomic, readonly) NSString *firstLine;
+/// The theme this card was built with, so the card's own chrome and its body's
+/// text come from the same one.
+@property (nonatomic, readonly) DSThemeColors *theme;
+/// The header row's own typography and its two remaining colors: the buttons,
+/// which a theme can tint apart from the row's text, and the rule under it.
+@property (nonatomic, readonly) UIFont *headerFont;
+@property (nonatomic, readonly, nullable) UIColor *headerButtonColor;
+@property (nonatomic, readonly, nullable) UIColor *headerBorderColor;
+/// Padding inside the card, its corner radius, and its border width, all from
+/// the theme. A radius or width of zero is what a theme that removes the border
+/// or squares the card asks for.
+@property (nonatomic, readonly) CGFloat padding;
+@property (nonatomic, readonly) CGFloat borderRadius;
+@property (nonatomic, readonly) CGFloat borderWidth;
 
 - (CGFloat)headerHeight;
 /// Body height at a card width, wrapped or not. A wrapped body's height depends
@@ -113,6 +146,16 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 @property (nonatomic, readonly) NSArray<NSNumber *> *rowHeights;
 @property (nonatomic, readonly) CGSize tableSize;
 @property (nonatomic, readonly) UIEdgeInsets cellPadding;
+/// The theme this table was built with, plus the grid and header metrics that
+/// used to be literals in the grid view.
+@property (nonatomic, readonly) DSThemeColors *theme;
+@property (nonatomic, readonly) CGFloat borderWidth;
+@property (nonatomic, readonly) CGFloat borderRadius;
+/// Row fills, alternating from the first data row. Nil where a theme sets none.
+@property (nonatomic, readonly, nullable) UIColor *rowBackgroundColor;
+/// The toolbar's button color, which a theme can set apart from the table's own
+/// text so the chrome reads as secondary without being smaller.
+@property (nonatomic, readonly, nullable) UIColor *toolbarButtonColor;
 /// Index of the segment's first block, which is what a copy or a download of
 /// the whole table reads.
 @property (nonatomic, readonly) NSInteger blockIndex;
@@ -131,17 +174,26 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 @property (nonatomic, readonly) uint32_t settledBlocks;
 /// Which control rows the document lays out with. See `downstream::Chrome`.
 @property (nonatomic, readonly) uint32_t chrome;
+/// The theme this rendering was built with, so a view draws its chrome from the
+/// same theme as its text.
+@property (nonatomic, readonly) DSThemeColors *theme;
 
 #ifdef __cplusplus
 /// Returns a cached rendering. Safe to call from any thread.
 ///
 /// `syntaxHighlighting` decides whether code blocks carry token colors. Tokens
 /// are always computed, so this only chooses the rendering, and it is part of
-/// the cache key because the two renderings differ. Measurement passes true:
-/// colors do not change metrics, so a measurement is valid either way.
+/// the cache key because the two renderings differ.
+///
+/// `theme` is the view's own theme rather than the default one, and measurement
+/// passes the same theme the view will mount. That is what keeps a themed
+/// measure and a themed draw from being two different sets of numbers, and it is
+/// why the theme is part of the cache key: a themed rendering is not
+/// interchangeable with the default one.
 + (instancetype)renderedDocumentFor:(const downstream::DocumentHandle &)document
                           fontScale:(CGFloat)fontScale
-                 syntaxHighlighting:(BOOL)syntaxHighlighting;
+                 syntaxHighlighting:(BOOL)syntaxHighlighting
+                              theme:(const downstream::Theme::Handle &)theme;
 #endif
 
 /// Drops every cached rendering. For tests and for a caller that wants to force

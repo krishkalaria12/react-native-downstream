@@ -2,13 +2,6 @@
 
 #import "DSRenderedDocument.h"
 
-namespace {
-
-constexpr CGFloat kBarWidth = 3;
-constexpr CGFloat kMarkerGap = 6;
-
-} // namespace
-
 @implementation DSLayoutManager
 
 - (BOOL)textBoundsForCharacterRange:(NSRange)range bounds:(DSBlockTextBounds *)bounds {
@@ -60,29 +53,34 @@ constexpr CGFloat kMarkerGap = 6;
     const CGFloat bottom = origin.y + bounds.bottom;
 
     for (DSContainerInfo *containerInfo in info.containers) {
-      if (containerInfo.barColor != nil) {
+      // A zero-width bar is a bar the theme removed, so the width is checked
+      // before drawing rather than only the color.
+      if (containerInfo.barColor != nil && containerInfo.barWidth > 0) {
         const CGFloat barTop = containerInfo.continuesPrevious ? top - info.spacingBefore - 1 : top;
         [containerInfo.barColor setFill];
         const CGFloat x = info.rightToLeft
-            ? width - containerInfo.leading - 2 - kBarWidth
+            ? width - containerInfo.leading - 2 - containerInfo.barWidth
             : containerInfo.leading + 2;
-        UIRectFill(CGRectMake(origin.x + x, barTop, kBarWidth, bottom - barTop));
+        UIRectFill(CGRectMake(origin.x + x, barTop, containerInfo.barWidth, bottom - barTop));
       }
       if (containerInfo.marker != nil) {
         UIFont *markerFont = [containerInfo.marker attribute:NSFontAttributeName atIndex:0 effectiveRange:NULL];
         const CGSize markerSize = containerInfo.marker.size;
         const CGFloat x = info.rightToLeft
-            ? width - containerInfo.leading - containerInfo.width + kMarkerGap
-            : containerInfo.leading + containerInfo.width - kMarkerGap - markerSize.width;
+            ? width - containerInfo.leading - containerInfo.width + containerInfo.markerGap
+            : containerInfo.leading + containerInfo.width - containerInfo.markerGap - markerSize.width;
         const CGFloat y = bounds.firstBaseline - markerFont.ascender;
         [containerInfo.marker drawAtPoint:CGPointMake(origin.x + x, origin.y + y)];
       }
     }
 
     const CGFloat left = origin.x + (info.rightToLeft ? 0 : info.contentLeading);
-    if (info.decoration == DSBlockDecorationRule) {
-      [UIColor.separatorColor setFill];
-      UIRectFill(CGRectMake(left, round((top + bottom) / 2), width - info.contentLeading, 1));
+    if (info.rule != nil) {
+      // The rule's color and thickness ride on the block, so a themed rule is
+      // drawn with the theme's own two values.
+      [info.rule.color setFill];
+      UIRectFill(CGRectMake(left, round((top + bottom) / 2) - (info.rule.height - 1) / 2,
+                            width - info.contentLeading, info.rule.height));
     }
   }
 }
