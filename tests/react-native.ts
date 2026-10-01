@@ -76,10 +76,84 @@ export const Linking = {
 export const Settings = { get: vi.fn(), set: vi.fn() };
 export const I18nManager = { isRTL: false };
 
-/** Style helpers the comparison bench's renderer reaches for at import time. */
-export function processColor(color: unknown): unknown {
-  return color;
+/**
+ * `processColor`, as React Native's own behaves.
+ *
+ * Faithful enough for the theme resolver, which is the one part of the library
+ * that reads a processed color: a hex string, a named color and a number all
+ * become an ARGB integer, a `DynamicColorIOS` object comes back as its
+ * `dynamic` pair, a `PlatformColor` comes back as its opaque form, and anything
+ * unreadable becomes `undefined`. The comparison bench's renderer only ever
+ * hands these to a web implementation, so it does not care about the details.
+ */
+export function processColor(color?: unknown): unknown {
+  if (color === undefined || color === null) return color;
+  if (typeof color === 'object') {
+    // A DynamicColorIOS arrives already processed, as `{ dynamic: {...} }`, and
+    // PlatformColor as `{ semantic: [...] }` or `{ resource_paths: [...] }`.
+    return color;
+  }
+  if (typeof color === 'number') return swap(color);
+  if (typeof color !== 'string') return null;
+  const text = color.trim().toLowerCase();
+  const hex = /^#([0-9a-f]{3,8})$/.exec(text);
+  if (hex?.[1] !== undefined) {
+    const digits = hex[1];
+    // #abc is #aabbcc and #abcd is #aabbccdd, then an omitted alpha is opaque.
+    const expanded =
+      digits.length === 3 || digits.length === 4
+        ? [...digits].map((digit) => digit + digit).join('')
+        : digits;
+    const withAlpha = expanded.length === 6 ? `${expanded}ff` : expanded;
+    return swap(Number.parseInt(withAlpha, 16));
+  }
+  const named = NAMED[text];
+  // The table holds 0xaarrggbb already, so only the number path is swapped.
+  if (named !== undefined) return named;
+  // An rgb(), rgba() or hsl() string is readable to the platform but not to this
+  // stand-in, and returning undefined makes the resolver refuse it rather than
+  // draw a color nobody asked for.
+  return undefined;
 }
+
+/**
+ * 0xrrggbbaa becomes 0xaarrggbb, which is the order both platforms read a
+ * processed color in. JavaScript numbers hold the unsigned value, so the shift
+ * is done in 32 bits and read back unsigned.
+ */
+function swap(color: number): number {
+  return ((color << 24) | (color >>> 8)) >>> 0;
+}
+
+/** The CSS named colors, as the table React Native's own parser carries. */
+const NAMED: Readonly<Record<string, number>> = {
+  transparent: 0x00000000,
+  aliceblue: 0xfff0f8ff,
+  black: 0xff000000,
+  blue: 0xff0000ff,
+  brown: 0xffa52a2a,
+  crimson: 0xffdc143c,
+  cyan: 0xff00ffff,
+  gray: 0xff808080,
+  green: 0xff008000,
+  grey: 0xff808080,
+  indigo: 0xff4b0082,
+  magenta: 0xffff00ff,
+  maroon: 0xff800000,
+  navy: 0xff000080,
+  olive: 0xff808000,
+  orange: 0xffffa500,
+  pink: 0xffffc0cb,
+  purple: 0xff800080,
+  red: 0xffff0000,
+  rebeccapurple: 0xff663399,
+  silver: 0xffc0c0c0,
+  teal: 0xff008080,
+  violet: 0xffee82ee,
+  white: 0xffffffff,
+  yellow: 0xffffff00,
+};
+
 export function processColorArray(colors: unknown): unknown {
   return colors;
 }

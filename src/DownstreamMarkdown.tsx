@@ -16,6 +16,7 @@ import {
 import { resolveControls, type ResolvedControls } from './controls';
 import NativeDownstreamMarkdownView from './DownstreamMarkdownViewNativeComponent';
 import { getStreamState } from './createMarkdownStream';
+import { resolveTheme, type ResolvedTheme } from './theme';
 import type {
   MarkdownControlAction,
   MarkdownControlKind,
@@ -166,6 +167,29 @@ function useStableResolved(resolved: ResolvedControls): ResolvedControls {
 }
 
 /**
+ * The resolved theme, kept by value rather than by identity.
+ *
+ * `theme` and `markdownStyle` are inline literals for the same reason
+ * `controls` is, and a theme that reached native as a new array on every render
+ * would re-intern and re-render the document behind it. Comparing the three
+ * resolved arrays means an unchanged theme sends nothing, which is what lets a
+ * chat's messages keep their prepared renderings while an unrelated state
+ * change re-renders the list.
+ */
+function useStableTheme(resolved: ResolvedTheme): ResolvedTheme {
+  const stable = useRef(resolved);
+  const previous = stable.current;
+  if (
+    previous.slots.length !== resolved.slots.length ||
+    previous.values.some((value, index) => value !== resolved.values[index]) ||
+    previous.fonts.some((family, index) => family !== resolved.fonts[index])
+  ) {
+    stable.current = resolved;
+  }
+  return stable.current;
+}
+
+/**
  * Resolves the shared control props and the callbacks that route native events
  * back to the caller's handlers.
  *
@@ -275,6 +299,8 @@ function ControlledMarkdown({
   codeBlockWrap = false,
   controls,
   translations,
+  theme,
+  markdownStyle,
   onLinkPress,
   onError,
 }: Extract<MarkdownViewProps, { markdown: string }>) {
@@ -304,6 +330,9 @@ function ControlledMarkdown({
     translations,
     onError,
     generationRef
+  );
+  const resolvedTheme = useStableTheme(
+    useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
   );
 
   const handleLinkPress = useCallback(
@@ -344,6 +373,9 @@ function ControlledMarkdown({
       tableFilename={resolved.tableFilename}
       csvSeparator={resolved.csvSeparator}
       controlLabels={resolved.labels}
+      themeSlots={resolvedTheme.slots}
+      themeValues={resolvedTheme.values}
+      themeFonts={resolvedTheme.fonts}
       onLinkPress={onLinkPress ? handleLinkPress : undefined}
       onMarkdownError={handleError}
       onControlAction={handleControlAction}
@@ -359,6 +391,8 @@ function StreamMarkdown({
   codeBlockWrap = false,
   controls,
   translations,
+  theme,
+  markdownStyle,
   onLinkPress,
   onError,
 }: Extract<
@@ -385,6 +419,11 @@ function StreamMarkdown({
     translations,
     onError,
     generationRef
+  );
+  // A stream keeps its theme across a rebind, so a theme that has not changed
+  // sends nothing however often a snapshot arrives.
+  const resolvedTheme = useStableTheme(
+    useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
   );
 
   const handleLinkPress = useCallback(
@@ -425,6 +464,9 @@ function StreamMarkdown({
       tableFilename={resolved.tableFilename}
       csvSeparator={resolved.csvSeparator}
       controlLabels={resolved.labels}
+      themeSlots={resolvedTheme.slots}
+      themeValues={resolvedTheme.values}
+      themeFonts={resolvedTheme.fonts}
       onLinkPress={onLinkPress ? handleLinkPress : undefined}
       onMarkdownError={handleError}
       onControlAction={handleControlAction}
