@@ -25,6 +25,7 @@ Pod::Spec.new do |s|
     "src/cpp/fabric/*.{h,cpp}",
     "src/cpp/remend/*.{h,cpp}",
     "src/cpp/highlight/*.{h,cpp}",
+    "src/cpp/theme/*.{h,cpp}",
     "src/cpp/lexilla/*.{h,cxx}",
     "src/cpp/lexilla/lexers/*.cxx",
     "src/cpp/lexilla/lexlib/*.{h,cxx}",
@@ -37,12 +38,16 @@ Pod::Spec.new do |s|
 
   s.pod_target_xcconfig = {
     "HEADER_SEARCH_PATHS" => [
+      # The engine's own root, so a header can spell another as
+      # `theme/Theme.h` the way the sources read, whatever directory it sits in.
+      "\"$(PODS_TARGET_SRCROOT)/src/cpp\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/downstream\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/session\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/fabric\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/md4c\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/remend\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/highlight\"",
+      "\"$(PODS_TARGET_SRCROOT)/src/cpp/theme\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/lexilla\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/lexilla/lexlib\"",
     ].join(" "),

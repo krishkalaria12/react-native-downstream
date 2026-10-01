@@ -51,6 +51,7 @@ const CXXFLAGS = [
   `-I${join(CPP, 'session')}`,
   `-I${join(CPP, 'remend')}`,
   `-I${join(CPP, 'highlight')}`,
+  `-I${join(CPP, 'theme')}`,
   `-I${LEXILLA}`,
   `-I${join(LEXILLA, 'lexlib')}`,
 ];
