@@ -111,7 +111,6 @@ downstream::Theme::Handle DownstreamMarkdownShadowNode::resolveTheme() const {
 }
 
 downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale, Float width) const {
-  const auto &props = getConcreteProps();
   const auto &state = getStateData();
   return downstream::LayoutHint{static_cast<float>(fontScale),
                                 static_cast<float>(width),
@@ -246,7 +245,6 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   if (awaitingPrepared_) {
     relayoutWhenPrepared();
   }
-  const auto &props = getConcreteProps();
   const auto &state = getStateData();
   const uint32_t chrome = chromeFor(state);
   // The theme is compared by id rather than by pointer, so a view whose theme
