@@ -91,6 +91,29 @@ private class InlineCodeLineSpan(private val ascent: Int, private val descent: I
 }
 
 /**
+ * A themed line height, as a minimum: a line the face needs more room for keeps
+ * it, so no glyph is clipped, and the extra sits above the text, as iOS places
+ * it. Runs after InlineCodeLineSpan, which sets absolute metrics, and before
+ * BlockSpan, which adds block spacing on top of the line.
+ */
+private class BlockLineHeightSpan(private val height: Int) : LineHeightSpan {
+  override fun chooseHeight(
+    text: CharSequence,
+    lineStart: Int,
+    lineEnd: Int,
+    spanStartV: Int,
+    lineHeight: Int,
+    fm: Paint.FontMetricsInt,
+  ) {
+    val extra = height - (fm.descent - fm.ascent)
+    if (extra > 0) {
+      fm.ascent -= extra
+      fm.top = minOf(fm.top, fm.ascent)
+    }
+  }
+}
+
+/**
  * Inline code in a text segment, whose background TextSegmentView draws
  * between the code's ascent and descent. BackgroundColorSpan fills the whole
  * line, which on a block's first line includes the block spacing above it.
@@ -1125,6 +1148,10 @@ internal class RenderedDocument(
         val margin = leading.toInt()
         if (margin > 0) {
           text.setSpan(LeadingMarginSpan.Standard(margin), start, spanEnd, Spanned.SPAN_PARAGRAPH)
+        }
+        val lineHeight = document.blockLineHeight(block)
+        if (lineHeight > 0f) {
+          text.setSpan(BlockLineHeightSpan(px(lineHeight).toInt()), start, spanEnd, Spanned.SPAN_PARAGRAPH)
         }
         text.setSpan(
           BlockSpan(gap.toInt(), leading, decoration, containers, markerPaint, colors, density,
