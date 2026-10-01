@@ -301,19 +301,27 @@ NSString *const kSymbolDownload = @"arrow.down.to.line";
 NSString *const kSymbolWrap = @"text.alignleft";
 NSString *const kSymbolUnwrap = @"text.alignleft";
 
-UIButton *makeControlButton(NSString *symbol, NSString *label, NSString *action, NSString *format) {
-  UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+/// Every control glyph at one size, so a glyph swapped in later (a copy's check,
+/// a wrap state) matches the ones built with the button.
+UIImage *controlImage(NSString *symbol) {
   UIImageSymbolConfiguration *configuration =
       [UIImageSymbolConfiguration configurationWithPointSize:kButtonGlyph * 0.5
                                                       weight:UIImageSymbolWeightRegular];
-  [button setImage:[UIImage systemImageNamed:symbol withConfiguration:configuration]
-          forState:UIControlStateNormal];
+  return [UIImage systemImageNamed:symbol withConfiguration:configuration];
+}
+
+UIButton *makeControlButton(NSString *symbol, NSString *label, NSString *action, NSString *format) {
+  // Built as the subclass, not cast to it: a plain UIButton has no action or
+  // format, and setting either would throw.
+  DSControlButton *button = [DSControlButton buttonWithType:UIButtonTypeSystem];
+  [button setImage:controlImage(symbol) forState:UIControlStateNormal];
   [button setTintColor:UIColor.secondaryLabelColor];
   button.accessibilityLabel = label;
   button.frame = CGRectMake(0, 0, kButtonGlyph, kButtonGlyph);
-  DSControlButton *control = (DSControlButton *)button;
-  control.action = action;
-  control.format = format;
+  // A fixed width, so a swapped glyph (copy's check) does not shift the others.
+  [button.widthAnchor constraintEqualToConstant:kButtonGlyph].active = YES;
+  button.action = action;
+  button.format = format;
   return button;
 }
 
@@ -362,6 +370,7 @@ namespace {
 
     _header = [UIView new];
     _header.userInteractionEnabled = YES;
+    _header.translatesAutoresizingMaskIntoConstraints = NO;
     _language = [UILabel new];
     _language.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
     _language.textColor = UIColor.secondaryLabelColor;
@@ -382,11 +391,12 @@ namespace {
     _scrollView.showsVerticalScrollIndicator = NO;
     _scrollView.alwaysBounceVertical = NO;
     _scrollView.directionalLockEnabled = YES;
-    _scrollView.translatesAutoresizingMaskIntoConstraints = NO;
 
+    // The scroll view and the body are framed in layoutSubviews from the
+    // measured body size. Under Auto Layout a non-scrolling text view would
+    // take its intrinsic one-line width instead, and never wrap.
     _body = [DSTextSegmentView new];
     _body.scrollEnabled = NO;
-    _body.translatesAutoresizingMaskIntoConstraints = NO;
 
     [_scrollView addSubview:_body];
     [self addSubview:_header];
@@ -407,10 +417,6 @@ namespace {
     [_language.trailingAnchor constraintLessThanOrEqualToAnchor:_buttons.leadingAnchor constant:-8],
     [_buttons.trailingAnchor constraintEqualToAnchor:_header.trailingAnchor constant:-4],
     [_buttons.centerYAnchor constraintEqualToAnchor:_header.centerYAnchor],
-    [_scrollView.topAnchor constraintEqualToAnchor:_header.bottomAnchor],
-    [_scrollView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-    [_scrollView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-    [_scrollView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
   ]];
 }
 
@@ -550,15 +556,15 @@ namespace {
 
   UIButton *wrap = (UIButton *)all[0];
   wrap.selected = _wrapped;
-  [wrap setImage:[UIImage systemImageNamed:symbolForWrap(_wrapped)] forState:UIControlStateNormal];
+  [wrap setImage:controlImage(symbolForWrap(_wrapped)) forState:UIControlStateNormal];
   wrap.accessibilityLabel = _wrapped ? [self label:DSControlLabelUnwrapCode] : [self label:DSControlLabelWrapCode];
-  wrap.accessibilityTraits = _wrapped ? (UIAccessibilityTraitButton | UIAccessibilityTraitSelected)
-                                      : UIAccessibilityTraitButton;
+  // No explicit traits: UIButton derives Selected and Not Enabled itself, and a
+  // fixed value would tell VoiceOver a disabled button can be pressed.
 
   UIButton *download = (UIButton *)all[1];
   download.accessibilityLabel = [self label:DSControlLabelDownloadFile];
   UIButton *copy = (UIButton *)all[2];
-  [copy setImage:[UIImage systemImageNamed:symbolForCopy(_copied)] forState:UIControlStateNormal];
+  [copy setImage:controlImage(symbolForCopy(_copied)) forState:UIControlStateNormal];
   copy.accessibilityLabel = _copied ? [self label:DSControlLabelCopied] : [self label:DSControlLabelCopyCode];
   [self updateCopiedSpokenText];
 }
@@ -706,7 +712,9 @@ namespace {
       [elements addObject:view];
     }
   }
-  [elements addObjectsFromArray:_body.accessibilityElements ?: @[]];
+  // The body is listed as a container, not flattened: its elements' frames are
+  // in the body's space, which the header and the scroll offset move.
+  [elements addObject:_body];
   return elements;
 }
 
@@ -1119,7 +1127,14 @@ namespace {
   // A toolbar above the grid takes layout space rather than floating over the
   // rows, so a reader never taps a button instead of a cell.
   _toolbar.frame = CGRectMake(0, 0, self.bounds.size.width, toolbarHeight);
-  _buttons.frame = CGRectMake(0, 0, self.bounds.size.width, toolbarHeight);
+  // The buttons keep their own width at the trailing edge, as the code header's
+  // do; a row-wide stack would stretch them apart.
+  const CGFloat buttonsWidth =
+      [_buttons systemLayoutSizeFittingSize:UILayoutFittingCompressedSize].width;
+  const BOOL rightToLeft =
+      self.effectiveUserInterfaceLayoutDirection == UIUserInterfaceLayoutDirectionRightToLeft;
+  _buttons.frame = CGRectMake(rightToLeft ? 4 : self.bounds.size.width - buttonsWidth - 4, 0, buttonsWidth,
+                              toolbarHeight);
   const CGFloat leading = _segment.contentLeading;
   _scrollView.frame = CGRectMake(_segment.rightToLeft ? 0 : leading, toolbarHeight,
                                  std::max<CGFloat>(0, self.bounds.size.width - leading),
@@ -1189,7 +1204,9 @@ namespace {
       }
     }
   }
-  [elements addObjectsFromArray:_grid.accessibilityElements ?: @[]];
+  // The grid is listed as a container, not flattened: its rows' frames are in
+  // the grid's space, which the toolbar and the horizontal scroll move.
+  [elements addObject:_grid];
   return elements;
 }
 
