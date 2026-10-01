@@ -428,6 +428,7 @@ internal class CodeSegment(
   val borderWidth: Float,
   /** The header row's face, for the language label. */
   val headerFace: Typeface,
+  /** The language label's size, in pixels. */
   val headerSize: Float,
   /** A list marker's face and size, for the margin beside the card. */
   val markerFace: Typeface,
