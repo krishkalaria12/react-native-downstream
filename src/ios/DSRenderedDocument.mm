@@ -8,6 +8,7 @@
 #include "InlineRuns.h"
 #include "SegmentPlan.h"
 #include "TokenPalette.h"
+#include "Unicode.h"
 #include "theme/ThemeLayout.h"
 
 #include <algorithm>
@@ -721,28 +722,29 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
     segment.containers = containers;
     segment.contentLeading = leading;
   }
+  std::vector<std::string> altTexts;
+  altTexts.reserve(block.images.size());
   for (const uint32_t ordinal : block.images) {
     // The alt texts, which is the block's own text and what accessibility,
     // export, and the fallback all read. Storing them per image is what lets a
     // view show one image's label under that image rather than one label for
     // the block.
-    segment.altTexts.push_back(ordinal < document.images.size()
-                                  ? utf16ToUtf8(document.images[ordinal].alt)
-                                  : std::string());
+    altTexts.push_back(ordinal < document.images.size() ? utf16ToUtf8(document.images[ordinal].alt) : std::string());
   }
+  segment.altTexts = std::move(altTexts);
   segment.placeholderColor = [colors colorForSlot:kSlotImagePlaceholderColor];
   // The metrics come from the shared rule rather than from a platform copy, and
   // are scaled here once so `imageBox` is handed points rather than unscaled
   // numbers every time it is called.
-  const downstream::ImageMetrics base = imageMetrics(theme);
-  segment.metrics = base;
-  segment.metrics.marginTop = static_cast<float>(base.marginTop * scale);
-  segment.metrics.marginBottom = static_cast<float>(base.marginBottom * scale);
-  segment.metrics.fallbackTextHeight = static_cast<float>(base.fallbackTextHeight * scale);
+  downstream::ImageMetrics metrics = imageMetrics(theme);
+  metrics.marginTop = static_cast<float>(metrics.marginTop * scale);
+  metrics.marginBottom = static_cast<float>(metrics.marginBottom * scale);
+  metrics.fallbackTextHeight = static_cast<float>(metrics.fallbackTextHeight * scale);
+  segment.metrics = metrics;
   return segment;
 }
 
-- (std::vector<const downstream::ImageEntry *> *)entriesFor:(const downstream::ImageStateLayout &)answers {
+- (std::vector<const downstream::ImageEntry *>)entriesFor:(const downstream::ImageStateLayout &)answers {
   std::vector<const downstream::ImageEntry *> found;
   found.reserve(self.images.size());
   for (const uint32_t ordinal : self.images) {

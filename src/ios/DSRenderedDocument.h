@@ -219,7 +219,7 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 @property (nonatomic, readonly, nullable) UIColor *placeholderColor;
 /// What each image is in this view. One entry per image, in the same order as
 /// `images`, and a `Disabled` entry for an image the view has no answer for.
-- (std::vector<const downstream::ImageEntry *> *)entriesFor:(const downstream::ImageStateLayout &)answers;
+- (std::vector<const downstream::ImageEntry *>)entriesFor:(const downstream::ImageStateLayout &)answers;
 /// The box for one image at a column width, through the engine's own rule.
 - (downstream::ImageBox)boxAtIndex:(NSUInteger)index
                             column:(CGFloat)column
