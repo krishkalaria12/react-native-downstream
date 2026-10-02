@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Downstream · fence renderers plan</title>
+    <style>
+      :root {
+        --paper: #f5f8f8;
+        --surface: #ffffff;
+        --surface-soft: #edf3f2;
+        --ink: #17272d;
+        --ink-soft: #486167;
+        --muted: #667c80;
+        --line: #cddcda;
+        --line-strong: #94aeaa;
+        --accent: #146e69;
+        --accent-soft: #d9efeb;
+        --tail: #aa681b;
+        --tail-soft: #f8eddb;
+        --risk: #a64242;
+        --risk-soft: #faeaea;
+        --code: #e8f0ef;
+        --sans: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --paper: #0f1b1e;
+          --surface: #152528;
+          --surface-soft: #1c3334;
+          --ink: #e8f2ef;
+          --ink-soft: #b6cac5;
+          --muted: #92aca7;
+          --line: #34504e;
+          --line-strong: #537872;
+          --accent: #84d4c6;
+          --accent-soft: #1b4643;
+          --tail: #efbb72;
+          --tail-soft: #46351f;
+          --risk: #ef9993;
+          --risk-soft: #462d30;
+          --code: #223a3b;
+        }
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.58 var(--sans); }
+      a { color: var(--accent); text-underline-offset: 0.18em; }
+      :focus-visible { outline: 3px solid var(--tail); outline-offset: 3px; border-radius: 3px; }
+      .shell { display: grid; grid-template-columns: 15rem minmax(0, 1fr); min-height: 100vh; }
+      .rail { position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 2.1rem 1.2rem 2rem 1.5rem; border-right: 1px solid var(--line); background: var(--surface); }
+      .rail-title { font-weight: 800; letter-spacing: -0.035em; line-height: 1.18; font-size: 1.12rem; margin: 0 0 0.35rem; }
+      .rail-subtitle { margin: 0; color: var(--muted); font-size: 0.8rem; line-height: 1.4; }
+      .rail nav { margin-top: 2rem; display: grid; gap: 0.06rem; }
+      .rail nav a { display: block; padding: 0.46rem 0.6rem; color: var(--ink-soft); text-decoration: none; font-size: 0.86rem; line-height: 1.3; border-left: 2px solid transparent; }
+      .rail nav a:hover { color: var(--ink); background: var(--surface-soft); border-left-color: var(--accent); }
+      main { min-width: 0; }
+      .wrap { max-width: 74rem; padding: 3.2rem clamp(1rem, 4.8vw, 4.5rem) 6rem; margin: 0 auto; }
+      .mast { border-bottom: 2px solid var(--ink); padding-bottom: 2.2rem; margin-bottom: 0.6rem; }
+      .kicker { font: 700 0.77rem/1.3 var(--mono); color: var(--accent); letter-spacing: 0.02em; margin: 0 0 0.9rem; }
+      h1 { font-size: clamp(2.3rem, 5vw, 4.3rem); letter-spacing: -0.06em; line-height: 1; margin: 0 0 1.3rem; max-width: 15ch; font-weight: 760; }
+      .lede { font-size: clamp(1.05rem, 1.5vw, 1.22rem); line-height: 1.5; max-width: 52rem; margin: 0; color: var(--ink-soft); }
+      .decision { margin-top: 2rem; padding: 1.2rem 1.4rem; background: var(--accent-soft); border-left: 5px solid var(--accent); max-width: 62rem; }
+      .decision strong { display: block; margin-bottom: 0.3rem; }
+      .decision p { margin: 0; }
+      section { scroll-margin-top: 1.5rem; padding: 2.4rem 0 1.6rem; border-top: 1px solid var(--line); }
+      .section-head { display: grid; grid-template-columns: minmax(0, 2fr) minmax(12rem, 1fr); align-items: end; gap: 2rem; margin-bottom: 1.2rem; }
+      .section-head h2 { font-size: clamp(1.6rem, 2.6vw, 2.3rem); letter-spacing: -0.05em; line-height: 1.13; margin: 0; }
+      .section-head p { margin: 0; color: var(--ink-soft); font-size: 0.94rem; line-height: 1.45; }
+      h3 { font-size: 1.18rem; letter-spacing: -0.025em; line-height: 1.25; margin: 1.8rem 0 0.6rem; }
+      p { max-width: 72ch; margin: 0.5rem 0 1rem; }
+      ul, ol { padding-left: 1.35rem; max-width: 80ch; }
+      li { margin: 0.38rem 0; }
+      code, pre { font-family: var(--mono); }
+      code { background: var(--code); border-radius: 3px; padding: 0.08rem 0.25rem; font-size: 0.86em; overflow-wrap: anywhere; }
+      pre { background: var(--surface); border: 1px solid var(--line); padding: 1rem 1.2rem; overflow-x: auto; font-size: 0.8rem; line-height: 1.6; max-width: 100%; }
+      pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+      .table-wrap { max-width: 100%; overflow-x: auto; border: 1px solid var(--line); background: var(--surface); margin: 1rem 0 1.5rem; }
+      table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 0.86rem; line-height: 1.45; }
+      th, td { padding: 0.72rem 0.85rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+      th { background: var(--surface-soft); font-size: 0.77rem; font-weight: 750; }
+      tr:last-child td { border-bottom: 0; }
+      tr.pick td { background: var(--accent-soft); }
+      .tag { display: inline-block; font: 700 0.7rem/1 var(--mono); padding: 0.28rem 0.42rem; border-radius: 3px; margin: 0.1rem 0.25rem 0.1rem 0; white-space: nowrap; }
+      .tag.go { background: var(--accent-soft); color: var(--accent); }
+      .tag.later { background: var(--tail-soft); color: var(--tail); }
+      .tag.no { background: var(--risk-soft); color: var(--risk); }
+      .meta-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 1.2rem; }
+      .meta-grid > div { background: var(--surface); padding: 1rem 1.1rem; }
+      .meta-grid b { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; }
+      .meta-grid span { color: var(--ink-soft); font-size: 0.9rem; }
+      .callout { padding: 1rem 1.25rem; background: var(--surface-soft); border-left: 4px solid var(--line-strong); margin: 1.3rem 0; }
+      .callout.risk { background: var(--risk-soft); border-left-color: var(--risk); }
+      .callout p:last-child { margin-bottom: 0; }
+      .flow { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.9rem; margin: 1.2rem 0 1.4rem; }
+      .flow-node { position: relative; background: var(--surface); border: 1px solid var(--line); padding: 0.8rem 0.85rem; font-size: 0.82rem; line-height: 1.4; }
+      .flow-node b { display: block; font-size: 0.85rem; margin-bottom: 0.2rem; }
+      .flow-node span { color: var(--ink-soft); }
+      .flow-node.new { border-color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
+      .flow-node:not(:last-child)::after { content: "→"; position: absolute; top: 0.8rem; right: -0.78rem; color: var(--accent); font-weight: bold; }
+      .phase { border: 1px solid var(--line); background: var(--surface); padding: 1.1rem 1.3rem 0.6rem; margin: 1rem 0; }
+      .phase h3 { margin-top: 0; }
+      .phase .exit { border-top: 1px dashed var(--line); padding-top: 0.6rem; margin-top: 0.6rem; font-size: 0.9rem; color: var(--ink-soft); }
+      .phase .exit b { color: var(--ink); }
+      .sources li { font-size: 0.9rem; overflow-wrap: anywhere; }
+      .mocks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.4rem; margin: 1rem 0 0.4rem; }
+      .mock { font-size: 0.82rem; line-height: 1.5; }
+      .mock-p { margin: 0 0 0.6rem; color: var(--ink); max-width: none; }
+      .mock-item { display: grid; grid-template-columns: 1.4rem minmax(0, 1fr); }
+      .mock-item .m { color: var(--muted); }
+      .mock-quote { border-left: 3px solid var(--line-strong); padding-left: 0.7rem; }
+      .mock-slot { position: relative; border: 1.5px dashed var(--accent); border-radius: 6px; padding: 0.7rem; background: var(--surface); min-height: 6.5rem; }
+      .mock-slot .lbl { position: absolute; top: -0.65rem; left: 0.5rem; background: var(--paper); padding: 0 0.3rem; font: 700 0.66rem/1.2 var(--mono); color: var(--accent); }
+      .mock-bars { display: flex; align-items: flex-end; gap: 0.4rem; height: 4.6rem; padding-top: 0.3rem; }
+      .mock-bars i { display: block; flex: 1; background: var(--accent); opacity: 0.75; border-radius: 2px 2px 0 0; }
+      .mock-skel { height: 4.6rem; border-radius: 4px; background: repeating-linear-gradient(90deg, var(--surface-soft), var(--surface-soft) 40%, var(--line) 50%, var(--surface-soft) 60%); display: grid; place-items: center; color: var(--muted); font-size: 0.75rem; }
+      .mock-card { background: var(--surface-soft); border-radius: 6px; overflow: hidden; font-family: var(--mono); font-size: 0.74rem; }
+      .mock-card .h { display: flex; justify-content: space-between; padding: 0.35rem 0.6rem; color: var(--muted); }
+      .mock-card .b { padding: 0 0.6rem 0.6rem; white-space: pre; color: var(--ink-soft); overflow: hidden; }
+      .mock-note { font: 0.8rem/1.4 var(--sans); color: var(--ink-soft); margin: 0.5rem 0 0; }
+      @media (max-width: 1000px) {
+        .shell { grid-template-columns: 1fr; }
+        .rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+        .rail nav { grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); margin-top: 1rem; }
+        .flow, .mocks { grid-template-columns: 1fr; }
+        .flow-node:not(:last-child)::after { content: "↓"; top: auto; bottom: -1.05rem; right: 50%; }
+      }
+      @media (max-width: 760px) {
+        .meta-grid, .section-head { grid-template-columns: 1fr; gap: 0.6rem; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="rail">
+        <p class="rail-title">Fence renderers</p>
+        <p class="rail-subtitle">Implementation plan · the "Custom renderers by fence language" row of the Streamdown gap analysis</p>
+        <nav aria-label="Sections">
+          <a href="#scope">Scope</a>
+          <a href="#streamdown">What Streamdown does</a>
+          <a href="#constraints">Constraints</a>
+          <a href="#hosting">Choosing a hosting model</a>
+          <a href="#design">Design</a>
+          <a href="#api">Public API</a>
+          <a href="#streaming">Streaming</a>
+          <a href="#platforms">Platforms</a>
+          <a href="#catalog">Renderers we can ship</a>
+          <a href="#phases">Phases</a>
+          <a href="#testing">Testing</a>
+          <a href="#risks">Decisions and risks</a>
+          <a href="#followups">Follow-ups</a>
+          <a href="#sources">Sources</a>
+        </nav>
+      </aside>
+      <main>
+        <div class="wrap">
+          <header class="mast">
+            <p class="kicker">docs / fence-renderers-plan</p>
+            <h1>React components for fenced blocks, inside the native document</h1>
+            <p class="lede">
+              Streamdown's <code>plugins.renderers</code> lets an app replace a fenced block, such as <code>```mermaid</code>,
+              <code>```vega-lite</code> or a tool-call JSON, with a component that receives <code>code</code>, <code>language</code>,
+              <code>meta</code> and <code>isIncomplete</code>. This plan brings the same API to Downstream. The block stays part of the one
+              native view: the component is a real React child that the shadow node measures and places, the way React Native's own
+              <code>&lt;Text&gt;</code> places an inline <code>&lt;View&gt;</code>.
+            </p>
+            <div class="meta-grid">
+              <div><b>Builds on</b><span>Code block chrome (#19), theme and style (#18), and math and images (#21), all merged. Streaming animation (#20) is open; the interaction with it is covered under <a href="#streaming">Streaming</a>.</span></div>
+              <div><b>Compared against</b><span>Streamdown 2.7.0 (<code>vercel/streamdown@1ddd8f4</code>), and React Native 0.83.2's <code>ParagraphShadowNode</code>, which hosts inline views the same way</span></div>
+              <div><b>New dependencies</b><span>None in the core package. An optional Mermaid renderer package would add <code>beautiful-mermaid</code> (MIT) and <code>react-native-svg</code>.</span></div>
+            </div>
+            <div class="decision">
+              <strong>Decision: the native view gets React children, and its shadow node lays them out</strong>
+              <p>
+                <code>DownstreamMarkdown</code> asks the engine, synchronously and during render, which fenced blocks name a registered language.
+                For each one it renders a <code>&lt;DownstreamFenceSlot ordinal={n}&gt;</code> child holding the app's component. The shadow node
+                stays a measurable Yoga leaf. It measures each slot child at the block's column width, hands those heights to the platform
+                measurement as a new layout input, and gets back each slot's rectangle, so it can place the child where the code card would
+                have been. A fence becomes a slot only if a visible slot child for it is mounted. With no child (not rendered yet, suspended,
+                or the renderer threw), the native code card is drawn as it is today, so there is always a readable fallback and it needs no
+                code of its own.
+              </p>
+              <p style="margin-top: 0.7rem">
+                Everything stays in one Fabric commit: no extra frame, no event round trip, no second native view, and no change for a view
+                with no renderers. The API is Streamdown's, so a <code>renderers</code> array written for the web needs only its components
+                rewritten for React Native.
+              </p>
+            </div>
+          </header>
+
+          <section id="scope">
+            <div class="section-head">
+              <h2>Scope</h2>
+              <p>What ships, what is deferred, and what stays out.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Piece</th><th>Status</th><th>Notes</th></tr></thead>
+                <tbody>
+                  <tr><td><code>plugins.renderers</code> with <code>{ language, component }</code></td><td><span class="tag go">in</span></td><td>Streamdown's shape. <code>language</code> is a string or an array, and the first matching entry wins, as in Streamdown's <code>useCustomRenderer</code>.</td></tr>
+                  <tr><td><code>CustomRendererProps</code>: <code>code</code>, <code>language</code>, <code>meta</code>, <code>isIncomplete</code></td><td><span class="tag go">in</span></td><td>Same names and meanings. <code>code</code> is exactly what the code block's copy button copies, and <code>meta</code> is the raw info string after the language, as remark gives it.</td></tr>
+                  <tr><td>Fences inside lists, quotes, admonitions and footnotes</td><td><span class="tag go">in</span></td><td>The slot sits in the block's content column. The native side still draws the list marker and the quote or admonition bar beside it.</td></tr>
+                  <tr><td>Streaming</td><td><span class="tag go">in</span></td><td>The component re-renders as its fence grows, keeps its React state across snapshots, and gets <code>isIncomplete</code> until the fence settles. A settled fence's component does not re-render on later snapshots.</td></tr>
+                  <tr><td>Fallback to the code card</td><td><span class="tag go">in</span></td><td>Shown while a lazy renderer loads, after a renderer throws, and for any fence the slot query missed. This goes beyond Streamdown, which has no error boundary and shows a skeleton while suspended.</td></tr>
+                  <tr><td><code>renderer_failed</code> error code</td><td><span class="tag go">in</span></td><td>Reported to the view's <code>onError</code> once per settled fence, the way <code>onMathError</code> reports a formula only after it settles.</td></tr>
+                  <tr><td>Example app "Renderers" screen</td><td><span class="tag go">in</span></td><td>A bar chart from JSON, a Mermaid diagram, a renderer that throws, a lazy renderer, and fences nested in a list and a quote, in both controlled and streamed modes.</td></tr>
+                  <tr><td>First-party Mermaid renderer package</td><td><span class="tag later">later, own PR</span></td><td><code>react-native-downstream-mermaid</code>: <code>beautiful-mermaid</code> (pure TypeScript, synchronous, no DOM) to an SVG string, drawn with <code>react-native-svg</code>. Gated on a Hermes spike. See <a href="#catalog">Renderers we can ship</a>.</td></tr>
+                  <tr><td>Native card around a renderer</td><td><span class="tag later">later</span></td><td>An opt-in <code>chrome: 'card'</code> per renderer that draws the native code card's background, header, copy and download around the component. It replaces Streamdown's exported <code>CodeBlockContainer</code> and <code>CodeBlockHeader</code>, which are DOM components.</td></tr>
+                  <tr><td>Theme values in JavaScript</td><td><span class="tag later">later</span></td><td>A <code>useMarkdownTheme()</code> hook so a renderer can match the code card's colors. Until then, renderers use <code>useColorScheme</code>.</td></tr>
+                  <tr><td>Per-node renderers (headings, links, paragraphs)</td><td><span class="tag no">out</span></td><td>Still ruled out by the contract. A fence is one block with a clear boundary and a known column, which is what makes it hostable. Arbitrary inline nodes are not.</td></tr>
+                  <tr><td>Indented code, inline code, and <code>```math</code> when <code>math</code> is on</td><td><span class="tag no">out</span></td><td>Indented code has no language. A <code>```math</code> fence is a <code>MathBlock</code> when math is on, as it is a math node in Streamdown, where remark-math claims it before the code component runs.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="streamdown">
+            <div class="section-head">
+              <h2>What Streamdown does, and what we take</h2>
+              <p>Read from <code>lib/plugin-types.ts</code>, <code>lib/plugin-context.tsx</code>, <code>lib/components.tsx</code>, <code>index.tsx</code>, <code>lib/remark/code-meta.ts</code>, <code>lib/mermaid/index.tsx</code>, the custom renderer tests, and <code>content/docs/custom-renderers.mdx</code>.</p>
+            </div>
+            <h3>How it works there</h3>
+            <ul>
+              <li><b>Types.</b> <code>CustomRendererProps</code> is <code>{ code, isIncomplete, language, meta? }</code>. <code>CustomRenderer</code> is <code>{ component, language: string | string[] }</code>. Both live on <code>PluginConfig.renderers</code>, beside <code>code</code>, <code>math</code>, <code>mermaid</code> and <code>cjk</code>.</li>
+              <li><b>Matching.</b> <code>useCustomRenderer(language)</code> runs <code>renderers.find(...)</code> with exact, case-sensitive equality. The language comes from the <code>language-([^\s]+)</code> class, so <code>```ts:a.ts</code> has the language <code>ts:a.ts</code> and <code>```Mermaid</code> does not match <code>mermaid</code>.</li>
+              <li><b>Priority.</b> In the code component, a custom renderer is checked first, then the Mermaid plugin, then the default code block. The docs point out that this lets an app override Mermaid by registering a <code>mermaid</code> renderer.</li>
+              <li><b>Meta.</b> <code>remarkCodeMeta</code> copies mdast's <code>node.meta</code> (the info string after the first word, trimmed) to a <code>metastring</code> property. It reaches the renderer as <code>meta</code>, which is <code>undefined</code> when the fence has none.</li>
+              <li><b>Incompleteness.</b> <code>isIncomplete = isAnimating &amp;&amp; isLastBlock &amp;&amp; hasIncompleteCodeFence(block)</code>. A line scanner implements CommonMark's closing rule: same character, at least as long, at most three spaces of indent. It is passed down through <code>BlockIncompleteContext</code> and is also public as <code>useIsCodeFenceIncomplete()</code>.</li>
+              <li><b>Loading.</b> The renderer is wrapped in <code>&lt;Suspense fallback={&lt;CodeBlockSkeleton /&gt;}&gt;</code>. There is no error boundary, so a renderer that throws takes the message down with it.</li>
+              <li><b>Docs and examples.</b> Vega-Lite (wait for the complete spec, then <code>vegaEmbed</code>), AntV Infographic (renders progressively, so it skips the <code>isIncomplete</code> guard), and D2 (a server renders the SVG). Each is wrapped in the exported <code>CodeBlockContainer</code> and <code>CodeBlockHeader</code>. The docs' prop table leaves out <code>meta</code>, although the code passes it.</li>
+              <li><b>Mermaid's own lessons.</b> The built-in Mermaid component keeps the <code>lastValidSvg</code> while new source fails to parse, waits while the fence streams, and defers rendering until the block is near the viewport, using <code>useDeferredRender</code> with a 300px root margin and an idle callback.</li>
+            </ul>
+            <h3>What we take, change, and leave</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Streamdown behavior</th><th>Downstream</th><th>Why</th></tr></thead>
+                <tbody>
+                  <tr><td>Prop shape and prop names</td><td><span class="tag go">take</span></td><td><code>controls</code> already takes Streamdown's shape so a value written for it keeps working. A renderer array is the same idea: only the components need rewriting.</td></tr>
+                  <tr><td>First match wins; renderers outrank the code card</td><td><span class="tag go">take</span></td><td>Parity. A future native Mermaid path would rank below an app's renderer, as it does in Streamdown.</td></tr>
+                  <tr><td>Exact, case-sensitive language match</td><td><span class="tag later">change</span></td><td>Matched on the language as highlighting already normalizes it: ASCII lower case, cut at the first space and at <code>:</code>. That way <code>```Mermaid</code> and <code>```mermaid title="flow"</code> match, and highlighting and rendering never disagree about a fence's language. <code>language</code> is still passed as written.</td></tr>
+                  <tr><td><code>isIncomplete</code> only while <code>isAnimating</code></td><td><span class="tag later">change</span></td><td>A stream knows which blocks are settled, which is more precise than "the last block, while animating". See <a href="#streaming">Streaming</a> for the exact rule and the controlled case.</td></tr>
+                  <tr><td>Suspense skeleton, no error boundary</td><td><span class="tag later">change</span></td><td>The fallback is the native code card, which is always available and always readable, and an error is reported instead of crashing the tree.</td></tr>
+                  <tr><td>Exported <code>CodeBlockContainer</code> and <code>CodeBlockHeader</code></td><td><span class="tag later">later</span></td><td>They are DOM components. The native equivalent is the opt-in card chrome follow-up.</td></tr>
+                  <tr><td><code>useIsCodeFenceIncomplete()</code></td><td><span class="tag no">leave</span></td><td>It exists because Streamdown's code component is a React component an app can override. In Downstream the renderer receives <code>isIncomplete</code> as a prop, and that is the only place it is needed.</td></tr>
+                  <tr><td>Port the 8 cases in <code>custom-renderer.test.tsx</code></td><td><span class="tag go">take</span></td><td>Matching, props, non-matching languages, several renderers, array languages, no renderers, and <code>meta</code> present and absent. They run against the real engine through <code>tests/real-engine-module.ts</code>.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="constraints">
+            <div class="section-head">
+              <h2>Constraints from the contract and the code</h2>
+              <p>What the design has to respect, with where each rule lives.</p>
+            </div>
+            <ul>
+              <li><b>The contract rules this out today.</b> The "Custom renderers" row in <code>docs/api.md</code> reads "None / None planned / Per-node React render callbacks in the native display path". It needs to change: fence renderers move into the first release, and per-node callbacks stay unsupported.</li>
+              <li><b>No parse model in JavaScript.</b> <code>docs/api.md</code> says "No parser model or AST is sent to JavaScript for display." A slot list (ordinal, language, meta, code, completeness) for registered languages only is a narrow, documented exception. It is the minimum a component needs, and it is exactly what Streamdown passes.</li>
+              <li><b>One view per session.</b> A stream controller binds to at most one view (<code>session_bound</code>). Any design that splits a message into several native views breaks that.</li>
+              <li><b>The module never blocks on a parse.</b> <code>DownstreamSessionModule.h</code> says its methods "never wait for a parse". Layout, however, does wait for sources up to 16 KiB (<code>kWaitForPreparedBytes</code> in the shadow node). A synchronous slot query may wait under exactly that rule and no other, because it only moves earlier a wait that layout would otherwise make.</li>
+              <li><b>The shadow node is a measurable Yoga leaf.</b> It sets <code>LeafYogaNode</code> and <code>MeasurableYogaNode</code>. Yoga ignores the children of a leaf (<code>YogaLayoutableShadowNode::appendChild</code> returns early), so the node has to lay its children out itself, as <code>ParagraphShadowNode::layout</code> does for inline views. A clone with new children always dirties a measurable node (<code>completeClone</code>), so a renderer that changes size triggers a new measurement on its own.</li>
+              <li><b>Android measures through <code>FabricUIManager.measure</code>.</b> Only <code>measureText</code> takes <code>attachmentsPositions</code>; the generic <code>measure</code> passes <code>null</code>. The slot rectangles therefore need their own return path from Kotlin.</li>
+              <li><b>Both platforms own their child views.</b> <code>DownstreamMarkdownView.kt</code> reconciles segments by child index and trims any extra children. <code>DownstreamMarkdownViewManager</code> is a <code>SimpleViewManager</code>, which accepts no children. On iOS, <code>RCTViewComponentView</code> mounts children into <code>currentContainerView</code>, and that would put them under <code>_documentView</code>.</li>
+              <li><b>The groundwork is already there.</b> <code>Block::info</code> keeps the whole info string "so a renderer receives the raw meta string, as Streamdown's <code>CustomRendererProps.meta</code> does". <code>SegmentPlan::codeOrdinal</code> is stable across append-only snapshots. <code>exportCodeText</code> already defines what a code block's text is.</li>
+              <li><b>Engine rules are written once.</b> The column a slot is measured at must come from the engine, which both platforms already read, so the shadow node and the platform agree to the point. Today each platform computes container indents itself in <code>buildContainers</code> from <code>containerIndent(theme, kind)</code>.</li>
+              <li><b>A view with no renderers pays nothing.</b> This is the feature matrix's rule that heavier paths load only when a document uses them: no slot query, no children, the same measure cache key, and the same props as today.</li>
+            </ul>
+          </section>
+
+          <section id="hosting">
+            <div class="section-head">
+              <h2>Choosing a hosting model</h2>
+              <p>Four ways to get a React component into a native document.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Model</th><th>How</th><th>Verdict</th></tr></thead>
+                <tbody>
+                  <tr><td>Split the message</td><td>JavaScript renders native view, component, native view, and so on.</td><td><span class="tag no">no</span> Breaks one view per session, committed-segment reuse, selection, and reading order. JavaScript would need block boundaries to know where to cut, and a split that moves while streaming would remount views.</td></tr>
+                  <tr><td>Overlay</td><td>Native reserves a box and reports its frame. JavaScript positions an absolutely placed sibling over it.</td><td><span class="tag no">no</span> Always a frame late. Heights loop through JavaScript (the component's height sets the box, and the box moves the component), and anything that scrolls shows the overlay sliding.</td></tr>
+                  <tr class="pick"><td>Children laid out by the shadow node</td><td>Slot views are real Fabric children. The shadow node measures them, passes their heights into native measurement, and places them at the rectangles it gets back.</td><td><span class="tag go">chosen</span> One commit, synchronous, with exact positions. It is the same mechanism React Native uses for <code>&lt;View&gt;</code> inside <code>&lt;Text&gt;</code>, so it relies on code paths React Native already depends on.</td></tr>
+                  <tr><td>Native renderers per language</td><td>C++ or platform code draws, say, Mermaid, like math.</td><td><span class="tag later">complementary</span> Not a general API. It could later back a built-in language below app renderers, as Streamdown's Mermaid plugin ranks below them.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>How JavaScript learns which fences to render is a second choice:</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Option</th><th>Verdict</th></tr></thead>
+                <tbody>
+                  <tr class="pick"><td><b>A synchronous query during render.</b> One TurboModule call returns the slots for the snapshot or source being rendered.</td><td><span class="tag go">chosen</span> The children and the document they belong to arrive in the same commit. A stream already re-renders on every published snapshot (<code>useSyncExternalStore</code> on <code>revision</code>), and the query for a stream reads an existing snapshot, so it never parses.</td></tr>
+                  <tr><td><b>A native event after layout</b> listing new slots.</td><td><span class="tag no">no</span> One frame late. Every message that holds a chart would show a code card for a frame and then jump, including when a list scrolls back to it.</td></tr>
+                  <tr><td><b>A JavaScript fence scanner</b>, as Streamdown has <code>hasIncompleteCodeFence</code>.</td><td><span class="tag no">no</span> A second parser that would disagree with md4c about containers, list indentation, lazy continuation and entities, and a test double that restates engine rules. A JavaScript check is kept only as a pre-filter that may say "maybe" too often but never "no" wrongly (see <a href="#design">Design §2</a>).</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="design">
+            <div class="section-head">
+              <h2>Design</h2>
+              <p>From a renderer list to a placed component, in one commit.</p>
+            </div>
+            <div class="flow" role="list" aria-label="Pipeline">
+              <div class="flow-node new" role="listitem"><b>Resolve</b><span><code>plugins.renderers</code> to a language map, kept stable by value</span></div>
+              <div class="flow-node new" role="listitem"><b>Query</b><span>A synchronous TurboModule call returns the slots for this source or snapshot</span></div>
+              <div class="flow-node new" role="listitem"><b>Render</b><span>One <code>&lt;DownstreamFenceSlot ordinal&gt;</code> per slot, holding the component</span></div>
+              <div class="flow-node new" role="listitem"><b>Measure</b><span>The shadow node measures each slot at its column and passes the heights to the platform</span></div>
+              <div class="flow-node new" role="listitem"><b>Place</b><span>The platform returns slot rectangles, and <code>layout()</code> sets each child's frame</span></div>
+              <div class="flow-node" role="listitem"><b>Mount</b><span>Native draws container chrome in the slot; the child sits above it</span></div>
+            </div>
+
+            <h3>1. Which fences are slots</h3>
+            <ul>
+              <li>A <b>candidate</b> is a fenced <code>CodeBlock</code> whose normalized language is in the view's renderer set. The language is the info string's first word as written, ASCII lower-cased and cut at <code>:</code>, the same normalization highlighting uses. It is read from the raw <code>Block::info</code>, not from md4c's entity-decoded <code>lang</code>, so the JavaScript pre-filter in §2 can never miss one. A fence whose info line has not ended yet is not a candidate, because <code>```merm</code> is still growing into <code>```mermaid</code>. It draws as today's code card until its newline arrives.</li>
+              <li>A candidate becomes a <b>slot</b> only if a visible <code>DownstreamFenceSlot</code> child with its ordinal is mounted. Native decides this from the children it actually has, not from a language list, so JavaScript and native cannot disagree about which fences are hosted. Lagging, suspension (React hides the slot with <code>display: none</code>), and error fallback all reduce to one case: no child, so draw the code card.</li>
+              <li>A slot is identified by its existing <code>codeOrdinal</code>, so wrap and expand choices for the other code blocks keep their keys whichever fences are hosted. The React key is <code>`${generation}:${ordinal}`</code>, so a <code>reset()</code> remounts every renderer with fresh state, while a growing fence keeps its component instance from snapshot to snapshot.</li>
+              <li>The engine gains <code>fenceSlots(document, languages)</code> in <code>src/cpp/downstream/FenceSlots.{h,cpp}</code>. It walks code blocks and returns <code>{ ordinal, blockIndex, language, meta, code, incomplete, identity }</code>. <code>code</code> is <code>exportCodeText</code>'s result, so a renderer sees exactly what copy returns, with the empty-fence placeholder removed. <code>meta</code> is <code>info</code> after its first word, trimmed, and empty when there is none (JavaScript turns empty into <code>undefined</code>).</li>
+            </ul>
+
+            <h3>2. Getting slots to JavaScript</h3>
+            <ul>
+              <li><b>Stream.</b> <code>sessionFenceSlots(sessionId, generation, sequence, languages)</code> reads <code>SessionRegistry::snapshot(id, generation, sequence)</code>, the same snapshot the shadow node mounts for the <code>sessionSequence</code> prop rendered with it. It walks blocks, does not parse, and runs on every published snapshot inside the render that <code>useSyncExternalStore</code> already triggers.</li>
+              <li><b>Controlled.</b> <code>fenceSlots(source, mathFlags, languages)</code> answers from a finished <code>PreparedDocument</code> when one exists. Otherwise, for a source up to 16 KiB, it runs <code>parseMarkdown</code> on the JavaScript thread without highlighting, math layout or platform preparation, and keeps the answer in a small LRU keyed by source and flags. A larger source returns <code>{ pending: true }</code> and the view calls <code>fenceSlotsAsync</code>, which parses on the worker pool. Until that resolves the fences draw as code cards, which matches what layout does for a large source today: it shows the previous content until preparation ends.</li>
+              <li><b>Why not wait on the shared preparation.</b> A request from render would start the worker without the node's theme hint, and a hint that arrives after the worker has collected its layouts is never prepared, so themed apps would lose their pre-built rendering. A bare parse of at most 16 KiB costs well under a millisecond and leaves the shared preparation to the node. Bench gates this (see <a href="#risks">Decisions and risks</a>).</li>
+              <li><b>Pre-filter.</b> Before any controlled query, JavaScript checks whether the source contains any registered language name case-insensitively, once per source value. Matching uses the raw info word, so a real slot always passes. A prose message that never names <code>mermaid</code> costs one substring search. Streams skip the pre-filter because their query never parses.</li>
+              <li><b>Contract wording.</b> The slot list is the one structure that crosses into JavaScript, it covers only languages the app registered, and it carries only Streamdown's props. Ranges and block kinds stay native.</li>
+            </ul>
+
+            <h3>3. Children in the shadow tree</h3>
+            <ul>
+              <li>A new codegen component, <code>DownstreamFenceSlot</code>, with one prop, <code>ordinal: Int32</code>. It is a plain view on both platforms, never flattened, and its only job is to carry the ordinal. A dedicated type is clearer than encoding the ordinal into <code>nativeID</code> on a <code>View</code>, and an app's own views can never be mistaken for slots.</li>
+              <li>The JavaScript tree per slot is <code>ErrorBoundary › Suspense (fallback = nothing) › DownstreamFenceSlot › memo(component)</code>. The slot sits inside <code>Suspense</code>, so a lazy renderer mounts no slot until it resolves, and the code card shows meanwhile. The memo compares <code>code</code>, <code>language</code>, <code>meta</code> and <code>isIncomplete</code>, so a settled fence's component does not re-render on later snapshots.</li>
+              <li><code>DownstreamMarkdownShadowNode</code> stays a leaf and gains <code>slotChildren()</code>, which returns its <code>DownstreamFenceSlot</code> children with their ordinals, skipping any whose <code>display</code> is <code>none</code>.</li>
+            </ul>
+
+            <h3>4. Measuring and placing</h3>
+            <ul>
+              <li><b>Column.</b> A new engine function, <code>contentLeading(theme, containers, scale)</code> in <code>ThemeLayout</code>, is the leading <code>buildContainers</code> computes today on each platform. Both platforms switch to it, and the shadow node uses it, so a slot is measured at exactly the column it is drawn in. RTL mirrors the leading to the trailing edge, as it does for list markers.</li>
+              <li><b>Heights in.</b> <code>measureContent</code> resolves the document and plan, then measures each slot child with <code>LayoutableShadowNode::measure</code> at an exact width (the column) and an unbounded height, as Paragraph measures an attachment. The result is a <code>downstream::HostLayout { entries: [{ ordinal, height }] }</code>, sorted, and passed to <code>DownstreamTextLayoutManager::measure</code> next to <code>CodeLayout</code> and <code>ImageLayout</code>. It is part of the measure cache key, and empty when there are no slots, so the key is unchanged for every existing view.</li>
+              <li><b>Rectangles out.</b> <code>measure</code> returns <code>DocumentMeasurement { size, slots: [{ ordinal, rect }] }</code>, and the cache stores the whole value. A hosted code segment's height is its slot's height. Its margins are a code block's margins, because the block is still a <code>CodeBlock</code> to <code>blockGap</code>, so spacing does not change when a fence becomes a chart.</li>
+              <li><b>Placement.</b> <code>layout()</code> reads the cached measurement for the final size. For each slot child it clones the child, runs <code>layoutTree</code> with the exact size, and sets the origin from the rectangle, which is <code>ParagraphShadowNode::layout</code>'s loop. A child whose ordinal has no hosted block in the current document (a stale slot from a lagging render, or a fallback document while a source is pending) gets <code>DisplayType::None</code>, as a clipped attachment does.</li>
+              <li><b>State.</b> <code>DownstreamMarkdownState</code> carries <code>HostLayout</code>, as it carries <code>ImageStateLayout</code>, so the mounted view knows which code segments to draw as slots and at what height. This includes <code>getDynamic</code> and the folly constructor for Android.</li>
+            </ul>
+
+            <h3>5. Drawing a slot</h3>
+            <ul>
+              <li>A hosted code segment becomes a <b>host segment</b>: no text, no header, no gutter. It draws only the container chrome for its block (quote and admonition bars along its full height, and a list marker on its first line). The React child sits above it, in the content rectangle.</li>
+              <li>The worker still prepares a code segment for a candidate, because it cannot know whether a child will mount. That is exactly today's cost for that fence, so nothing regresses. Skipping text layout for hosted languages is a follow-up, gated on Bench.</li>
+              <li><code>codeBlockMaxHeight</code>, <code>lineNumbers</code>, wrap, expand and code controls do not apply to a slot, since the component owns its own height and its own chrome.</li>
+            </ul>
+
+            <div class="mocks" aria-label="How a slot looks in three states">
+              <div class="mock">
+                <p class="mock-p">Revenue by month:</p>
+                <div class="mock-item"><span class="m">1.</span>
+                  <div class="mock-slot"><span class="lbl">slot · isIncomplete</span><div class="mock-skel">renderer's own placeholder</div></div>
+                </div>
+                <p class="mock-note">While the fence streams, the component draws whatever it chooses. The list marker is native.</p>
+              </div>
+              <div class="mock">
+                <p class="mock-p">Revenue by month:</p>
+                <div class="mock-item"><span class="m">1.</span>
+                  <div class="mock-slot"><span class="lbl">slot · settled</span><div class="mock-bars"><i style="height:45%"></i><i style="height:90%"></i><i style="height:70%"></i><i style="height:60%"></i></div></div>
+                </div>
+                <p class="mock-note">Settled. The slot's height is the component's measured height, and the text below moves in the same commit.</p>
+              </div>
+              <div class="mock">
+                <p class="mock-p">Revenue by month:</p>
+                <div class="mock-item"><span class="m">1.</span>
+                  <div><div class="mock-card"><div class="h"><span>chart</span><span>copy · save</span></div><div class="b">{"type":"bar","data":[28,
+ 55,43,38]}</div></div></div>
+                </div>
+                <p class="mock-note">No visible slot (lazy and loading, threw, or not queried): today's native code card, with copy and download.</p>
+              </div>
+            </div>
+
+            <h3>6. Failure and fallback</h3>
+            <ul>
+              <li>A renderer that throws is caught by its slot's boundary, which renders nothing, so the fence draws as a code card. Once the fence is settled, the view's <code>onError</code> receives <code>{ code: 'renderer_failed', message, language, generation, sequence: 0, recoverable: true }</code>, once per ordinal and generation. An error while the fence is still streaming is not reported, because partial input is expected to fail.</li>
+              <li>The boundary resets when the slot's <code>code</code> or <code>isIncomplete</code> changes, so a renderer that failed on a partial spec gets another chance on the next snapshot. That can flicker between the card and the component while streaming. The docs tell renderer authors to guard <code>isIncomplete</code>, as Streamdown's docs do.</li>
+              <li>A renderer that returns <code>null</code> gets a zero-height slot. That is the app's choice and is not an error.</li>
+            </ul>
+          </section>
+
+          <section id="api">
+            <div class="section-head">
+              <h2>Public API</h2>
+              <p>Additions to <code>src/types.ts</code>, the codegen specs, and <code>docs/api.md</code>.</p>
+            </div>
+<pre><code>// src/types.ts
+export type CustomRendererProps = Readonly&lt;{
+  /** The fence's text, exactly what the code block's copy button copies. */
+  code: string;
+  /** The info string's first word as written, cut at ':'. Compare case-insensitively. */
+  language: string;
+  /** The info string after the language, trimmed. Undefined when there is none. */
+  meta?: string;
+  /** True until the fence is settled; see "Streaming" for the exact rule. */
+  isIncomplete: boolean;
+}&gt;;
+
+export type CustomRenderer = Readonly&lt;{
+  /** Matched case-insensitively against the normalized fence language. */
+  language: string | readonly string[];
+  component: React.ComponentType&lt;CustomRendererProps&gt;;
+}&gt;;
+
+export type MarkdownPlugins = Readonly&lt;{
+  renderers?: readonly CustomRenderer[];
+}&gt;;
+
+// MarkdownViewProps gains:
+plugins?: MarkdownPlugins;
+
+// MarkdownErrorCode gains 'renderer_failed'; MarkdownErrorEvent gains
+// `language?: string`, present only for that code.</code></pre>
+<pre><code>&lt;DownstreamMarkdown
+  stream={stream}
+  plugins={{
+    renderers: [
+      { language: ['vega', 'vega-lite'], component: VegaLiteChart },
+      { language: 'mermaid', component: MermaidDiagram },
+    ],
+  }}
+  onError={(e) =&gt; e.code === 'renderer_failed' &amp;&amp; log(e.language, e.message)}
+/&gt;</code></pre>
+            <ul>
+              <li><b>Stability.</b> <code>plugins</code> is usually an inline literal, so it is resolved by value, as <code>useStableResolved</code> does for <code>controls</code>: the normalized language list and the component identities. An unchanged list sends nothing and re-queries nothing. The language list is passed to native unnormalized, and C++ normalizes it, so there is one implementation of the rule.</li>
+              <li><b>Native codegen.</b> <code>DownstreamFenceSlotNativeComponent.ts</code> (<code>ordinal: Int32</code>), registered in <code>codegenConfig.ios.componentProvider</code> and in <code>DownstreamPackage</code>. <code>DownstreamMarkdownView</code> gains no prop, because the children are the input.</li>
+              <li><b>Session module.</b> <code>fenceSlots(source, mathFlags, languages)</code>, <code>fenceSlotsAsync(source, mathFlags, languages): Promise</code>, and <code>sessionFenceSlots(sessionId, generation, sequence, languages)</code>, each returning slots of the shape <code>{ ordinal, language, meta, code, incomplete, identity }</code>. <code>fenceSlots</code> wraps them as <code>{ pending, slots }</code>, so a source over 16 KiB can answer <code>pending</code> without waiting; the other two return the array. Exported from <code>index.tsx</code>: the three types above. The query methods stay internal.</li>
+            </ul>
+            <h3>Edits to <code>docs/api.md</code></h3>
+            <ul>
+              <li>The feature scope's "Custom renderers" row becomes: first release, "Fence-language renderers through <code>plugins.renderers</code>, with a code card fallback"; later, "Native card chrome around a renderer"; unsupported, "Per-node React render callbacks, and renderers for inline code, indented code, or <code>math</code> fences while math is on".</li>
+              <li>The "No parser model or AST is sent to JavaScript" paragraph gains its exception: slots for registered languages only.</li>
+              <li>A new "Fence renderers" section covers matching, props, completeness, fallback, errors, nesting, sizing ("the component's measured height, at the content column's width"), and accessibility.</li>
+              <li><code>docs/feature-matrix.md</code> gets a row, and the gap analysis row links here. The rule "a view with no renderers is unchanged" joins the closing paragraph, next to the lexer and math rules.</li>
+            </ul>
+          </section>
+
+          <section id="streaming">
+            <div class="section-head">
+              <h2>Streaming</h2>
+              <p>Completeness, identity, and per-snapshot cost.</p>
+            </div>
+            <h3>The <code>isIncomplete</code> rule</h3>
+            <p>
+              <code>isIncomplete = !settled || (isLastBlock &amp;&amp; !closed &amp;&amp; live)</code>. <code>settled</code> is the engine's existing notion: a stream
+              settles a block once md4c proves it closed, and <code>finish()</code> settles everything. That is the same moment the block's code controls turn on, so
+              "the copy button is enabled" and "the renderer is told the spec is complete" never disagree. <code>closed</code> means a closing fence line was
+              found, using the same check as the incremental parser's <code>closesFence</code>: same character, at least as long, and at most three spaces of indent,
+              which is Streamdown's <code>hasIncompleteCodeFence</code> rule.
+            </p>
+            <ul>
+              <li><b>Stream.</b> <code>live</code> is "not finished", so the second term adds nothing: an unsettled block covers it. A fence the model never closed reads <code>false</code> after <code>finish()</code>, as in Streamdown once animation stops, so the renderer at least tries.</li>
+              <li><b>Controlled, with #20 merged.</b> <code>live</code> is the controlled view's <code>isAnimating</code> prop. That gives exactly Streamdown's <code>isAnimating &amp;&amp; isLastBlock &amp;&amp; hasIncompleteCodeFence</code> for apps that stream by replacing the <code>markdown</code> string, which is how AI SDK's <code>useChat</code> is usually wired up.</li>
+              <li><b>Controlled, before #20.</b> <code>live</code> is <code>true</code>. A growing string with an open final fence then reads as incomplete, which protects the common <code>useChat</code> case. The cost is that a finished message ending in an unclosed fence stays incomplete. That is rare, and the code card is still one press away once a renderer decides to try anyway.</li>
+              <li>Only the last block can be "unclosed" in this sense. A fence ended by its list item or quote is closed by its container, which avoids the trap of counting every container-ended fence as incomplete forever.</li>
+            </ul>
+            <h3>Identity, cost and animation</h3>
+            <ul>
+              <li><b>Instance identity.</b> The React key is the generation and the ordinal, so a growing fence keeps its component, and a chart that has finished loading does not reload when later text arrives. An ordinal can shift only if the unproven tail is reinterpreted (for example a list turning into a paragraph), and then the component remounts, which is the same rule wrap choices already follow.</li>
+              <li><b>Per-snapshot cost.</b> One <code>sessionFenceSlots</code> walk (block count, no parsing), one string copy per candidate, and memo comparisons. The settled fences' components do not re-render. If Bench shows the copies matter for large settled specs, the call takes the identities JavaScript already holds and returns <code>code</code> only for the ones that changed.</li>
+              <li><b>Layout churn.</b> A component that changes height while streaming causes a remeasure of its message, which is expected: Fabric marks the node dirty because its children changed. The platform reuses every segment's measured height and only restacks.</li>
+              <li><b>Streaming animation (#20).</b> A slot is not faded by the reveal tracker; a renderer animates itself if it wants to. The caret takes a line of its own after a hosted last block, which is the rule #20 already applies after a closed fence. A slot's text never enters the reveal alignment, because the hosted block's text is the same code text as before.</li>
+            </ul>
+          </section>
+
+          <section id="platforms">
+            <div class="section-head">
+              <h2>Platforms</h2>
+              <p>Mounting, the measure return path, touch, and accessibility.</p>
+            </div>
+            <h3>iOS</h3>
+            <ul>
+              <li><code>DownstreamMarkdownView</code> overrides <code>mountChildComponentView:index:</code> and <code>unmountChildComponentView:index:</code> to insert slot views directly above <code>_documentView</code>, in React order. Fabric sets each child's frame from the shadow node, in the markdown view's coordinates, which are also the document view's. No pass-through layer is needed, because only the children's own frames take touches.</li>
+              <li><code>DSRenderedDocument</code> takes <code>HostLayout</code> in <code>segmentFramesForWidth</code> and in its cache key, returns the hosted content rectangles, and builds a <code>DSHostSegment</code>, a new box segment in <code>DSBoxSegmentViews.mm</code> that draws container chrome only, for a hosted code segment.</li>
+              <li><b>Accessibility.</b> The markdown view returns an <code>accessibilityElements</code> array that interleaves the document view's elements with the slot views, by the slot's position. Otherwise VoiceOver would read every chart after the whole message.</li>
+            </ul>
+            <h3>Android</h3>
+            <ul>
+              <li><code>DownstreamMarkdownViewManager</code> becomes a <code>ViewGroupManager</code>. Its <code>addView</code>, <code>removeViewAt</code>, <code>getChildCount</code> and <code>getChildAt</code> address a <code>hostLayer</code>, and <code>needsCustomLayoutForChildren()</code> stays <code>false</code>, so Fabric positions the children.</li>
+              <li><code>DownstreamMarkdownView</code> moves its index-reconciled segment views into a private <code>segmentLayer</code>, unchanged, and adds a <code>hostLayer</code> above it whose <code>onLayout</code> does nothing, as <code>ReactViewGroup</code>'s does. A touch that no slot takes falls through to the segment layer, because a <code>ViewGroup</code> offers an unhandled event to the next child down.</li>
+              <li><b>Measure return path.</b> After <code>FabricUIManager.measure</code>, and only when <code>HostLayout</code> is not empty, the JNI layer calls a new static <code>DownstreamNative.hostFrames(documentId, map, widthPx): FloatArray</code>. It reads the <code>RenderedDocument</code> that measurement just filled and returns <code>[ordinal, x, y, w, h]*</code>. The layout map gains a <code>hostEntries</code> array in the shape <code>imageEntries</code> uses.</li>
+              <li><b>Accessibility.</b> <code>DownstreamMarkdownView</code> overrides <code>addChildrenForAccessibility</code> so the segment layer's virtual nodes and the slot views come out in vertical order.</li>
+              <li><b>Kotlin mirror.</b> <code>LayoutMaps.kt</code> and <code>RenderedDocument.kt</code> gain the host layout. <code>pnpm test:kotlin</code> checks that the mirror reads the engine's table, as it does for code layout.</li>
+            </ul>
+            <h3>Both</h3>
+            <ul>
+              <li>Recycling needs nothing new: Fabric unmounts the children before a view is recycled.</li>
+              <li>Selection and copy are unchanged. Text selection never included the code card's body across segments, and <code>getSource()</code> still returns the fence.</li>
+              <li>Nested gestures (pan and zoom inside a chart) are the component's to arbitrate. The capped code card's drag hand-off to the list does not apply to slots.</li>
+            </ul>
+          </section>
+
+          <section id="catalog">
+            <div class="section-head">
+              <h2>Renderers we can ship or document</h2>
+              <p>What an app can register on day one, and what is worth bringing into this repository.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Language</th><th>Approach</th><th>Recommendation</th></tr></thead>
+                <tbody>
+                  <tr class="pick"><td><code>mermaid</code></td><td><a href="https://github.com/lukilabs/beautiful-mermaid">beautiful-mermaid</a> (MIT): pure TypeScript, no DOM, synchronous <code>renderMermaidSVG</code>, ELK.js layout, flowchart, state, sequence, class, ER and XY charts, two-color themes plus a Shiki theme bridge. The SVG string is drawn with <code>react-native-svg</code>'s <code>SvgXml</code>.</td><td><span class="tag later">own package</span> <code>react-native-downstream-mermaid</code> exports <code>mermaid(options?)</code> → <code>CustomRenderer</code>. It shows a placeholder while incomplete, keeps the last valid SVG on a parse error (Streamdown's <code>lastValidSvg</code>), maps the color scheme to the GitHub light and dark themes, and sizes from the viewBox. A spike first: Hermes speed and ELK's bundle size.</td></tr>
+                  <tr><td><code>mermaid</code>, as text</td><td>beautiful-mermaid's <code>renderMermaidASCII</code>, drawn as monospace text.</td><td><span class="tag later">in the package</span> A zero-dependency mode for apps that do not want <code>react-native-svg</code>, and a readable fallback for diagram types the SVG renderer lacks.</td></tr>
+                  <tr><td><code>mermaid</code>, full fidelity</td><td>The official <code>mermaid</code> inside <code>react-native-webview</code>.</td><td><span class="tag later">example only</span> It covers every diagram type, but it costs one WebView per diagram, plus memory and startup time. Show it in docs; do not ship it.</td></tr>
+                  <tr><td><code>mermaid</code>, Rust</td><td><a href="https://github.com/rinfimate/react-native-ariel-rs">react-native-ariel-rs</a>: a Rust Mermaid engine as a TurboModule, returning SVG for <code>SvgXml</code>.</td><td><span class="tag no">watch</span> MIT and the right shape, but new and unproven (January 2026, no adoption yet).</td></tr>
+                  <tr><td><code>vega</code>, <code>vega-lite</code></td><td>Vega's headless <code>View</code> with <code>renderer: 'none'</code> and <code>toSVG()</code>, drawn with <code>SvgXml</code>.</td><td><span class="tag later">docs example</span> It is Streamdown's headline example. Spike whether it runs under Hermes and how good its estimated text widths look without a canvas.</td></tr>
+                  <tr><td>App JSON (<code>chart</code>, tool UIs)</td><td>The app's own components, such as Victory Native or Skia charts, or a card for a tool call.</td><td><span class="tag go">example app</span> The example's bar chart renderer, about 60 lines and dependency-free, is the reference for "parse JSON, guard <code>isIncomplete</code>, draw".</td></tr>
+                  <tr><td><code>d2</code>, <code>plantuml</code></td><td>A server renders SVG, as Streamdown's D2 example does.</td><td><span class="tag later">docs example</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="callout risk">
+              <p><b>Model output is untrusted input.</b> A renderer receives text written by a model, which may itself be carrying a prompt injection. The docs must say: never <code>eval</code> it; a WebView renderer sets <code>originWhitelist</code> and blocks navigation; a server-side renderer must not let a spec name arbitrary URLs. Mermaid's own default is <code>securityLevel: 'strict'</code> for the same reason. Downstream itself never executes fence content.</p>
+            </div>
+          </section>
+
+          <section id="phases">
+            <div class="section-head">
+              <h2>Phases</h2>
+              <p>Each phase ends green and can be reviewed alone. Phases 1–6 are one pull request; the Mermaid package is its own.</p>
+            </div>
+            <div class="callout">
+              <p><b>Where things are verified.</b> Engine behavior by host tests (<code>pnpm test:native</code>), JavaScript by <code>pnpm test</code> against the real engine module, Kotlin mirrors by <code>pnpm test:kotlin</code>, and rendering in the example app on the iOS Simulator and an arm64 Android emulator with the headless recipes the earlier items used.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 0 · Spike and contract</h3>
+              <ul>
+                <li>A throwaway branch: one hard-coded <code>DownstreamFenceSlot</code> with a fixed-height <code>View</code> on both platforms, measured and placed by the shadow node. It proves the Paragraph-style loop, the iOS mount override, the Android <code>ViewGroupManager</code> switch, and the <code>hostFrames</code> return path before anything else depends on them.</li>
+                <li>Measure a bare <code>parseMarkdown</code> of 1, 4 and 16 KiB sources on the JavaScript thread on a mid-range Android device.</li>
+                <li>Add the types in <a href="#api">Public API</a> to <code>src/types.ts</code> and make the <code>docs/api.md</code> edits, writing in the four decisions: <code>plugins.renderers</code>, case-insensitive matching, the controlled <code>isIncomplete</code> rule, and the code card fallback.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> the spike shows a slot in a list item on both platforms, with no extra frame. The 16 KiB parse is under 1 ms p95, or the threshold drops to whatever is. <code>pnpm typecheck</code> passes, and the contract is reviewed.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 1 · Engine</h3>
+              <ul>
+                <li><code>FenceSlots.{h,cpp}</code>: candidates, normalization from the raw info word, <code>meta</code>, <code>code</code> from <code>exportCodeText</code>, and the <code>closed</code> check shared with <code>closesFence</code>.</li>
+                <li><code>contentLeading(theme, containers, scale)</code> in <code>ThemeLayout</code>. <code>HostLayout</code> and <code>DocumentMeasurement</code>. <code>HostLayout</code> in the measure cache key and in <code>DownstreamMarkdownState</code>, including <code>getDynamic</code> and the folly constructor.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm test:native</code> passes the slot goldens and the byte-at-a-time replay. Every existing golden and the measure key for a document with no slots are unchanged.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 2 · JavaScript</h3>
+              <ul>
+                <li><code>plugins</code> resolution and value-stability, the pre-filter, the three module methods (C++ in <code>DownstreamSessionModule</code>, plus the codegen spec), and <code>DownstreamFenceSlotNativeComponent.ts</code>.</li>
+                <li>The slot subtree (boundary, Suspense, slot, memo), the <code>isIncomplete</code> rule, and <code>renderer_failed</code> routing with generation filtering.</li>
+                <li><code>tests/real-engine-module.ts</code> implements the query methods with the real parser.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm test</code> passes the ported Streamdown cases and the cases under <a href="#testing">Testing</a>, including "no renderers: no module call, same native props".</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 3 · Shadow node</h3>
+              <ul>
+                <li><code>slotChildren()</code>, child measurement at the column, <code>HostLayout</code> into measure, placement in <code>layout()</code>, <code>DisplayType::None</code> for stale slots, and the state carrying the host layout.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> builds on both platforms. A slot child of fixed height mounts at the expected rectangle in the iOS layout harness (<code>pnpm test:ios:layout</code>).</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 4 · iOS</h3>
+              <ul>
+                <li>The mount override, <code>DSHostSegment</code>, host-aware frames, <code>buildContainers</code> on <code>contentLeading</code>, and accessibility interleaving.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> the example's Renderers screen is correct on the Simulator in every case listed under Platforms in <a href="#testing">Testing</a>.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 5 · Android</h3>
+              <ul>
+                <li>The <code>ViewGroupManager</code> switch, <code>segmentLayer</code> and <code>hostLayer</code>, <code>hostFrames</code> over JNI, the Kotlin mirror on <code>contentLeading</code>, and accessibility order.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm test:kotlin</code> passes, and the Renderers screen matches iOS on the emulator.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 6 · Example and docs</h3>
+              <ul>
+                <li>The Renderers screen: a bar chart from JSON, a lazy renderer, one that throws, nesting in a list, a quote and an admonition, and a toggle between controlled and streamed modes. The AI chat screen registers the chart renderer.</li>
+                <li>The <code>docs/api.md</code> section, a <code>docs/feature-matrix.md</code> row with device checks, the README, and the gap analysis row marked shipped.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> Bench shows no regression for documents without renderers. The device checks pass on both platforms.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 7 · Mermaid package (separate pull request)</h3>
+              <ul>
+                <li>Spike beautiful-mermaid under Hermes: render time for a 30-node flowchart and a 20-message sequence diagram, and bundle size with ELK.js. If it is too slow on the JavaScript thread, use <code>renderMermaidSVGAsync</code> or defer until the block is near the viewport, as Streamdown's <code>useDeferredRender</code> does.</li>
+                <li>Then build <code>react-native-downstream-mermaid</code> next to <code>math/</code>, using the same packaging pattern: opt-in, its own <code>package.json</code>, and a peer dependency on <code>react-native-svg</code>.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> the five supported diagram types render on both platforms, and a streaming diagram never flashes an error.</p>
+            </div>
+          </section>
+
+          <section id="testing">
+            <div class="section-head">
+              <h2>Testing</h2>
+              <p>Engine rules against the real engine, never restated by a test double; platform behavior on the Simulator and the emulator.</p>
+            </div>
+            <h3>Engine (<code>pnpm test:native</code>)</h3>
+            <ul>
+              <li><b>Slot goldens.</b> A matching fence; case variants (<code>Mermaid</code>, <code>MERMAID</code>); <code>lang:path</code>; <code>title="…"</code> meta; no meta; tilde fences; a fence in a list item, a quote, an admonition and a footnote; an indented code block (never); <code>```math</code> with math on (never) and off (yes); two fences with one registered; an entity in the info word (raw match).</li>
+              <li><b>Completeness.</b> Open at end of source, closed, closed by a longer fence, not closed by a shorter or different-character fence, ended by its list item, and an info line with no newline yet (not a candidate). Cross-checked against Streamdown's <code>hasIncompleteCodeFence</code> cases.</li>
+              <li><b>Streaming.</b> Replay each fixture one byte at a time through <code>IncrementalParser</code> in both modes. Ordinals and settledness change monotonically, the settled slots equal a one-shot parse, and <code>code</code> equals <code>exportCodeText</code> at every step.</li>
+              <li><b>Layout inputs.</b> <code>contentLeading</code> for every container kind and scale. <code>HostLayout</code> equality, its sort order, and its effect on the cache key. The state round trip through the folly constructor.</li>
+              <li><b>Unchanged output.</b> With no slots, every document, export format, accessibility dump and measure key is byte-identical to today's across the fixture corpus.</li>
+            </ul>
+            <h3>JavaScript (<code>pnpm test</code>)</h3>
+            <ul>
+              <li>The 8 ported Streamdown cases, through the real engine module.</li>
+              <li>No renderers: zero module calls and props identical to today's. A new <code>plugins</code> literal with equal content sends nothing.</li>
+              <li>Pre-filter property test over the fixture and remend corpora: whenever the engine reports a slot, the pre-filter said "maybe".</li>
+              <li>A settled renderer is not re-rendered across 50 later snapshots (render counter). A growing renderer keeps its instance (a ref survives). <code>reset()</code> remounts.</li>
+              <li>A thrown error reports <code>renderer_failed</code> once, only after settling, never for an old generation, and the slot unmounts. A lazy renderer mounts no slot until it resolves.</li>
+              <li>The controlled path: 16 KiB answers synchronously, 17 KiB goes through <code>fenceSlotsAsync</code>, and the LRU hits on a remount.</li>
+            </ul>
+            <h3>Platforms (Simulator and emulator)</h3>
+            <ul>
+              <li>A slot at the top, the middle and the end of a message, inside a list (marker aligned), in a quote (bar spans the slot), in RTL, at the largest text size, and after rotation.</li>
+              <li>A streamed chart: placeholder, then the chart in the same frame as its closing fence, with no remount on later text. A height change moves the text below with no overlap.</li>
+              <li>A renderer that throws shows the code card, and copy works. A lazy renderer shows the code card, then the component.</li>
+              <li>Touches: a button inside the slot fires, a link in the text under it still works, and the list scrolls over a slot.</li>
+              <li>VoiceOver and TalkBack read the slot's content between the paragraphs around it.</li>
+              <li>Recycling: scroll a chat with 30 chart messages, and no slot appears in the wrong message.</li>
+            </ul>
+          </section>
+
+          <section id="risks">
+            <div class="section-head">
+              <h2>Decisions and risks</h2>
+              <p>The four design decisions are settled; the rest are risks and open questions with their mitigation.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Question or risk</th><th>Recommendation</th></tr></thead>
+                <tbody>
+                  <tr><td>API name and shape<br /><span class="tag go">decided</span></td><td><b><code>plugins.renderers</code></b>, Streamdown's, rather than a top-level <code>renderers</code> prop. It leaves room for the other plugin keys if Downstream ever grows them, and a Streamdown config's shape carries over.</td></tr>
+                  <tr><td>Case-insensitive matching<br /><span class="tag go">decided</span></td><td><b>Yes.</b> This differs from Streamdown on purpose: one normalization shared with highlighting, and models do write <code>```Mermaid</code>.</td></tr>
+                  <tr><td><code>isIncomplete</code> for controlled views<br /><span class="tag go">decided</span></td><td><b>The rule under <a href="#streaming">Streaming</a></b>: an open last fence counts as incomplete while the view is live. That is Streamdown's rule once #20 gives controlled views <code>isAnimating</code>, and "always live" before then.</td></tr>
+                  <tr><td>Fallback<br /><span class="tag go">decided</span></td><td><b>The native code card</b>, for loading, errors and misses, rather than a skeleton. It is readable, copyable and already themed.</td></tr>
+                  <tr><td>Hosting relies on Paragraph's pattern</td><td>A leaf shadow node laying out its own children is the mechanism React Native's text uses, but it is not documented API. The Phase 0 spike proves it, a layout harness test pins it, and each React Native upgrade reruns that test.</td></tr>
+                  <tr><td>JavaScript-thread time</td><td>Bounded: the pre-filter skips messages that never name a registered language, a bare parse runs only up to 16 KiB, larger sources go to the worker, and streams never parse. Budget: under 1 ms p95 per controlled query at 16 KiB, and under 50 µs per stream query at 200 blocks, on a mid-range Android device in Bench.</td></tr>
+                  <tr><td>Heavy components in a long chat</td><td>Ten WebViews in a chat will hurt whatever Downstream does. The docs recommend SVG renderers, and deferring work until the block is near the viewport, as Streamdown's Mermaid does. The list's own virtualization unmounts slots with their messages.</td></tr>
+                  <tr><td>Layout jump when a component loads</td><td>Unavoidable when height is only known after loading, as with images. Recommend that renderers reserve a fixed height while incomplete. A chat list keeps its anchor through <code>maintainVisibleContentPosition</code>.</td></tr>
+                  <tr><td>Hermes compatibility of third-party renderers</td><td>Neither beautiful-mermaid nor Vega names React Native support. That is why each is a spike before it becomes a package or a docs example. The core feature does not depend on either.</td></tr>
+                  <tr><td>Wasted text layout for hosted fences</td><td>The worker lays out a candidate's code as if it were a card, which is today's cost exactly. A follow-up passes renderer languages in <code>LayoutHint</code> so the worker builds a host segment directly, if Bench shows long streamed specs matter.</td></tr>
+                  <tr><td>Open: <code>range</code> on the props</td><td>The fence's UTF-16 source range would let a renderer offer "edit this chart". Leave it out until someone needs it, because it widens what crosses into JavaScript.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="followups">
+            <div class="section-head">
+              <h2>Follow-ups this unlocks</h2>
+              <p>Not part of this item.</p>
+            </div>
+            <ul>
+              <li><b>Native card chrome.</b> <code>{ language, component, chrome: 'card' }</code> draws the code card's background, radius, header label, copy (the fence source) and download around the component, using the theme's <code>codeBlock</code> slots.</li>
+              <li><b><code>useMarkdownTheme()</code>.</b> The resolved colors and fonts for JavaScript renderers, from the same slot table native reads.</li>
+              <li><b>Mermaid controls.</b> Full screen, pan and zoom, and export as SVG, PNG or <code>.mmd</code>, matching Streamdown's <code>controls.mermaid</code>, in the Mermaid package.</li>
+              <li><b>A built-in Mermaid path</b> that ranks below app renderers, if the package proves itself and adopters want it without registering it.</li>
+              <li><b>Block-level slots beyond fences</b>, for example a renderer for a custom HTML tag from the safe HTML subset. The hosting mechanism is the same; only the candidate rule changes.</li>
+            </ul>
+          </section>
+
+          <section id="sources">
+            <div class="section-head">
+              <h2>Sources</h2>
+              <p>Code read for this plan, and external references.</p>
+            </div>
+            <ul class="sources">
+              <li>Streamdown 2.7.0 at <code>vercel/streamdown@1ddd8f4</code>: <code>packages/streamdown/lib/plugin-types.ts</code>, <code>lib/plugin-context.tsx</code>, <code>lib/components.tsx</code> (<code>CodeComponent</code>), <code>index.tsx</code> (<code>Block</code>, <code>isIncomplete</code>), <code>lib/incomplete-code-utils.ts</code>, <code>lib/remark/code-meta.ts</code>, <code>lib/mermaid/index.tsx</code>, <code>hooks/use-deferred-render.ts</code>, <code>__tests__/custom-renderer.test.tsx</code>, <code>apps/website/content/docs/custom-renderers.mdx</code>, <code>packages/streamdown-mermaid/index.ts</code>.</li>
+              <li>React Native 0.83.2: <code>ReactCommon/react/renderer/components/text/ParagraphShadowNode.cpp</code> (<code>getContentWithMeasuredAttachments</code>, <code>layout</code>), <code>components/view/YogaLayoutableShadowNode.cpp</code> (<code>appendChild</code>, <code>completeClone</code>), <code>ReactAndroid/.../fabric/FabricUIManager.java</code> (<code>measure</code>, <code>measureText</code>), <code>React/Fabric/.../RCTViewComponentView.mm</code> (<code>mountChildComponentView</code>).</li>
+              <li>This repository: <code>src/cpp/fabric/DownstreamMarkdownShadowNode.{h,cpp}</code>, <code>DownstreamMarkdownState.h</code>, <code>DownstreamTextLayoutManager.{h,cpp}</code>, <code>src/cpp/downstream/{Document,SegmentPlan,FenceMeta,PreparedDocument,Export}.h</code>, <code>src/cpp/session/{DownstreamSessionModule,IncrementalParser}</code>, <code>src/ios/DSRenderedDocument.mm</code>, <code>src/android/.../DownstreamMarkdownView{,Manager}.kt</code>, <code>src/android/src/main/jni/DownstreamTextLayoutManager.cpp</code>, <code>src/DownstreamMarkdown.tsx</code>, <code>src/createMarkdownStream.ts</code>.</li>
+              <li><a href="https://github.com/lukilabs/beautiful-mermaid">lukilabs/beautiful-mermaid</a> and <a href="https://www.npmjs.com/package/beautiful-mermaid">its npm package</a>: synchronous SVG and ASCII Mermaid rendering with no DOM, MIT.</li>
+              <li><a href="https://github.com/rinfimate/react-native-ariel-rs">rinfimate/react-native-ariel-rs</a>: a Rust Mermaid engine as a React Native TurboModule.</li>
+              <li><a href="https://vega.github.io/vega/docs/api/view/">Vega View API</a> and <a href="https://vega.github.io/vega/usage/">Vega usage</a>: headless <code>renderer: 'none'</code> and <code>toSVG()</code>.</li>
+              <li><a href="streamdown-gap-analysis.html">The Streamdown gap analysis</a>, <a href="code-block-chrome-plan.html">the code block chrome plan</a>, <a href="math-and-images-plan.html">the math and images plan</a>, and <a href="api.md">the API contract</a>.</li>
+            </ul>
+          </section>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>
