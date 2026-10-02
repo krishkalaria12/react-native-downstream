@@ -10,12 +10,19 @@ import {
 import type { NativeSyntheticEvent } from 'react-native';
 
 import {
+  NONE,
+  resolveAnimate,
+  type ResolvedAnimate,
+  type ResolvedAnimating,
+  type ResolvedCaret,
+} from './animation';
+import {
   acceptControlledSource,
   initialControlledSource,
 } from './controlledSource';
 import { resolveControls, type ResolvedControls } from './controls';
 import NativeDownstreamMarkdownView from './DownstreamMarkdownViewNativeComponent';
-import { getStreamState } from './createMarkdownStream';
+import { getStreamState, type StreamState } from './createMarkdownStream';
 import { resolveTheme, type ResolvedTheme } from './theme';
 import type {
   MarkdownControlAction,
@@ -156,6 +163,104 @@ function toErrorEvent(nativeError: NativeMarkdownError): MarkdownErrorEvent {
  * which is the opposite of what a native display path is for. Comparing the
  * resolved values instead means an unchanged configuration sends nothing.
  */
+/**
+ * The resolved animation, kept by value rather than by identity.
+ *
+ * `animated` is usually written as an inline object literal, so its identity
+ * changes on every render of the parent. Sending a fresh `animationTiming` array
+ * each time would rebuild the fade's state and re-render the document behind it
+ * for a configuration that has not changed, which is the opposite of what the
+ * animation is for. Comparing the resolved values means an unchanged animation
+ * sends nothing.
+ */
+function useStableAnimate(resolved: ResolvedAnimate): ResolvedAnimate {
+  const stable = useRef(resolved);
+  const previous = stable.current;
+  if (
+    previous.animation !== resolved.animation ||
+    previous.split !== resolved.split ||
+    previous.timing.some((value, index) => value !== resolved.timing[index])
+  ) {
+    stable.current = resolved;
+  }
+  return stable.current;
+}
+
+/**
+ * The animation callbacks, with Streamdown's mount rule.
+ *
+ * `onAnimationStart` fires when `isAnimating` turns true *including on mount*,
+ * because a view that mounts mid-stream is animating and an app showing a
+ * "typing" indicator needs to know. `onAnimationEnd` does not fire on mount,
+ * because a view that mounts with the flag already off was never animating and
+ * has nothing to report.
+ *
+ * A null flag is a view that does not know, which is the stream case handled by
+ * the controller's own transitions rather than by a prop.
+ */
+function useAnimationCallbacks(
+  isAnimating: boolean | undefined,
+  onStart: (() => void) | undefined,
+  onEnd: (() => void) | undefined
+): void {
+  const mounted = useRef(false);
+  useLayoutEffect(() => {
+    if (isAnimating === undefined) return;
+    if (isAnimating) onStart?.();
+    else if (mounted.current) onEnd?.();
+    mounted.current = true;
+  }, [isAnimating, onStart, onEnd]);
+}
+
+/**
+ * The same callbacks for a stream, whose transitions the controller owns.
+ *
+ * There is no prop to watch, so the rule is the controller's: the first append of
+ * a generation is a start, `finish()` is an end, and a `reset()` ends the current
+ * cycle so the next append starts a new one.
+ */
+function useStreamAnimationCallbacks(
+  state: StreamState,
+  onStart: (() => void) | undefined,
+  onEnd: (() => void) | undefined
+): void {
+  const handlers = useRef({ onStart, onEnd });
+  handlers.current = { onStart, onEnd };
+  useEffect(
+    () =>
+      state.subscribeAnimation((animating) => {
+        if (animating) handlers.current.onStart?.();
+        else handlers.current.onEnd?.();
+      }),
+    [state]
+  );
+}
+
+/**
+ * What native reads for the animation and the caret, gathered once.
+ *
+ * `animating` is `auto` for a stream so the platform follows the session's own
+ * flag, and an explicit `on` or `off` for a controlled view, which has nothing
+ * else to go on.
+ */
+function useAnimationProps(
+  animated: MarkdownViewProps['animated'],
+  caret: MarkdownViewProps['caret'],
+  animating: ResolvedAnimating
+) {
+  const fresh = useMemo(() => resolveAnimate(animated), [animated]);
+  const resolved = useStableAnimate(fresh);
+  // `none` is what the platforms' draw pass reads as "no fade", and an empty
+  // timing array is what keeps the prop off native's comparison entirely.
+  return {
+    animation: resolved.animation,
+    animationSplit: resolved.split,
+    animationTiming: resolved === NONE ? undefined : resolved.timing,
+    animating,
+    caret: (caret ?? 'none') as ResolvedCaret,
+  };
+}
+
 function useStableResolved(resolved: ResolvedControls): ResolvedControls {
   const stable = useRef(resolved);
   const previous = stable.current;
@@ -314,6 +419,11 @@ function ControlledMarkdown({
   translations,
   theme,
   markdownStyle,
+  animated,
+  isAnimating,
+  caret,
+  onAnimationStart,
+  onAnimationEnd,
   onLinkPress,
   onError,
 }: Extract<MarkdownViewProps, { markdown: string }>) {
@@ -346,6 +456,14 @@ function ControlledMarkdown({
   );
   const resolvedTheme = useStableTheme(
     useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
+  );
+  // A controlled view has to say whether text is arriving; the platform has
+  // nothing else to go on.
+  useAnimationCallbacks(isAnimating, onAnimationStart, onAnimationEnd);
+  const animation = useAnimationProps(
+    animated,
+    caret,
+    isAnimating ? 'on' : 'off'
   );
 
   const handleLinkPress = useCallback(
@@ -391,6 +509,11 @@ function ControlledMarkdown({
       themeSlots={resolvedTheme.slots}
       themeValues={resolvedTheme.values}
       themeFonts={resolvedTheme.fonts}
+      animation={animation.animation}
+      animationSplit={animation.animationSplit}
+      animationTiming={animation.animationTiming}
+      animating={animation.animating}
+      caret={animation.caret}
       onLinkPress={onLinkPress ? handleLinkPress : undefined}
       onMarkdownError={handleError}
       onControlAction={handleControlAction}
@@ -410,6 +533,11 @@ function StreamMarkdown({
   translations,
   theme,
   markdownStyle,
+  animated,
+  isAnimating,
+  caret,
+  onAnimationStart,
+  onAnimationEnd,
   onLinkPress,
   onError,
 }: Extract<
@@ -441,6 +569,17 @@ function StreamMarkdown({
   // sends nothing however often a snapshot arrives.
   const resolvedTheme = useStableTheme(
     useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
+  );
+  // A stream view follows its controller's own transitions, so the callbacks fire
+  // on the first append of a generation and on `finish()` rather than on a prop.
+  useStreamAnimationCallbacks(state, onAnimationStart, onAnimationEnd);
+  const animation = useAnimationProps(
+    animated,
+    caret,
+    // `auto` follows the session's own flag, which the stream sets on every
+    // snapshot it publishes before `finish()`. An explicit value overrides it,
+    // which is how a controlled-looking stream view takes over.
+    isAnimating === undefined ? 'auto' : isAnimating ? 'on' : 'off'
   );
 
   const handleLinkPress = useCallback(
@@ -486,6 +625,11 @@ function StreamMarkdown({
       themeSlots={resolvedTheme.slots}
       themeValues={resolvedTheme.values}
       themeFonts={resolvedTheme.fonts}
+      animation={animation.animation}
+      animationSplit={animation.animationSplit}
+      animationTiming={animation.animationTiming}
+      animating={animation.animating}
+      caret={animation.caret}
       onLinkPress={onLinkPress ? handleLinkPress : undefined}
       onMarkdownError={handleError}
       onControlAction={handleControlAction}

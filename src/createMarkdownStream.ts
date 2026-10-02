@@ -95,6 +95,11 @@ class StreamState implements MarkdownStreamController {
   private tracing = false;
   private previewFeatures = 0;
   private subscribers = new Set<() => void>();
+  /// Whether text is still arriving, which is what a stream view sends to native
+  /// as `animating: auto`. A view that names `isAnimating` overrides it, so this
+  /// is the default rather than a requirement.
+  private streaming = false;
+  private animationListeners = new Set<(animating: boolean) => void>();
 
   constructor(options: MarkdownStreamOptions, mode: ParseMode) {
     this.sessionId = `downstream-${Date.now()}-${++nextSession}`;
@@ -143,6 +148,10 @@ class StreamState implements MarkdownStreamController {
         `Queued Markdown exceeds ${MAX_QUEUED_BYTES} bytes of UTF-8.`
       );
     }
+    // The first accepted chunk of a generation is where text starts arriving,
+    // which is the transition `onAnimationStart` reports. A chunk that only
+    // refreshes a preview policy does not, so this is not on `setPreview`.
+    this.noteAnimating(true);
     this.trace('receipt', this.sequence + 1);
     this.source += chunk;
     this.sourceBytes += bytes;
@@ -220,6 +229,9 @@ class StreamState implements MarkdownStreamController {
     this.pending = [];
     this.inFlight = [];
     this.finished = false;
+    // A new generation has shown nothing yet, so the next append is a fresh
+    // start rather than a continuation.
+    this.noteAnimating(false);
     this.publish();
   }
 
@@ -239,6 +251,11 @@ class StreamState implements MarkdownStreamController {
       this.sequence
     );
     this.finished = true;
+    // The last snapshot is still scheduled, and every fade it started runs to its
+    // end; this is the transition an app's `onAnimationEnd` reports. It fires
+    // here rather than when the last fade finishes, which is Streamdown's rule and
+    // which is up to about half a second earlier.
+    this.noteAnimating(false);
   }
 
   dispose(): void {
@@ -251,6 +268,7 @@ class StreamState implements MarkdownStreamController {
     this.pending = [];
     this.inFlight = [];
     this.subscribers.clear();
+    this.animationListeners.clear();
     controllers.delete(this.sessionId);
     NativeDownstreamSession.dispose(this.sessionId);
     stopListeningIfUnused();
@@ -291,6 +309,31 @@ class StreamState implements MarkdownStreamController {
     if (this.tracing) {
       emitJsStreamTrace(this.sessionId, this.generation, sequence, event);
     }
+  }
+
+  /**
+   * Reports a change in whether text is arriving, once per transition.
+   *
+   * The stream's own answer rather than a prop, because a view can tell that it
+   * is mid-answer without JavaScript watching for it: an app that wants a caret
+   * or a fade asks for the animation, not for the flag.
+   */
+  subscribeAnimation(listener: (animating: boolean) => void): () => void {
+    this.animationListeners.add(listener);
+    return () => {
+      this.animationListeners.delete(listener);
+    };
+  }
+
+  /** Whether text is still arriving, which native follows as `animating: auto`. */
+  isStreaming(): boolean {
+    return this.streaming;
+  }
+
+  private noteAnimating(next: boolean): void {
+    if (this.streaming === next) return;
+    this.streaming = next;
+    this.animationListeners.forEach((listener) => listener(next));
   }
 
   bind(): () => void {
@@ -447,6 +490,12 @@ export function createMarkdownStreamWithMode(
 ): MarkdownStreamController {
   return new StreamState(options, mode);
 }
+
+/**
+ * The controller's own state, which a view reads for the transitions a prop
+ * cannot carry: whether text is arriving, and when it started and stopped.
+ */
+export type { StreamState };
 
 export function getStreamState(
   controller: MarkdownStreamController
