@@ -229,30 +229,32 @@ collect device traces.
 
 CI runs three workflows. `ci.yml` runs on every push. `ios.yml` and
 `android.yml` run only when native code or the native specs change (`src/cpp`,
-`src/ios`, `src/android`, `src/specs`, and the `Native*.ts` files). Each
-command below is the one its job runs, so a change that passes here should pass
-there. Run them from the repository root after `pnpm install`.
+`src/ios`, `src/android`, `src/specs`, the `Native*.ts` files, and the `math/`
+workspace package). The commands below reproduce the CI checks. Run them from
+the repository root after `pnpm install`.
 
 ```sh
 pnpm lint && pnpm typecheck   # lint
 pnpm test                     # test
 pnpm test:native              # test-native: builds and tests the C++ engine
 pnpm test:kotlin              # test-kotlin: needs kotlinc (brew install kotlin)
-pnpm typecheck:android        # the Android source set and the JNI, without Gradle
 pnpm prepare                  # build-library
 pnpm example exec expo export --platform web   # build-web
 ```
 
 ### iOS
 
-Needs Xcode and CocoaPods. This compiles the `Downstream` pod and its
-dependencies for the simulator, the way CI does, without building or signing the
-app:
+Needs Xcode and CocoaPods. Vendor the pinned RaTeX framework and KaTeX fonts
+before installing pods; the script verifies both downloads against their
+SHA-256 pins. The `DownstreamMath` scheme compiles the math installer, the
+`Downstream` pod, and their dependencies for the simulator without building or
+signing the app:
 
 ```sh
+node math/scripts/vendor-ratex.mjs
 pnpm example exec expo prebuild --platform ios --no-install
 (cd example/ios && pod install)
-xcodebuild -project example/ios/Pods/Pods.xcodeproj -scheme Downstream \
+xcodebuild -project example/ios/Pods/Pods.xcodeproj -scheme DownstreamMath \
   -configuration Debug -sdk iphonesimulator \
   -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath /tmp/downstream-ios-build \
@@ -273,7 +275,15 @@ emulator or an APK:
 ```sh
 pnpm example exec expo prebuild --platform android --no-install
 (cd example/android && ./gradlew :react-native-downstream:compileDebugKotlin \
+  :react-native-downstream-math:compileDebugKotlin \
   :app:externalNativeBuildDebug -PreactNativeArchitectures=x86_64)
+```
+
+An additional local check compiles the Android source set and the JNI without
+Gradle:
+
+```sh
+pnpm typecheck:android
 ```
 
 `typecheck:android` needs the Android SDK, an NDK, kotlinc, and a populated
