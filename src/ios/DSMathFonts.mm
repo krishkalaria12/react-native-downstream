@@ -96,7 +96,7 @@ void DSMathInstallFontDirectory(const std::string &directory) {
   std::lock_guard<std::mutex> lock(table.mutex);
   const size_t index = static_cast<size_t>(font);
   if (index < table.fonts.size() && table.fonts[index] != NULL) {
-    return CTFontCreateCopyWithSize(table.fonts[index], size, NULL, NULL);
+    return CTFontCreateCopyWithAttributes(table.fonts[index], size, NULL, NULL);
   }
   if (table.directory.empty()) {
     return NULL;
@@ -141,7 +141,7 @@ void DSMathInstallFontDirectory(const std::string &directory) {
   }
   table.fonts[index] = face;
   table.graphics[index] = graphics;
-  return CTFontCreateCopyWithSize(face, size, NULL, NULL);
+  return CTFontCreateCopyWithAttributes(face, size, NULL, NULL);
 }
 
 + (CTFontRef)systemFontAtSize:(CGFloat)size {
@@ -214,9 +214,9 @@ void DSMathInstallFontDirectory(const std::string &directory) {
       // pattern, because a pattern is in user space and these are em units: a
       // pattern set once at the outer scale would be the wrong length for a
       // formula drawn at a different size.
-      const CGFloat dash = std::max(rule.height, 0.04);
+      const CGFloat dash = std::max<CGFloat>(rule.height, 0.04);
       for (CGFloat x = rule.x; x < rule.x + rule.width; x += dash * 2) {
-        const CGFloat end = std::min(x + dash, rule.x + rule.width);
+        const CGFloat end = std::min<CGFloat>(x + dash, rule.x + rule.width);
         CGContextFillRect(context, CGRectMake(x, rule.y, end - x, rule.height));
       }
     } else {
@@ -282,18 +282,32 @@ void DSMathInstallFontDirectory(const std::string &directory) {
       // formula with one missing symbol.
       continue;
     }
-    const unichar character = static_cast<unichar>(glyph.codePoint);
-    CGGlyph glyphs[1] = {CTFontGetGlyphsForCharacters(face, &character, glyphs, 1)};
-    if (glyphs[0] == 0) {
+    // A code point past the BMP, such as a math italic letter, is a surrogate
+    // pair, and Core Text answers it with the glyph first and a zero second.
+    unichar characters[2];
+    CFIndex count = 1;
+    if (glyph.codePoint > 0xFFFF) {
+      const char32_t offset = glyph.codePoint - 0x10000;
+      characters[0] = static_cast<unichar>(0xD800 + (offset >> 10));
+      characters[1] = static_cast<unichar>(0xDC00 + (offset & 0x3FF));
+      count = 2;
+    } else {
+      characters[0] = static_cast<unichar>(glyph.codePoint);
+    }
+    CGGlyph glyphs[2] = {0, 0};
+    if (!CTFontGetGlyphsForCharacters(face, characters, glyphs, count) || glyphs[0] == 0) {
       CFRelease(face);
       continue;
     }
     CGContextSaveGState(context);
     CGContextSetFillColorWithColor(context, [self colorFor:glyph.color fallback:color].CGColor);
+    // The context is y-down and Core Text draws y-up, so the glyph is drawn at
+    // the origin of a flipped space placed at its baseline.
     CGContextSetTextMatrix(context, CGAffineTransformIdentity);
-    CGContextSetTextPosition(context, glyph.x, glyph.y);
+    CGContextTranslateCTM(context, glyph.x, glyph.y);
     CGContextScaleCTM(context, 1, -1);
-    CTFontDrawGlyphs(face, glyphs, context, 1);
+    const CGPoint origin = CGPointZero;
+    CTFontDrawGlyphs(face, glyphs, &origin, 1, context);
     CGContextRestoreGState(context);
     CFRelease(face);
   }
