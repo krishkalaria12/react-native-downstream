@@ -120,7 +120,10 @@ private:
   /// Colors the tail code block, resuming from the last pass. A tail that is
   /// not code clears the state, which is what releases its lexer.
   void highlightTail(Document *document);
-  void publish(DocumentHandle document);
+  /// Records the snapshot the view will show, with the two flags that are the
+  /// document's rather than its blocks': how many leading blocks no later input
+  /// can change, and whether a stream is still arriving.
+  void publish(DocumentHandle document, uint32_t settled);
   void tryCommit();
   bool commitRegion(size_t boundary);
   bool appendOpenFence();
@@ -165,6 +168,10 @@ private:
   remend::PreviewStats previewStats_{};
   // A new policy has to reach the reader even if no new input arrived.
   bool previewDirty_{false};
+  // Whether the pass now running is the stream's last. `publish` reads it, so a
+  // snapshot's own `streaming` flag always answers for that pass rather than for
+  // whichever one happened to set it.
+  bool finished_{false};
 
   IncrementalCounters counters_;
 };
