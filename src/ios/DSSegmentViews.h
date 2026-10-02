@@ -6,6 +6,7 @@
 
 #import <UIKit/UIKit.h>
 
+#import "DSLayoutManager.h"
 #import "DSRenderedDocument.h"
 
 NS_ASSUME_NONNULL_BEGIN
@@ -57,13 +58,30 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 - (NSInteger)linkIndexAtPoint:(CGPoint)point;
 @end
 
+/// A segment view that can be told to redraw one block's characters.
+///
+/// The range is in the *document block's* coordinates rather than the view's own,
+/// because the ticker works in the engine's units and translating into each
+/// view's text would mean walking every segment's block ranges on every tick.
+@protocol DSRevealInvalidatable <NSObject>
+- (void)invalidateRevealCharacterRange:(NSRange)range
+                            blockOffset:(NSInteger)blockOffset
+                                     now:(double)now;
+@end
+
 /// A text segment drawn by UITextView on the same TextKit 1 configuration
 /// that measured it, which gives selection and text navigation.
-@interface DSTextSegmentView : UITextView <DSSegmentView>
+@interface DSTextSegmentView : UITextView <DSSegmentView, DSRevealInvalidatable>
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
 /// The theme's selection highlight. TextKit draws the selection itself, so this
 /// is the only way a themed `colors.selection` reaches the platform's drawing.
 @property (nonatomic) UIColor *selectionColor;
+/// Where this view's fading characters are. Weak, so a recycled view cannot keep
+/// a document alive through a fade.
+@property (nonatomic, weak, nullable) id<DSRevealProvider> revealProvider;
+/// The document block this view's first character belongs to, which is what maps
+/// a reveal unit's block-and-offset pair into this view's own text.
+@property (nonatomic) NSInteger blockOffset;
 - (instancetype)init;
 - (void)setSegment:(DSTextSegment *)segment;
 @end
@@ -75,7 +93,7 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 /// and link hit testing inside the code are the ones a text segment already has.
 /// The gutter is a sibling that draws numbers rather than holding text, so there
 /// is nothing to select, copy, or read aloud.
-@interface DSCodeSegmentView : UIView <DSSegmentView>
+@interface DSCodeSegmentView : UIView <DSSegmentView, DSRevealInvalidatable>
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
 @property (nonatomic, weak, nullable) id<DSControlDelegate> controlDelegate;
 @property (nonatomic) BOOL controlsEnabled;
@@ -111,8 +129,12 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 
 /// One table: fixed column widths in a horizontal scroll view, with a toolbar
 /// row above the grid and container bars and markers in the leading margin.
-@interface DSTableSegmentView : UIView <DSSegmentView>
+@interface DSTableSegmentView : UIView <DSSegmentView, DSRevealInvalidatable>
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
+/// Where the rows' fading alphas come from.
+@property (nonatomic, weak, nullable) id<DSRevealProvider> revealProvider;
+/// The document block this table's first row is.
+@property (nonatomic) NSInteger blockOffset;
 @property (nonatomic, weak, nullable) id<DSControlDelegate> controlDelegate;
 @property (nonatomic) BOOL controlsEnabled;
 @property (nonatomic, readwrite) BOOL showsToolbar;
@@ -123,6 +145,12 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 
 /// Stacks segment views at the frames the measurement computed.
 @interface DSDocumentView : UIView
+/// Where the document's fading characters are. Weak, because the provider is the
+/// Markdown view's and this one is recycled with its segments.
+@property (nonatomic, weak, nullable) id<DSRevealProvider> revealProvider;
+/// The segment views that can fade, so a tick invalidates only the lines holding
+/// an active unit rather than the whole document.
+- (NSArray<UIView<DSRevealInvalidatable> *> *)revealViewsForBlock:(NSInteger)block;
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
 @property (nonatomic, weak, nullable) id<DSControlDelegate> controlDelegate;
 @property (nonatomic) BOOL selectable;

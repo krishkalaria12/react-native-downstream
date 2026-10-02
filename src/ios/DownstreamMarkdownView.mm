@@ -11,9 +11,11 @@
 #import <react/renderer/components/DownstreamSpec/Props.h>
 #import <react/renderer/components/DownstreamSpec/RCTComponentViewHelpers.h>
 
+#include "Caret.h"
 #include "Controls.h"
 #include "DownstreamMarkdownComponentDescriptor.h"
 #include "Export.h"
+#include "Reveal.h"
 #include "SegmentPlan.h"
 #include "theme/Theme.h"
 #include "SessionTrace.h"
@@ -90,9 +92,13 @@ NSString *nameForFormat(NSString *format) {
 
 } // namespace
 
-@interface DownstreamMarkdownView () <RCTDownstreamMarkdownViewViewProtocol, DSLinkDelegate, DSControlDelegate>
+@interface DownstreamMarkdownView () <RCTDownstreamMarkdownViewViewProtocol, DSLinkDelegate, DSControlDelegate,
+                                     DSRevealProvider>
 - (void)scheduleTraceFrame;
 - (void)applyRendering;
+- (void)applyReveal;
+- (void)stopReveal;
+- (void)finishReveal;
 @end
 
 @implementation DownstreamMarkdownView {
@@ -116,6 +122,19 @@ NSString *nameForFormat(NSString *format) {
   CADisplayLink *_traceDisplayLink;
   uint64_t _traceDocumentId;
   uint64_t _controlEpoch;
+  /// What is still fading in this view. Per view rather than per document,
+  /// because it holds the document this view last showed, and two views of one
+  /// controlled source each fade on their own.
+  downstream::RevealTracker _reveal;
+  /// The fade's options, resolved from the props and from the platform's own
+  /// animation scale.
+  downstream::RevealOptions _revealOptions;
+  /// Runs only while something is still fading, and in the common run loop modes
+  /// so it keeps going while a list scrolls.
+  CADisplayLink *_revealDisplayLink;
+  /// Whether Reduce Motion was on the last time it was read, so a change is one
+  /// comparison rather than an observer per unit.
+  BOOL _reduceMotion;
 }
 
 + (ComponentDescriptorProvider)componentDescriptorProvider {
@@ -144,6 +163,12 @@ NSString *nameForFormat(NSString *format) {
     _csvSeparator = @",";
     _controlLabels = @[];
     _exporter = [DSFileExporter new];
+    // One observer per view for the platform's own Reduce Motion setting, which a
+    // reader can turn on while a message is still fading.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(reduceMotionChanged:)
+                                                 name:UIAccessibilityReduceMotionStatusDidChangeNotification
+                                               object:nil];
     _documentView = [[DSDocumentView alloc] initWithFrame:self.bounds];
     _documentView.linkDelegate = self;
     _documentView.controlDelegate = self;
@@ -195,9 +220,94 @@ NSString *nameForFormat(NSString *format) {
   [_traceDisplayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
 }
 
+#pragma mark - DSRevealProvider
+
+/// The runs of `range` whose alpha is below 1, in the asking layout's own text.
+///
+/// The provider is asked rather than pushing: a draw pass already knows which
+/// characters it is about to draw, so the mapping from a document block's offsets
+/// into that layout happens once per drawn range rather than once per frame for
+/// the whole document.
+- (NSArray<DSRevealRun *> *)revealRunsForCharacterRange:(NSRange)range
+                                            blockOffset:(NSInteger)blockOffset
+                                                     now:(double)now {
+  if (!_state) {
+    return @[];
+  }
+  const auto &document = _state->getData().document;
+  if (!document || blockOffset < 0 || static_cast<size_t>(blockOffset) >= document->blocks.size()) {
+    return @[];
+  }
+  const std::u16string &text = document->blocks[static_cast<size_t>(blockOffset)].text;
+  NSMutableArray<DSRevealRun *> *runs = [NSMutableArray new];
+  for (const downstream::RevealUnit &unit : _reveal.units()) {
+    if (unit.block != static_cast<uint32_t>(blockOffset)) {
+      continue;
+    }
+    const float alpha = downstream::revealAlpha(unit, now, _revealOptions);
+    if (alpha >= 1) {
+      continue;
+    }
+    // A unit's offsets are into the block's own text, and the layout's range
+    // begins where this block's does in the segment's text, so the mapping is one
+    // addition on each end.
+    const long long from = std::max<long long>(unit.start, 0);
+    const long long to = std::min<long long>(unit.end, static_cast<long long>(text.size()));
+    if (from >= to) {
+      continue;
+    }
+    const NSRange unitRange = NSMakeRange(static_cast<NSUInteger>(from), static_cast<NSUInteger>(to - from));
+    const NSRange clipped = NSIntersectionRange(unitRange, range);
+    if (clipped.length == 0) {
+      continue;
+    }
+    [runs addObject:[[DSRevealRun alloc] initWithRange:clipped
+                                                 alpha:alpha
+                                                  rise:downstream::revealRise(unit, now, _revealOptions)]];
+  }
+  // Text order, because the draw pass walks `range` forwards and expects the runs
+  // in the same order.
+  [runs sortUsingComparator:^NSComparisonResult(DSRevealRun *a, DSRevealRun *b) {
+    if (a.range.location != b.range.location) {
+      return a.range.location < b.range.location ? NSOrderedAscending : NSOrderedDescending;
+    }
+    return NSOrderedSame;
+  }];
+  return runs;
+}
+
+/// The alpha at one character of a document block.
+- (CGFloat)revealAlphaAtBlock:(NSInteger)block offset:(NSUInteger)offset now:(double)now {
+  if (!_state) {
+    return 1;
+  }
+  const auto &document = _state->getData().document;
+  if (!document || block < 0 || static_cast<size_t>(block) >= document->blocks.size()) {
+    return 1;
+  }
+  for (const downstream::RevealUnit &unit : _reveal.units()) {
+    if (unit.block != static_cast<uint32_t>(block)) {
+      continue;
+    }
+    if (offset < unit.start || offset >= unit.end) {
+      continue;
+    }
+    return downstream::revealAlpha(unit, now, _revealOptions);
+  }
+  return 1;
+}
+
 - (void)didMoveToWindow {
   [super didMoveToWindow];
   [self scheduleTraceFrame];
+  // A view that leaves its window finishes everything: a fade nobody is looking at
+  // is not worth a frame, and finishing it means returning to the window shows the
+  // text rather than resuming a stale animation.
+  if (self.window == nil) {
+    [self finishReveal];
+  } else if (_reveal.active()) {
+    [self startRevealTicker];
+  }
 }
 
 - (void)traceDisplayTick:(CADisplayLink *)link {
@@ -209,30 +319,6 @@ NSString *nameForFormat(NSString *format) {
     downstream::SessionTrace::recordDocument(_traceDocumentId, "frame_estimate");
     _traceDocumentId = 0;
   }
-}
-
-/// Rebuilds the platform text from the document the view already holds, and
-/// ends any frame trace the old rendering was waiting on.
-///
-/// A color appearance change deliberately does not come through here. Token
-/// colors are dynamic UIColors, which the platform resolves against the trait
-/// collection when it draws, so a cached rendering already follows the
-/// appearance and rebuilding it would only discard warm caches to get the same
-/// objects back.
-- (void)applyRendering {
-  const uint64_t documentId = _document ? _document->id : 0;
-  if (_traceDocumentId && _traceDocumentId != documentId) {
-    downstream::SessionTrace::recordDocument(_traceDocumentId, "frame_unavailable");
-    [_traceDisplayLink invalidate];
-    _traceDisplayLink = nil;
-    _traceDocumentId = 0;
-  }
-  _documentView.chrome = _chrome;
-  _documentView.rendered = _document ? [DSRenderedDocument renderedDocumentFor:_document
-                                                                  fontScale:_fontScale
-                                                         syntaxHighlighting:_syntaxHighlighting
-                                                                      theme:_theme]
-                                     : nil;
 }
 
 /// Adopts the state's theme and reports whether it was a different one.
@@ -320,6 +406,12 @@ NSString *nameForFormat(NSString *format) {
   _traceDocumentId = 0;
   [_traceDisplayLink invalidate];
   _traceDisplayLink = nil;
+  // A recycled view is about to show a different message, so it has to forget
+  // what it had shown. `clear` also finishes, which is what stops the ticker and
+  // leaves the next document to fade from its first word rather than to resume
+  // this one's timing.
+  [self stopReveal];
+  _reveal.clear();
   [super prepareForRecycle];
   _state.reset();
   _document.reset();
@@ -327,9 +419,201 @@ NSString *nameForFormat(NSString *format) {
 }
 
 - (void)dealloc {
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
   if (_traceDocumentId) downstream::SessionTrace::recordDocument(_traceDocumentId, "frame_unavailable");
   [_traceDisplayLink invalidate];
+  [_revealDisplayLink invalidate];
 }
+
+/// Rebuilds the platform text from the document the view already holds, and
+/// ends any frame trace the old rendering was waiting on.
+///
+/// A color appearance change deliberately does not come through here. Token
+/// colors are dynamic UIColors, which the platform resolves against the trait
+/// collection when it draws, so a cached rendering already follows the
+/// appearance and rebuilding it would only discard warm caches to get the same
+/// objects back.
+- (void)applyRendering {
+  // The caret the state resolved. It is in the rendering's cache key, so a change
+  // rebuilds only the last segment rather than the document.
+  const downstream::PlacedCaret caret = _state ? _state->getData().caret : downstream::PlacedCaret{};
+  const uint64_t documentId = _document ? _document->id : 0;
+  if (_traceDocumentId && _traceDocumentId != documentId) {
+    downstream::SessionTrace::recordDocument(_traceDocumentId, "frame_unavailable");
+    [_traceDisplayLink invalidate];
+    _traceDisplayLink = nil;
+    _traceDocumentId = 0;
+  }
+  // The fade's ticker is separate from the trace's: one runs for as long as
+  // something is fading and the other for a single frame, so neither invalidates
+  // the other.
+  _documentView.chrome = _chrome;
+  _documentView.rendered = _document ? [DSRenderedDocument renderedDocumentFor:_document
+                                                                  fontScale:_fontScale
+                                                         syntaxHighlighting:_syntaxHighlighting
+                                                                      theme:_theme
+                                                                     caret:caret]
+                                     : nil;
+  // The fade is decided after the rendering exists, because the tracker aligns the
+  // document it was given against the one this view last showed, and the ticker
+  // needs the segment views the rendering just produced.
+  [self applyReveal];
+}
+
+#pragma mark - The fade
+
+/// Whether the system asks for reduced motion.
+///
+/// A reader's setting rather than an app's, so it is read here rather than
+/// resolved in JavaScript: JavaScript cannot see it, and a fade that ignored it
+/// would be a fade some readers cannot turn off. The notification is one
+/// comparison per change rather than an observer per unit.
+- (BOOL)reduceMotionEnabled {
+  return UIAccessibilityIsReduceMotionEnabled();
+}
+
+/// The fade's options, from the props.
+///
+/// The three time values are the engine's own, already resolved by
+/// `src/animation.ts`, so there is one place that decides what `stagger` means. A
+/// curve's x components are clamped again here because the boundary is what trusts
+/// them: a curve that doubles back has no single y for an x, which is the one
+/// thing a fade needs.
+- (downstream::RevealOptions)resolveRevealOptions:(const DownstreamMarkdownViewProps &)props {
+  downstream::RevealOptions options;
+  // `animation` and `animationSplit` arrive as codegen enums, so the string
+  // names were already parsed once, in `fromRawValue`.
+  switch (props.animation) {
+    case DownstreamMarkdownViewAnimation::FadeIn:
+      options.effect = downstream::RevealEffect::Fade;
+      break;
+    case DownstreamMarkdownViewAnimation::SlideUp:
+      options.effect = downstream::RevealEffect::Rise;
+      break;
+    case DownstreamMarkdownViewAnimation::None:
+      break;
+  }
+  options.split = props.animationSplit == DownstreamMarkdownViewAnimationSplit::Char
+                      ? downstream::RevealSplit::Char
+                      : downstream::RevealSplit::Word;
+  if (props.animationTiming.size() >= 7) {
+    options.durationMs = static_cast<float>(props.animationTiming[0]);
+    options.staggerMs = static_cast<float>(props.animationTiming[1]);
+    options.maxBacklogMs = static_cast<float>(props.animationTiming[2]);
+    const auto clamp = [](double value) { return static_cast<float>(std::min(1.0, std::max(0.0, value))); };
+    options.easing = {clamp(props.animationTiming[3]), static_cast<float>(props.animationTiming[4]),
+                      clamp(props.animationTiming[5]), static_cast<float>(props.animationTiming[6])};
+  }
+  // Reduce Motion turns the fade off rather than shortening it: the setting asks
+  // for no animation, not for a faster one. The caret is unaffected, because it
+  // does not move.
+  if ([self reduceMotionEnabled]) {
+    options.effect = downstream::RevealEffect::None;
+  }
+  return options;
+}
+
+/// Aligns the document this view was just given against the one it last showed,
+/// schedules what is new, and starts the ticker if anything is still fading.
+- (void)applyReveal {
+  _revealOptions = [self resolveRevealOptions:*std::static_pointer_cast<const DownstreamMarkdownViewProps>(_props)];
+  _documentView.revealProvider =
+      _revealOptions.effect == downstream::RevealEffect::None ? nil : (id<DSRevealProvider>)self;
+  if (!_document) {
+    [self stopReveal];
+    return;
+  }
+  const double now = CACurrentMediaTime() * 1000.0;
+  if (_reveal.apply(_document, now, _revealOptions).empty()) {
+    [self stopReveal];
+    return;
+  }
+  [self startRevealTicker];
+}
+
+/// The display link, in the common run loop modes so a fade keeps running while
+/// the reader scrolls a list. One per view, separate from the trace's link: one
+/// runs for as long as something is fading and the other for a single frame.
+- (void)startRevealTicker {
+  if (_revealDisplayLink != nil || !self.window) {
+    return;
+  }
+  _revealDisplayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(revealTick:)];
+  [_revealDisplayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+}
+
+- (void)revealTick:(CADisplayLink *)link {
+  if (_revealDisplayLink != link) {
+    return;
+  }
+  [self invalidateReveals];
+  // `prune` drops what has finished, and the frame after that is the one that
+  // draws it at full alpha, so it is dropped here rather than the moment its fade
+  // ended. What it drops still redraws at full alpha this frame.
+  if (!_reveal.prune(CACurrentMediaTime() * 1000.0, _revealOptions)) {
+    [self stopReveal];
+  }
+}
+
+/// Redraws only the lines that hold an active unit.
+///
+/// `invalidateDisplayForCharacterRange:` is the documented trigger and TextKit
+/// redraws only the line fragments that range touches. No text storage is edited,
+/// no glyph is invalidated, and nothing is laid out, which is what keeps a frame
+/// of animation free of every cost the rest of this library avoids.
+- (void)invalidateReveals {
+  if (!_state) {
+    return;
+  }
+  const auto &document = _state->getData().document;
+  if (!document) {
+    return;
+  }
+  const double now = CACurrentMediaTime() * 1000.0;
+  for (const downstream::RevealUnit &unit : _reveal.units()) {
+    if (unit.block >= document->blocks.size()) {
+      continue;
+    }
+    const std::u16string &text = document->blocks[unit.block].text;
+    const uint32_t start = std::min<uint32_t>(unit.start, static_cast<uint32_t>(text.size()));
+    const uint32_t end = std::min<uint32_t>(unit.end, static_cast<uint32_t>(text.size()));
+    for (UIView<DSRevealInvalidatable> *view in [_documentView revealViewsForBlock:unit.block]) {
+      [view invalidateRevealCharacterRange:NSMakeRange(start, end - start)
+                                blockOffset:unit.block
+                                         now:now];
+    }
+  }
+}
+
+/// Stops the ticker without finishing anything.
+- (void)stopReveal {
+  [_revealDisplayLink invalidate];
+  _revealDisplayLink = nil;
+}
+
+/// Finishes every fade at once and redraws.
+///
+/// Three callers need the same thing: Reduce Motion, an explicit `animated: false`
+/// mid-fade, and a view leaving its window. All three want the text at once
+/// rather than a fade nobody is watching finish.
+- (void)finishReveal {
+  const bool hadUnits = _reveal.active();
+  _reveal.clear();
+  [self stopReveal];
+  if (hadUnits) {
+    [_documentView setNeedsDisplay];
+  }
+}
+
+- (void)reduceMotionChanged:(NSNotification *)note {
+  (void)note;
+  // Every unit finishes at once and later snapshots schedule nothing, which is
+  // what the setting asks for.
+  [self finishReveal];
+  [self applyReveal];
+}
+
+#pragma mark - Links
 
 - (void)handleTap:(UITapGestureRecognizer *)recognizer {
   if (recognizer.state != UIGestureRecognizerStateEnded) {
