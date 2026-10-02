@@ -152,12 +152,12 @@ public:
     if (auto value = data.get_ptr("expanded")) {
       code.choices.expanded = readOrdinals(*value);
     }
-    // The image answers cross as one flat array: the enabled flag, then four
-    // numbers per image. One array rather than an array of arrays, because a JNI
-    // array of arrays allocates one object per image on a state update, and a
-    // message with six charts would pay six allocations for six numbers. Read
-    // back sorted by ordinal, which is what `find` binary-searches for.
-    if (auto value = data.get_ptr("images")) {
+    // The image answers, in the shape `codeLayoutData` writes on Android, so
+    // the measure map, the state and a round trip all read one set of keys.
+    if (auto value = data.get_ptr("imagesEnabled")) {
+      images.enabled = value->asDouble() != 0;
+    }
+    if (auto value = data.get_ptr("imageEntries")) {
       readImages(*value, &images);
     }
   }
@@ -178,44 +178,42 @@ public:
         // By id, as the document is: Java resolves the theme through the
         // registry rather than copying its values across JNI on every update.
         "themeId", static_cast<double>(themeId()))(
-        // Flat, so the whole answer is one array: the enabled flag, then five
-        // numbers per image — ordinal, state, width, height, and a trailing zero
-        // that keeps every entry the same size, which is what lets the reader
-        // index it without knowing how many images there are.
-        "images", writeImages(images));
+        // The same keys the Android measure map uses, because the view reads
+        // this state and that map through one function.
+        "imagesEnabled", images.enabled ? 1.0 : 0.0)("imageEntries", writeImages(images));
   }
 
 private:
-  /// The image answers, flattened. The stride is `kImageEntryStride` and both
-  /// halves of the round trip use it, so a field added to `ImageEntry` is one
-  /// line in each rather than a format that can drift.
-  static constexpr size_t kImageEntryStride = 4;
-
+  /// One object per image, as `codeLayoutData` writes them.
   static folly::dynamic writeImages(const downstream::ImageStateLayout &images) {
     auto array = folly::dynamic::array();
-    array.push_back(images.enabled ? 1.0 : 0.0);
     for (const downstream::ImageEntry &entry : images.entries) {
-      array.push_back(static_cast<double>(entry.ordinal));
-      array.push_back(static_cast<double>(entry.state));
-      array.push_back(static_cast<double>(entry.pixelWidth));
-      array.push_back(static_cast<double>(entry.pixelHeight));
+      array.push_back(folly::dynamic::object("ordinal", static_cast<double>(entry.ordinal))(
+          "state", static_cast<double>(entry.state))("pixelWidth", static_cast<double>(entry.pixelWidth))(
+          "pixelHeight", static_cast<double>(entry.pixelHeight)));
     }
     return array;
   }
 
   static void readImages(const folly::dynamic &array, downstream::ImageStateLayout *out) {
     out->entries.clear();
-    if (!array.isArray() || array.empty()) {
+    if (!array.isArray()) {
       return;
     }
-    out->enabled = array[0].asDouble() != 0;
-    out->entries.reserve((array.size() - 1) / kImageEntryStride);
-    for (size_t at = 1; at + kImageEntryStride <= array.size(); at += kImageEntryStride) {
+    out->entries.reserve(array.size());
+    const auto number = [](const folly::dynamic &object, const char *key) {
+      const auto *value = object.get_ptr(key);
+      return value != nullptr && value->isNumber() ? value->asDouble() : 0.0;
+    };
+    for (const auto &object : array) {
+      if (!object.isObject()) {
+        continue;
+      }
       downstream::ImageEntry entry;
-      entry.ordinal = static_cast<uint32_t>(array[at].asDouble());
-      entry.state = static_cast<downstream::ImageState>(static_cast<uint8_t>(array[at + 1].asDouble()));
-      entry.pixelWidth = static_cast<float>(array[at + 2].asDouble());
-      entry.pixelHeight = static_cast<float>(array[at + 3].asDouble());
+      entry.ordinal = static_cast<uint32_t>(number(object, "ordinal"));
+      entry.state = static_cast<downstream::ImageState>(static_cast<uint8_t>(number(object, "state")));
+      entry.pixelWidth = static_cast<float>(number(object, "pixelWidth"));
+      entry.pixelHeight = static_cast<float>(number(object, "pixelHeight"));
       out->entries.push_back(entry);
     }
     std::sort(out->entries.begin(), out->entries.end(),

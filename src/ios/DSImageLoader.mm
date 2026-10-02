@@ -17,6 +17,7 @@
 - (instancetype)initWithStatus:(DSImageLoadStatus)status
                       response:(nullable NSURLResponse *)response
                           data:(nullable NSData *)data
+                         image:(nullable UIImage *)image
                      pixelSize:(CGSize)pixelSize
                       mimeType:(NSString *)mimeType;
 @end
@@ -29,11 +30,11 @@ constexpr size_t kMaxConcurrentLoads = 4;
 
 /// The image's pixel size, from the decoded image.
 ///
-/// The platform's size-aware load already decoded at the size that was asked for,
-/// so the picture's own `size` is the size it will be drawn at — which is what
-/// makes a message laid out at a cached size and the picture that fills it agree.
+/// Pixels rather than `size`, which is in points at the decode scale: a 600-pixel
+/// picture decoded at 3x is 200 points, and `imageBox` reads an image's natural
+/// size the way CSS does, as 600.
 CGSize pixelSizeOf(UIImage *image) {
-  return image != nil ? image.size : CGSizeZero;
+  return image != nil ? CGSizeMake(image.size.width * image.scale, image.size.height * image.scale) : CGSizeZero;
 }
 
 NSString *mimeTypeOf(NSURLResponse *response) {
@@ -60,7 +61,7 @@ struct Request {
   /// One callback per interested view. A view that cancels has its callback
   /// removed, which is what makes the reference count a count of interested
   /// views rather than a count of requests.
-  std::vector<std::function<void(DSImageLoad *, DSImageLoadResult *)>> callbacks;
+  std::vector<std::pair<DSImageLoad *, std::function<void(DSImageLoad *, DSImageLoadResult *)>>> callbacks;
   RCTImageLoader *loader = nullptr;
   /// Set once the platform request is started, which is what counts against
   /// the cap; a request still waiting for a slot holds none.
@@ -102,6 +103,7 @@ DSImageLoadResult *resultFor(NSURLResponse *response, UIImage *image) {
   return [[DSImageLoadResult alloc] initWithStatus:DSImageLoadStatusLoaded
                                            response:response
                                                data:nil
+                                              image:image
                                           pixelSize:pixelSizeOf(image)
                                            mimeType:mimeTypeOf(response)];
 }
@@ -130,6 +132,7 @@ DSImageLoadResult *failureResult(void) {
   return [[DSImageLoadResult alloc] initWithStatus:DSImageLoadStatusFailed
                                            response:nil
                                                data:nil
+                                              image:nil
                                           pixelSize:CGSizeZero
                                            mimeType:@""];
 }
@@ -150,7 +153,7 @@ RCTImageLoaderCancellationBlock releaseSlot(Request &request) {
 void drainQueue(void);
 
 void deliver(const std::shared_ptr<Request> &request, DSImageLoadResult *result) {
-  std::vector<std::function<void(DSImageLoad *, DSImageLoadResult *)>> callbacks;
+  std::vector<std::pair<DSImageLoad *, std::function<void(DSImageLoad *, DSImageLoadResult *)>>> callbacks;
   {
     std::lock_guard<std::mutex> lock(store().mutex);
     const auto found = store().live.find(request->key);
@@ -167,8 +170,8 @@ void deliver(const std::shared_ptr<Request> &request, DSImageLoadResult *result)
   // The platform calls back on its own queue and a view draws on the main one,
   // so this hop is the one that has to be explicit.
   dispatch_async(dispatch_get_main_queue(), ^{
-    for (const auto &callback : callbacks) {
-      callback(nil, result);
+    for (const auto &[load, callback] : callbacks) {
+      callback(load, result);
     }
   });
   drainQueue();
@@ -253,6 +256,7 @@ void DSDownloadImageBytes(NSURL *url, void (^completion)(NSData *, NSString *)) 
 - (instancetype)initWithStatus:(DSImageLoadStatus)status
                       response:(NSURLResponse *)response
                           data:(NSData *)data
+                         image:(UIImage *)image
                      pixelSize:(CGSize)pixelSize
                       mimeType:(NSString *)mimeType {
   if (!(self = [super init])) {
@@ -261,6 +265,7 @@ void DSDownloadImageBytes(NSURL *url, void (^completion)(NSData *, NSString *)) 
   _status = status;
   _response = response;
   _data = data;
+  _image = image;
   _pixelSize = pixelSize;
   _mimeType = mimeType;
   return self;
@@ -335,7 +340,7 @@ void DSDownloadImageBytes(NSURL *url, void (^completion)(NSData *, NSString *)) 
     if (found != store().live.end()) {
       // Deduplicated: a second message showing the same chart shares the first
       // request rather than starting a second one.
-      found->second->callbacks.push_back(callback);
+      found->second->callbacks.emplace_back(handle, callback);
       return handle;
     }
     auto request = std::make_shared<Request>();
@@ -345,7 +350,7 @@ void DSDownloadImageBytes(NSURL *url, void (^completion)(NSData *, NSString *)) 
     request->scale = scale;
     request->loader = loader;
     request->generation = store().generation;
-    request->callbacks.push_back(callback);
+    request->callbacks.emplace_back(handle, callback);
     store().live[key] = request;
     store().queued.push_back(key);
   }
@@ -365,11 +370,13 @@ void DSDownloadImageBytes(NSURL *url, void (^completion)(NSData *, NSString *)) 
     if (found == store().live.end()) {
       return;
     }
-    if (!found->second->callbacks.empty()) {
-      // One view let go. The request survives while another wants it, which is
-      // what lets two messages share one request and one of them go away.
-      found->second->callbacks.pop_back();
-    }
+    // This view's own callback, found by its handle: two views sharing a request
+    // let go in any order, and dropping the wrong one would leave the view that is
+    // still on screen with no picture.
+    auto &callbacks = found->second->callbacks;
+    callbacks.erase(std::remove_if(callbacks.begin(), callbacks.end(),
+                                   [load](const auto &entry) { return entry.first == load; }),
+                    callbacks.end());
     if (!found->second->callbacks.empty()) {
       return;
     }

@@ -663,6 +663,16 @@ NSString *nameForFormat(NSString *format) {
   }
 }
 
+- (void)imagesDidChange {
+  if (!_state) {
+    return;
+  }
+  // A clone with the same data is enough: Fabric measures every new revision,
+  // and the node's `layout` reads each picture's answer from the cache the load
+  // just wrote and commits the state the view then draws.
+  _state->updateState(DownstreamMarkdownState(_state->getData()));
+}
+
 - (void)didToggleWrapAtOrdinal:(uint32_t)ordinal language:(NSString *)language wrapped:(BOOL)wrapped {
   const auto *emitter = [self emitter];
   if (emitter == nullptr || !_state) {

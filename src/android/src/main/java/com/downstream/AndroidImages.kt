@@ -3,13 +3,15 @@ package com.downstream
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import com.facebook.common.executors.UiThreadImmediateExecutorService
 import com.facebook.common.references.CloseableReference
+import com.facebook.datasource.BaseDataSubscriber
+import com.facebook.datasource.DataSource
 import com.facebook.drawee.backends.pipeline.Fresco
 import com.facebook.imagepipeline.common.ResizeOptions
 import com.facebook.imagepipeline.image.CloseableImage
 import com.facebook.imagepipeline.request.ImageRequest
 import com.facebook.imagepipeline.request.ImageRequestBuilder
-import com.facebook.react.bridge.ReactContext
 
 /**
  * Loading a picture through the app's own pipeline.
@@ -26,88 +28,156 @@ import com.facebook.react.bridge.ReactContext
  * one this library builds.
  *
  * This is the only file that names the platform's image APIs, which is the point.
- * Those calls have moved between Fresco and React Native releases — `ImageRequest`'s
- * builder left the class, and `Fresco` moved to the Drawee package — and one file to
+ * Those calls have moved between Fresco and React Native releases, and one file to
  * re-check against a release is easier to keep right than a loader threaded through
  * every segment view.
  *
- * The engine's own limit of four loads applies above this: [load] starts one request
- * and reports its answer, and the shadow node decides whether the fifth picture in a
- * message gets one at all.
+ * The contract's three rules, which iOS's `DSImageLoader` applies too:
+ *
+ *   - At most four requests in flight, so a paragraph of `![](…)` does not open
+ *     thirty sockets to a host the reader never chose.
+ *   - One request per URL and size, shared by every view that wants it.
+ *   - Every request is held by the views that want it and closed when the last
+ *     one lets go, so a recycled message releases what it started.
+ *
+ * Everything here runs on the main thread: the pipeline delivers to the UI
+ * executor, and every caller is a view.
  */
 internal object AndroidImages {
-  /** Results on the main thread, because every caller draws. */
-  private val main = Handler(Looper.getMainLooper())
+  private const val MAX_IN_FLIGHT = 4
 
-  /**
-   * Fetches [url] decoded at [width] by [height], and reports whether it decoded.
-   *
-   * The size is the box's, not the screen's: a 4,000-pixel photo drawn in a
-   * 400-pixel box does not need four thousand pixels of bitmap, and decoding all of
-   * them is what makes a message list stutter while it scrolls. That is
-   * `ResizeOptions` rather than a resize afterwards, so the decode itself is bounded.
-   *
-   * [onAnswer] runs on the main thread. It reports the answer and nothing else: the
-   * new state is written into the layout map by the engine, and the view is rebuilt
-   * from that rather than told to resize itself, which is what keeps a measured
-   * height and a drawn one the same number.
-   *
-   * Reports false for anything that is not a decoded image, which includes SVG:
-   * neither platform's pipeline draws it, and an image that cannot be drawn is a
-   * failed image, which is a state the box rule already has.
-   */
-  fun load(
-    reactContext: ReactContext,
-    url: String,
-    width: Int,
-    height: Int,
-    onAnswer: (loaded: Boolean) -> Unit,
-  ) {
-    // `getImagePipeline` throws rather than returning null when Fresco was never
-    // initialized, which cannot happen in a running app but can happen in a test
-    // harness or an early attach. A picture that cannot be fetched is a failed
-    // picture, so that is what is reported.
-    val pipeline = try {
-      Fresco.getImagePipeline()
-    } catch (error: IllegalStateException) {
-      main.post { onAnswer(false) }
-      return
-    }
+  /** One decoded answer: the picture's own size in pixels, or null when it failed. */
+  class Answer(val width: Int, val height: Int)
 
-    // `parse` returns null for a string that is not a URI at all, which the engine's
-    // own policy already rejects but a hand-built state map could still carry.
-    val uri = Uri.parse(url) ?: run {
-      main.post { onAnswer(false) }
-      return
-    }
+  /** One view's interest in one request, which is what [cancel] takes back. */
+  class Ticket internal constructor(internal val key: String)
 
-    val request: ImageRequest = ImageRequestBuilder.newBuilderWithSource(uri)
-      .setResizeOptions(ResizeOptions.forDimensions(width.coerceAtLeast(1), height.coerceAtLeast(1)))
-      .build()
-
-    // No caller context: the cache key is then the URL and the size alone, which is
-    // what makes two views showing the same picture at the same size share one
-    // decode.
-    val data = pipeline.fetchDecodedImage(request, null)
-
-    // The result is non-null once the request has finished and null while it is in
-    // flight or when it failed. Nothing waits on either case: the shadow node writes
-    // the answer and rebuilds the view, so this call only has to produce one number.
-    val decoded = data.result
-    // `CloseableReference` is a counted handle the pipeline owns. It is released
-    // straight away because nothing here keeps the bitmap: the ImageView asks the
-    // pipeline for the picture itself, and holding the handle would keep a full
-    // bitmap alive per message in a scrolling list.
-    val size = decoded?.let { sizeOf(it) }
-    decoded?.close()
-    main.post { onAnswer(size != null) }
+  private class Request(val key: String, val image: ImageRequest) {
+    val waiting = LinkedHashMap<Ticket, (Answer?) -> Unit>()
+    var source: DataSource<CloseableReference<CloseableImage>>? = null
   }
 
-  /** The decoded image's own size, or null when it is not something either can draw. */
-  private fun sizeOf(reference: CloseableReference<CloseableImage>): Pair<Int, Int>? {
-    val image = reference.get() ?: return null
-    val width = image.width
-    val height = image.height
-    return if (width > 0 && height > 0) width to height else null
+  private val main = Handler(Looper.getMainLooper())
+  private val live = HashMap<String, Request>()
+  private val queued = ArrayDeque<String>()
+  private var started = 0
+
+  /** The request a Drawee view should show once a load has finished, so it hits the same cache entry. */
+  fun imageRequest(url: String, width: Int, height: Int): ImageRequest? {
+    val uri = Uri.parse(url) ?: return null
+    return ImageRequestBuilder.newBuilderWithSource(uri)
+      .setResizeOptions(ResizeOptions.forDimensions(width.coerceAtLeast(1), height.coerceAtLeast(1)))
+      .build()
+  }
+
+  /**
+   * Fetches [url] decoded within [width] by [height] pixels and reports its size.
+   *
+   * The bound is the column, not the screen: a 4,000-pixel photo drawn in a
+   * 400-pixel column does not need four thousand pixels of bitmap. That is
+   * `ResizeOptions` rather than a resize afterwards, so the decode itself is bounded.
+   *
+   * [onAnswer] runs on the main thread exactly once, unless the ticket is cancelled
+   * first. An SVG, which neither platform's pipeline decodes, is a failure.
+   */
+  fun load(url: String, width: Int, height: Int, onAnswer: (Answer?) -> Unit): Ticket? {
+    val image = imageRequest(url, width, height) ?: run {
+      main.post { onAnswer(null) }
+      return null
+    }
+    val key = "$url@${width}x$height"
+    val ticket = Ticket(key)
+    val existing = live[key]
+    if (existing != null) {
+      existing.waiting[ticket] = onAnswer
+      return ticket
+    }
+    val request = Request(key, image)
+    request.waiting[ticket] = onAnswer
+    live[key] = request
+    queued.addLast(key)
+    drain()
+    return ticket
+  }
+
+  /** Takes back one view's interest. The request itself stops only when nobody wants it. */
+  fun cancel(ticket: Ticket?) {
+    val current = ticket ?: return
+    val request = live[current.key] ?: return
+    request.waiting.remove(current)
+    if (request.waiting.isNotEmpty()) {
+      return
+    }
+    live.remove(current.key)
+    queued.remove(current.key)
+    request.source?.let { source ->
+      request.source = null
+      started--
+      source.close()
+    }
+    drain()
+  }
+
+  private fun drain() {
+    while (started < MAX_IN_FLIGHT) {
+      val key = queued.removeFirstOrNull() ?: return
+      val request = live[key] ?: continue
+      // `getImagePipeline` throws when Fresco was never initialized, which cannot
+      // happen in a running app but can in a test harness or an early attach.
+      val pipeline = try {
+        Fresco.getImagePipeline()
+      } catch (error: IllegalStateException) {
+        finish(request, null)
+        continue
+      }
+      started++
+      // No caller context: the cache key is then the URL and the size alone, which
+      // is what lets two views showing one picture share one decode.
+      val source = pipeline.fetchDecodedImage(request.image, null)
+      request.source = source
+      source.subscribe(
+        object : BaseDataSubscriber<CloseableReference<CloseableImage>>() {
+          override fun onNewResultImpl(dataSource: DataSource<CloseableReference<CloseableImage>>) {
+            if (!dataSource.isFinished) {
+              return
+            }
+            val reference = dataSource.result
+            val answer = reference?.get()?.let { image ->
+              if (image.width > 0 && image.height > 0) Answer(image.width, image.height) else null
+            }
+            // The handle is the pipeline's; nothing here keeps the bitmap, because
+            // the Drawee view asks the pipeline for it again from the memory cache.
+            CloseableReference.closeSafely(reference)
+            settle(request, answer)
+          }
+
+          override fun onFailureImpl(dataSource: DataSource<CloseableReference<CloseableImage>>) {
+            settle(request, null)
+          }
+        },
+        UiThreadImmediateExecutorService.getInstance(),
+      )
+    }
+  }
+
+  /** A started request finished. A request already cancelled has nobody to tell. */
+  private fun settle(request: Request, answer: Answer?) {
+    if (live[request.key] !== request || request.source == null) {
+      return
+    }
+    request.source?.close()
+    request.source = null
+    started--
+    finish(request, answer)
+    drain()
+  }
+
+  private fun finish(request: Request, answer: Answer?) {
+    live.remove(request.key)
+    val callbacks = request.waiting.values.toList()
+    request.waiting.clear()
+    for (callback in callbacks) {
+      callback(answer)
+    }
   }
 }

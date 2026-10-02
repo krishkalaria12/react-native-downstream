@@ -62,13 +62,15 @@ DownstreamMarkdownShadowNode::DownstreamMarkdownShadowNode(const ShadowNode &sou
     document_.reset();
     requestControlledSource();
   } else if (previous.markdown == props.markdown && previous.generation == props.generation &&
-             previous.sessionSequence == props.sessionSequence && previous.sessionRevision == props.sessionRevision) {
+             previous.sessionSequence == props.sessionSequence && previous.sessionRevision == props.sessionRevision &&
+             previous.mathFlags == props.mathFlags) {
     controlled_ = source.controlled_;
     // A revision that showed a fallback while its source was being prepared
     // collects the result in the next revision.
     needsDocument_ = source.needsDocument_ || source.awaitingPrepared_;
     pendingError_ = source.pendingError_;
-  } else if (props.sessionId.empty() && previous.markdown == props.markdown) {
+  } else if (props.sessionId.empty() && previous.markdown == props.markdown &&
+             previous.mathFlags == props.mathFlags) {
     // A generation change without a new source, after a rejected value.
     controlled_ = source.controlled_;
   } else {
@@ -80,7 +82,7 @@ DownstreamMarkdownShadowNode::DownstreamMarkdownShadowNode(const ShadowNode &sou
   // Later changes use the normal on-demand platform rendering cache.
   if (controlled_ && controlled_->prepared &&
       (!sameTheme || previous.controls != props.controls || previous.codeBlockWrap != props.codeBlockWrap)) {
-    controlled_->prepared->noteHint(layoutHint(1, 0));
+    controlled_->prepared->noteHint(layoutHint(1, 0, document_));
   }
 }
 
@@ -114,13 +116,14 @@ downstream::Theme::Handle DownstreamMarkdownShadowNode::resolveTheme() const {
   return theme_;
 }
 
-downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale, Float width) const {
+downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale, Float width,
+                                                               const downstream::DocumentHandle &document) const {
   const auto &state = getStateData();
   return downstream::LayoutHint{static_cast<float>(fontScale),
                                 static_cast<float>(width),
                                 chromeFor(state),
                                 codeLayout(state),
-                                imageLayout(getDocument()),
+                                imageLayout(document),
                                 theme_};
 }
 
@@ -135,7 +138,12 @@ void DownstreamMarkdownShadowNode::requestControlledSource() {
   // The hint carries this node's theme. Its width is zero, because the node has
   // not been measured yet, and a hint with no width is expanded against the
   // widths views use now, so the theme is still prepared.
-  controlled_->prepared = downstream::PreparedDocument::request(props.markdown, layoutHint(1, 0));
+  // The view's math options are parse options: the same string parses to a
+  // different document with math on, so they travel with the request and are
+  // part of what the preparation cache keys on.
+  downstream::MathOptions math;
+  math.flags = static_cast<uint32_t>(props.mathFlags);
+  controlled_->prepared = downstream::PreparedDocument::request(props.markdown, layoutHint(1, 0, document_), math);
 }
 
 void DownstreamMarkdownShadowNode::setLayoutManager(
@@ -182,6 +190,43 @@ const downstream::DocumentHandle &DownstreamMarkdownShadowNode::getDocument() co
     pendingError_ = PendingError{downstream::errorCode(result.status), result.message};
   }
   return document_;
+}
+
+/**
+ * Reports each formula that failed in `document` and had not failed in
+ * `previous`.
+ *
+ * Only a settled formula has an error, because one that is still arriving is
+ * not a failure yet. A block whose identity is unchanged from the previous
+ * document already reported its formula, which is what keeps a stream from
+ * sending the same error with every token; JavaScript also drops a repeat per
+ * view, so this is a cost bound rather than the guarantee.
+ */
+void DownstreamMarkdownShadowNode::reportMathErrors(const downstream::DocumentHandle &document,
+                                                    const downstream::DocumentHandle &previous) const {
+  const int generation = getConcreteProps().generation;
+  for (size_t index = 0; index < document->blocks.size(); index++) {
+    const downstream::Block &block = document->blocks[index];
+    if (block.math.empty()) {
+      continue;
+    }
+    const downstream::Block *before =
+        previous && index < previous->blocks.size() ? &previous->blocks[index] : nullptr;
+    const bool sameBlock = before != nullptr && before->identity == block.identity &&
+        before->math.size() == block.math.size();
+    for (size_t span = 0; span < block.math.size(); span++) {
+      const downstream::MathSpan &formula = block.math[span];
+      if (formula.error.empty() || (sameBlock && !before->math[span].error.empty())) {
+        continue;
+      }
+      getConcreteEventEmitter().onMathError({
+          .source = formula.tex,
+          .message = formula.error,
+          .display = formula.display,
+          .generation = generation,
+      });
+    }
+  }
 }
 
 void DownstreamMarkdownShadowNode::relayoutWhenPrepared() const {
@@ -347,7 +392,7 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
   // that records it does. The hint carries the theme too, so the worker builds
   // the rendering this measurement will mount rather than one Fabric discards.
   const downstream::LayoutHint hint =
-      layoutHint(layoutContext.fontSizeMultiplier, layoutConstraints.maximumSize.width);
+      layoutHint(layoutContext.fontSizeMultiplier, layoutConstraints.maximumSize.width, getDocument());
   downstream::RenderPreparer::noteLayout(hint);
   if (!props.sessionId.empty()) {
     downstream::SessionRegistry::noteLayout(props.sessionId, hint);
@@ -373,6 +418,9 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   // layout is: the node measured with one set and would otherwise mount with
   // another, which is a picture that draws at a height it was not measured at.
   const downstream::ImageStateLayout images = imageState(imageLayout(document));
+  if (document && state.document != document) {
+    reportMathErrors(document, state.document);
+  }
   if (state.document != document || state.fontSizeMultiplier != layoutContext.fontSizeMultiplier ||
       state.chrome != chrome || state.code != code || state.images != images || state.themeId() != themeId()) {
     DownstreamMarkdownState next{state};

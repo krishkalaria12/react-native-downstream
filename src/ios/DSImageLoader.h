@@ -25,9 +25,11 @@ typedef NS_ENUM(NSInteger, DSImageLoadStatus) {
 /// writes these bytes to a file, so releasing them here would make a save fail
 /// for a reason the reader cannot see.
 @property (nonatomic, readonly, nullable) NSData *data;
-/// The image's own pixels, which is what `imageBox` takes a size from. A
-/// downscaled request reports the size it decoded at, so the box is the size the
-/// picture is drawn at rather than the size the file claims.
+/// The decoded picture, which the view draws. Present for `Loaded`.
+@property (nonatomic, readonly, nullable) UIImage *image;
+/// The image's own pixels, which is what `imageBox` takes a size from, the way
+/// CSS takes an image's natural size. A downscaled request reports the size it
+/// decoded at, which is never smaller than the column it was bounded by.
 @property (nonatomic, readonly) CGSize pixelSize;
 /// The MIME type, for the download's file name. Empty when the server sent none.
 @property (nonatomic, readonly) NSString *mimeType;

@@ -84,10 +84,19 @@ private:
   /// Asks for a relayout once a preparation that layout did not wait for ends.
   void relayoutWhenPrepared() const;
 
+  /// Sends `onMathError` for the formulas that newly failed in `document`.
+  void reportMathErrors(const downstream::DocumentHandle &document,
+                        const downstream::DocumentHandle &previous) const;
+
   /// The node's layout hint at a scale and a width. Carries the theme, so the
   /// worker builds the rendering the view will mount and Fabric measures the
   /// sizes the view draws.
-  downstream::LayoutHint layoutHint(react::Float fontScale, react::Float width) const;
+  /// The hint a preparation is made for. `document` is the one whose image answers
+  /// it carries: the node's resolved document when measuring, and the fallback
+  /// it already holds when requesting a preparation, because resolving the
+  /// document there would read a preparation that does not exist yet.
+  downstream::LayoutHint layoutHint(react::Float fontScale, react::Float width,
+                                    const downstream::DocumentHandle &document) const;
 
   /// The chrome a document lays out with, from the props and the reader's
   /// choices. It is a height, not a rendering, so it is recomputed here rather

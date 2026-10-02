@@ -62,6 +62,10 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
                          alt:(NSString *)alt
                        title:(NSString *)title
                     ordinal:(uint32_t)ordinal;
+/// A load finished and its answer is in the engine's size cache. The host asks
+/// the shadow node to measure again, which is how a picture arriving makes the
+/// message taller without a React render.
+- (void)imagesDidChange;
 @end
 
 @protocol DSSegmentView <NSObject>

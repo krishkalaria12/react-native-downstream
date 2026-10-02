@@ -19,12 +19,23 @@ import com.facebook.react.uimanager.PixelUtil
  * Kotlin compiler. The bridge types belong here, where React Native is a given.
  */
 
+/**
+ * A number from the map, or [fallback] when the key is absent or null.
+ *
+ * `ReadableMap.getDouble` throws `NoSuchKeyException` for a missing key rather
+ * than returning null, so every read of an optional key goes through here. The
+ * state map and the measure map are written by two C++ functions, and a key one
+ * of them does not write must be a default, not a crash on mount.
+ */
+internal fun ReadableMap.numberAt(key: String, fallback: Double): Double =
+  if (hasKey(key) && !isNull(key)) getDouble(key) else fallback
+
 /** The code layout in the map, as the shadow node resolved it. */
 internal fun ReadableMap.toCodeLayout(): CodeLayout = CodeLayout(
   CodeLayoutProps(
-    (getDouble("codeBlockWrap") ?: 0.0) != 0.0,
-    (getDouble("lineNumbers") ?: 1.0) != 0.0,
-    PixelUtil.toPixelFromDIP(getDouble("codeBlockMaxHeight") ?: 400.0).toFloat(),
+    numberAt("codeBlockWrap", 0.0) != 0.0,
+    numberAt("lineNumbers", 1.0) != 0.0,
+    PixelUtil.toPixelFromDIP(numberAt("codeBlockMaxHeight", 400.0)).toFloat(),
   ),
   CodeChoices(ordinalsAt("wrapToggles"), ordinalsAt("expanded")),
 )
@@ -40,7 +51,7 @@ internal fun ReadableMap.toCodeLayout(): CodeLayout = CodeLayout(
  */
 internal fun ReadableMap.toImageLayout(): ImageLayout = ImageLayout(
   state = ImageStateLayout(
-    enabled = (getDouble("imagesEnabled") ?: 1.0) != 0.0,
+    enabled = numberAt("imagesEnabled", 1.0) != 0.0,
     entries = imageEntriesAt("imageEntries"),
   ),
   allowedPrefixes = stringsAt("allowedImagePrefixes"),
@@ -54,13 +65,13 @@ internal fun ReadableMap.toImageLayout(): ImageLayout = ImageLayout(
  * `binarySearch` that silently misses.
  */
 internal fun ReadableMap.ordinalsAt(key: String): IntArray {
-  val array = getArray(key) ?: return IntArray(0)
+  val array = (if (hasKey(key)) getArray(key) else null) ?: return IntArray(0)
   return IntArray(array.size()) { array.getDouble(it).toInt() }.also { it.sort() }
 }
 
 /** A string array from the map, or nothing when the key is absent. */
 internal fun ReadableMap.stringsAt(key: String): List<String> {
-  val array = getArray(key) ?: return emptyList()
+  val array = (if (hasKey(key)) getArray(key) else null) ?: return emptyList()
   return List(array.size()) { index -> array.getString(index).orEmpty() }
 }
 
@@ -71,16 +82,19 @@ internal fun ReadableMap.stringsAt(key: String): List<String> {
  * binary-searches over, so the order is kept rather than re-sorted here. A missing
  * element becomes an empty map and therefore an entry of defaults, because every
  * field is defaulted and a null would push that decision onto every reader.
+ *
+ * The engine records an image's size in points, as the shadow node measures, and
+ * every metric on this side is in pixels, so the size is converted here once.
  */
 internal fun ReadableMap.imageEntriesAt(key: String): List<ImageEntry> {
-  val array = getArray(key) ?: return emptyList()
+  val array = (if (hasKey(key)) getArray(key) else null) ?: return emptyList()
   return List(array.size()) { index ->
     val entry = array.getMap(index) ?: Arguments.createMap()
     ImageEntry(
-      ordinal = (entry.getDouble("ordinal") ?: 0.0).toInt(),
-      state = ImageState.of((entry.getDouble("state") ?: 0.0).toInt()) ?: ImageState.PENDING,
-      pixelWidth = (entry.getDouble("pixelWidth") ?: 0.0).toFloat(),
-      pixelHeight = (entry.getDouble("pixelHeight") ?: 0.0).toFloat(),
+      ordinal = entry.numberAt("ordinal", 0.0).toInt(),
+      state = ImageState.of(entry.numberAt("state", 0.0).toInt()) ?: ImageState.PENDING,
+      pixelWidth = PixelUtil.toPixelFromDIP(entry.numberAt("pixelWidth", 0.0)).toFloat(),
+      pixelHeight = PixelUtil.toPixelFromDIP(entry.numberAt("pixelHeight", 0.0)).toFloat(),
     )
   }
 }

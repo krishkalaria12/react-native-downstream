@@ -2,14 +2,12 @@ package com.downstream
 
 import android.content.Context
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
 import com.facebook.drawee.view.SimpleDraweeView
-import com.facebook.react.bridge.ReactContext
 
 /**
  * One picture, as a view.
@@ -47,9 +45,12 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
     // box and never cropped or stretched out of it.
     scaleType = ImageView.ScaleType.FIT_CENTER
   }
+  // One line, because the box the engine reserves for a fallback is one line tall.
   private val altText = TextView(context).apply {
     includeFontPadding = false
     gravity = Gravity.CENTER_VERTICAL
+    maxLines = 1
+    ellipsize = android.text.TextUtils.TruncateAt.END
   }
 
   private var segment: ImageSegment? = null
@@ -57,11 +58,18 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
   private var layout = ImageLayout()
   private var columnWidth = 0
 
-  /** Set by the view group: reports the answer so the shadow node can record it. */
-  internal var onImageAnswer: ((ordinal: Int, state: ImageState) -> Unit)? = null
+  /**
+   * Set by the view group: reports a finished load so the engine can record it.
+   * The size is the decoded picture's, in pixels, and null means it failed.
+   */
+  internal var onImageAnswer: ((url: String, answer: AndroidImages.Answer?) -> Unit)? = null
+
+  /** The one request this view holds, and what it was for. */
+  private var ticket: AndroidImages.Ticket? = null
+  private var ticketUrl: String? = null
 
   /** Set by the view group: reports a press. */
-  internal var onImagePress: ((url: String, alt: String, title: String, ordinal: Int) -> Unit)? = null
+  internal var onImagePress: ((url: String, alt: String, title: String, range: IntRange) -> Unit)? = null
 
   /**
    * The theme's metrics and its alt color.
@@ -84,6 +92,22 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
     requestLayout()
   }
 
+  private var notAvailableLabel = "Image not available"
+  private var blockedLabel = "Image blocked"
+
+  /**
+   * What a failed and a blocked picture say under their alt text, from the
+   * `translations` the app passed, as iOS shows them.
+   */
+  fun setStatusLabels(notAvailable: String, blocked: String) {
+    if (notAvailableLabel == notAvailable && blockedLabel == blocked) {
+      return
+    }
+    notAvailableLabel = notAvailable
+    blockedLabel = blocked
+    applyState()
+  }
+
   /** The engine's answers, and the prefixes that produced them. */
   fun setImageLayout(value: ImageLayout) {
     if (layout == value) {
@@ -100,7 +124,6 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
       return
     }
     segment = value
-    altText.text = value.alt
     // The alt text is the label, and the URL is not: a screen reader announcing a
     // picture's address tells the reader nothing about the picture.
     contentDescription = value.alt.ifEmpty { null }
@@ -109,48 +132,69 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
   }
 
   /**
-   * Starts, replaces, or abandons the one request this view may have.
+   * Shows what the engine's answer says, and starts the one request this view may
+   * have.
    *
-   * Keyed by the URL and the size it was asked for, so a recycled view does not
-   * restart a load that already finished and does not keep a load whose size the
-   * theme has since changed. Four requests is the engine's limit across the whole
-   * document, and a view that must not start one says so here rather than by
-   * failing later.
+   * The state is the source of truth, as on iOS: `Pending` and `Loading` draw the
+   * placeholder, `Loaded` draws the picture, and every other state draws the alt
+   * text. A load starts only once the column is known, because the column is the
+   * decode bound, and only once per URL.
    */
   private fun applyState() {
     val current = segment ?: return
-    val state = layout.state.find(current.ordinal)?.state ?: ImageState.PENDING
-    val mayLoad = layout.state.enabled && current.loadable &&
-      state != ImageState.BLOCKED && state != ImageState.FAILED && state != ImageState.DISABLED
-
-    photo.visibility = if (state == ImageState.LOADED) VISIBLE else GONE
-    // The same URI the request asked for. Set once per segment rather than per state
-    // change, because Drawee treats a second `setImageURI` for a URI it already has
-    // as a new request, and a state update is not a reason to fetch again.
-    if (state == ImageState.LOADED && photo.tag != current.url) {
-      photo.tag = current.url
-      photo.setImageURI(Uri.parse(current.url))
+    val state = if (!layout.state.enabled) {
+      ImageState.DISABLED
+    } else {
+      layout.state.find(current.ordinal)?.state ?: ImageState.PENDING
     }
-    placeholder.visibility = if (state == ImageState.LOADED || !mayLoad) GONE else VISIBLE
-    // Alt text is what the reader gets, so it is shown rather than an empty box.
-    // An image with no alt text shows nothing rather than a bare filename.
-    altText.visibility = if (altText.text.isNullOrEmpty() || mayLoad) GONE else VISIBLE
+    val loading = state == ImageState.PENDING || state == ImageState.LOADING
+    photo.visibility = if (state == ImageState.LOADED) VISIBLE else GONE
+    placeholder.visibility = if (loading) VISIBLE else GONE
+    // The alt text, and under it what happened: a reader should be able to tell a
+    // picture that failed from one this app chose not to load. A disabled picture
+    // is only its alt text, because nothing went wrong.
+    val status = when (state) {
+      ImageState.FAILED -> notAvailableLabel
+      ImageState.BLOCKED -> blockedLabel
+      else -> ""
+    }
+    val fallback = listOf(current.alt, status).filter { it.isNotEmpty() }.joinToString(" · ")
+    if (altText.text.toString() != fallback) {
+      altText.text = fallback
+    }
+    altText.visibility = if (loading || state == ImageState.LOADED || fallback.isEmpty()) GONE else VISIBLE
 
-    if (state == ImageState.LOADED || !mayLoad || columnWidth <= 0) {
+    if (ticketUrl != null && ticketUrl != current.url) {
+      AndroidImages.cancel(ticket)
+      ticket = null
+      ticketUrl = null
+    }
+    if (columnWidth <= 0) {
       return
     }
-    val box = imageBox(layout.state.find(current.ordinal), columnWidth.toFloat(), metrics)
-    AndroidImages.load(
-      reactContext = context as? ReactContext ?: return,
-      url = current.url,
-      width = box.width.toInt(),
-      height = box.height.toInt(),
+    val boundWidth = columnWidth
+    val boundHeight = metrics.maxHeight.toInt().takeIf { it > 0 } ?: columnWidth
+    if (state == ImageState.LOADED) {
+      // The same request the load made, so the Drawee view finds the decode in the
+      // memory cache rather than fetching and decoding the picture a second time.
+      if (photo.tag != current.url) {
+        photo.tag = current.url
+        photo.setImageRequest(AndroidImages.imageRequest(current.url, boundWidth, boundHeight))
+      }
+      return
+    }
+    if (state != ImageState.LOADING || !current.loadable || ticketUrl == current.url) {
+      return
+    }
+    val url = current.url
+    ticketUrl = url
+    ticket = AndroidImages.load(url, boundWidth, boundHeight) { answer ->
+      ticket = null
       // The answer is reported, not applied: the state belongs to the engine, and a
-      // view that wrote its own height would be measuring against itself.
-      onAnswer = { loaded ->
-        onImageAnswer?.invoke(current.ordinal, if (loaded) ImageState.LOADED else ImageState.FAILED)
-      },
-    )
+      // view that wrote its own height would be measuring against itself. The URL
+      // is kept until the state says otherwise, so a finished load is not restarted.
+      onImageAnswer?.invoke(url, answer)
+    }
   }
 
   override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -160,7 +204,10 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
       setMeasuredDimension(available.coerceAtLeast(0), 0)
       return
     }
-    columnWidth = available
+    if (columnWidth != available) {
+      columnWidth = available
+      applyState()
+    }
     setPadding(0, metrics.marginTop.toInt(), 0, metrics.marginBottom.toInt())
     val box = imageBox(layout.state.find(current.ordinal), available.toFloat(), metrics)
     val height = (box.height + metrics.marginTop + metrics.marginBottom).toInt().coerceAtLeast(0)
@@ -185,10 +232,18 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
 
   override fun onDetachedFromWindow() {
     super.onDetachedFromWindow()
-    // A recycled view stops caring about the answer, so a load that finishes after
-    // this cannot write into a view the list has already reused.
-    onImageAnswer = null
-    onImagePress = null
+    // A detached view stops wanting its picture, and the request is closed when no
+    // other view wants it. The callbacks stay: the view group set them once, and a
+    // view that is attached again must still report.
+    AndroidImages.cancel(ticket)
+    ticket = null
+    ticketUrl = null
+    photo.tag = null
+  }
+
+  override fun onAttachedToWindow() {
+    super.onAttachedToWindow()
+    applyState()
   }
 
   init {
@@ -197,7 +252,7 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
     addView(photo)
     setOnClickListener {
       val current = segment ?: return@setOnClickListener
-      onImagePress?.invoke(current.url, current.alt, current.title, current.ordinal)
+      onImagePress?.invoke(current.url, current.alt, current.title, current.range)
     }
     // A picture inside a link is a link, and the view group routes that press to
     // the link before it reaches here, so reaching here means there was no link.

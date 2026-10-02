@@ -85,6 +85,7 @@ private val DEFAULT_LABELS = listOf(
   "Copy table", "Copy table as Markdown", "Copy table as CSV", "Copy table as TSV",
   "Download table", "Download table as CSV", "Download table as Markdown",
   "Markdown", "CSV", "TSV",
+  "Image not available", "Download image", "Image", "Image blocked",
 )
 private const val LABEL_COPY_CODE = 0
 private const val LABEL_DOWNLOAD_FILE = 1
@@ -98,6 +99,8 @@ private const val LABEL_DOWNLOAD_TABLE = 11
 private const val LABEL_FORMAT_MARKDOWN = 14
 private const val LABEL_FORMAT_CSV = 15
 private const val LABEL_FORMAT_TSV = 16
+private const val LABEL_IMAGE_NOT_AVAILABLE = 17
+private const val LABEL_IMAGE_BLOCKED = 20
 
 /** How far a line number is dimmed below the code it numbers. Mirrors `kGutterAlpha` on iOS. */
 private const val GUTTER_ALPHA = 0.5f
@@ -671,11 +674,24 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   fun toggleExpand(ordinal: Int) = updateChoice { it.copyWithExpand(ordinal) }
 
   private fun updateChoice(toggle: (CodeChoices) -> CodeChoices) {
-    val wrapper = stateWrapper ?: return
+    if (stateWrapper == null) return
     val choices = toggle(codeLayout.choices)
     val layout = CodeLayout(codeLayout.props, choices)
     chrome = chromeFor(layout)
     codeLayout = layout
+    applySettledState()
+    requestLayout()
+    pushState(layout)
+  }
+
+  /**
+   * Hands the state back with [layout], which is a Fabric state update: the node is
+   * cloned, measured again, and reconciles its image answers from the engine's
+   * cache, all without a React render.
+   */
+  private fun pushState(layout: CodeLayout) {
+    val wrapper = stateWrapper ?: return
+    val choices = layout.choices
     val map = Arguments.createMap()
     map.putDouble("documentId", documentId.toDouble())
     map.putDouble("fontScale", fontScale.toDouble())
@@ -687,8 +703,6 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     map.putDouble("codeBlockMaxHeight", PixelUtil.toDIPFromPixel(layout.props.maxHeight).toDouble())
     map.putArray("wrapToggles", intArrayOf(choices.wrapToggles))
     map.putArray("expanded", intArrayOf(choices.expanded))
-    applySettledState()
-    requestLayout()
     wrapper.updateState(map)
   }
 
@@ -760,8 +774,8 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
             // upward and not applied here: the view rebuilds from the state rather
             // than resizing itself, which is what keeps a measured height and a drawn
             // one the same number.
-            new.onImageAnswer = { ordinal, state -> reportImageAnswer(ordinal, state) }
-            new.onImagePress = { url, alt, title, ordinal -> pressImage(url, alt, title, ordinal) }
+            new.onImageAnswer = { url, answer -> reportImageAnswer(url, answer) }
+            new.onImagePress = { url, alt, title, range -> pressImage(url, alt, title, range) }
           }
           is MathSegment -> MathSegmentView(context)
         }
@@ -778,6 +792,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
         is ImageSegment -> (view as ImageSegmentView).apply {
           val style = document!!.style
           setStyle(style.imageMetrics, style.imageAltColor)
+          setStatusLabels(controlLabels[LABEL_IMAGE_NOT_AVAILABLE], controlLabels[LABEL_IMAGE_BLOCKED])
           setImageLayout(imageLayout)
           setSegment(segment)
         }
@@ -812,11 +827,8 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    */
   private var imageLayout = ImageLayout()
 
-  /** Set by the view manager: a picture's answer goes back into the state. */
-  internal var onImageAnswer: ((ordinal: Int, state: ImageState) -> Unit)? = null
-
   /** Set by the view manager: a press on a picture that is not inside a link. */
-  internal var onImagePress: ((url: String, alt: String, title: String, ordinal: Int) -> Unit)? = null
+  internal var onImagePress: ((view: DownstreamMarkdownView, url: String, alt: String, title: String, range: IntRange) -> Unit)? = null
 
   /**
    * Sets the answers and restacks, because a picture's height is its state.
@@ -832,9 +844,18 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     syncSegmentViews()
   }
 
-  /** Reports a picture's answer to the engine, which writes it into the state. */
-  private fun reportImageAnswer(ordinal: Int, state: ImageState) {
-    onImageAnswer?.invoke(ordinal, state)
+  /**
+   * Records a picture's answer with the engine and asks the shadow node to measure
+   * again.
+   *
+   * The size goes into the engine's process-wide cache, keyed by URL, which is what
+   * the shadow node reads when it resolves the image layout; the state update is
+   * only the nudge that makes it measure. So a message scrolled back into view
+   * measures at its loaded height on its first frame, without loading again.
+   */
+  private fun reportImageAnswer(url: String, answer: AndroidImages.Answer?) {
+    DownstreamNative.recordImage(url, answer?.width ?: 0, answer?.height ?: 0)
+    pushState(codeLayout)
   }
 
   /**
@@ -843,8 +864,8 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    * The library opens nothing: an app that has a viewer wants its own, and one that
    * does not should not have a picture that navigates somewhere surprising.
    */
-  private fun pressImage(url: String, alt: String, title: String, ordinal: Int) {
-    onImagePress?.invoke(url, alt, title, ordinal)
+  private fun pressImage(url: String, alt: String, title: String, range: IntRange) {
+    onImagePress?.invoke(this, url, alt, title, range)
   }
 
   // React Native does not relayout children that request it, so segments are
