@@ -1,6 +1,7 @@
 #import "DSImageLoader.h"
 
 #import <React/RCTImageLoader.h>
+#import <React/RCTImageLoaderProtocol.h>
 #import <React/RCTUtils.h>
 
 #import <algorithm>

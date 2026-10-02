@@ -2,8 +2,6 @@
 
 #include "Scan.h"
 
-#include <algorithm>
-
 namespace downstream::scan {
 
 namespace {
@@ -89,8 +87,19 @@ MathSource rewriteMathDelimiters(std::string_view source, bool brackets) {
     return out;
   }
 
-  // Positions that start a code span or a code fence, so the delimiter search
-  // can skip them in order rather than re-scanning the source for each one.
+  // Most snapshots contain prose or code, not bracket math. Do not build code
+  // regions unless a two-byte opener could actually be rewritten.
+  size_t candidate = source.find('\\');
+  while (candidate != std::string_view::npos &&
+         (candidate + 1 == source.size() || (source[candidate + 1] != '(' && source[candidate + 1] != '['))) {
+    candidate = source.find('\\', candidate + 1);
+  }
+  if (candidate == std::string_view::npos) {
+    return out;
+  }
+
+  // Fenced code regions, visited in source order. Inline spans are skipped by
+  // advancing the delimiter search directly to their closing backticks.
   std::vector<std::pair<size_t, size_t>> code;
 
   // Fences first, so a bracket inside a fenced block is skipped whether the
@@ -99,12 +108,14 @@ MathSource rewriteMathDelimiters(std::string_view source, bool brackets) {
   // delimiters into `$$`, and the rewritten result is a `$$` fence either way.
   size_t cursor = 0;
   while ((cursor = source.find_first_of("`~", cursor)) != std::string_view::npos) {
-    const size_t start = afterIndent(lineAt(source, cursor));
+    const std::string_view line = lineAt(source, cursor);
+    const size_t start = afterIndent(line);
     if (start == kNoOffset) {
-      cursor++;
+      // Every marker on this line would give the same rejected opener.
+      const size_t newline = source.find('\n', cursor);
+      cursor = newline == std::string_view::npos ? source.size() : newline + 1;
       continue;
     }
-    const std::string_view line = lineAt(source, cursor);
     if (start < line.size() && (line[start] == '`' || line[start] == '~')) {
       if (const auto fence = fenceOpener(line)) {
         const size_t lineStart = cursor - start;
@@ -129,14 +140,15 @@ MathSource rewriteMathDelimiters(std::string_view source, bool brackets) {
         continue;
       }
     }
-    cursor++;
+    const size_t newline = source.find('\n', cursor);
+    cursor = newline == std::string_view::npos ? source.size() : newline + 1;
   }
 
   size_t search = 0;
+  size_t codeIndex = 0;
   while (search + 1 < source.size()) {
     if (source[search] == '`') {
       if (const auto end = codeSpanEnd(source, search)) {
-        code.emplace_back(search, *end);
         search = *end;
         continue;
       }
@@ -161,9 +173,13 @@ MathSource rewriteMathDelimiters(std::string_view source, bool brackets) {
       continue;
     }
     // Inside code, a bracket is two characters and not a delimiter.
-    const bool inCode = std::any_of(code.begin(), code.end(), [&](const auto &region) {
-      return search >= region.first && search < region.second;
-    });
+    // Fenced regions and this scan both advance in source order. Completed
+    // inline code spans already jumped to their end above, so they never need
+    // to be stored or revisited for each later formula.
+    while (codeIndex < code.size() && code[codeIndex].second <= search) {
+      codeIndex++;
+    }
+    const bool inCode = codeIndex < code.size() && search >= code[codeIndex].first;
     if (inCode) {
       search += 2;
       continue;

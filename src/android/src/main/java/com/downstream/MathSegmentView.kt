@@ -3,8 +3,8 @@ package com.downstream
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Canvas
-import android.graphics.Paint
 import android.graphics.drawable.GradientDrawable
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
@@ -34,6 +34,7 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
   }
 
   private val background = View(context)
+  private val backgroundDrawable = GradientDrawable()
   private val literal = TextView(context).apply {
     includeFontPadding = false
     gravity = Gravity.CENTER_VERTICAL
@@ -45,13 +46,16 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
     overScrollMode = OVER_SCROLL_NEVER
     addView(glyphs, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
   }
+  private val contentViews = arrayOf(background, literal, scroll)
 
   private var segment: MathSegment? = null
-  private val errorPaint = Paint(Paint.ANTI_ALIAS_FLAG)
   private var textColor = Color.BLACK
   private var fontSize = 0f
   private var padding = 0f
   private var errorColor = Color.BLACK
+  private var backgroundColor: Int? = null
+  private var radius = 0f
+  private var hasStyle = false
 
   /**
    * The theme's own values, resolved here rather than by the view group so the box
@@ -65,28 +69,50 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
     padding: Float,
     radius: Float,
   ) {
+    if (hasStyle && this.fontSize == fontSize && textColor == color &&
+      this.backgroundColor == backgroundColor && this.errorColor == errorColor &&
+      this.padding == padding && this.radius == radius
+    ) {
+      return
+    }
+    val sizeChanged = !hasStyle || this.fontSize != fontSize
+    val layoutChanged = sizeChanged || this.padding != padding
+    if (sizeChanged) {
+      literal.setTextSize(TypedValue.COMPLEX_UNIT_PX, fontSize)
+    }
+    if (!hasStyle || textColor != color || this.errorColor != errorColor) {
+      literal.setTextColor(if (segment?.failed == true) errorColor else color)
+    }
+    if (!hasStyle || this.backgroundColor != backgroundColor) {
+      // A missing fill shows the page's background in either theme.
+      background.visibility = if (backgroundColor == null) GONE else VISIBLE
+      backgroundDrawable.setColor(backgroundColor ?: Color.TRANSPARENT)
+    }
+    if (!hasStyle || this.radius != radius) {
+      backgroundDrawable.cornerRadius = radius
+    }
+    if (!hasStyle) background.background = backgroundDrawable
     this.fontSize = fontSize
     this.padding = padding
-    literal.paint.textSize = fontSize
     textColor = color
     this.errorColor = errorColor
-    errorPaint.color = errorColor
-    literal.setTextColor(if (segment?.failed == true) errorColor else color)
+    this.backgroundColor = backgroundColor
+    this.radius = radius
+    hasStyle = true
     glyphs.setPaint(color, fontSize)
-    // No background is no background, rather than a fill of the default light
-    // color on a dark theme: a theme that sets no math background wants the page's.
-    background.visibility = if (backgroundColor == null) GONE else VISIBLE
-    background.background = GradientDrawable().apply {
-      cornerRadius = radius
-      setColor(backgroundColor ?: Color.TRANSPARENT)
-    }
-    requestLayout()
+    if (layoutChanged) requestLayout()
   }
 
   fun setSegment(value: MathSegment) {
+    // Speech can arrive without a new layout. Keep accessibility current even
+    // when all the drawing and measurement inputs are unchanged.
+    val description = value.speech.ifEmpty { value.literal }
+    if (contentDescription != description) contentDescription = description
     if (segment?.literal == value.literal && segment?.resolved == value.resolved && segment?.failed == value.failed &&
-      segment?.displayList === value.displayList && segment?.textAlign == value.textAlign
+      segment?.displayList === value.displayList && segment?.textAlign == value.textAlign &&
+      segment?.height == value.height && segment?.depth == value.depth
     ) {
+      segment = value
       return
     }
     if (segment?.literal != value.literal) scroll.scrollTo(0, 0)
@@ -98,7 +124,6 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
     // The theme's own alignment, resolved in C++ so both platforms read one value.
     // A `$$` line fence centers by default, and the theme overrides that.
     literal.gravity = Gravity.CENTER_VERTICAL or gravityFor(value.textAlign)
-    contentDescription = value.speech.ifEmpty { value.literal }
     val drawable = value.resolved && value.displayList != null
     literal.visibility = if (drawable) GONE else VISIBLE
     scroll.visibility = if (drawable) VISIBLE else GONE
@@ -143,7 +168,7 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
     // view's minimum width supplies the full drawing surface for that measure.
     glyphs.minimumWidth = natural.coerceAtLeast(width)
     glyphs.layoutParams.height = height
-    for (child in listOf(background, literal, scroll)) {
+    for (child in contentViews) {
       child.measure(
         MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
         MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY),
@@ -154,7 +179,7 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
     val width = right - left - paddingLeft - paddingRight
     val height = bottom - top - paddingTop - paddingBottom
-    for (child in listOf(background, literal, scroll)) {
+    for (child in contentViews) {
       child.layout(paddingLeft, paddingTop, paddingLeft + width, paddingTop + height)
     }
   }
@@ -192,8 +217,10 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
 internal class MathGlyphView(context: Context) : View(context) {
   var segment: MathSegment? = null
     set(value) {
+      if (field === value) return
+      val drawingChanged = field?.displayList !== value?.displayList || field?.textAlign != value?.textAlign
       field = value
-      invalidate()
+      if (drawingChanged) invalidate()
     }
 
   private val renderer = MathRenderer().also { MathFonts.attach(context) }
@@ -205,6 +232,7 @@ internal class MathGlyphView(context: Context) : View(context) {
    * uncolored item takes, and the block's own scaled size in pixels per em.
    */
   fun setPaint(color: Int, textSize: Float) {
+    if (this.color == color && this.textSize == textSize) return
     this.color = color
     this.textSize = textSize
     invalidate()

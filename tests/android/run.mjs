@@ -6,12 +6,14 @@
 // `src/cpp/tests/test_export.cpp`, `test_images.cpp`, and `test_math.cpp` are the
 // contracts those copies answer. This runs those same tables against the Kotlin
 // side, so a drift between them fails here rather than on a device.
+// MathRenderCheck also records math drawing/style operations using host stubs;
+// it checks redraw allocation avoidance and state changes, not raster output.
 //
 // It needs a Kotlin compiler, which `pnpm test:native` does not assume, so it is a
 // separate command. Point KOTLIN_HOME at an unpacked kotlin-compiler, or put
 // `kotlinc` on the PATH.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +27,14 @@ const suites = [
   { jar: 'code_layout', sources: [kotlin('CodeLayout.kt'), join(here, 'CodeLayoutCheck.kt')] },
   { jar: 'image_layout', sources: [kotlin('ImageLayout.kt'), join(here, 'ImageLayoutCheck.kt')] },
   { jar: 'math_layout', sources: [kotlin('MathLayout.kt'), join(here, 'MathLayoutCheck.kt')] },
+  {
+    jar: 'math_render',
+    sources: [
+      ...kotlin('MathLayout.kt', 'MathDisplayList.kt', 'MathSegmentView.kt'),
+      join(here, 'MathRenderCheck.kt'),
+      ...readdirSync(join(here, 'math-stubs')).filter((name) => name.endsWith('.kt')).map((name) => join(here, 'math-stubs', name)),
+    ],
+  },
 ];
 
 /** `code_layout` to `CodeLayoutCheckKt`. */

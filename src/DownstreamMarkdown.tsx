@@ -382,6 +382,8 @@ function useMathAndImages(
   // Formulas the reader has already been told about, so `onMathError` fires once
   // per distinct source per view rather than once per snapshot that contains it.
   const reportedMathErrors = useRef(new Set<string>());
+  const latest = useRef({ onImagePress, onMathError, currentGeneration });
+  latest.current = { onImagePress, onMathError, currentGeneration };
 
   const handleImagePress = useCallback(
     (event: NativeSyntheticEvent<NativeImagePress>) => {
@@ -392,9 +394,9 @@ function useMathAndImages(
         title === ''
           ? { url, alt, range: { start, end } }
           : { url, alt, title, range: { start, end } };
-      onImagePress?.(payload);
+      latest.current.onImagePress?.(payload);
     },
-    [onImagePress]
+    []
   );
 
   const handleMathError = useCallback(
@@ -402,7 +404,7 @@ function useMathAndImages(
       const native = event.nativeEvent;
       // An error from a document that has since been replaced describes a
       // formula the reader is no longer looking at.
-      if (native.generation !== currentGeneration()) return;
+      if (native.generation !== latest.current.currentGeneration()) return;
       const key = `${native.display ? 'd' : 'i'}\u0000${native.source}`;
       if (reportedMathErrors.current.has(key)) return;
       reportedMathErrors.current.add(key);
@@ -413,14 +415,14 @@ function useMathAndImages(
         warnAboutMissingMathEngine();
         return;
       }
-      onMathError?.({
+      latest.current.onMathError?.({
         source: native.source,
         message: native.message,
         display: native.display,
         generation: native.generation,
       });
     },
-    [currentGeneration, onMathError]
+    []
   );
 
   return {

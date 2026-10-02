@@ -175,10 +175,23 @@ void dashedAndRects() {
 }
 
 void failures() {
+  MathEngine::clearCache();
   std::string error;
   const MathLayout::Handle broken = layout("\\frac{a}{", true, &error);
   CHECK(broken == nullptr, "an unfinished fraction fails");
   CHECK(error.find("ParseError") != std::string::npos, "the failure carries RaTeX's own message");
+  for (int i = 0; i < 40; i++) {
+    std::string repeated;
+    CHECK(layout("\\frac{a}{", true, &repeated) == nullptr && repeated == error,
+          "repeated failures preserve RaTeX's original message");
+  }
+  CHECK(MathEngine::engineCallCount() == 1, "identical invalid formulas reach RaTeX once");
+  CHECK(MathEngine::cachedCount() == 1, "RaTeX failures occupy one bounded cache entry");
+  CHECK(layout("\\frac{a}{", false) == nullptr, "an inline invalid formula still fails");
+  CHECK(MathEngine::engineCallCount() == 2, "inline and display failures are cached separately");
+  const MathLayout::Handle completed = layout("\\frac{a}{b}", true);
+  CHECK(completed != nullptr && MathEngine::engineCallCount() == 3,
+        "completing rejected TeX evaluates its new source");
   std::string unknown;
   CHECK(layout("\\notacommand", false, &unknown) == nullptr, "an unknown command fails rather than drawing");
   CHECK(!unknown.empty(), "and says why");

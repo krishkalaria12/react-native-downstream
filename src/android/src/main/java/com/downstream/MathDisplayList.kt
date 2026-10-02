@@ -28,7 +28,14 @@ internal class MathDisplayList(
   val rules: List<Rule>,
   val paths: List<Shape>,
 ) {
-  class Glyph(val x: Float, val y: Float, val scale: Float, val font: Int, val codePoint: Int, val color: Int)
+  class Glyph(val x: Float, val y: Float, val scale: Float, val font: Int, val codePoint: Int, val color: Int) {
+    // The display list is immutable; encode supplementary code points only once.
+    val text: String? = if (codePoint > 0 && Character.isValidCodePoint(codePoint)) {
+      String(Character.toChars(codePoint))
+    } else {
+      null
+    }
+  }
 
   /** A filled box, top-left and size: a fraction bar, a `\rule`, a colorbox. */
   class Rule(val x: Float, val y: Float, val width: Float, val height: Float, val color: Int, val dashed: Boolean)
@@ -40,8 +47,11 @@ internal class MathDisplayList(
     val strokeWidth: Float,
     val color: Int,
     /** Seven floats per command: op, x, y, x1, y1, x2, y2. */
-    val commands: FloatArray,
-  )
+    commands: FloatArray,
+  ) {
+    // Keep geometry in em. Canvas scaling applies the current size on every draw.
+    val path: Path = pathOf(commands)
+  }
 
   companion object {
     /** `kInheritColor`: draw in the surrounding text's color. */
@@ -231,7 +241,6 @@ internal class MathRenderer {
     }
 
     for (shape in list.paths) {
-      val path = MathDisplayList.pathOf(shape.commands)
       canvas.save()
       canvas.translate(shape.x * size, shape.y * size)
       canvas.scale(size, size)
@@ -241,18 +250,16 @@ internal class MathRenderer {
         // In em, because the canvas is scaled to em here.
         stroke.strokeWidth = if (shape.strokeWidth > 0) shape.strokeWidth else minimumRule / size
       }
-      canvas.drawPath(path, paint)
+      canvas.drawPath(shape.path, paint)
       canvas.restore()
     }
 
     for (glyph in list.glyphs) {
-      if (glyph.codePoint <= 0 || !Character.isValidCodePoint(glyph.codePoint)) {
-        continue
-      }
+      val glyphText = glyph.text ?: continue
       text.typeface = MathFonts.typeface(glyph.font)
       text.textSize = size * glyph.scale
       text.color = ink(glyph.color)
-      canvas.drawText(String(Character.toChars(glyph.codePoint)), glyph.x * size, glyph.y * size, text)
+      canvas.drawText(glyphText, glyph.x * size, glyph.y * size, text)
     }
   }
 }

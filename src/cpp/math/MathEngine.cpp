@@ -42,7 +42,7 @@ struct Store {
   /// Set by `installResolver` and cleared once it has run, whatever it found.
   MathEngineResolver resolver{nullptr};
 
-  /// Least-recently-used layouts, keyed on the TeX and the display flag.
+  /// Least-recently-used layouts and failures, keyed on TeX and display mode.
   ///
   /// A formula's layout is a function of its final TeX alone, so a full-mode
   /// reparse and a message that streamed in a thousand chunks call the engine
@@ -67,8 +67,21 @@ struct Store {
       return hash;
     }
   };
-  std::list<std::pair<Key, MathLayout::Handle>> entries;
+  struct CachedResult {
+    MathLayout::Handle handle;
+    std::string error;
+  };
+  std::list<std::pair<Key, CachedResult>> entries;
   std::unordered_map<Key, decltype(entries)::iterator, KeyHash> index;
+  /// An in-flight call may finish after clearCache or engine replacement.
+  /// Its caller still gets the result, but it must not refill the new cache.
+  uint64_t generation{0};
+
+  void invalidateCache() {
+    entries.clear();
+    index.clear();
+    generation++;
+  }
 
   /// How many calls reached the engine. A budget test asserts this does not
   /// move for a document with no formula in it.
@@ -99,6 +112,7 @@ void install(const MathEngineFunctions &functions, std::string_view fontDir) {
   shared.fontDir.assign(fontDir);
   shared.resolver = nullptr;
   shared.installed = functions.parseAndLayout != nullptr && functions.free != nullptr;
+  shared.invalidateCache();
 }
 
 void installResolver(MathEngineResolver resolve, std::string_view fontDir) {
@@ -109,6 +123,7 @@ void installResolver(MathEngineResolver resolve, std::string_view fontDir) {
   }
   shared.resolver = resolve;
   shared.fontDir.assign(fontDir);
+  shared.invalidateCache();
 }
 
 bool available() {
@@ -126,8 +141,7 @@ std::string fontDirectory() {
 void clearCache() {
   Store &shared = store();
   std::lock_guard<std::mutex> lock(shared.mutex);
-  shared.entries.clear();
-  shared.index.clear();
+  shared.invalidateCache();
   shared.engineCalls.store(0, std::memory_order_relaxed);
 }
 
@@ -150,6 +164,7 @@ MathLayout::Handle layout(std::string_view tex, bool display, std::string *error
 
   Store::Key key{std::string(tex), display};
   MathEngineFunctions functions{};
+  uint64_t generation = 0;
   {
     std::lock_guard<std::mutex> lock(shared.mutex);
     if (!shared.installed && shared.resolver != nullptr) {
@@ -169,9 +184,11 @@ MathLayout::Handle layout(std::string_view tex, bool display, std::string *error
     }
     if (const auto found = shared.index.find(key); found != shared.index.end()) {
       shared.entries.splice(shared.entries.begin(), shared.entries, found->second);
-      return found->second->second;
+      const auto &cached = found->second->second;
+      return cached.handle ? cached.handle : refuse(cached.error);
     }
     functions = shared.functions;
+    generation = shared.generation;
   }
 
   // The engine is called without the lock. RaTeX keeps its error slot per thread,
@@ -188,37 +205,46 @@ MathLayout::Handle layout(std::string_view tex, bool display, std::string *error
   const MathEngineOptions options{sizeof(MathEngineOptions), display ? 1 : 0, &sentinel};
   shared.engineCalls.fetch_add(1, std::memory_order_relaxed);
   const MathEngineResult result = functions.parseAndLayout(key.tex.c_str(), &options);
+  Store::CachedResult cached;
   if (result.errorCode != 0 || result.data == nullptr) {
     const char *message = functions.lastError != nullptr ? functions.lastError() : nullptr;
+    // An engine's free function may overwrite its thread-local error slot.
+    // Copy the message before releasing even a failed result's buffer.
+    cached.error = message != nullptr && message[0] != '\0'
+        ? message : "The math engine could not lay out this formula.";
     if (result.data != nullptr) {
       functions.free(result.data);
     }
-    return refuse(message != nullptr && message[0] != '\0' ? message
-                                                          : "The math engine could not lay out this formula.");
+  } else {
+    auto decoded = std::make_shared<MathLayout>();
+    const bool ok = math::decodeDisplayList(result.data, decoded.get(), &cached.error);
+    functions.free(result.data);
+    if (ok) {
+      cached.handle = std::move(decoded);
+    } else if (cached.error.empty()) {
+      cached.error = "The math engine returned a layout this build cannot read.";
+    }
   }
 
-  auto decoded = std::make_shared<MathLayout>();
-  std::string failure;
-  const bool ok = math::decodeDisplayList(result.data, decoded.get(), &failure);
-  functions.free(result.data);
-  if (!ok) {
-    return refuse(failure.empty() ? "The math engine returned a layout this build cannot read." : failure);
-  }
-
-  MathLayout::Handle handle = decoded;
   std::lock_guard<std::mutex> lock(shared.mutex);
-  if (const auto found = shared.index.find(key); found != shared.index.end()) {
-    // Another worker laid the same formula out meanwhile. Its handle wins, so
-    // every snapshot shares one layout object.
-    return found->second->second;
+  if (generation != shared.generation) {
+    return cached.handle ? cached.handle : refuse(cached.error);
   }
-  shared.entries.emplace_front(std::move(key), handle);
+  if (const auto found = shared.index.find(key); found != shared.index.end()) {
+    // Another worker finished the same formula meanwhile. Its result wins, so
+    // every snapshot shares one layout object or failure message.
+    shared.entries.splice(shared.entries.begin(), shared.entries, found->second);
+    const auto &existing = found->second->second;
+    return existing.handle ? existing.handle : refuse(existing.error);
+  }
+  shared.entries.emplace_front(std::move(key), std::move(cached));
   shared.index.emplace(shared.entries.front().first, shared.entries.begin());
   while (shared.entries.size() > kMaxCacheEntries) {
     shared.index.erase(shared.entries.back().first);
     shared.entries.pop_back();
   }
-  return handle;
+  const auto &inserted = shared.entries.front().second;
+  return inserted.handle ? inserted.handle : refuse(inserted.error);
 }
 
 } // namespace downstream::MathEngine

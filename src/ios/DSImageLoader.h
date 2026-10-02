@@ -2,9 +2,6 @@
 
 #import <UIKit/UIKit.h>
 
-#import <React/RCTImageLoaderProtocol.h>
-#import <React/RCTImageSource.h>
-
 NS_ASSUME_NONNULL_BEGIN
 
 @class RCTImageLoader;

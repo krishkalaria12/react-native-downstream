@@ -124,8 +124,9 @@ std::string fontDirectory();
  * a display list the decoder refuses, and a cache miss are all the same answer,
  * which is a null handle and a message in `error`.
  *
- * Cached on the TeX and the display flag, so a full-mode reparse and a recycled
- * message never call the engine twice for a formula it has already laid out.
+ * Successes and failures are cached on the TeX and the display flag, so a
+ * full-mode reparse and a recycled message reuse the same result. Concurrent
+ * cache misses may call the engine independently, without serializing workers.
  * This is the whole reason the pass is cheap on a streaming snapshot: a thousand
  * tokens of the same formula cost one call.
  */
@@ -134,7 +135,7 @@ MathLayout::Handle layout(std::string_view tex, bool display, std::string *error
 /// Empties the layout cache. For tests.
 void clearCache();
 
-/// How many layouts the cache holds, and how many engine calls it has made.
+/// How many results the cache holds, and how many engine calls it has made.
 /// The second number is what a budget test asserts on: a prose-only document
 /// must never increment it.
 uint64_t cachedCount();

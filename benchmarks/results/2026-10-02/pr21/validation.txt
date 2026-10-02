@@ -1,0 +1,18 @@
+Validation for PR21 performance changes, original head abac4ef8ccd2aee740e3a5b678f5b110fedb562f.
+Full build logs were captured locally under /tmp/downstream-pr21-*.log.
+
+JavaScript: Test Files  20 passed (20); Tests  381 passed (381); Duration  5.43s (tests 72%, environment 21%, transform 4%, import 3%, worker 1%)
+Native: ℹ tests 263; ℹ suites 12; ℹ pass 263; ℹ fail 0; ℹ cancelled 0; ℹ skipped 0; ℹ todo 0; ℹ duration_ms 22409.214417
+TypeScript: passed (exit 0)
+Full pnpm lint: passed (exit 0), five existing no-bitwise warnings.
+Focused native benchmark mjs lint: passed without warnings.
+Android build: BUILD SUCCESSFUL in 12s; 416 actionable tasks: 21 executed, 395 up-to-date
+iOS build: ** BUILD SUCCEEDED **
+pnpm test:kotlin: passed, including math_render operation checks.
+pnpm typecheck:android: passed against Android and React Native classes/headers.
+pnpm test:ios:math: passed, see ios-math-optimized.txt.
+Portable math cache tests: AddressSanitizer and UndefinedBehaviorSanitizer passed.
+Independent code review: no actionable findings; additional 100,000-case MathScan differential check matched HEAD.
+pnpm test:ios:layout: passed after repairing native dependencies and private React imports; see ios-layout-optimized.txt.
+ESLint mjs parsing: fixed ES2015 inheritance with module-specific latest ECMAScript setting; native-math and native-highlight lint and Node syntax checks passed.
+git diff --check: passed.

@@ -4,12 +4,16 @@
 #import "math/MathSpeech.h"
 
 #import <algorithm>
+#import <atomic>
 #import <mutex>
 #import <string>
 
 using namespace downstream;
 
 namespace {
+
+// A raster must not survive replacement or invalidation of its font faces.
+std::atomic<uint64_t> fontGeneration{0};
 
 /// One loaded face, and the graphics font it came from.
 ///
@@ -61,6 +65,7 @@ void DSMathInstallFontDirectory(const std::string &directory) {
   }
   releaseFaces(table);
   table.directory = directory;
+  fontGeneration.fetch_add(1, std::memory_order_relaxed);
 }
 
 extern "C" void DownstreamInstallMathEngine(const void *parseAndLayout, const void *freeDisplayList,
@@ -147,6 +152,7 @@ extern "C" void DownstreamInstallMathEngine(const void *parseAndLayout, const vo
   FaceTable &table = faces();
   std::lock_guard<std::mutex> lock(table.mutex);
   releaseFaces(table);
+  fontGeneration.fetch_add(1, std::memory_order_relaxed);
 }
 
 @end
@@ -314,6 +320,14 @@ NSAttributedStringKey const DSMathLiteralAttributeName = @"DSMathLiteral";
   MathLayout::Handle _layout;
   CGFloat _fontSize;
   UIColor *_color;
+  std::mutex _imageMutex;
+  UIImage *_cachedImage;
+  CGRect _cachedBounds;
+  CGFloat _cachedSize;
+  CGFloat _cachedScale;
+  UIColor *_cachedColor;
+  UITraitCollection *_cachedTraits;
+  uint64_t _cachedFontGeneration;
 }
 
 - (instancetype)initWithLayout:(MathLayout::Handle)layout fontSize:(CGFloat)fontSize color:(UIColor *)color {
@@ -354,18 +368,40 @@ NSAttributedStringKey const DSMathLiteralAttributeName = @"DSMathLiteral";
   if (!_layout || imageBounds.size.width <= 0 || imageBounds.size.height <= 0) {
     return nil;
   }
-  const MathLayout::Handle layout = _layout;
-  const CGFloat total = layout->height + layout->depth;
+  const CGFloat total = _layout->height + _layout->depth;
   const CGFloat size = total > 0 ? imageBounds.size.height / total : _fontSize;
   // Resolved against the appearance being drawn, which UIKit sets as the current
   // trait collection while a text view draws.
-  UIColor *color = [_color resolvedColorWithTraitCollection:UITraitCollection.currentTraitCollection];
+  UITraitCollection *traits = UITraitCollection.currentTraitCollection;
+  UIColor *color = [_color resolvedColorWithTraitCollection:traits];
+  const CGFloat displayScale = traits.displayScale > 0 ? traits.displayScale : UIScreen.mainScreen.scale;
+  const uint64_t generation = fontGeneration.load(std::memory_order_relaxed);
+  // TextKit asks for the same attachment during selection, redraws and scrolling.
+  // Keep only its most recent raster, so an appearance or size change replaces it.
+  std::lock_guard<std::mutex> lock(_imageMutex);
+  if (_cachedImage != nil && CGRectEqualToRect(_cachedBounds, imageBounds) && _cachedSize == size &&
+      _cachedScale == displayScale && _cachedFontGeneration == generation &&
+      CGColorEqualToColor(_cachedColor.CGColor, color.CGColor) &&
+      ![traits hasDifferentColorAppearanceComparedToTraitCollection:_cachedTraits] &&
+      traits.displayGamut == _cachedTraits.displayGamut) {
+    return _cachedImage;
+  }
+  const MathLayout::Handle layout = _layout;
   UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
   format.opaque = NO;
+  format.scale = displayScale;
   UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:imageBounds.size format:format];
-  return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+  UIImage *image = [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
     [DSMathRenderer drawLayout:*layout size:size color:color scale:1 inContext:context.CGContext];
   }];
+  _cachedImage = image;
+  _cachedBounds = imageBounds;
+  _cachedSize = size;
+  _cachedScale = displayScale;
+  _cachedColor = color;
+  _cachedTraits = traits;
+  _cachedFontGeneration = generation;
+  return image;
 }
 
 @end

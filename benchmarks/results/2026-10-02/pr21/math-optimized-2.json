@@ -1,0 +1,245 @@
+{
+  "measuredAt": "2026-10-02T16:43:26.540Z",
+  "scope": "100 KiB bracket scan and complete parse; 5,000 repeated RaTeX calls when vendored; excludes native layout and paint",
+  "sourceRoot": "/Users/krish/orca/workspaces/react-native-downstream/murex",
+  "host": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M5"
+  },
+  "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
+  "flags": [
+    "-std=c++20",
+    "-O3",
+    "-DNDEBUG",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-pthread",
+    "-DMD4C_USE_UTF8",
+    "-Dmd_parse=downstream_md_parse",
+    "-Dentity_lookup=downstream_entity_lookup",
+    "-I/Users/krish/orca/workspaces/react-native-downstream/murex/src/cpp",
+    "-I/Users/krish/orca/workspaces/react-native-downstream/murex/src/cpp/md4c"
+  ],
+  "ratex": {
+    "version": "0.1.14",
+    "commit": "776c1d3",
+    "xcframework": {
+      "url": "https://github.com/erweixin/RaTeX/releases/download/v0.1.14/RaTeX.xcframework.zip",
+      "sha256": "16b84a5e9b9f80ed4910c490f96dda047662e9bdd0934817ecf4464cf02581f2"
+    },
+    "fonts": {
+      "url": "https://github.com/erweixin/RaTeX/releases/download/v0.1.14/ratex-android-release.aar",
+      "sha256": "dabcdf5870de5d74ca53a019e4c3fed843aa052bc6f7003dad0fb2cd63b6df41"
+    },
+    "android": "io.github.erweixin:ratex-android:0.1.14"
+  },
+  "harnessSha256": "74749ea25d81787b3252ca2e470735eb82c3d42fe9099131ca4214b1fdc5732d",
+  "workloads": [
+    {
+      "name": "scan_prose",
+      "bytes": 102419,
+      "count": 0,
+      "median_ms": 0.003358,
+      "samples_ms": [
+        0.003385,
+        0.003356,
+        0.003354,
+        0.00336,
+        0.003352,
+        0.003356,
+        0.003363,
+        0.00336,
+        0.003358
+      ]
+    },
+    {
+      "name": "parse_prose",
+      "bytes": 102419,
+      "count": 1679,
+      "median_ms": 0.659354,
+      "samples_ms": [
+        0.629337,
+        0.745925,
+        0.624433,
+        0.659354,
+        0.623933,
+        0.651692,
+        0.851404,
+        0.679163,
+        0.670396
+      ]
+    },
+    {
+      "name": "scan_inline_code",
+      "bytes": 102408,
+      "count": 0,
+      "median_ms": 0.003275,
+      "samples_ms": [
+        0.003283,
+        0.003265,
+        0.003263,
+        0.003275,
+        0.003263,
+        0.003263,
+        0.003419,
+        0.003737,
+        0.003408
+      ]
+    },
+    {
+      "name": "parse_inline_code",
+      "bytes": 102408,
+      "count": 2008,
+      "median_ms": 1.090337,
+      "samples_ms": [
+        1.250029,
+        1.123821,
+        1.090337,
+        1.235625,
+        1.2168,
+        1.023758,
+        1.028204,
+        1.005008,
+        1.003788
+      ]
+    },
+    {
+      "name": "scan_fenced_code",
+      "bytes": 102410,
+      "count": 0,
+      "median_ms": 0.002148,
+      "samples_ms": [
+        0.002154,
+        0.002154,
+        0.002148,
+        0.002146,
+        0.002148,
+        0.002152,
+        0.00215,
+        0.002148,
+        0.002146
+      ]
+    },
+    {
+      "name": "parse_fenced_code",
+      "bytes": 102410,
+      "count": 1463,
+      "median_ms": 0.776104,
+      "samples_ms": [
+        0.775742,
+        0.776104,
+        0.867458,
+        0.750092,
+        0.776104,
+        0.763596,
+        0.764713,
+        0.804462,
+        0.813954
+      ]
+    },
+    {
+      "name": "scan_bracket_math",
+      "bytes": 102410,
+      "count": 5390,
+      "median_ms": 0.158348,
+      "samples_ms": [
+        0.162815,
+        0.155492,
+        0.181773,
+        0.180369,
+        0.154665,
+        0.150742,
+        0.161529,
+        0.158348,
+        0.150431
+      ]
+    },
+    {
+      "name": "parse_bracket_math",
+      "bytes": 102410,
+      "count": 2695,
+      "median_ms": 6.586483,
+      "samples_ms": [
+        6.266229,
+        6.493796,
+        7.041292,
+        6.586483,
+        6.458129,
+        7.26815,
+        6.92075,
+        6.863025,
+        6.561342
+      ]
+    },
+    {
+      "name": "scan_code_and_math",
+      "bytes": 102438,
+      "count": 3794,
+      "median_ms": 0.139213,
+      "samples_ms": [
+        0.139498,
+        0.139094,
+        0.139256,
+        0.139213,
+        0.139171,
+        0.139027,
+        0.139229,
+        0.139298,
+        0.139146
+      ]
+    },
+    {
+      "name": "parse_code_and_math",
+      "bytes": 102438,
+      "count": 1897,
+      "median_ms": 3.938483,
+      "samples_ms": [
+        4.177371,
+        3.939025,
+        3.938483,
+        3.746771,
+        4.125217,
+        3.7569,
+        3.699471,
+        4.036867,
+        3.7462
+      ]
+    },
+    {
+      "name": "ratex_repeated_invalid",
+      "bytes": 9,
+      "count": 1,
+      "median_ms": 0.194333,
+      "samples_ms": [
+        0.201875,
+        0.1965,
+        0.1995,
+        0.195333,
+        0.194333,
+        0.190542,
+        0.191,
+        0.1935,
+        0.192666
+      ]
+    },
+    {
+      "name": "ratex_repeated_valid",
+      "bytes": 11,
+      "count": 1,
+      "median_ms": 0.135458,
+      "samples_ms": [
+        0.138667,
+        0.138542,
+        0.135458,
+        0.144292,
+        0.141375,
+        0.133125,
+        0.131042,
+        0.133,
+        0.129625
+      ]
+    }
+  ]
+}

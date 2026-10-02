@@ -82,6 +82,16 @@ before(async () => {
     ['test_theme', theme],
     ['test_images', [downstream('ImageLayout.cpp')]],
     ['test_math', []],
+    [
+      'test_math_scan',
+      ['MathScan.cpp', 'Scan.cpp', 'Compare.cpp'].map(downstream),
+    ],
+    [
+      'test_math_cache',
+      ['MathEngine.cpp', 'MathDisplayList.cpp', 'MathLayout.cpp'].map((name) =>
+        join(CPP, 'math', name)
+      ),
+    ],
   ];
   if (ratexVendored) {
     executables.push([
@@ -862,6 +872,14 @@ describe('images', () => {
 });
 
 describe('math', () => {
+  test('bracket scanning preserves code and source offsets', () => {
+    execFileSync(binary('test_math_scan'), { timeout: 15_000, stdio: 'inherit' });
+  });
+
+  test('math cache reuses successes and failures with bounded eviction', () => {
+    execFileSync(binary('test_math_cache'), { timeout: 15_000, stdio: 'inherit' });
+  });
+
   // The sizing both platforms apply once a layout exists. `test_math` is the C++
   // side, and `tests/android/MathLayoutCheck.kt` runs the same cases against the
   // Kotlin mirror, so a formula cannot be a different height on one platform.
