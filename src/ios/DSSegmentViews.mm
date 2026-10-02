@@ -422,8 +422,8 @@ constexpr CGFloat kPinThreshold = 8;
 
 @interface DSCodeGutterView : UIView
 @property (nonatomic, weak, nullable) DSTextSegmentView *body;
-/// The UTF-16 offset of each logical line, owned by the code segment.
-@property (nonatomic, copy, nullable) NSData *lineStarts;
+/// Retains the owner of the line starts so mounting a gutter needs no copy.
+@property (nonatomic, strong, nullable) DSCodeSegment *segment;
 @property (nonatomic) uint32_t firstNumber;
 @property (nonatomic) uint32_t lineCount;
 @property (nonatomic) CGFloat digitAdvance;
@@ -467,6 +467,14 @@ constexpr CGFloat kPinThreshold = 8;
   [self setNeedsDisplay];
 }
 
+- (void)setSegment:(DSCodeSegment *)segment {
+  if (segment == _segment) {
+    return;
+  }
+  _segment = segment;
+  [self setNeedsDisplay];
+}
+
 - (void)setFont:(UIFont *)font {
   _font = font;
   [self setNeedsDisplay];
@@ -496,7 +504,7 @@ constexpr CGFloat kPinThreshold = 8;
 
 /// The number drawn beside logical line `index`, or 0 when the gutter has none.
 - (NSString *)numberForLine:(uint32_t)index {
-  if (self.lineStarts == nil || index >= self.lineCount) {
+  if (self.segment == nil || index >= self.lineCount) {
     return nil;
   }
   return [NSString stringWithFormat:@"%u", self.firstNumber + index];
@@ -504,7 +512,8 @@ constexpr CGFloat kPinThreshold = 8;
 
 - (void)drawRect:(CGRect)rect {
   DSTextSegmentView *body = self.body;
-  if (body == nil || self.lineCount == 0) {
+  DSCodeSegment *segment = self.segment;
+  if (body == nil || segment == nil || self.lineCount == 0) {
     return;
   }
   // The theme's code color dimmed, so the numbers read as an annotation on the
@@ -528,7 +537,7 @@ constexpr CGFloat kPinThreshold = 8;
   // The logical line holding the character at the top of the dirty rect: one
   // glyph lookup for the point, then a search of the line starts, rather than a
   // walk over every glyph above it.
-  const uint32_t *starts = (const uint32_t *)self.lineStarts.bytes;
+  const uint32_t *starts = segment.lineStarts->data();
   const NSUInteger topGlyph = [manager glyphIndexForPoint:CGPointMake(0, MAX(visible.origin.y, 0))
                                           inTextContainer:body.textContainer];
   const auto topCharacter = static_cast<uint32_t>([manager characterIndexForGlyphAtIndex:topGlyph]);
@@ -536,30 +545,27 @@ constexpr CGFloat kPinThreshold = 8;
   const uint32_t first = after == starts ? 0 : static_cast<uint32_t>(after - starts - 1);
   // Each logical line starts at the first visual line its first glyph is on. A
   // wrapped continuation line gets no number, as in GitHub and VS Code.
-  // A blank line's only glyph is its newline, which TextKit places below where a
-  // drawn glyph's baseline sits, so its number would drop toward the next one. Code
-  // is one face at one size, so every line's baseline is at the same height in its
-  // fragment: a blank line borrows it from the nearest line with text.
+  // A newline glyph does not have the drawn text's baseline. Find the next
+  // nonblank line once from cached offsets; repeated blank lines never scan
+  // the remaining text. Nonblank lines keep their own actual glyph baseline,
+  // including any difference a fallback font introduces.
   NSString *const text = body.textStorage.string;
   const auto isBlank = [&](uint32_t line) {
     return starts[line] >= text.length || [text characterAtIndex:starts[line]] == '\n';
   };
-  const auto glyphAt = [&](uint32_t line) {
-    return [manager glyphRangeForCharacterRange:NSMakeRange(starts[line], 0) actualCharacterRange:NULL].location;
-  };
   CGFloat textBaseline = -1;
-  const auto baselineInFragment = [&](uint32_t line) -> CGFloat {
-    if (!isBlank(line)) {
-      textBaseline = [manager locationForGlyphAtIndex:glyphAt(line)].y;
-      return textBaseline;
+  const NSUInteger baselineOffset = isBlank(first) ? [segment baselineCharacterOffsetAtOrAfter:starts[first]]
+                                                  : NSNotFound;
+  if (baselineOffset != NSNotFound) {
+    const NSUInteger glyph =
+        [manager glyphRangeForCharacterRange:NSMakeRange(baselineOffset, 0)
+                       actualCharacterRange:NULL].location;
+    if (glyph < manager.numberOfGlyphs) {
+      textBaseline = [manager locationForGlyphAtIndex:glyph].y;
     }
-    for (uint32_t next = line + 1; textBaseline < 0 && next < self.lineCount; next++) {
-      if (!isBlank(next) && glyphAt(next) < manager.numberOfGlyphs) {
-        textBaseline = [manager locationForGlyphAtIndex:glyphAt(next)].y;
-      }
-    }
-    return textBaseline >= 0 ? textBaseline : font.ascender;
-  };
+  }
+  NSDictionary<NSAttributedStringKey, id> *const attributes =
+      @{NSFontAttributeName : font, NSForegroundColorAttributeName : color};
   for (uint32_t line = first; line < self.lineCount; line++) {
     const uint32_t offset = starts[line];
     if (offset >= manager.numberOfGlyphs && line > 0) {
@@ -571,7 +577,10 @@ constexpr CGFloat kPinThreshold = 8;
       break;
     }
     const CGRect fragment = [manager lineFragmentRectForGlyphAtIndex:glyph effectiveRange:NULL];
-    const CGFloat baseline = CGRectGetMinY(fragment) + baselineInFragment(line);
+    if (!isBlank(line)) {
+      textBaseline = [manager locationForGlyphAtIndex:glyph].y;
+    }
+    const CGFloat baseline = CGRectGetMinY(fragment) + (textBaseline >= 0 ? textBaseline : font.ascender);
     if (baseline - font.ascender > CGRectGetMaxY(visible) && line > first) {
       break;
     }
@@ -579,8 +588,6 @@ constexpr CGFloat kPinThreshold = 8;
     if (number.length == 0) {
       continue;
     }
-    NSDictionary<NSAttributedStringKey, id> *attributes =
-        @{NSFontAttributeName : font, NSForegroundColorAttributeName : color};
     const CGSize size = [number sizeWithAttributes:attributes];
     // Right-aligned against the gap, so the numbers line up on their last digit
     // as they do in GitHub and VS Code.
@@ -893,8 +900,7 @@ constexpr CGFloat kPinThreshold = 8;
   _body.linkDelegate = self.linkDelegate;
   [_body setSegment:segment.text];
   _gutter.body = _body;
-  _gutter.lineStarts = [NSData dataWithBytes:segment.lineStarts->data()
-                                      length:segment.lineStarts->size() * sizeof(uint32_t)];
+  _gutter.segment = segment;
   _gutter.firstNumber = segment.fenceMeta.startLine;
   _gutter.lineCount = segment.lineCount;
   _gutter.digitAdvance = segment.digitAdvance;
@@ -989,7 +995,8 @@ constexpr CGFloat kPinThreshold = 8;
 
 - (void)setLayout:(downstream::CodeBlockLayout)layout {
   if (layout.wraps == _layout.wraps && layout.lineNumbers == _layout.lineNumbers &&
-      layout.firstNumber == _layout.firstNumber && layout.maxHeight == _layout.maxHeight) {
+      layout.firstNumber == _layout.firstNumber && layout.maxHeight == _layout.maxHeight &&
+      layout.expanded == _layout.expanded) {
     return;
   }
   _layout = layout;

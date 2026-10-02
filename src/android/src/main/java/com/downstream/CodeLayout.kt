@@ -197,10 +197,29 @@ internal fun codeCardHeight(
  * Mirrors `downstream::codeLineStarts`.
  */
 internal fun codeLineStarts(text: CharSequence): IntArray {
-  val starts = ArrayList<Int>(minOf(text.length / 24 + 1, 4096))
-  starts.add(0)
+  var starts = IntArray(minOf(text.length / 24 + 1, 4096))
+  var count = 1
   for (index in text.indices) {
-    if (text[index] == '\n') starts.add(index + 1)
+    if (text[index] == '\n') {
+      if (count == starts.size) starts = starts.copyOf(starts.size * 2)
+      starts[count++] = index + 1
+    }
   }
-  return starts.toIntArray()
+  return if (count == starts.size) starts else starts.copyOf(count)
+}
+
+/**
+ * The logical code line containing a visual line's starting UTF-16 offset.
+ * Wrapped continuations stay on the same logical line. A trailing empty line
+ * has its own entry at the text length, so an exact offset selects that line.
+ * Uses an upper bound search so deep scrolling takes logarithmic work.
+ */
+internal fun codeLineForOffset(starts: IntArray, offset: Int): Int {
+  var low = 0
+  var high = starts.size
+  while (low < high) {
+    val middle = low + (high - low) / 2
+    if (starts[middle] <= offset) low = middle + 1 else high = middle
+  }
+  return (low - 1).coerceAtLeast(0)
 }

@@ -574,11 +574,25 @@ internal class CodeSegment(
   val markerGap: Float,
   gapBefore: Int,
 ) : Segment(gapBefore) {
-  private var codePaintCache: TextPaint? = null
+  private val digitAdvance: Float
+  private val codeLineHeight: Int
   private var wrappedWidth = -1
   private var wrappedHeight = 0
   private var unwrappedHeight = 0
   private var unwrappedWidth = 0
+
+  init {
+    // Face and size are immutable for this segment. Measure these once on the
+    // rendering worker instead of shaping a digit and allocating metrics in
+    // every height/layout pass.
+    val codePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+      textSize = codeTextSize.toFloat()
+      typeface = codeFace
+    }
+    digitAdvance = codePaint.measureText("0")
+    val metrics = codePaint.fontMetricsInt
+    codeLineHeight = metrics.descent - metrics.ascent
+  }
 
   /**
    * The width the body lays out at: the card's inner width, or unbounded.
@@ -651,28 +665,11 @@ internal class CodeSegment(
   fun gutterWidth(layout: CodeBlockLayout): Int {
     if (!layout.lineNumbers) return 0
     val digits = gutterDigits(layout.firstNumber, lineStarts.size)
-    val advance = codePaint().measureText("0")
-    return ceil(digits * advance).toInt() + gutterGap
+    return ceil(digits * digitAdvance).toInt() + gutterGap
   }
 
   /** The line height the height floor needs, in the code's own face and size. */
-  fun lineHeight(): Int {
-    val metrics = codePaint().fontMetricsInt
-    return metrics.descent - metrics.ascent
-  }
-
-  /**
-   * The paint the code block's own face and size make, built once per rendering.
-   *
-   * The gutter's digit advance and the card's line height are both code metrics,
-   * so they are measured here rather than in the body paint a frame hands in: a
-   * theme that resizes code moves the gutter and the height floor with it.
-   */
-  private fun codePaint(): TextPaint =
-    codePaintCache ?: TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-      textSize = codeTextSize.toFloat()
-      typeface = codeFace
-    }.also { codePaintCache = it }
+  fun lineHeight(): Int = codeLineHeight
 }
 
 /**
