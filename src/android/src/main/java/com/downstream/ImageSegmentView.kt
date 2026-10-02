@@ -1,10 +1,15 @@
 package com.downstream
 
 import android.content.Context
+import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.TextView
 import com.facebook.drawee.view.SimpleDraweeView
@@ -50,10 +55,11 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
     includeFontPadding = false
     gravity = Gravity.CENTER_VERTICAL
     maxLines = 1
-    ellipsize = android.text.TextUtils.TruncateAt.END
+    ellipsize = TextUtils.TruncateAt.END
   }
   private val download = newControlButton(context, R.drawable.ds_ic_download).apply {
     visibility = GONE
+    styleDownload(this, context.resources.configuration)
     setOnClickListener {
       val current = segment ?: return@setOnClickListener
       if (visibility == VISIBLE) onImageDownload?.invoke(current)
@@ -166,8 +172,15 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
     }
     val loading = state == ImageState.PENDING || state == ImageState.LOADING
     photo.visibility = if (state == ImageState.LOADED) VISIBLE else GONE
-    download.visibility = if (state == ImageState.LOADED && controlsEnabled &&
-      controls and CONTROL_IMAGE_DOWNLOAD != 0) VISIBLE else GONE
+    val showsDownload = state == ImageState.LOADED && controlsEnabled && controls and CONTROL_IMAGE_DOWNLOAD != 0
+    if ((download.visibility == VISIBLE) != showsDownload) {
+      download.visibility = if (showsDownload) VISIBLE else GONE
+      // The block settles in the parent's own layout pass, and React Native does
+      // not run a native subtree's layout again until the next snapshot, so a
+      // button that appears then would never get a frame. Its frame depends only
+      // on this view's size, so it is placed here.
+      placeDownload()
+    }
     placeholder.visibility = if (loading) VISIBLE else GONE
     // The alt text, and under it what happened: a reader should be able to tell a
     // picture that failed from one this app chose not to load. A disabled picture
@@ -246,16 +259,40 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
     )
   }
 
+  override fun onConfigurationChanged(newConfig: Configuration) {
+    super.onConfigurationChanged(newConfig)
+    styleDownload(download, newConfig)
+  }
+
+  /** Measures and places the download button in this view's bottom-right corner. */
+  private fun placeDownload() {
+    val size = download.layoutParams?.width ?: return
+    if (size <= 0 || width <= 0 || height <= 0) {
+      return
+    }
+    download.measure(
+      MeasureSpec.makeMeasureSpec(size, MeasureSpec.EXACTLY),
+      MeasureSpec.makeMeasureSpec(size, MeasureSpec.EXACTLY),
+    )
+    val inset = (4 * context.resources.displayMetrics.density).toInt()
+    val innerWidth = width - paddingLeft - paddingRight
+    val innerHeight = height - paddingTop - paddingBottom
+    val x = paddingLeft + (innerWidth - download.measuredWidth - inset).coerceAtLeast(0)
+    val y = paddingTop + (innerHeight - download.measuredHeight - inset).coerceAtLeast(0)
+    download.layout(x, y, x + download.measuredWidth, y + download.measuredHeight)
+    // Laid out outside a layout pass, so nothing would draw it until something
+    // else on screen changed.
+    download.invalidate()
+    invalidate()
+  }
+
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
     val width = right - left - paddingLeft - paddingRight
     val height = bottom - top - paddingTop - paddingBottom
     for (child in listOf(placeholder, photo, altText)) {
       child.layout(paddingLeft, paddingTop, paddingLeft + width, paddingTop + height)
     }
-    val inset = (4 * context.resources.displayMetrics.density).toInt()
-    val x = paddingLeft + (width - download.measuredWidth - inset).coerceAtLeast(0)
-    val y = paddingTop + (height - download.measuredHeight - inset).coerceAtLeast(0)
-    download.layout(x, y, x + download.measuredWidth, y + download.measuredHeight)
+    placeDownload()
   }
 
   override fun onDetachedFromWindow() {
@@ -288,4 +325,19 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
     // the link before it reaches here, so reaching here means there was no link.
     isClickable = true
   }
+}
+
+/**
+ * The download button's round backing, because the button sits on the picture and
+ * a bare glyph disappears on a dark or busy corner. It follows the appearance the
+ * way the page does: light on light, dark on dark.
+ */
+private fun styleDownload(button: ImageButton, configuration: Configuration) {
+  val night = (configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+  val fill = GradientDrawable().apply {
+    shape = GradientDrawable.OVAL
+    setColor(if (night) 0xCC1C1C1E.toInt() else 0xE6FFFFFF.toInt())
+  }
+  button.background = RippleDrawable(ColorStateList.valueOf(if (night) 0x33FFFFFF else 0x22000000), fill, null)
+  button.imageTintList = ColorStateList.valueOf(if (night) 0xFFE5E5EA.toInt() else 0xFF3A3A3C.toInt())
 }
