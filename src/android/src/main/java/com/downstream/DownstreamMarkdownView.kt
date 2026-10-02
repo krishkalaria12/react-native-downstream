@@ -698,6 +698,8 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
         is TextSegment -> view is TextSegmentView
         is CodeSegment -> view is CodeSegmentView
         is TableSegment -> view is TableSegmentView
+        is ImageSegment -> view is ImageSegmentView
+        is MathSegment -> view is MathSegmentView
       }
       if (!reusable) {
         if (view != null) removeViewAt(index)
@@ -705,6 +707,15 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
           is TextSegment -> TextSegmentView(context)
           is CodeSegment -> CodeSegmentView(context).apply { setControlHost(this@DownstreamMarkdownView) }
           is TableSegment -> TableSegmentView(context).apply { setControlHost(this@DownstreamMarkdownView) }
+          is ImageSegment -> ImageSegmentView(context).also { new ->
+            // A picture's answer is the engine's, so a load that finishes is reported
+            // upward and not applied here: the view rebuilds from the state rather
+            // than resizing itself, which is what keeps a measured height and a drawn
+            // one the same number.
+            new.onImageAnswer = { ordinal, state -> reportImageAnswer(ordinal, state) }
+            new.onImagePress = { url, alt, title, ordinal -> pressImage(url, alt, title, ordinal) }
+          }
+          is MathSegment -> MathSegmentView(context)
         }
         addView(view, index)
       }
@@ -712,6 +723,22 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
         is TextSegment -> (view as TextSegmentView).setSegment(segment, rendered!!)
         is CodeSegment -> (view as CodeSegmentView).setSegment(segment, rendered!!)
         is TableSegment -> (view as TableSegmentView).setSegment(segment, sourceEpoch, rendered!!.style.chromeRowHeight)
+        is ImageSegment -> (view as ImageSegmentView).apply {
+          setStyle(rendered!!.style.imageMetrics, rendered.style.imageAltColor)
+          setImageLayout(imageLayout)
+          setSegment(segment)
+        }
+        is MathSegment -> (view as MathSegmentView).apply {
+          setStyle(
+            rendered!!.style.mathFontSize,
+            rendered.style.mathColor,
+            rendered.style.mathBackground,
+            rendered.style.mathErrorColor,
+            rendered.style.mathPadding,
+            rendered.style.mathRadius,
+          )
+          setSegment(segment)
+        }
       }
     }
     while (childCount > segments.size) {
@@ -719,6 +746,51 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     }
     applySettledState()
     layoutSegments()
+  }
+
+  /**
+   * The engine's answers about pictures, from the state the shadow node resolved.
+   *
+   * Held here rather than per segment because a state update replaces the whole
+   * layout map at once, and a per-segment answer would have to be matched back to a
+   * view that may already have been recycled. The view group is the one thing that
+   * outlives every segment.
+   */
+  private var imageLayout = ImageLayout()
+
+  /** Set by the view manager: a picture's answer goes back into the state. */
+  var onImageAnswer: ((ordinal: Int, state: ImageState) -> Unit)? = null
+
+  /** Set by the view manager: a press on a picture that is not inside a link. */
+  var onImagePress: ((url: String, alt: String, title: String, ordinal: Int) -> Unit)? = null
+
+  /**
+   * Sets the answers and restacks, because a picture's height is its state.
+   *
+   * The frames are keyed on the answers as well as the width, so a load that
+   * finishes collapses the placeholder and moves the text under it in one pass.
+   */
+  fun setImageLayout(value: ImageLayout) {
+    if (imageLayout == value) {
+      return
+    }
+    imageLayout = value
+    syncSegmentViews()
+  }
+
+  /** Reports a picture's answer to the engine, which writes it into the state. */
+  private fun reportImageAnswer(ordinal: Int, state: ImageState) {
+    onImageAnswer?.invoke(ordinal, state)
+  }
+
+  /**
+   * A press on a picture that is not inside a link.
+   *
+   * The library opens nothing: an app that has a viewer wants its own, and one that
+   * does not should not have a picture that navigates somewhere surprising.
+   */
+  private fun pressImage(url: String, alt: String, title: String, ordinal: Int) {
+    onImagePress?.invoke(url, alt, title, ordinal)
   }
 
   // React Native does not relayout children that request it, so segments are
@@ -729,7 +801,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     if (width <= 0) {
       return
     }
-    val frames = document.frames(width, chrome, codeLayout)
+    val frames = document.frames(width, chrome, codeLayout, imageLayout)
     for (index in 0 until minOf(childCount, frames.size / 2)) {
       val child = getChildAt(index)
       val top = paddingTop + frames[index * 2]

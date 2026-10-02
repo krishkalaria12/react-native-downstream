@@ -145,9 +145,13 @@ class DownstreamMarkdownViewManager :
       state.getDouble("codeBlockMaxHeight") ?: 400.0,
     )
     view.setCodeChoices(
-      state.getOrdinals("wrapToggles"),
-      state.getOrdinals("expanded"),
+      state.ordinalsAt("wrapToggles"),
+      state.ordinalsAt("expanded"),
     )
+    // Images resolve the same way code does: the state carries each picture's
+    // answer and the prefix list that produced it, so a reload draws the box the
+    // measurement reserved for it rather than a placeholder under a loaded image.
+    view.setImageLayout(state.toImageLayout())
     view.setChrome(state.getDouble("chrome").toInt())
     // The theme travels as its id, the way the document does, so a state update
     // carries one number rather than every slot the theme sets.
@@ -157,12 +161,6 @@ class DownstreamMarkdownViewManager :
       state.getDouble("themeId")?.toLong() ?: 0L,
     )
     return null
-  }
-
-  /** One sorted choice set from the state, as `renderedDocument` reads it. */
-  private fun ReadableMap.getOrdinals(key: String): IntArray {
-    val array = getArray(key) ?: return IntArray(0)
-    return IntArray(array.size()) { array.getDouble(it).toInt() }.also { it.sort() }
   }
 
   override fun prepareToRecycleView(reactContext: ThemedReactContext, view: DownstreamMarkdownView): DownstreamMarkdownView {
@@ -194,31 +192,25 @@ class DownstreamMarkdownViewManager :
     // Measuring without them would measure a different layout from the one the view
     // draws.
     val code = localData?.toCodeLayout() ?: CodeLayout()
+    // The image answers travel in the same map, for the same reason: an image's
+    // height is its state and its size, and measuring without them would measure
+    // a placeholder from a layout the view is not drawing.
+    val images = localData?.toImageLayout() ?: ImageLayout()
     if (DownstreamNative.preparationContext?.get() !== context) {
       DownstreamNative.preparationContext = WeakReference(context)
     }
     val rendered = RenderedDocument.obtain(context, documentId, fontScale, themeId = themeId)
       ?: return YogaMeasureOutput.make(0f, 0f)
     val layoutWidth = if (widthMode == YogaMeasureMode.UNDEFINED || !width.isFinite()) {
-      rendered.desiredWidth(code)
+      rendered.desiredWidth(code, images)
     } else {
       width.toInt()
     }
     return YogaMeasureOutput.make(
       PixelUtil.toDIPFromPixel(layoutWidth.toFloat()),
-      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth, chrome, code).toFloat()),
+      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth, chrome, code, images).toFloat()),
     )
   }
-
-  /** The map the shadow node hands measure, read as the one code layout. */
-  private fun ReadableMap.toCodeLayout(): CodeLayout = CodeLayout(
-    CodeLayoutProps(
-      (getDouble("codeBlockWrap") ?: 0.0) != 0.0,
-      (getDouble("lineNumbers") ?: 1.0) != 0.0,
-      PixelUtil.toPixelFromDIP(getDouble("codeBlockMaxHeight") ?: 400.0).toFloat(),
-    ),
-    CodeChoices(getOrdinals("wrapToggles"), getOrdinals("expanded")),
-  )
 
   override fun getExportedCustomDirectEventTypeConstants(): MutableMap<String, Any> = mutableMapOf(
     LinkPressEvent.NAME to mapOf("registrationName" to "onLinkPress"),

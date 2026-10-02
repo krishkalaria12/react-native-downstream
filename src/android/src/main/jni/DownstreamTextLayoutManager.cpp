@@ -1,6 +1,7 @@
 #include "DownstreamTextLayoutManager.h"
 
 #include "DocumentRegistry.h"
+#include "ImageLoaderRegistry.h"
 #include "theme/Theme.h"
 
 #include <fbjni/fbjni.h>
@@ -23,19 +24,41 @@ folly::dynamic ordinalArray(const std::vector<uint32_t> &ordinals) {
   return array;
 }
 
-/// The document id, font scale, chrome, code layout, and theme id as the map the
-/// view manager reads. `measure`, `updateState`, and the state wrapper all
-/// resolve this same shape, so a measurement and a mount cannot disagree about a
-/// height or about the colors it drew it with.
+/// The document id, font scale, chrome, code layout, image layout, and theme id
+/// as the map the view manager reads. `measure`, `updateState`, and the state
+/// wrapper all resolve this same shape, so a measurement and a mount cannot
+/// disagree about a height or about the colors it drew it with.
 folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontScale, uint32_t chrome,
-                              const downstream::CodeLayout &code,
-                              const downstream::Theme::Handle &theme = nullptr) {
+                              const downstream::CodeLayout &code, const downstream::ImageLayout &images,
+                              const downstream::Theme::Handle &theme = nullptr,
+                              facebook::react::Float width = 0) {
+  // One array of five numbers per image rather than five parallel arrays: a
+  // measurement copies this map, and parallel arrays make "which array is one
+  // longer" a question the Kotlin side has to answer defensively. State codes
+  // are the small integers `ImageState` defines, so nothing needs translating.
+  auto imageEntries = folly::dynamic::array();
+  for (const auto &entry : images.state.entries) {
+    imageEntries.push_back(folly::dynamic::object("ordinal", static_cast<double>(entry.ordinal))(
+        "state", static_cast<double>(entry.state))("pixelWidth", static_cast<double>(entry.pixelWidth))(
+        "pixelHeight", static_cast<double>(entry.pixelHeight)));
+  }
+  auto prefixes = folly::dynamic::array();
+  for (const auto &prefix : images.allowedPrefixes) {
+    prefixes.push_back(prefix);
+  }
   return folly::dynamic::object("documentId", static_cast<double>(documentId))(
       "fontScale", static_cast<double>(fontScale))("chrome", static_cast<double>(chrome))(
+      // The width the worker is preparing for. Zero for the `measure` path, which
+      // already has Yoga's constraint and does not need it here.
+      "width", static_cast<double>(width))(
       // The booleans travel as numbers, so the whole map is one type across JNI.
       "codeBlockWrap", code.props.wrap ? 1.0 : 0.0)("lineNumbers", code.props.lineNumbers ? 1.0 : 0.0)(
       "codeBlockMaxHeight", static_cast<double>(code.props.maxHeight))(
       "wrapToggles", ordinalArray(code.choices.wrapToggles))("expanded", ordinalArray(code.choices.expanded))(
+      // Images: whether they are on, each image's answer, and the prefixes that
+      // produced them. The view only ever sees the answers.
+      "imagesEnabled", images.state.enabled ? 1.0 : 0.0)("imageEntries", imageEntries)(
+      "allowedImagePrefixes", prefixes)(
       // By id, as the document is: no slot value is copied on every measurement.
       "themeId", static_cast<double>(theme ? theme->id() : 0));
 }
@@ -48,17 +71,6 @@ JavaVM *javaVm = nullptr;
 jclass nativeClass = nullptr;
 jmethodID prepareMethod = nullptr;
 std::atomic<bool> javaReady{false};
-
-/// A sorted choice set as a Java array. An empty set becomes an empty array,
-/// which is what `binarySearch` on the Kotlin side reads as "nothing chosen".
-jintArray ordinalsToJava(JNIEnv *env, const std::vector<uint32_t> &ordinals) {
-  jintArray array = env->NewIntArray(static_cast<jsize>(ordinals.size()));
-  if (array != nullptr && !ordinals.empty()) {
-    std::vector<jint> values(ordinals.begin(), ordinals.end());
-    env->SetIntArrayRegion(array, 0, static_cast<jsize>(values.size()), values.data());
-  }
-  return array;
-}
 
 /// The JNIEnv for a pool thread, attaching it for the rest of its life.
 JNIEnv *attachedEnv() {
@@ -78,7 +90,39 @@ JNIEnv *attachedEnv() {
   return env;
 }
 
+/// The app's loader, as a global ref for the life of the process.
+///
+/// An atomic rather than a lock: it is read on every image load and written once,
+/// and there is no state to protect beyond the reference itself. The previous
+/// reference is deleted rather than leaked, because a loader replaced on a
+/// reload is otherwise pinned until the process ends.
+std::atomic<jobject> appImageLoader{nullptr};
+
+/// What the registry asks for on every image load. A function rather than the
+/// handle itself, because Java resolves the loader after this file's first use
+/// and a resolver that read a pointer once would hold the answer to a question
+/// asked too early.
+void *resolveAppImageLoader() {
+  return appImageLoader.load(std::memory_order_acquire);
+}
+
 } // namespace
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_downstream_DownstreamNative_nativeInstallImageLoader(JNIEnv *env, jclass, jobject loader) {
+  jobject previous = appImageLoader.exchange(env->NewGlobalRef(loader), std::memory_order_acq_rel);
+  if (previous != nullptr) {
+    env->DeleteGlobalRef(previous);
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_downstream_DownstreamNative_nativeReleaseImageLoader(JNIEnv *env, jclass) {
+  jobject previous = appImageLoader.exchange(nullptr, std::memory_order_acq_rel);
+  if (previous != nullptr) {
+    env->DeleteGlobalRef(previous);
+  }
+}
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_downstream_DownstreamNative_nativeInstallPreparer(JNIEnv *env, jclass clazz) {
@@ -86,9 +130,11 @@ Java_com_downstream_DownstreamNative_nativeInstallPreparer(JNIEnv *env, jclass c
   if (javaReady.load(std::memory_order_relaxed)) {
     return;
   }
-  // documentId, fontScale, width, chrome, codeBlockWrap, lineNumbers,
-  // codeBlockMaxHeight, wrapToggles, expanded, themeId.
-  const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JFFIZZF[I[IJ)V");
+  // The document id and the layout map. The map is the same shape `measure` and
+  // `updateState` carry, so a worker prepares the layout the view is about to draw
+  // rather than a near copy of it that a fourth positional argument could make
+  // disagree.
+  const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JLjava/util/Map;)V");
   if (method == nullptr || env->GetJavaVM(&javaVm) != JNI_OK) {
     env->ExceptionClear();
     return;
@@ -100,6 +146,18 @@ Java_com_downstream_DownstreamNative_nativeInstallPreparer(JNIEnv *env, jclass c
 
 namespace facebook::react {
 
+// Hands the engine the resolver for the app's own image loader.
+//
+// The mirror of iOS's `RCTImageLoader` read from the context container: it is the
+// object React Native's own `<Image>` loads through, so the app's Fresco
+// configuration, its network detector, and its disk cache all apply to a picture a
+// model wrote. The handle arrives from Java rather than from the container,
+// because Fresco's pipeline is reachable from the ReactContext and the container
+// holds only the bridge's own services.
+void DownstreamTextLayoutManager::installPlatformServices(const facebook::react::ContextContainer &) {
+  downstream::ImageLoaderRegistry::install(&resolveAppImageLoader);
+}
+
 // Measures through FabricUIManager.measure, which calls
 // DownstreamMarkdownViewManager.measure on the calling thread. The view
 // manager reads the document from the registry and lays it out with the same
@@ -108,6 +166,7 @@ Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHand
                                                   Float fontSizeMultiplier, Float maximumWidth,
                                                   SurfaceId surfaceId, uint32_t chrome,
                                                   const downstream::CodeLayout &code,
+                                                  const downstream::ImageLayout &images,
                                                   const downstream::Theme::Handle &theme) const {
   // Java resolves the theme through the registry by id, the way it resolves the
   // document, so no slot value is copied across JNI on a measurement. Zero is
@@ -130,7 +189,7 @@ Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHand
   // The same map shape is what the view manager reads in `updateState` and in
   // `measure`, so all three resolve one layout rather than three.
   auto localDataMap = ReadableNativeMap::newObjectCxxArgs(
-      codeLayoutData(document->id, fontSizeMultiplier, chrome, code, theme));
+      codeLayoutData(document->id, fontSizeMultiplier, chrome, code, images, theme));
 
   auto propsMap = ReadableNativeMap::newObjectCxxArgs(folly::dynamic::object());
   auto componentName = make_jstring("DownstreamMarkdownView");
@@ -156,19 +215,13 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
   }
   downstream::DocumentRegistry::add(document);
   for (const auto &hint : hints) {
-    // The whole code layout comes with the hint, because a prepared height is
-    // only the height of the layout the reader actually has.
-    jintArray toggles = ordinalsToJava(env, hint.code.choices.wrapToggles);
-    jintArray expanded = ordinalsToJava(env, hint.code.choices.expanded);
+    // The whole code layout and the whole image layout come with the hint,
+    // because a prepared height is only the height of the layout the reader
+    // actually has.
+    auto map = ReadableNativeMap::newObjectCxxArgs(
+        codeLayoutData(document->id, hint.fontScale, hint.chrome, hint.code, hint.images, hint.theme, hint.width));
     env->CallStaticVoidMethod(nativeClass, prepareMethod, static_cast<jlong>(document->id),
-                              static_cast<jfloat>(hint.fontScale), static_cast<jfloat>(hint.width),
-                              static_cast<jint>(hint.chrome),
-                              static_cast<jboolean>(hint.code.props.wrap ? JNI_TRUE : JNI_FALSE),
-                              static_cast<jboolean>(hint.code.props.lineNumbers ? JNI_TRUE : JNI_FALSE),
-                              static_cast<jfloat>(hint.code.props.maxHeight), toggles, expanded,
-                              static_cast<jlong>(hint.themeId()));
-    env->DeleteLocalRef(toggles);
-    env->DeleteLocalRef(expanded);
+                              reinterpret_cast<ReadableMap::javaobject>(map.get()));
     if (env->ExceptionCheck()) {
       env->ExceptionClear();
       return;

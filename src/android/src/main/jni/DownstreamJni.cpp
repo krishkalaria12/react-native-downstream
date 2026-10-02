@@ -240,6 +240,53 @@ Java_com_downstream_DownstreamNative_nativeFontScaleCap(JNIEnv * /*env*/,
   return theme_layout::fontScale(*theme, platformScale);
 }
 
+/**
+ * The theme's image metrics as [maxHeight, borderRadius, marginTop, marginBottom,
+ * fallbackTextHeight].
+ *
+ * Resolved in C++ by `theme_layout::imageMetrics` rather than by reading five slots
+ * on this side, because that function is what the shadow node measures with and a
+ * second reader is how a measured image and a drawn image end up disagreeing about
+ * a margin. One call per rendered document, not one per measurement: the theme does
+ * not change under a snapshot.
+ *
+ * A missing theme is the default one rather than zeros, so a view that mounted
+ * before its theme resolved gets the platform defaults instead of a picture with no
+ * height.
+ */
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_com_downstream_DownstreamNative_nativeImageMetrics(JNIEnv *env, jclass /*clazz*/, jlong id) {
+  const Theme::Handle theme = ThemeRegistry::find(static_cast<uint64_t>(id));
+  const ImageMetrics metrics =
+    theme_layout::imageMetrics(theme ? *theme : Theme::defaultTheme());
+  const jdouble values[] = {metrics.maxHeight, metrics.borderRadius, metrics.marginTop, metrics.marginBottom,
+                            metrics.fallbackTextHeight};
+  jdoubleArray array = env->NewDoubleArray(5);
+  if (array != nullptr) {
+    env->SetDoubleArrayRegion(array, 0, 5, values);
+  }
+  return array;
+}
+
+/**
+ * The theme's math metrics as [padding, textAlign].
+ *
+ * `textAlign` is 0 for left, 1 for center, and 2 for right, which is what the slot
+ * holds; the platform reads the number rather than mapping a name, because the
+ * view that centres a formula is the same one that measures it.
+ */
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_com_downstream_DownstreamNative_nativeMathMetrics(JNIEnv *env, jclass /*clazz*/, jlong id) {
+  const Theme::Handle theme = ThemeRegistry::find(static_cast<uint64_t>(id));
+  const Theme &resolved = theme ? *theme : Theme::defaultTheme();
+  const jdouble values[] = {theme_layout::mathPadding(resolved), theme_layout::mathTextAlign(resolved)};
+  jdoubleArray array = env->NewDoubleArray(2);
+  if (array != nullptr) {
+    env->SetDoubleArrayRegion(array, 0, 2, values);
+  }
+  return array;
+}
+
 /// Flattens blocks [from, to) of a document into one text and integer
 /// tables, with block indices and text offsets relative to `from`. Layouts
 /// must match NativeDocument.kt. Empty blocks get a zero-width space so they
@@ -383,6 +430,63 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
     env->SetDoubleArrayRegion(layoutArray, 0, static_cast<jsize>(layouts.size()), layouts.data());
   }
   env->SetObjectArrayElement(result, 7, layoutArray);
+  return result;
+}
+
+/**
+ * The document's images as [urls, alts, titles, records], where records is
+ * [start, end, loadable, link] per image.
+ *
+ * Three string arrays and one number array rather than one array of objects,
+ * because this is read once per segment that holds a picture and the objects
+ * would be allocated on every read. Three parallel string arrays keep every
+ * value the same JNI type, which is what the document read above does for its own
+ * strings.
+ *
+ * What is not here is each image's state: that belongs to a view, not to the
+ * document, and it travels in the layout map instead. Reading a document's images
+ * is therefore the same for a view that has loaded them and one that has not,
+ * which is why it is a document read rather than a state read.
+ */
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_downstream_DownstreamNative_nativeReadImages(JNIEnv *env, jclass /*clazz*/, jlong id) {
+  const DocumentHandle document = DocumentRegistry::find(static_cast<uint64_t>(id));
+  if (!document) {
+    return nullptr;
+  }
+  jclass objectClass = env->FindClass("java/lang/Object");
+  jclass stringClass = env->FindClass("java/lang/String");
+  const auto count = static_cast<jsize>(document->images.size());
+  jobjectArray urls = env->NewObjectArray(count, stringClass, nullptr);
+  jobjectArray alts = env->NewObjectArray(count, stringClass, nullptr);
+  jobjectArray titles = env->NewObjectArray(count, stringClass, nullptr);
+  std::vector<jint> records;
+  records.reserve(document->images.size() * 4);
+  for (size_t index = 0; index < document->images.size(); index++) {
+    const Image &image = document->images[index];
+    jstring url = toJavaString(env, utf8ToUtf16(image.url));
+    jstring alt = toJavaString(env, image.alt);
+    jstring title = toJavaString(env, utf8ToUtf16(image.title));
+    env->SetObjectArrayElement(urls, static_cast<jsize>(index), url);
+    env->SetObjectArrayElement(alts, static_cast<jsize>(index), alt);
+    env->SetObjectArrayElement(titles, static_cast<jsize>(index), title);
+    env->DeleteLocalRef(url);
+    env->DeleteLocalRef(alt);
+    env->DeleteLocalRef(title);
+    records.push_back(static_cast<jint>(image.range.start));
+    records.push_back(static_cast<jint>(image.range.end));
+    // `loadable` is the engine's own policy answer, and the link is the enclosing
+    // one, which is -1 for a picture that is not inside a link. Both travel here
+    // rather than being decided again on this side: the alt text of a blocked
+    // destination is a reader's decision, not the view's.
+    records.push_back(image.loadable ? 1 : 0);
+    records.push_back(image.link);
+  }
+  jobjectArray result = env->NewObjectArray(4, objectClass, nullptr);
+  env->SetObjectArrayElement(result, 0, urls);
+  env->SetObjectArrayElement(result, 1, alts);
+  env->SetObjectArrayElement(result, 2, titles);
+  env->SetObjectArrayElement(result, 3, toJavaArray(env, records));
   return result;
 }
 

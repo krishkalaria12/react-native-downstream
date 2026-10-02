@@ -2,6 +2,7 @@ package com.downstream
 
 import android.content.Context
 import com.facebook.proguard.annotations.DoNotStrip
+import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.uimanager.PixelUtil
 import java.lang.ref.WeakReference
 
@@ -230,6 +231,49 @@ internal class PlannedSegment(
   val codeOrdinal: Int,
 )
 
+/**
+ * Every image the document holds, as the engine recorded them
+ * (`Document::images`).
+ *
+ * What is not here is each image's state: that belongs to a view rather than to
+ * the document, and it arrives in the layout map instead. So this read is the
+ * same for a view that has loaded its pictures and one that has not, which is why
+ * it is a document read and not a state read.
+ */
+internal class NativeImages(
+  val urls: Array<String>,
+  val alts: Array<String>,
+  val titles: Array<String>,
+  /**
+   * [start, end, loadable, link] per image, four fields each. `loadable` is the
+   * engine's own policy answer rather than the view's, and `link` is the
+   * enclosing link's index, or -1 for a picture that is not inside one.
+   */
+  private val records: IntArray,
+) {
+  val count: Int get() = urls.size
+
+  fun url(ordinal: Int) = urls[ordinal]
+
+  /** Plain alt text, as written. Empty is a real answer, not a missing one. */
+  fun alt(ordinal: Int) = alts[ordinal]
+
+  /** The optional title, which is never drawn. */
+  fun title(ordinal: Int) = titles[ordinal]
+
+  /** Where the `![…](…)` sits in the source, for an event that reports a press. */
+  fun range(ordinal: Int) = records[ordinal * 4] until records[ordinal * 4 + 1] + 1
+
+  /**
+   * Whether the engine's own policy allows this destination: HTTPS, complete,
+   * with a host and no control characters or spaces.
+   */
+  fun loadable(ordinal: Int) = records[ordinal * 4 + 2] != 0
+
+  /** The enclosing link's index, or -1. */
+  fun link(ordinal: Int) = records[ordinal * 4 + 3]
+}
+
 internal class NativeLink(val url: String, val start: Int, val end: Int)
 
 /** Formats `nativeExport` produces, matching `ExportFormat` in the engine. */
@@ -263,33 +307,30 @@ internal object DownstreamNative {
    * parsed (DownstreamTextLayoutManager.cpp), so Fabric's measurement on the
    * JavaScript thread and the view's mount find it in the cache.
    *
-   * [width] is in points, as Fabric passes it to measure. The whole code layout
-   * comes along, because a prepared height is only the height of the layout the
-   * reader actually has.
+   * [layout] is the same map `measure` and `updateState` carry: the width, the
+   * code layout, and the image answers. One shape rather than a positional list,
+   * so a worker cannot prepare a layout that differs from the one the view draws
+   * by an argument the two callers happened to pass in a different order.
    */
   @JvmStatic
   @DoNotStrip
-  fun prepare(
-    documentId: Long,
-    fontScale: Float,
-    width: Float,
-    chrome: Int,
-    codeBlockWrap: Boolean,
-    lineNumbers: Boolean,
-    codeBlockMaxHeight: Float,
-    wrapToggles: IntArray,
-    expanded: IntArray,
-    themeId: Long,
-  ) {
+  fun prepare(documentId: Long, layout: ReadableMap) {
     val context = preparationContext?.get() ?: return
     try {
-      val rendered = RenderedDocument.obtain(context, documentId, fontScale, themeId = themeId) ?: return
+      val rendered = RenderedDocument.obtain(
+        context,
+        documentId,
+        (layout.getDouble("fontScale") ?: 1.0).toFloat(),
+        themeId = layout.getDouble("themeId")?.toLong() ?: 0L,
+      ) ?: return
+      val width = (layout.getDouble("width") ?: 0.0).toFloat()
       if (width.isFinite() && width > 0) {
-        val layout = CodeLayout(
-          CodeLayoutProps(codeBlockWrap, lineNumbers, PixelUtil.toPixelFromDIP(codeBlockMaxHeight.toDouble()).toFloat()),
-          CodeChoices(wrapToggles, expanded),
+        rendered.height(
+          PixelUtil.toPixelFromDIP(width.toDouble()).toInt(),
+          layout.getDouble("chrome")?.toInt() ?: 0,
+          layout.toCodeLayout(),
+          layout.toImageLayout(),
         )
-        rendered.height(PixelUtil.toPixelFromDIP(width).toInt(), chrome, layout)
       }
     } catch (error: RuntimeException) {
       // Measurement builds the rendering again on its own thread.
@@ -328,6 +369,39 @@ internal object DownstreamNative {
         values[it + 5].toInt(),
       )
     }
+  }
+
+  /**
+   * The theme's image metrics, in points, as `theme_layout::imageMetrics` resolves
+   * them. Resolved in C++ so a measurement and a draw read one value.
+   */
+  fun imageMetrics(id: Long): ImageMetrics {
+    val values = nativeImageMetrics(id) ?: return ImageMetrics()
+    return ImageMetrics(
+      maxHeight = values.getOrElse(0) { 0.0 }.toFloat(),
+      borderRadius = values.getOrElse(1) { 8.0 }.toFloat(),
+      marginTop = values.getOrElse(2) { 0.0 }.toFloat(),
+      marginBottom = values.getOrElse(3) { 0.0 }.toFloat(),
+      fallbackTextHeight = values.getOrElse(4) { kImageFallbackLineHeight.toDouble() }.toFloat(),
+    )
+  }
+
+  /** The theme's math padding in points and its text alignment as 0, 1, or 2. */
+  fun mathMetrics(id: Long): Pair<Float, Int> {
+    val values = nativeMathMetrics(id) ?: return 0f to 1
+    return values.getOrElse(0) { 0.0 }.toFloat() to values.getOrElse(1) { 1.0 }.toInt()
+  }
+
+  /** Returns null when the document is no longer alive. */
+  fun readImages(id: Long): NativeImages? {
+    val parts = nativeReadImages(id) ?: return null
+    @Suppress("UNCHECKED_CAST")
+    return NativeImages(
+      urls = parts[0] as Array<String>,
+      alts = parts[1] as Array<String>,
+      titles = parts[2] as Array<String>,
+      records = parts[3] as IntArray,
+    )
   }
 
   /** Returns null when the document or link is gone. */
@@ -423,6 +497,15 @@ internal object DownstreamNative {
 
   @JvmStatic
   private external fun nativeTableName(configured: String, extension: String): String?
+
+  @JvmStatic
+  private external fun nativeImageMetrics(id: Long): DoubleArray?
+
+  @JvmStatic
+  private external fun nativeMathMetrics(id: Long): DoubleArray?
+
+  @JvmStatic
+  private external fun nativeReadImages(id: Long): Array<Any>?
 
   @JvmStatic
   private external fun nativeReadLink(id: Long, index: Int): Array<Any>?
