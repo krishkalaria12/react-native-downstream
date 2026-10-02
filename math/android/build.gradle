@@ -1,0 +1,51 @@
+buildscript {
+  ext.safeExtGet = { name, fallback ->
+    rootProject.ext.has(name) ? rootProject.ext.get(name) : fallback
+  }
+
+  repositories {
+    google()
+    mavenCentral()
+  }
+
+  dependencies {
+    classpath "com.android.tools.build:gradle:8.7.2"
+    classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${safeExtGet('kotlinVersion', '2.1.20')}"
+  }
+}
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+
+android {
+  namespace "com.downstream.math"
+  compileSdkVersion safeExtGet("compileSdkVersion", 36)
+
+  defaultConfig {
+    minSdkVersion safeExtGet("minSdkVersion", 24)
+    targetSdkVersion safeExtGet("targetSdkVersion", 36)
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+
+  kotlinOptions {
+    jvmTarget = "17"
+  }
+}
+
+repositories {
+  google()
+  mavenCentral()
+}
+
+dependencies {
+  implementation "com.facebook.react:react-android"
+  // RaTeX's release AAR: `libratex_ffi.so` for each ABI and the KaTeX fonts under
+  // assets/fonts. Downstream finds the library with `dlopen` and never calls the
+  // AAR's Kotlin wrapper. An app that also uses another RaTeX-based library
+  // resolves one copy through Gradle. Keep in step with ratex-version.json.
+  implementation "io.github.erweixin:ratex-android:0.1.14"
+}

@@ -9,6 +9,22 @@
 #include <string>
 #include <unordered_map>
 
+namespace downstream {
+
+bool mathEngineFunctionsFromSymbols(const void *parseAndLayout, const void *freeDisplayList, const void *lastError,
+                                    MathEngineFunctions *out) {
+  if (parseAndLayout == nullptr || freeDisplayList == nullptr || lastError == nullptr || out == nullptr) {
+    return false;
+  }
+  out->parseAndLayout =
+      reinterpret_cast<MathEngineResult (*)(const char *, const MathEngineOptions *)>(const_cast<void *>(parseAndLayout));
+  out->free = reinterpret_cast<void (*)(char *)>(const_cast<void *>(freeDisplayList));
+  out->lastError = reinterpret_cast<const char *(*)(void)>(const_cast<void *>(lastError));
+  return true;
+}
+
+} // namespace downstream
+
 namespace downstream::MathEngine {
 
 namespace {
@@ -23,6 +39,8 @@ struct Store {
   MathEngineFunctions functions{};
   std::string fontDir;
   bool installed{false};
+  /// Set by `installResolver` and cleared once it has run, whatever it found.
+  MathEngineResolver resolver{nullptr};
 
   /// Least-recently-used layouts, keyed on the TeX and the display flag.
   ///
@@ -79,16 +97,27 @@ void install(const MathEngineFunctions &functions, std::string_view fontDir) {
   std::lock_guard<std::mutex> lock(shared.mutex);
   shared.functions = functions;
   shared.fontDir.assign(fontDir);
+  shared.resolver = nullptr;
   shared.installed = functions.parseAndLayout != nullptr && functions.free != nullptr;
+}
+
+void installResolver(MathEngineResolver resolve, std::string_view fontDir) {
+  Store &shared = store();
+  std::lock_guard<std::mutex> lock(shared.mutex);
+  if (shared.installed || resolve == nullptr) {
+    return;
+  }
+  shared.resolver = resolve;
+  shared.fontDir.assign(fontDir);
 }
 
 bool available() {
   Store &shared = store();
   std::lock_guard<std::mutex> lock(shared.mutex);
-  return shared.installed;
+  return shared.installed || shared.resolver != nullptr;
 }
 
-std::string_view fontDirectory() {
+std::string fontDirectory() {
   Store &shared = store();
   std::lock_guard<std::mutex> lock(shared.mutex);
   return shared.fontDir;
@@ -120,40 +149,69 @@ MathLayout::Handle layout(std::string_view tex, bool display, std::string *error
   Store &shared = store();
 
   Store::Key key{std::string(tex), display};
-  MathEngineOptions options;
-  options.display = display ? 1 : 0;
-  // The sentinel: the engine colors anything the formula did not color itself
-  // with this, and the decoder maps it back to `kInheritColor`. That is what
-  // makes a layout independent of the theme, so a dark-mode switch or a theme
-  // change never re-lays a formula out.
-  options.defaultColor = MathSentinelColor{0, 0, 0, 0};
-
-  std::lock_guard<std::mutex> lock(shared.mutex);
-  if (!shared.installed) {
-    return refuse("No math engine is installed.");
+  MathEngineFunctions functions{};
+  {
+    std::lock_guard<std::mutex> lock(shared.mutex);
+    if (!shared.installed && shared.resolver != nullptr) {
+      // The first formula any document needs: load the engine now, once. A
+      // resolver that finds nothing leaves the engine uninstalled, which every
+      // later call answers the same way without trying again.
+      MathEngineFunctions resolved{};
+      const MathEngineResolver resolve = shared.resolver;
+      shared.resolver = nullptr;
+      if (resolve(&resolved) && resolved.parseAndLayout != nullptr && resolved.free != nullptr) {
+        shared.functions = resolved;
+        shared.installed = true;
+      }
+    }
+    if (!shared.installed) {
+      return refuse("No math engine is installed.");
+    }
+    if (const auto found = shared.index.find(key); found != shared.index.end()) {
+      shared.entries.splice(shared.entries.begin(), shared.entries, found->second);
+      return found->second->second;
+    }
+    functions = shared.functions;
   }
-  if (const auto found = shared.index.find(key); found != shared.index.end()) {
-    shared.entries.splice(shared.entries.begin(), shared.entries, found->second);
-    return found->second->second;
-  }
 
-  options.fontDir = shared.fontDir.empty() ? nullptr : shared.fontDir.c_str();
+  // The engine is called without the lock. RaTeX keeps its error slot per thread,
+  // so the worker pool lays formulas out in parallel; holding the cache lock
+  // across a layout would make every worker wait on the slowest formula. Two
+  // workers that miss on the same formula both lay it out, and the second insert
+  // is dropped below.
+  //
+  // The default color is the sentinel: the engine colors anything the formula
+  // did not color itself with it, and the decoder maps it back to
+  // `kInheritColor`. That is what makes a layout independent of the theme, so a
+  // dark-mode switch or a theme change never lays a formula out again.
+  const MathEngineColor sentinel{0, 0, 0, 0};
+  const MathEngineOptions options{sizeof(MathEngineOptions), display ? 1 : 0, &sentinel};
   shared.engineCalls.fetch_add(1, std::memory_order_relaxed);
-  const MathEngineResult result = shared.functions.parseAndLayout(key.tex.c_str(), &options);
-  if (result.ok == 0 || result.json == nullptr) {
-    const char *message = shared.functions.lastError != nullptr ? shared.functions.lastError() : nullptr;
-    return refuse(message != nullptr && message[0] != '\0' ? message : "The math engine could not lay out this formula.");
+  const MathEngineResult result = functions.parseAndLayout(key.tex.c_str(), &options);
+  if (result.errorCode != 0 || result.data == nullptr) {
+    const char *message = functions.lastError != nullptr ? functions.lastError() : nullptr;
+    if (result.data != nullptr) {
+      functions.free(result.data);
+    }
+    return refuse(message != nullptr && message[0] != '\0' ? message
+                                                          : "The math engine could not lay out this formula.");
   }
 
   auto decoded = std::make_shared<MathLayout>();
   std::string failure;
-  const bool ok = math::decodeDisplayList(result.json, decoded.get(), &failure);
-  shared.functions.free(const_cast<char *>(result.json));
+  const bool ok = math::decodeDisplayList(result.data, decoded.get(), &failure);
+  functions.free(result.data);
   if (!ok) {
     return refuse(failure.empty() ? "The math engine returned a layout this build cannot read." : failure);
   }
 
   MathLayout::Handle handle = decoded;
+  std::lock_guard<std::mutex> lock(shared.mutex);
+  if (const auto found = shared.index.find(key); found != shared.index.end()) {
+    // Another worker laid the same formula out meanwhile. Its handle wins, so
+    // every snapshot shares one layout object.
+    return found->second->second;
+  }
   shared.entries.emplace_front(std::move(key), handle);
   shared.index.emplace(shared.entries.front().first, shared.entries.begin());
   while (shared.entries.size() > kMaxCacheEntries) {

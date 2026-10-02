@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace downstream::math {
 
@@ -195,6 +196,35 @@ public:
     return std::isfinite(*out) || fail("A display list value does not fit a coordinate.");
   }
 
+  /// A boolean. RaTeX writes `true` and `false`; a number is read as its
+  /// truthiness and `null` as false, which is the tolerant reading the protocol
+  /// asks for of an optional field.
+  bool flag(bool *out) {
+    skipSpace();
+    const std::string_view rest = text_.substr(offset_);
+    if (rest.substr(0, 4) == "true") {
+      offset_ += 4;
+      *out = true;
+      return true;
+    }
+    if (rest.substr(0, 5) == "false") {
+      offset_ += 5;
+      *out = false;
+      return true;
+    }
+    if (rest.substr(0, 4) == "null") {
+      offset_ += 4;
+      *out = false;
+      return true;
+    }
+    double value = 0;
+    if (!number(&value)) {
+      return false;
+    }
+    *out = value != 0;
+    return true;
+  }
+
   /// A string, unescaped. An escape this build does not know is taken as the
   /// character itself, which is the tolerant reading the protocol asks for; a
   /// truncated `\u` is the one thing it does not allow.
@@ -344,11 +374,11 @@ private:
 
 /// A color, as an ARGB word, or `kInheritColor`.
 ///
-/// The protocol sends `{r, g, b, a}` in 0–255. The engine was asked for a
-/// sentinel as its default, so this is the one place a layout stops carrying a
-/// theme: an item whose color is exactly the sentinel draws in whatever color
-/// the run it sits in already has, which is how dark mode, a theme and increased
-/// contrast all reach a formula without laying it out again.
+/// The protocol sends `{r, g, b, a}` as floats from 0 to 1. The engine asked for
+/// a sentinel of all zeros as its default, so this is the one place a layout
+/// stops carrying a theme: an item whose color is exactly the sentinel draws in
+/// whatever color the run it sits in already has, which is how dark mode, a
+/// theme and increased contrast all reach a formula without laying it out again.
 ///
 /// A color that is absent, malformed, or carries no recognized component is the
 /// sentinel rather than a failure. One item drawing in the run's color is right
@@ -356,9 +386,10 @@ private:
 /// comes through with its own color.
 uint32_t readColor(Reader &reader) {
   if (!reader.peek('{')) {
+    reader.skipValue();
     return kInheritColor;
   }
-  int components[4] = {0, 0, 0, 0};
+  double components[4] = {0, 0, 0, 0};
   int seen = 0;
   const bool ok = reader.object([&](const std::string &key, Reader &inner) {
     double value = 0;
@@ -366,8 +397,7 @@ uint32_t readColor(Reader &reader) {
       return false;
     }
     if (key == "r" || key == "g" || key == "b" || key == "a") {
-      components[key == "r" ? 0 : key == "g" ? 1 : key == "b" ? 2 : 3] =
-          value < 0 ? 0 : (value > 255 ? 255 : static_cast<int>(value));
+      components[key == "r" ? 0 : key == "g" ? 1 : key == "b" ? 2 : 3] = value < 0 ? 0 : (value > 1 ? 1 : value);
       seen++;
     }
     // A key this build does not know is still consumed, which is what the
@@ -377,168 +407,185 @@ uint32_t readColor(Reader &reader) {
   if (!ok || seen == 0) {
     return kInheritColor;
   }
-  if (components[0] == 0 && components[1] == 0 && components[2] == 0 && components[3] == 0) {
+  uint32_t bytes[4];
+  for (int i = 0; i < 4; i++) {
+    bytes[i] = static_cast<uint32_t>(std::lround(components[i] * 255.0));
+  }
+  if (bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 0) {
     return kInheritColor;
   }
-  return (static_cast<uint32_t>(components[3]) << 24) | (static_cast<uint32_t>(components[0]) << 16) |
-      (static_cast<uint32_t>(components[1]) << 8) | static_cast<uint32_t>(components[2]);
+  return (bytes[3] << 24) | (bytes[0] << 16) | (bytes[1] << 8) | bytes[2];
 }
 
-PathOp pathOpFromName(std::string_view name) {
-  if (name == "Move") return PathOp::Move;
-  if (name == "Quad") return PathOp::Quad;
-  if (name == "Cubic") return PathOp::Cubic;
-  if (name == "Close") return PathOp::Close;
-  // Anything else is a line, which is what a protocol that adds a command
-  // should degrade to rather than refusing the whole formula over.
-  return PathOp::Line;
+/// A path command's type, or false for one this build does not know.
+bool pathOpFromName(std::string_view name, PathOp *op) {
+  if (name == "MoveTo") *op = PathOp::Move;
+  else if (name == "LineTo") *op = PathOp::Line;
+  else if (name == "QuadTo") *op = PathOp::Quad;
+  else if (name == "CubicTo") *op = PathOp::Cubic;
+  else if (name == "Close") *op = PathOp::Close;
+  else return false;
+  return true;
 }
 
 /// One item out of the list.
 ///
-/// An item type this build does not know is skipped whole, which is what makes
-/// a RaTeX version that adds an item type a non-event: one item this build
-/// cannot draw, rather than a formula that fails.
+/// An item type this build does not know is skipped whole, and so is a path
+/// command, which is what makes a RaTeX version that adds either a non-event:
+/// one shape this build cannot draw, rather than a formula that fails.
+///
+/// The fields are read first and the shape is built after, because the protocol
+/// does not order fields and the same name means different things per type: a
+/// `Line`'s `y` is its centre and its `width` a length, a `Rect`'s `y` is
+/// its top.
 bool decodeItem(Reader &reader, MathLayout *layout) {
   if (!reader.peek('{')) {
     return reader.fail("A display list item is not an object.");
   }
-  // The three shapes are read into one set of fields and only the one that
-  // matches the item's type is kept. Their field names do not collide, and one
-  // reader is smaller than three that would each have to track the schema.
-  MathGlyph glyph;
-  MathRule rule;
-  MathPath path;
-  int kind = 0; // 1 glyph, 2 rule, 3 path
-  const bool ok = reader.object(
-      [&](const std::string &key, Reader &inner) {
-        if (key == "type") {
-          std::string name;
-          if (!inner.string(&name)) {
-            return false;
-          }
-          if (name == "GlyphPath" || name == "Glyph") {
-            kind = 1;
-          } else if (name == "Line" || name == "Rect") {
-            kind = 2;
-          } else if (name == "Path" || name == "Stroke" || name == "Fill") {
-            kind = 3;
-          }
-          return true;
-        }
-        if (key == "x" || key == "y" || key == "width" || key == "height" || key == "thickness" ||
-            key == "scale" || key == "stroke_width") {
-          float value = 0;
-          if (!inner.coordinate(&value)) {
-            return false;
-          }
-          if (key == "x") {
-            glyph.x = path.x = value;
-          } else if (key == "y") {
-            glyph.y = path.y = value;
-          } else if (key == "width" || key == "thickness") {
-            rule.width = value;
-          } else if (key == "height") {
-            rule.height = value;
-          } else if (key == "scale") {
-            glyph.scale = value > 0 ? value : 1.0f;
-          } else {
-            path.strokeWidth = value;
-          }
-          return true;
-        }
-        if (key == "font") {
-          std::string name;
-          if (!inner.string(&name)) {
-            return false;
-          }
-          glyph.font = fontFromName(name);
-          return true;
-        }
-        if (key == "char_code" || key == "code_point" || key == "char") {
-          double code = 0;
-          if (!inner.number(&code)) {
-            return false;
-          }
-          if (code < 0 || code > static_cast<double>(limits::kMaxCodePoint)) {
-            return inner.fail("A display list code point is out of range.");
-          }
-          glyph.codePoint = static_cast<char32_t>(code);
-          return true;
-        }
-        if (key == "color") {
-          const uint32_t color = readColor(inner);
-          glyph.color = rule.color = path.color = color;
-          return true;
-        }
-        if (key == "dashed" || key == "fill") {
-          double flag = 0;
-          if (!inner.number(&flag)) {
-            return false;
-          }
-          if (key == "dashed") {
-            rule.dashed = flag != 0;
-          } else {
-            path.fill = flag != 0;
-          }
-          return true;
-        }
-        if (key == "ops" || key == "path" || key == "commands") {
-          if (!inner.peek('[')) {
-            // A path with no commands draws nothing, which is a legal thing for
-            // a protocol to send and not worth refusing the formula over.
-            return true;
-          }
-          return inner.array([&](Reader &element) {
-            if (path.commands.size() >= limits::kMaxPathCommands) {
-              return element.fail("A display list path has too many commands.");
-            }
-            PathCommand command;
-            const bool read = element.object([&](const std::string &field, Reader &values) {
-              if (field == "type" || field == "op") {
-                std::string name;
-                if (!values.string(&name)) {
-                  return false;
-                }
-                command.op = pathOpFromName(name);
-                return true;
-              }
-              float value = 0;
-              if (!values.coordinate(&value)) {
-                return false;
-              }
-              if (field == "x") {
-                command.x = value;
-              } else if (field == "y") {
-                command.y = value;
-              } else if (field == "x2") {
-                command.x2 = value;
-              } else if (field == "y2") {
-                command.y2 = value;
-              }
-              // Any other field is consumed and dropped, which is the same
-              // tolerance as at the top level.
-              return true;
-            });
-            if (read) {
-              path.commands.push_back(command);
-            }
-            return read;
-          });
-        }
-        // A key this build does not know. Skipping it whole is what the
-        // protocol requires.
+  std::string type;
+  float x = 0, y = 0, width = 0, height = 0, thickness = 0, scale = 1, strokeWidth = 0;
+  bool dashed = false;
+  bool fill = false;
+  MathFont font = MathFont::MainRegular;
+  char32_t codePoint = 0;
+  uint32_t color = kInheritColor;
+  std::vector<PathCommand> commands;
+  const bool ok = reader.object([&](const std::string &key, Reader &inner) {
+    if (key == "type") {
+      return inner.string(&type);
+    }
+    if (key == "x") return inner.coordinate(&x);
+    if (key == "y") return inner.coordinate(&y);
+    if (key == "width") return inner.coordinate(&width);
+    if (key == "height") return inner.coordinate(&height);
+    if (key == "thickness") return inner.coordinate(&thickness);
+    if (key == "stroke_width") return inner.coordinate(&strokeWidth);
+    if (key == "scale") {
+      if (!inner.coordinate(&scale)) {
+        return false;
+      }
+      if (!(scale > 0)) {
+        scale = 1;
+      }
+      return true;
+    }
+    if (key == "font") {
+      std::string name;
+      if (!inner.string(&name)) {
+        return false;
+      }
+      font = fontFromName(name);
+      return true;
+    }
+    if (key == "char_code") {
+      double code = 0;
+      if (!inner.number(&code)) {
+        return false;
+      }
+      if (code < 0 || code > static_cast<double>(limits::kMaxCodePoint)) {
+        return inner.fail("A display list code point is out of range.");
+      }
+      codePoint = static_cast<char32_t>(code);
+      return true;
+    }
+    if (key == "color") {
+      color = readColor(inner);
+      return true;
+    }
+    if (key == "dashed") return inner.flag(&dashed);
+    if (key == "fill") return inner.flag(&fill);
+    if (key == "commands") {
+      if (!inner.peek('[')) {
+        // A path with no commands draws nothing, which is a legal thing for a
+        // protocol to send and not worth refusing the formula over.
         inner.skipValue();
         return true;
+      }
+      return inner.array([&](Reader &element) {
+        if (commands.size() >= limits::kMaxPathCommands) {
+          return element.fail("A display list path has too many commands.");
+        }
+        PathCommand command;
+        bool known = false;
+        const bool read = element.object([&](const std::string &field, Reader &values) {
+          if (field == "type") {
+            std::string name;
+            if (!values.string(&name)) {
+              return false;
+            }
+            known = pathOpFromName(name, &command.op);
+            return true;
+          }
+          float value = 0;
+          if (field == "x" || field == "y" || field == "x1" || field == "y1" || field == "x2" || field == "y2") {
+            if (!values.coordinate(&value)) {
+              return false;
+            }
+            (field == "x"    ? command.x
+             : field == "y"  ? command.y
+             : field == "x1" ? command.x1
+             : field == "y1" ? command.y1
+             : field == "x2" ? command.x2
+                             : command.y2) = value;
+            return true;
+          }
+          // Any other field is consumed and dropped, which is the same tolerance
+          // as at the top level.
+          values.skipValue();
+          return true;
+        });
+        if (read && known) {
+          commands.push_back(command);
+        }
+        return read;
       });
+    }
+    // A key this build does not know. Skipping it whole is what the protocol
+    // requires.
+    inner.skipValue();
+    return true;
+  });
   if (!ok) {
     return false;
   }
-  switch (kind) {
-    case 1: layout->glyphs.push_back(glyph); break;
-    case 2: layout->rules.push_back(rule); break;
-    case 3: layout->paths.push_back(std::move(path)); break;
-    default: break;
+  if (type == "GlyphPath") {
+    MathGlyph glyph;
+    glyph.x = x;
+    glyph.y = y;
+    glyph.scale = scale;
+    glyph.font = font;
+    glyph.codePoint = codePoint;
+    glyph.color = color;
+    layout->glyphs.push_back(glyph);
+  } else if (type == "Line") {
+    // The centre line and a thickness, as a box. RaTeX's own renderers never draw
+    // a rule thinner than half a point; that floor is the platform's, at draw
+    // time, because it is in points and this is in em.
+    MathRule rule;
+    rule.x = x;
+    rule.y = y - thickness / 2;
+    rule.width = width;
+    rule.height = thickness;
+    rule.color = color;
+    rule.dashed = dashed;
+    layout->rules.push_back(rule);
+  } else if (type == "Rect") {
+    MathRule rule;
+    rule.x = x;
+    rule.y = y;
+    rule.width = width;
+    rule.height = height;
+    rule.color = color;
+    layout->rules.push_back(rule);
+  } else if (type == "Path") {
+    MathPath path;
+    path.x = x;
+    path.y = y;
+    path.commands = std::move(commands);
+    path.fill = fill;
+    path.strokeWidth = strokeWidth;
+    path.color = color;
+    layout->paths.push_back(std::move(path));
   }
   return true;
 }

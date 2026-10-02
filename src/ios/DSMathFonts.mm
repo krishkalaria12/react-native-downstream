@@ -1,5 +1,6 @@
 #import "DSMathFonts.h"
 
+#import "math/MathEngine.h"
 #import "math/MathSpeech.h"
 
 #import <algorithm>
@@ -32,13 +33,21 @@ FaceTable &faces() {
   return *instance;
 }
 
-NSString *fontDirectory() {
-  FaceTable &table = faces();
-  std::lock_guard<std::mutex> lock(table.mutex);
-  if (table.directory.empty()) {
-    return nil;
+/// Releases every loaded face. The caller holds the table's lock, which is not
+/// recursive, so this never takes it.
+void releaseFaces(FaceTable &table) {
+  for (CTFontRef font : table.fonts) {
+    if (font != NULL) {
+      CFRelease(font);
+    }
   }
-  return [NSString stringWithUTF8String:table.directory.c_str()];
+  for (CGFontRef graphics : table.graphics) {
+    if (graphics != NULL) {
+      CGFontRelease(graphics);
+    }
+  }
+  table.fonts.clear();
+  table.graphics.clear();
 }
 
 } // namespace
@@ -50,47 +59,29 @@ void DSMathInstallFontDirectory(const std::string &directory) {
   if (table.directory == directory) {
     return;
   }
-  [DSMathFonts invalidate];
+  releaseFaces(table);
   table.directory = directory;
 }
 
-/// Private, so the header stays the public surface: only `fontFor:` needs to ask
-/// whether there is a font directory at all, and answering that separately from
-/// `fontFor:`'s own lookup is what keeps a missing package one nil check rather
-/// than a nil returned from inside a lock.
-@interface DSMathFonts ()
-+ (nullable NSString *)resolvedDirectory;
-@end
+extern "C" void DownstreamInstallMathEngine(const void *parseAndLayout, const void *freeDisplayList,
+                                            const void *lastError, const char *fontDirectory) {
+  MathEngineFunctions functions{};
+  if (!mathEngineFunctionsFromSymbols(parseAndLayout, freeDisplayList, lastError, &functions)) {
+    return;
+  }
+  const std::string directory = fontDirectory != nullptr ? fontDirectory : "";
+  MathEngine::install(functions, directory);
+  DSMathInstallFontDirectory(directory);
+}
 
 @implementation DSMathFonts
 
-/// Where the package's fonts live, or nil when no math package is installed.
-///
-/// Two ways to find it, in order: the installer records the path the math pod's
-/// `+load` gave it, and failing that the KaTeX fonts are looked for in the
-/// framework's own bundle. The second is what makes a font directory vendored
-/// inside the app — which is how a static-linked math pod ends up — work without
-/// the installer running at all.
-+ (nullable NSString *)resolvedDirectory {
-  if (NSString *installed = fontDirectory()) {
-    return installed;
-  }
-  for (NSBundle *bundle in [NSBundle allBundles]) {
-    NSString *path = [bundle pathForResource:@"fonts" ofType:nil];
-    if (path != nil) {
-      return path;
-    }
-  }
-  return nil;
-}
-
+/// The face for one KaTeX font, from the directory the math package installed.
+/// There is no other place to look: searching the app's bundles for a "fonts"
+/// folder would find an icon font's before it found KaTeX's.
 + (nullable CTFontRef)fontFor:(MathFont)font size:(CGFloat)size {
   if (font == MathFont::System) {
     return NULL;
-  }
-  NSString *directory = [DSMathFonts resolvedDirectory];
-  if (directory == nil) {
-    return nil;
   }
   FaceTable &table = faces();
   std::lock_guard<std::mutex> lock(table.mutex);
@@ -145,7 +136,7 @@ void DSMathInstallFontDirectory(const std::string &directory) {
 }
 
 + (CTFontRef)systemFontAtSize:(CGFloat)size {
-  return CTFontCreateWithName(CFSTR("System"), size, NULL);
+  return CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, size, NULL);
 }
 
 + (UIFont *)systemUIFontAtSize:(CGFloat)size {
@@ -155,18 +146,7 @@ void DSMathInstallFontDirectory(const std::string &directory) {
 + (void)invalidate {
   FaceTable &table = faces();
   std::lock_guard<std::mutex> lock(table.mutex);
-  for (CTFontRef font : table.fonts) {
-    if (font != NULL) {
-      CFRelease(font);
-    }
-  }
-  for (CGFontRef graphics : table.graphics) {
-    if (graphics != NULL) {
-      CGFontRelease(graphics);
-    }
-  }
-  table.fonts.clear();
-  table.graphics.clear();
+  releaseFaces(table);
 }
 
 @end
@@ -196,33 +176,38 @@ void DSMathInstallFontDirectory(const std::string &directory) {
   if (context == NULL || size <= 0) {
     return;
   }
-  // One transform for the whole list, so each item below works in em units
-  // against a baseline at the origin. The baseline is at y = height in the
-  // layout, and Core Graphics draws downward, so the origin is the formula's
-  // baseline rather than its top.
+  // One transform for the whole list, so each item below works in em units. The
+  // origin is the top-left of the formula's box, which is RaTeX's own origin: a
+  // glyph's y is its baseline measured down from the top, and the formula's
+  // baseline is at y = height.
+  const CGFloat unit = size * scale;
   CGContextSaveGState(context);
-  CGContextScaleCTM(context, size * scale, size * scale);
-  CGContextTranslateCTM(context, 0, -layout.height);
+  CGContextScaleCTM(context, unit, unit);
   CGContextSetShouldAntialias(context, true);
+  // RaTeX's own renderers never draw a rule thinner than half a point, so a
+  // fraction bar at a small size stays visible. The floor is in points, and this
+  // space is in em.
+  const CGFloat minimumRule = 0.5 / unit;
 
   for (const MathRule &rule : layout.rules) {
-    CGContextSaveGState(context);
     CGContextSetFillColorWithColor(context, [self colorFor:rule.color fallback:color].CGColor);
-    const CGRect box = CGRectMake(rule.x, rule.y, rule.width, rule.height);
+    CGFloat y = rule.y;
+    CGFloat height = rule.height;
+    if (height < minimumRule) {
+      y -= (minimumRule - height) / 2;
+      height = minimumRule;
+    }
     if (rule.dashed) {
-      // A dashed rule is drawn as a run of segments rather than with a dash
-      // pattern, because a pattern is in user space and these are em units: a
-      // pattern set once at the outer scale would be the wrong length for a
-      // formula drawn at a different size.
-      const CGFloat dash = std::max<CGFloat>(rule.height, 0.04);
+      // Dashes three thicknesses long, as RaTeX draws them, as segments rather
+      // than a dash pattern so their length is in em like everything else here.
+      const CGFloat dash = height * 3;
       for (CGFloat x = rule.x; x < rule.x + rule.width; x += dash * 2) {
         const CGFloat end = std::min<CGFloat>(x + dash, rule.x + rule.width);
-        CGContextFillRect(context, CGRectMake(x, rule.y, end - x, rule.height));
+        CGContextFillRect(context, CGRectMake(x, y, end - x, height));
       }
     } else {
-      CGContextFillRect(context, box);
+      CGContextFillRect(context, CGRectMake(rule.x, y, rule.width, height));
     }
-    CGContextRestoreGState(context);
   }
 
   for (const MathPath &path : layout.paths) {
@@ -230,33 +215,23 @@ void DSMathInstallFontDirectory(const std::string &directory) {
       continue;
     }
     CGContextSaveGState(context);
-    CGContextSetFillColorWithColor(context, [self colorFor:path.color fallback:color].CGColor);
-    CGContextSetStrokeColorWithColor(context, [self colorFor:path.color fallback:color].CGColor);
-    CGContextSetLineWidth(context, path.strokeWidth);
-    if (path.fill) {
-      CGContextBeginPath(context);
-    } else {
-      CGContextBeginPath(context);
-    }
+    UIColor *ink = [self colorFor:path.color fallback:color];
+    CGContextSetFillColorWithColor(context, ink.CGColor);
+    CGContextSetStrokeColorWithColor(context, ink.CGColor);
+    CGContextSetLineWidth(context, path.strokeWidth > 0 ? path.strokeWidth : minimumRule);
+    CGContextTranslateCTM(context, path.x, path.y);
+    CGContextBeginPath(context);
     for (const PathCommand &command : path.commands) {
       switch (command.op) {
-        case PathOp::Move:
-          CGContextMoveToPoint(context, path.x + command.x, path.y + command.y);
-          break;
-        case PathOp::Line:
-          CGContextAddLineToPoint(context, path.x + command.x, path.y + command.y);
-          break;
+        case PathOp::Move: CGContextMoveToPoint(context, command.x, command.y); break;
+        case PathOp::Line: CGContextAddLineToPoint(context, command.x, command.y); break;
         case PathOp::Quad:
-          CGContextAddQuadCurveToPoint(context, path.x + command.x, path.y + command.y, path.x + command.x2,
-                                       path.y + command.y2);
+          CGContextAddQuadCurveToPoint(context, command.x1, command.y1, command.x, command.y);
           break;
         case PathOp::Cubic:
-          CGContextAddCurveToPoint(context, path.x + command.x, path.y + command.y, path.x + command.x2,
-                                   path.y + command.y2, path.x, path.y);
+          CGContextAddCurveToPoint(context, command.x1, command.y1, command.x2, command.y2, command.x, command.y);
           break;
-        case PathOp::Close:
-          CGContextClosePath(context);
-          break;
+        case PathOp::Close: CGContextClosePath(context); break;
       }
     }
     if (path.fill) {
@@ -271,9 +246,8 @@ void DSMathInstallFontDirectory(const std::string &directory) {
     if (glyph.codePoint == 0) {
       continue;
     }
-    // A size-2 or larger glyph is emitted as a scaled glyph rather than as a
-    // path, so a big `\sum` stays a real glyph of Size1 at twice the size
-    // instead of an outline this renderer would have to scale by hand.
+    // A large operator comes as a glyph of a Size font with a scale, so a big
+    // `\sum` stays a real glyph rather than an outline drawn by hand.
     CTFontRef face = glyph.font == MathFont::System ? [DSMathFonts systemFontAtSize:glyph.scale]
                                                     : [DSMathFonts fontFor:glyph.font size:glyph.scale];
     if (face == NULL) {
@@ -282,22 +256,37 @@ void DSMathInstallFontDirectory(const std::string &directory) {
       // formula with one missing symbol.
       continue;
     }
-    // A code point past the BMP, such as a math italic letter, is a surrogate
-    // pair, and Core Text answers it with the glyph first and a zero second.
-    unichar characters[2];
+    // A code point past the BMP, such as an emoji or a math italic letter, is a
+    // surrogate pair, and Core Text answers it with the glyph first.
+    UniChar characters[2];
     CFIndex count = 1;
     if (glyph.codePoint > 0xFFFF) {
       const char32_t offset = glyph.codePoint - 0x10000;
-      characters[0] = static_cast<unichar>(0xD800 + (offset >> 10));
-      characters[1] = static_cast<unichar>(0xDC00 + (offset & 0x3FF));
+      characters[0] = static_cast<UniChar>(0xD800 + (offset >> 10));
+      characters[1] = static_cast<UniChar>(0xDC00 + (offset & 0x3FF));
       count = 2;
     } else {
-      characters[0] = static_cast<unichar>(glyph.codePoint);
+      characters[0] = static_cast<UniChar>(glyph.codePoint);
     }
     CGGlyph glyphs[2] = {0, 0};
+    CTFontRef drawn = face;
     if (!CTFontGetGlyphsForCharacters(face, characters, glyphs, count) || glyphs[0] == 0) {
-      CFRelease(face);
-      continue;
+      // The system face has no emoji or CJK glyph of its own; ask Core Text for
+      // the face it would cascade to, which is what a text view draws.
+      if (glyph.font != MathFont::System) {
+        CFRelease(face);
+        continue;
+      }
+      CFStringRef string = CFStringCreateWithCharacters(kCFAllocatorDefault, characters, count);
+      drawn = CTFontCreateForString(face, string, CFRangeMake(0, count));
+      CFRelease(string);
+      if (drawn == NULL || !CTFontGetGlyphsForCharacters(drawn, characters, glyphs, count) || glyphs[0] == 0) {
+        if (drawn != NULL) {
+          CFRelease(drawn);
+        }
+        CFRelease(face);
+        continue;
+      }
     }
     CGContextSaveGState(context);
     CGContextSetFillColorWithColor(context, [self colorFor:glyph.color fallback:color].CGColor);
@@ -307,11 +296,76 @@ void DSMathInstallFontDirectory(const std::string &directory) {
     CGContextTranslateCTM(context, glyph.x, glyph.y);
     CGContextScaleCTM(context, 1, -1);
     const CGPoint origin = CGPointZero;
-    CTFontDrawGlyphs(face, glyphs, &origin, 1, context);
+    CTFontDrawGlyphs(drawn, glyphs, &origin, 1, context);
     CGContextRestoreGState(context);
+    if (drawn != face) {
+      CFRelease(drawn);
+    }
     CFRelease(face);
   }
   CGContextRestoreGState(context);
+}
+
+@end
+
+NSAttributedStringKey const DSMathLiteralAttributeName = @"DSMathLiteral";
+
+@implementation DSMathAttachment {
+  MathLayout::Handle _layout;
+  CGFloat _fontSize;
+  UIColor *_color;
+}
+
+- (instancetype)initWithLayout:(MathLayout::Handle)layout fontSize:(CGFloat)fontSize color:(UIColor *)color {
+  if (!(self = [super initWithData:nil ofType:nil])) {
+    return nil;
+  }
+  _layout = std::move(layout);
+  _fontSize = fontSize;
+  _color = color ?: UIColor.labelColor;
+  return self;
+}
+
+/// The size per em this formula draws at in a line `lineWidth` wide.
+- (CGFloat)sizeForLineWidth:(CGFloat)lineWidth {
+  const CGFloat natural = _layout ? _layout->width * _fontSize : 0;
+  if (!(lineWidth > 0) || natural <= lineWidth || natural <= 0) {
+    return _fontSize;
+  }
+  return _fontSize * std::max<CGFloat>(kMinInlineScale, lineWidth / natural);
+}
+
+- (CGRect)attachmentBoundsForTextContainer:(NSTextContainer *)textContainer
+                      proposedLineFragment:(CGRect)lineFrag
+                             glyphPosition:(CGPoint)position
+                            characterIndex:(NSUInteger)charIndex {
+  if (!_layout) {
+    return CGRectZero;
+  }
+  const CGFloat size = [self sizeForLineWidth:CGRectGetWidth(lineFrag)];
+  // The origin is on the baseline and y grows up, so the box starts at minus the
+  // formula's depth.
+  return CGRectMake(0, -_layout->depth * size, _layout->width * size, (_layout->height + _layout->depth) * size);
+}
+
+- (UIImage *)imageForBounds:(CGRect)imageBounds
+              textContainer:(NSTextContainer *)textContainer
+             characterIndex:(NSUInteger)charIndex {
+  if (!_layout || imageBounds.size.width <= 0 || imageBounds.size.height <= 0) {
+    return nil;
+  }
+  const MathLayout::Handle layout = _layout;
+  const CGFloat total = layout->height + layout->depth;
+  const CGFloat size = total > 0 ? imageBounds.size.height / total : _fontSize;
+  // Resolved against the appearance being drawn, which UIKit sets as the current
+  // trait collection while a text view draws.
+  UIColor *color = [_color resolvedColorWithTraitCollection:UITraitCollection.currentTraitCollection];
+  UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
+  format.opaque = NO;
+  UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:imageBounds.size format:format];
+  return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+    [DSMathRenderer drawLayout:*layout size:size color:color scale:1 inContext:context.CGContext];
+  }];
 }
 
 @end

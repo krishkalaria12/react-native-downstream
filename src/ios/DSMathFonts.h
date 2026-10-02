@@ -11,12 +11,25 @@
 NS_ASSUME_NONNULL_BEGIN
 
 #ifdef __cplusplus
-/// Tells the font loader where the math package's fonts are. Called once, from
-/// the package's `+load`, and only by the package that carries the binary.
-///
-/// A C function rather than a class method because the caller is a pod's
-/// `+load` and a pod is not a caller this header's types can reach.
+/// Tells the font loader where the math package's fonts are. Called by
+/// `DownstreamInstallMathEngine`.
 void DSMathInstallFontDirectory(const std::string &directory);
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+/// Installs the math engine: RaTeX's `ratex_parse_and_layout`,
+/// `ratex_free_display_list` and `ratex_get_last_error`, as addresses, and the
+/// directory holding the KaTeX fonts.
+///
+/// Called from the math pod's `+load`, which declares this prototype itself: a
+/// C function taking addresses is a surface a second pod can call without
+/// seeing any of this library's headers, which are private.
+void DownstreamInstallMathEngine(const void *parseAndLayout, const void *freeDisplayList, const void *lastError,
+                                 const char *fontDirectory);
+#ifdef __cplusplus
+}
 #endif
 
 /// The KaTeX faces, loaded from the math package's bundle on first use.
@@ -60,8 +73,9 @@ void DSMathInstallFontDirectory(const std::string &directory);
 /// changes what a reader sees.
 @interface DSMathRenderer : NSObject
 
-/// Draws `layout` at `size` points with `color` as the color for every item the
-/// formula did not color itself.
+/// Draws `layout` at `size` points, with the top-left of its box at the
+/// context's origin, and `color` as the color for every item the formula did not
+/// color itself.
 ///
 /// `color` is the run's own dynamic color, so dark mode, a theme, and increased
 /// contrast all reach a formula without a relayout: the layout carries no theme,
@@ -77,6 +91,26 @@ void DSMathInstallFontDirectory(const std::string &directory);
 + (CGSize)sizeOfLayout:(const downstream::MathLayout &)layout size:(CGFloat)size;
 
 @end
+
+#ifdef __cplusplus
+/// The attribute an inline formula's attachment character carries: the literal
+/// it stands in for, delimiters included, which is what a copy writes back.
+extern NSAttributedStringKey const DSMathLiteralAttributeName;
+
+/// One inline formula, drawn in the line it sits in.
+///
+/// An attachment rather than a view, so TextKit wraps, selects and measures it
+/// with the text around it. Its bounds put the formula's baseline on the line's
+/// baseline, at the run's own size times KaTeX's 1.21, scaled down to fit a line
+/// that is too narrow but never below half. It draws when TextKit asks, in the
+/// run's own color resolved for the current appearance, so dark mode reaches it
+/// without the text being rebuilt.
+@interface DSMathAttachment : NSTextAttachment
+- (instancetype)initWithLayout:(downstream::MathLayout::Handle)layout
+                      fontSize:(CGFloat)fontSize
+                         color:(UIColor *)color;
+@end
+#endif
 
 /// The spoken form of a formula, from the engine's verbalizer.
 ///

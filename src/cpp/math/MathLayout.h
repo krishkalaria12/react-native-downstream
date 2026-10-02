@@ -81,10 +81,14 @@ enum class PathOp : uint8_t {
   Close,
 };
 
+/// One path segment, in em relative to its path's origin. `x` and `y` are the
+/// end point; `x1, y1` is a quadratic's control point and a cubic's first one,
+/// and `x2, y2` is a cubic's second.
 struct PathCommand {
   PathOp op{PathOp::Move};
-  /// x, y for Move and Line; x1, y1, x, y for Quad and Cubic.
-  float x{0}, y{0}, x2{0}, y2{0};
+  float x{0}, y{0};
+  float x1{0}, y1{0};
+  float x2{0}, y2{0};
 };
 
 /// One glyph, placed in em relative to the layout's origin.
@@ -100,6 +104,10 @@ struct MathGlyph {
 };
 
 /// A filled rectangle: a fraction bar, a radical's overbar, a `\rule`.
+///
+/// The box itself, top-left and size. RaTeX sends a `Line` as its centre line and
+/// a thickness; the decoder turns that into this box so a platform draws one
+/// shape for both.
 struct MathRule {
   float x{0}, y{0}, width{0}, height{0};
   uint32_t color{kInheritColor};
@@ -112,7 +120,7 @@ struct MathRule {
 struct MathPath {
   float x{0}, y{0};
   std::vector<PathCommand> commands;
-  /// A stroked path has a width of its own; a filled one is closed.
+  /// A stroked path's width in em, or zero for the platform's hairline.
   float strokeWidth{0};
   bool fill{false};
   uint32_t color{kInheritColor};

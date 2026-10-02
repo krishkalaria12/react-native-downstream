@@ -209,12 +209,17 @@ function compileObject(source) {
   return target;
 }
 
+/** A prebuilt archive, which is linked as it is rather than compiled. */
+const isArchive = (source) => source.endsWith('.a');
+
 /** Reuse the same engine objects in every binary and in ccache. */
 export function compile(sources, name) {
   const cached = binaries.get(name);
   if (cached !== undefined) return cached;
   mkdirSync(buildRoot(), { recursive: true });
-  const linkObjects = sources.map(compileObject);
+  const linkObjects = sources.map((source) =>
+    isArchive(source) ? source : compileObject(source)
+  );
   const archive = highlightArchive();
   const compiler = process.env.CXX ?? 'c++';
   const key = digest(
@@ -254,7 +259,7 @@ export async function prepareTargets(targets) {
   mkdirSync(buildRoot(), { recursive: true });
   const sources = [
     ...new Set([...Object.values(targets).flat(), ...HIGHLIGHT_SOURCES]),
-  ];
+  ].filter((source) => !isArchive(source));
   let next = 0;
   let failed = false;
   let failure;

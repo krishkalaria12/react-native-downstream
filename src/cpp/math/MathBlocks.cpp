@@ -123,7 +123,7 @@ uint64_t layoutMathInBlock(Block *block, MathLayoutStats *stats) {
     before = stats->laidOut;
   }
   for (MathSpan &span : block->math) {
-    layoutSpan(&span, /*settled=*/false, nullptr, stats);
+    layoutSpan(&span, /*settled=*/true, nullptr, stats);
   }
   return stats != nullptr ? stats->laidOut - before : 0;
 }
@@ -132,27 +132,14 @@ void layoutMathTail(std::vector<Block> *tail, const Document *previous, MathLayo
   if (tail == nullptr || tail->empty()) {
     return;
   }
-  // The last math block may still grow, so its formulas are the unsettled ones.
-  size_t last = tail->size();
-  while (last > 0 && (*tail)[last - 1].kind != BlockKind::MathBlock) {
-    last--;
-  }
-  for (size_t index = 0; index < last; index++) {
+  // Only the last block may still grow: a later block means the earlier one is
+  // closed. Every kind of block is visited, because an inline formula in a
+  // paragraph or a list item needs a layout as much as a math block does.
+  const size_t last = tail->size() - 1;
+  for (size_t index = 0; index < tail->size(); index++) {
     Block &block = (*tail)[index];
-    if (block.kind != BlockKind::MathBlock) {
-      continue;
-    }
     for (MathSpan &span : block.math) {
-      layoutSpan(&span, /*settled=*/true, previous, stats);
-    }
-  }
-  for (size_t index = last; index < tail->size(); index++) {
-    Block &block = (*tail)[index];
-    if (block.kind != BlockKind::MathBlock) {
-      continue;
-    }
-    for (MathSpan &span : block.math) {
-      layoutSpan(&span, /*settled=*/false, previous, stats);
+      layoutSpan(&span, /*settled=*/index < last, previous, stats);
     }
   }
 }

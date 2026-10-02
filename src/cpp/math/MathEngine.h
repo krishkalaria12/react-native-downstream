@@ -29,43 +29,44 @@
 
 namespace downstream {
 
-/// The color the engine asks the math engine to use for anything the formula
-/// did not color itself. The decoder maps exactly this value to
-/// `kInheritColor`, which is what makes a layout independent of the theme.
-struct MathSentinelColor {
-  uint8_t r{0};
-  uint8_t g{0};
-  uint8_t b{0};
-  uint8_t a{0};
-};
-
-/// What the engine asks for on one call.
+/// RaTeX's `RatexColor`: normalized floats. The engine passes all zeros as the
+/// default color, and the decoder maps exactly that value to `kInheritColor`,
+/// which is what makes a layout independent of the theme.
 ///
-/// A field struct rather than a JSON string so the ABI is a fixed layout this
-/// file owns; RaTeX's own header would be a second, unpinned copy of it.
+/// The three structs below are plain C structs, with no initializers, because
+/// they cross a C ABI by value.
+struct MathEngineColor {
+  float r;
+  float g;
+  float b;
+  float a;
+};
+
+/// RaTeX's `RatexOptions`, field for field.
+///
+/// Mirrored rather than included, so the core compiles without the package. The
+/// layout is RaTeX's C ABI, and `structSize` is how RaTeX tells one version of
+/// it from another: fields past the size a caller passes are ignored.
 struct MathEngineOptions {
-  /// Display style, which is what makes `\sum` put its limits above and below.
-  int display{0};
-  /// A scale hint. 1 leaves the em metrics alone, which is what both platforms
-  /// want because the platform chooses the size at draw time.
-  double fontSize{1.0};
-  /// The sentinel, so an uncolored item comes back as `kInheritColor`.
-  MathSentinelColor defaultColor{};
-  /// A directory of the KaTeX fonts, UTF-8. The engine finds the metrics it
-  /// needs from these files; a null or wrong path is a layout failure, not a
-  /// crash.
-  const char *fontDir{nullptr};
+  /// `sizeof(MathEngineOptions)`.
+  size_t structSize;
+  /// 1 for display style, which is what puts `\sum`'s limits above and below.
+  int displayMode;
+  /// The default color, or null for black.
+  const MathEngineColor *color;
 };
 
-/// The result one call produced. `json` is owned by the engine and released with
-/// `free`; `error` is a thread-local message, valid until the next call on the
-/// same thread.
+/// RaTeX's `RatexResult`. `data` is owned by the engine and released with
+/// `free`; a non-zero `errorCode` means `data` is null and `lastError` holds a
+/// thread-local message, valid until the next call on the same thread.
 struct MathEngineResult {
-  const char *json{nullptr};
-  int ok{0};
+  char *data;
+  int errorCode;
 };
 
-/// RaTeX's C ABI, as function pointers.
+/// RaTeX's C ABI, as function pointers: `ratex_parse_and_layout`,
+/// `ratex_free_display_list` and `ratex_get_last_error`, with exactly their
+/// signatures, so the math package installs RaTeX's own functions with no shim.
 ///
 /// Function pointers rather than a linked symbol so the core has no undefined
 /// reference to the engine: iOS installs the three functions from the math
@@ -78,6 +79,19 @@ struct MathEngineFunctions {
   const char *(*lastError)(void);
 };
 
+/// RaTeX's three symbols as addresses, which is what `dlsym` hands Android and
+/// what the iOS pod takes from its static archive, as the functions above.
+///
+/// One cast, in one place, for both platforms. The mirror's layout is held to
+/// RaTeX's own header by `test_math_engine`, which installs through this too.
+/// False when any address is null.
+bool mathEngineFunctionsFromSymbols(const void *parseAndLayout, const void *freeDisplayList,
+                                    const void *lastError, MathEngineFunctions *out);
+
+/// Finds the engine's functions on first use. Returns false when the library is
+/// not there, in which case every formula keeps its literal.
+using MathEngineResolver = bool (*)(MathEngineFunctions *out);
+
 namespace MathEngine {
 
 /// Hands the engine its three functions and where its fonts are. Called once
@@ -89,12 +103,19 @@ namespace MathEngine {
 /// pointer into a bundle that could be released first.
 void install(const MathEngineFunctions &functions, std::string_view fontDir);
 
+/// Records that an engine is present without loading it yet. `resolve` runs once,
+/// on the first formula a document needs laid out, which is how Android keeps a
+/// 3 MB library out of a process that never shows math. `available()` is true
+/// from this call on, because the package that registers a resolver is installed.
+void installResolver(MathEngineResolver resolve, std::string_view fontDir);
+
 /// Whether a formula can be laid out at all. False means every formula keeps
 /// its literal and a development warning names the package to install, once.
 bool available();
 
-/// The font directory the engine was installed with, or empty.
-std::string_view fontDirectory();
+/// The font directory the engine was installed with, or empty. A copy, because a
+/// later install may replace it.
+std::string fontDirectory();
 
 /**
  * Lays out one formula, through the shared cache.

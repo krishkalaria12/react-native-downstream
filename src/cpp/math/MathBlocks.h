@@ -85,8 +85,8 @@ uint64_t layoutMathInBlock(Block *block, MathLayoutStats *stats = nullptr);
 
 /// Lays out a stream's unstable tail, in place.
 ///
-/// Every block but the last math block is settled, because a later block means
-/// the earlier one can no longer change. The last one may still grow, so its
+/// Every block but the last is settled, because a later block means the earlier
+/// one can no longer change. The last one may still grow, so its
 /// formulas are laid out as unsettled: one that does not parse keeps the
 /// previous snapshot's layout rather than flickering to its source on every
 /// token. This is the same pass `layoutMath` runs, with the difference that it

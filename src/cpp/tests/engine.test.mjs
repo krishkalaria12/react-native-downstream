@@ -34,6 +34,14 @@ const [STRONG, EMPHASIS, STRIKE, CODE, LINK, IMAGE_ALT, FOOTNOTE] = [
   0, 1, 2, 3, 4, 5, 6,
 ].map((bit) => 1 << bit);
 
+/**
+ * RaTeX's macOS slice, which `node math/scripts/vendor-ratex.mjs` writes. The
+ * math engine test links it, and is skipped where it is not vendored: there is
+ * no Linux slice in RaTeX's release.
+ */
+const RATEX_HOST = resolve(CPP, '..', '..', 'math', 'vendor', 'host', 'libratex_ffi.a');
+const ratexVendored = process.platform === 'darwin' && existsSync(RATEX_HOST);
+
 const targets = {};
 const binary = (name) => compile(targets[name], name);
 
@@ -75,6 +83,14 @@ before(async () => {
     ['test_images', [downstream('ImageLayout.cpp')]],
     ['test_math', []],
   ];
+  if (ratexVendored) {
+    executables.push([
+      'test_math_engine',
+      ['MathEngine.cpp', 'MathDisplayList.cpp', 'MathLayout.cpp']
+        .map((name) => join(CPP, 'math', name))
+        .concat(RATEX_HOST),
+    ]);
+  }
   for (const [name, dependencies] of executables) {
     targets[name] = [
       testSource(`${name}.cpp`),
@@ -825,6 +841,23 @@ describe('math', () => {
   test('block and inline sizing', () => {
     execFileSync(binary('test_math'), { timeout: 15_000, stdio: 'inherit' });
   });
+
+  // RaTeX itself, installed the way the math package installs it, read by the
+  // decoder both platforms draw from.
+  test(
+    'RaTeX display lists decode',
+    {
+      skip: ratexVendored
+        ? false
+        : 'run node math/scripts/vendor-ratex.mjs on macOS',
+    },
+    () => {
+      execFileSync(binary('test_math_engine'), {
+        timeout: 30_000,
+        stdio: 'inherit',
+      });
+    }
+  );
 });
 
 describe('input', () => {
