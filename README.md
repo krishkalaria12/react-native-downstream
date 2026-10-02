@@ -212,9 +212,9 @@ collect device traces.
 
 CI runs three workflows. `ci.yml` runs on every push. `ios.yml` and
 `android.yml` run only when native code or the native specs change (`src/cpp`,
-`src/ios`, `src/android`, `src/specs`, and the `Native*.ts` files). Each command below is the one its job runs, so
-a change that passes here should pass there. Run them from the repository root
-after `pnpm install`.
+`src/ios`, `src/android`, `src/specs`, and the `Native*.ts` files). Each
+command below is the one its job runs, so a change that passes here should pass
+there. Run them from the repository root after `pnpm install`.
 
 ```sh
 pnpm lint && pnpm typecheck   # lint
