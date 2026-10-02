@@ -208,6 +208,60 @@ adapter uses React DOM. Their different overhead prevents these timings from
 ranking the native renderers. The example app's Bench and Testing screens
 collect device traces.
 
+## Running CI locally
+
+CI runs three workflows. `ci.yml` runs on every push. `ios.yml` and
+`android.yml` run only when native code or the native specs change (`src/cpp`,
+`src/ios`, `src/android`, `src/specs`, and the `Native*.ts` files). Each command below is the one its job runs, so
+a change that passes here should pass there. Run them from the repository root
+after `pnpm install`.
+
+```sh
+pnpm lint && pnpm typecheck   # lint
+pnpm test                     # test
+pnpm test:native              # test-native: builds and tests the C++ engine
+pnpm test:kotlin              # test-kotlin: needs kotlinc (brew install kotlin)
+pnpm prepare                  # build-library
+pnpm example exec expo export --platform web   # build-web
+```
+
+### iOS
+
+Needs Xcode and CocoaPods. This compiles the `Downstream` pod and its
+dependencies for the simulator, the way CI does, without building or signing the
+app:
+
+```sh
+pnpm example exec expo prebuild --platform ios --no-install
+(cd example/ios && pod install)
+xcodebuild -project example/ios/Pods/Pods.xcodeproj -scheme Downstream \
+  -configuration Debug -sdk iphonesimulator \
+  -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath /tmp/downstream-ios-build \
+  CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO build
+```
+
+If `xcode-select` points at the Command Line Tools, prefix the command with
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`. Newer Xcode releases
+reject a dependency's iOS 6.0 deployment target. Add
+`IPHONEOS_DEPLOYMENT_TARGET=15.1` to the `xcodebuild` line to work around it.
+
+### Android
+
+Needs JDK 17, the Android SDK, and NDK 27.1, with `ANDROID_HOME` set. This
+compiles the Kotlin sources and the JNI and Fabric C++ for one ABI, without an
+emulator or an APK:
+
+```sh
+pnpm example exec expo prebuild --platform android --no-install
+(cd example/android && ./gradlew :react-native-downstream:compileDebugKotlin \
+  :app:externalNativeBuildDebug -PreactNativeArchitectures=x86_64)
+```
+
+The Android build compiles C++ with `-Werror`, so a deprecation warning that iOS
+lets through fails here. `example/ios` and `example/android` are generated and
+ignored by git. Delete them and prebuild again when a native dependency changes.
+
 ## License
 
 MIT, except for the vendored third-party sources, which keep their own terms:
