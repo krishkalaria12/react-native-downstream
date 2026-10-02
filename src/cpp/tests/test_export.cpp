@@ -66,7 +66,16 @@ void checkPlan(const char *label, std::string_view source, const char *expected)
     if (!shape.empty()) {
       shape.push_back(' ');
     }
-    shape += segment.isTable() ? 'T' : segment.isCode() ? 'C' : 't';
+    // One letter per kind rather than a table flag and a code flag, because the
+    // plan has five kinds and the last two were added after the other three: a
+    // boolean per kind is how a new one gets drawn as prose and measured as text.
+    switch (segment.kind) {
+      case SegmentKind::Table: shape += 'T'; break;
+      case SegmentKind::Code: shape += 'C'; break;
+      case SegmentKind::Math: shape += 'M'; break;
+      case SegmentKind::Image: shape += 'I'; break;
+      case SegmentKind::Text: shape += 't'; break;
+    }
     shape += std::to_string(segment.from);
     shape.push_back('-');
     shape += std::to_string(segment.to);
@@ -112,6 +121,28 @@ void testSegmentPlan() {
             "t0-1 C1-2");
   checkPlan("a rule is not a code segment", "a\n\n---\n\nb\n", "t0-3");
   checkPlan("a table and a code block in one document", "| x |\n| - |\n| 1 |\n\n```js\nx\n```\n", "T0-2 C2-3");
+
+  // A formula is a segment of its own for the same reason a code block is: it has
+  // its own box, its own theme slots, and its own height, so sharing a segment
+  // with prose would mean measuring it as text and drawing it as neither.
+  checkPlan("a lone display formula is its own segment", "a\n\n$$x^2$$\n\nb\n", "t0-1 M1-2 t2-3");
+  checkPlan("a display formula first", "$$x$$\n\nb\n", "M0-1 t1-2");
+  checkPlan("a math fence is a math segment", "```math\nx\n```\n\nb\n", "M0-1 t1-2");
+  checkPlan("a display formula and a code block in one document", "$$x$$\n\n```js\nx\n```\n", "M0-1 C1-2");
+
+  // Inline math stays inside a text segment: it is the height of the line it sits
+  // in, not a box of its own.
+  checkPlan("inline math stays in prose", "a $$x$$ b\n", "t0-1");
+
+  // A picture-only paragraph is its own segment, and its ordinal is the picture's
+  // index in Document::images, which is what a view matches a state entry against.
+  checkPlan("a picture-only paragraph is its own segment", "a\n\n![alt](https://example.com/a.png)\n\nb\n",
+            "t0-1 I1-2 t2-3");
+  checkPlan("a picture with prose around it stays prose", "see ![alt](https://example.com/a.png) here\n", "t0-1");
+  checkPlan("two pictures on consecutive lines are one image block", "![a](https://example.com/a.png)\n![b](https://example.com/b.png)\n",
+            "I0-1");
+  checkPlan("a picture and a table in one document", "![a](https://example.com/a.png)\n\n| x |\n| - |\n| 1 |\n",
+            "I0-1 T1-3");
   checkPlan("an empty document has no segments", "", "");
 }
 
@@ -120,6 +151,51 @@ void testSegmentPlan() {
 /// A block's layout is one membership test against the toggled set, and both
 /// platforms resolve it through this one rule. The cases below are the whole
 /// table, so a platform's mirror of it can be checked against them.
+/// One block's formula, as `tex|resolved|display`, so a document read and the plan
+/// read can both be asserted on without a second dump format.
+std::string mathShape(std::string_view source) {
+  const DocumentHandle document = parse(source);
+  if (!document) {
+    return "(unparsed)";
+  }
+  std::string shape;
+  for (const Block &block : document->blocks) {
+    if (!shape.empty()) {
+      shape.push_back(' ');
+    }
+    shape += std::to_string(static_cast<int>(block.kind));
+    for (const MathSpan &span : block.math) {
+      shape += "[" + span.tex + "|" + (span.layout ? "1" : "0") + "|" + (span.display ? "1" : "0") + "]";
+    }
+  }
+  return shape;
+}
+
+void testMathDocuments() {
+  // What a document holds, as opposed to what the plan does with it: the plan
+  // passing is necessary and not sufficient, because a formula that never became a
+  // span cannot be promoted no matter how the plan walks the blocks.
+  check("6[x|0|1]", "a lone $$x$$ is a math block", mathShape("$$x$$\n"));
+  check("0[x|0|1]", "a formula with prose stays prose", mathShape("a $$x$$ b\n"));
+  check("6[x^2|0|1]", "a lone $$x^2$$ is a math block", mathShape("$$x^2$$\n"));
+  check("6[x|0|1]", "a $$ line fence is a math block", mathShape("$$\nx\n$$\n"));
+  check("6[x|0|1]", "a ```math fence is a math block", mathShape("```math\nx\n```\n"));
+  check("0", "single dollar stays literal by default", mathShape("$x$\n"));
+  check("6[x|0|1]", "brackets are a display formula by default", mathShape("\\[x\\]\n"));
+  check("0[x|0|0]", "brackets are inline inside prose", mathShape("a \\(x\\) b\n"));
+
+  // Math off is the byte-for-byte old parse, which is the promise the flags make.
+  {
+    const ParseResult off = parseMarkdown("$$x$$\n", MathOptions{0});
+    CHECK(off.status == ParseStatus::Ok && off.document, "a document with math off still parses");
+    if (off.document) {
+      CHECK(off.document->blocks.size() == 1, "math off leaves one block");
+      CHECK(off.document->blocks[0].kind == BlockKind::Paragraph, "math off leaves a formula a paragraph");
+      CHECK(off.document->blocks[0].math.empty(), "math off records no span");
+    }
+  }
+}
+
 void testWrapChoices() {
   const std::vector<uint32_t> none;
   const std::vector<uint32_t> third{2};
@@ -535,6 +611,7 @@ int main() {
   }
   CHECK(inlineRunsInRange({}, 0, 10).empty(), "an empty run list has no overlaps");
   testSegmentPlan();
+  testMathDocuments();
   testWrapChoices();
   testCodeBlockLayout();
   testGutterDigits();

@@ -654,8 +654,8 @@ private:
    * never reaches here — that is a fence, and md4c reports it as a block.
    */
   bool promoteLoneMath() {
-    if (current_->math.size() != 1 || !current_->runs.empty() || !current_->cells.empty()) {
-      // A run means something other than the formula is styled, and a cell
+    if (current_->math.size() != 1 || !current_->cells.empty()) {
+      // Two formulas in one paragraph are two formulas, not one block, and a cell
       // means the paragraph is a table row, so in both cases this is not a
       // paragraph that is only its formula.
       return false;
@@ -663,6 +663,17 @@ private:
     const MathSpan &span = current_->math.front();
     if (!span.display || span.start != 0 || span.end != current_->text.size()) {
       return false;
+    }
+    // A run *inside* the formula is the formula's own: its delimiters and its TeX
+    // are appended as one styled run so a platform can find a typeset run without
+    // consulting the span. Rejecting every run therefore rejected every formula,
+    // which is why a lone `$$x$$` stayed a paragraph. What matters is whether
+    // anything *outside* the formula is styled, because that is the prose that
+    // would have to come along.
+    for (const InlineRun &run : current_->runs) {
+      if (run.start < span.start || run.end > span.end) {
+        return false;
+      }
     }
     Block math = *current_;
     math.kind = BlockKind::MathBlock;
@@ -837,7 +848,7 @@ private:
     MathSpan span;
     span.start = static_cast<uint32_t>(block.text.size());
     span.tex = utf16ToUtf8(piece);
-    span.display = display;
+    span.display = bracketDisplayAt(openAt, display);
     span.delimiter = mathDelimiterAt(openAt, closeAt, display);
     // The literal, delimiters included, is what a reader sees and what a copy
     // yields, and it is the same string a document with math off produces for
@@ -871,6 +882,27 @@ private:
     // Goes through `appendText` so a formula's delimiters are covered by the
     // same run as its TeX rather than sitting outside it.
     appendText(delimiter, currentStyles() | InlineStyle::Math, currentLink());
+  }
+
+  /**
+   * Whether this formula is display style, correcting md4c's answer for a rewrite.
+   *
+   * A rewritten `\(` and a written `$$` are the same two bytes by the time md4c
+   * sees them, so md4c calls both display. They are not the same thing: `\[…\]` is
+   * display math and `\[…\)` is the inline form, and LaTeX's own convention is the
+   * only thing that says which the writer meant. The pre-scan recorded it before the
+   * rewrite, so this is where it is read back rather than guessed at.
+   *
+   * Anything the scan did not rewrite keeps md4c's answer, which is right for `$`
+   * and `$$` and for a `$$` line fence.
+   */
+  bool bracketDisplayAt(size_t openAt, bool fromParser) const {
+    for (const scan::MathPair &pair : brackets_.pairs) {
+      if (pair.open == openAt) {
+        return pair.display;
+      }
+    }
+    return fromParser;
   }
 
   /// Which delimiters the writer used, from the original bytes.
