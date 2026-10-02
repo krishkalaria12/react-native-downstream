@@ -49,6 +49,12 @@ A lone display formula on one line becomes a block too:
 
 $$\sum_{k=1}^{n} k = \frac{n(n+1)}{2}$$
 
+A formula wider than the column scrolls sideways:
+
+$$
+(a+b)^{10} = a^{10} + 10a^9b + 45a^8b^2 + 120a^7b^3 + 210a^6b^4 + 252a^5b^5 + 210a^4b^6 + 120a^3b^7 + 45a^2b^8 + 10ab^9 + b^{10}
+$$
+
 Colors, a brace, and a CJK character: $$\color{#e5484d}{\alpha} + \overbrace{a+b}^{2} + \text{中}$$
 
 Inline formulas stay in the sentence, like $$E = mc^2$$ and \(a^2 + b^2 = c^2\).
