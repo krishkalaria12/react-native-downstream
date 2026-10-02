@@ -115,8 +115,7 @@ fun main() {
   checkEq(codeCardHeight(small, header, padding, 40, line), header + 40 + 2 * padding,
     "the floor does not pad a short block")
 
-  // Line starts, in pixels here rather than UTF-16 units: the mirror walks a
-  // CharSequence, so the same table reads in the platform's own unit.
+  // Offsets use Android's UTF-16 units, including surrogate pairs.
   val single = codeLineStarts("a")
   check(single.size == 1 && single[0] == 0, "one line starts at zero")
   val three = codeLineStarts("a\nb\nc")
@@ -125,6 +124,37 @@ fun main() {
   check(trailing.contentEquals(intArrayOf(0, 2)), "a trailing newline starts a last empty line")
   val empty = codeLineStarts("")
   check(empty.size == 1 && empty[0] == 0, "an empty block has one line to number")
+  check(codeLineStarts("\n\n\n").contentEquals(intArrayOf(0, 1, 2, 3)),
+    "consecutive empty lines grow the primitive array")
+  check(codeLineStarts("\ud83d\ude00\nnext\r\n").contentEquals(intArrayOf(0, 3, 9)),
+    "surrogate pairs and CRLF preserve UTF-16 line starts")
+
+  var reads = 0
+  val manyLines = object : CharSequence {
+    override val length = 100_000
+    override fun get(index: Int): Char {
+      reads++
+      return '\n'
+    }
+    override fun subSequence(startIndex: Int, endIndex: Int): CharSequence =
+      error("line indexing must not allocate substrings")
+  }
+  val dense = codeLineStarts(manyLines)
+  checkEq(reads, manyLines.length, "line starts scan every code unit once")
+  checkEq(dense.size, manyLines.length + 1, "dense newlines survive repeated array growth")
+  check(dense.indices.all { dense[it] == it }, "dense line starts have no missing or extra entries")
+
+  val wrappedStarts = intArrayOf(0, 12, 20)
+  checkEq(codeLineForOffset(wrappedStarts, -1), 0, "negative offset stays on the first line")
+  checkEq(codeLineForOffset(wrappedStarts, 0), 0, "first exact start selects the first line")
+  checkEq(codeLineForOffset(wrappedStarts, 6), 0, "wrapped continuation keeps its logical line")
+  checkEq(codeLineForOffset(wrappedStarts, 12), 1, "exact next start selects the next line")
+  checkEq(codeLineForOffset(wrappedStarts, 19), 1, "last wrapped continuation keeps its logical line")
+  checkEq(codeLineForOffset(wrappedStarts, 20), 2, "trailing blank start selects its own line")
+  checkEq(codeLineForOffset(wrappedStarts, Int.MAX_VALUE), 2, "past the final line stays on it")
+  checkEq(codeLineForOffset(empty, 0), 0, "an empty fence selects its single logical line")
+  checkEq(codeLineForOffset(single, 0), 0, "single line indexing does not need a newline")
+  checkEq(codeLineForOffset(dense, 99_999), 99_999, "deep scrolling selects the exact logical line")
 
   if (failures > 0) {
     println("$failures check(s) failed")

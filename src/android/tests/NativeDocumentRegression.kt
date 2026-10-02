@@ -3,10 +3,10 @@ package com.downstream
 /** Run with python3 src/android/tests/check_native_document.py after the example Android build. */
 fun main() {
   fun document(starts: IntArray, layouts: DoubleArray = DoubleArray(starts.size * 9)): NativeDocument {
-    val blocks = IntArray(starts.size * 13)
+    val blocks = IntArray(starts.size * 16)
     for (index in starts.indices) {
-      blocks[index * 13 + 4] = starts[index]
-      blocks[index * 13 + 5] = starts.getOrElse(index + 1) { starts[index] + 5 } - 1
+      blocks[index * 16 + 4] = starts[index]
+      blocks[index * 16 + 5] = starts.getOrElse(index + 1) { starts[index] + 5 } - 1
     }
     return NativeDocument("", blocks, IntArray(0), IntArray(0), emptyArray(), IntArray(0), IntArray(0), layouts)
   }

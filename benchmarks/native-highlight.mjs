@@ -97,6 +97,7 @@ try {
       'Compare.cpp',
       'Export.cpp',
       'ExportNames.cpp',
+      'FenceMeta.cpp',
     ].map((name) => join(cpp, 'downstream', name)),
     join(cpp, 'remend', 'Preview.cpp'),
     join(cpp, 'session', 'IncrementalParser.cpp'),
