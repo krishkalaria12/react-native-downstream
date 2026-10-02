@@ -218,9 +218,16 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
   if (range.length == 0) {
     return;
   }
-  NSString *text = [[_stack.textStorage.string substringWithRange:range] stringByReplacingOccurrencesOfString:kPlaceholder
-                                                                                                   withString:@""];
-  UIPasteboard.generalPasteboard.string = text;
+  // An inline formula is one attachment character carrying its literal, and the
+  // literal is what a reader copying the sentence expects.
+  NSMutableString *text = [NSMutableString string];
+  [_stack.textStorage enumerateAttribute:DSMathLiteralAttributeName
+                                 inRange:range
+                                 options:0
+                              usingBlock:^(NSString *literal, NSRange part, BOOL *stop) {
+                                [text appendString:literal ?: [self->_stack.textStorage.string substringWithRange:part]];
+                              }];
+  UIPasteboard.generalPasteboard.string = [text stringByReplacingOccurrencesOfString:kPlaceholder withString:@""];
 }
 
 - (NSInteger)linkIndexAtPoint:(CGPoint)point {

@@ -1,5 +1,7 @@
 #import "DSRenderedDocument.h"
 
+#import "DSMathFonts.h"
+
 #import "DSFonts.h"
 #import "DSThemeColors.h"
 
@@ -176,6 +178,38 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
 /// Applies a code block's token colors. Tokens are offsets into the block's own
 /// text and only change color, never a character, so selection, copy, and the
 /// accessibility text are untouched.
+/// Swaps each laid-out inline formula's literal for one attachment character.
+///
+/// After the runs are applied, so the attachment inherits the run's font, color
+/// and link, and from the last formula back, so an earlier formula's offsets are
+/// still the block's own when it is reached. The literal rides along as an
+/// attribute, which is what a copy writes back. A formula with no layout keeps
+/// its literal, which is what a reader sees while it is still arriving and when
+/// it failed.
+void replaceInlineMath(NSMutableAttributedString *text, const Block &block, NSUInteger offset) {
+  if (block.math.empty() || block.kind == BlockKind::MathBlock || block.kind == BlockKind::CodeBlock) {
+    return;
+  }
+  for (auto span = block.math.rbegin(); span != block.math.rend(); ++span) {
+    if (!span->layout || span->end <= span->start) {
+      continue;
+    }
+    const NSRange range = NSMakeRange(offset + span->start, span->end - span->start);
+    if (NSMaxRange(range) > text.length) {
+      continue;
+    }
+    NSMutableDictionary *attributes = [[text attributesAtIndex:range.location effectiveRange:NULL] mutableCopy];
+    UIFont *font = attributes[NSFontAttributeName];
+    const CGFloat size = (font != nil ? font.pointSize : UIFont.systemFontSize) * kInlineMathScale;
+    attributes[NSAttachmentAttributeName] = [[DSMathAttachment alloc] initWithLayout:span->layout
+                                                                            fontSize:size
+                                                                               color:attributes[NSForegroundColorAttributeName]];
+    attributes[DSMathLiteralAttributeName] = [text.string substringWithRange:range];
+    [text replaceCharactersInRange:range
+              withAttributedString:[[NSAttributedString alloc] initWithString:@"\uFFFC" attributes:attributes]];
+  }
+}
+
 void applyTokens(NSMutableAttributedString *text, const Block &block, DSThemeColors *colors, NSUInteger offset,
                  uint32_t clampStart, uint32_t clampEnd) {
   for (const TokenRun &run : block.tokens) {
@@ -486,8 +520,9 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
     if (isCode && syntaxHighlighting) {
       applyTokens(text, block, colors, start, 0, static_cast<uint32_t>(block.text.size()));
     }
+    replaceInlineMath(text, block, start);
     [blocks addObject:info];
-    [blockRanges addObject:[NSValue valueWithRange:NSMakeRange(start, blockText.length)]];
+    [blockRanges addObject:[NSValue valueWithRange:NSMakeRange(start, text.length - start - (hasSeparator ? 1 : 0))]];
   }
 
   segment.attributedString = [text copy];
@@ -695,6 +730,9 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
 @interface DSImageSegment ()
 @property (nonatomic) std::vector<uint32_t> images;
 @property (nonatomic) std::vector<std::string> altTexts;
+@property (nonatomic) std::vector<std::string> urls;
+@property (nonatomic) std::vector<std::string> titles;
+@property (nonatomic) std::vector<int32_t> links;
 @property (nonatomic) uint32_t imageOrdinal;
 @property (nonatomic) NSInteger blockIndex;
 @property (nonatomic, copy) NSArray<DSContainerInfo *> *containers;
@@ -723,8 +761,20 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
     segment.contentLeading = leading;
   }
   std::vector<std::string> altTexts;
+  std::vector<std::string> urls;
+  std::vector<std::string> titles;
+  std::vector<int32_t> links;
   altTexts.reserve(block.images.size());
+  urls.reserve(block.images.size());
+  titles.reserve(block.images.size());
+  links.reserve(block.images.size());
   for (const uint32_t ordinal : block.images) {
+    // The destination only when the engine's policy allows it, so a view cannot
+    // request what the engine refused; the state already says `Blocked` for it.
+    const bool known = ordinal < document.images.size();
+    urls.push_back(known && document.images[ordinal].loadable ? document.images[ordinal].url : std::string());
+    titles.push_back(known ? document.images[ordinal].title : std::string());
+    links.push_back(known ? document.images[ordinal].link : -1);
     // The alt texts, which is the block's own text and what accessibility,
     // export, and the fallback all read. Storing them per image is what lets a
     // view show one image's label under that image rather than one label for
@@ -732,6 +782,9 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
     altTexts.push_back(ordinal < document.images.size() ? utf16ToUtf8(document.images[ordinal].alt) : std::string());
   }
   segment.altTexts = std::move(altTexts);
+  segment.urls = std::move(urls);
+  segment.titles = std::move(titles);
+  segment.links = std::move(links);
   segment.placeholderColor = [colors colorForSlot:kSlotImagePlaceholderColor];
   // The metrics come from the shared rule rather than from a platform copy, and
   // are scaled here once so `imageBox` is handed points rather than unscaled
@@ -1170,17 +1223,18 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
 }
 
 + (id)committedSegmentFor:(const Document &)document
+                     kind:(SegmentKind)kind
                      from:(size_t)from
                        to:(size_t)to
                     theme:(const Theme &)theme
                     scale:(CGFloat)scale
                markerFont:(UIFont *)markerFont
         syntaxHighlighting:(BOOL)syntaxHighlighting {
-  const BlockKind kind = document.blocks[from].kind;
   // The theme is in the key because a segment holds resolved colors and
   // measured sizes, and a second theme must not read the first one's.
-  NSString *key = [NSString stringWithFormat:@"%llu:%zu:%llu:%.4f:%d", (unsigned long long)document.blocks[from].identity,
-                                             to - from, (unsigned long long)theme.id(), scale, syntaxHighlighting];
+  NSString *key = [NSString stringWithFormat:@"%llu:%zu:%llu:%.4f:%d:%d", (unsigned long long)document.blocks[from].identity,
+                                             to - from, (unsigned long long)theme.id(), scale, syntaxHighlighting,
+                                             static_cast<int>(kind)];
   DSCommittedSegment *cached = [self.committedSegmentCache objectForKey:key];
   bool matches = cached != nil && cached->identities.size() == to - from;
   for (size_t index = from; matches && index < to; index++) {
@@ -1195,8 +1249,25 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
     cached->identities.push_back(document.blocks[index].identity);
     cost += document.blocks[index].text.size() * 16 + 256;
   }
+  // The plan's kind rather than the block's: a math block and an image-only
+  // paragraph are their own segments, and building them as text would show a
+  // committed formula as its source and a committed picture as its alt text.
   switch (kind) {
-    case BlockKind::TableRow:
+    case SegmentKind::Math:
+      cached->segment = (id)[DSMathSegment segmentWithDocument:document
+                                                         index:from
+                                                        theme:theme
+                                                        scale:scale
+                                                   markerFont:markerFont];
+      break;
+    case SegmentKind::Image:
+      cached->segment = (id)[DSImageSegment segmentWithDocument:document
+                                                          index:from
+                                                         theme:theme
+                                                          scale:scale
+                                                    markerFont:markerFont];
+      break;
+    case SegmentKind::Table:
       cached->segment = (id)[DSTableSegment segmentWithDocument:document
                                                             from:from
                                                               to:to
@@ -1204,7 +1275,7 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                                            scale:scale
                                                       markerFont:markerFont];
       break;
-    case BlockKind::CodeBlock:
+    case SegmentKind::Code:
       cached->segment = (id)[DSCodeSegment segmentWithDocument:document
                                                          index:from
                                                         theme:theme
@@ -1212,7 +1283,7 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                                    markerFont:markerFont
                                         syntaxHighlighting:syntaxHighlighting];
       break;
-    default:
+    case SegmentKind::Text:
       cached->segment = (id)[DSTextSegment segmentWithDocument:document
                                                            from:from
                                                              to:to
@@ -1292,6 +1363,7 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
     id built = nil;
     if (segment.committed) {
       built = [DSRenderedDocument committedSegmentFor:document
+                                                 kind:segment.kind
                                                  from:segment.from
                                                    to:segment.to
                                                 theme:theme

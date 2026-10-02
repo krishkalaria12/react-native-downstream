@@ -60,10 +60,10 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
     this.fontSize = fontSize
     this.padding = padding
     literal.paint.textSize = fontSize
-    literal.setTextColor(color)
     textColor = color
     this.errorColor = errorColor
     errorPaint.color = errorColor
+    literal.setTextColor(if (segment?.failed == true) errorColor else color)
     glyphs.setPaint(color, fontSize)
     // No background is no background, rather than a fill of the default light
     // color on a dark theme: a theme that sets no math background wants the page's.
@@ -76,7 +76,9 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
   }
 
   fun setSegment(value: MathSegment) {
-    if (segment?.literal == value.literal && segment?.resolved == value.resolved) {
+    if (segment?.literal == value.literal && segment?.resolved == value.resolved && segment?.failed == value.failed &&
+      segment?.displayList === value.displayList && segment?.textAlign == value.textAlign
+    ) {
       return
     }
     segment = value
@@ -88,14 +90,15 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
     // A `$$` line fence centers by default, and the theme overrides that.
     literal.gravity = Gravity.CENTER_VERTICAL or gravityFor(value.textAlign)
     contentDescription = value.speech.ifEmpty { value.literal }
-    literal.visibility = if (value.resolved) GONE else VISIBLE
-    glyphs.visibility = if (value.resolved) VISIBLE else GONE
-    glyphs.segment = if (value.resolved) value else null
-    // An unresolved formula is drawn in the theme's error color rather than the text
+    val drawable = value.resolved && value.displayList != null
+    literal.visibility = if (drawable) GONE else VISIBLE
+    glyphs.visibility = if (drawable) VISIBLE else GONE
+    glyphs.segment = if (drawable) value else null
+    // A failed formula is drawn in the theme's error color rather than the text
     // color: the reader should be able to see that this one is not rendered, without
-    // the engine having to reject the document or the app logging anything. The
-    // literal is still fully readable — this is a color, not an overlay.
-    literal.setTextColor(if (value.resolved) textColor else errorColor)
+    // the engine having to reject the document or the app logging anything. One that
+    // is still arriving keeps the text color, because nothing is wrong with it yet.
+    literal.setTextColor(if (value.failed) errorColor else textColor)
     requestLayout()
   }
 
@@ -115,7 +118,7 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
     // The engine's own height, with the theme's padding: the layout's height and
     // depth in em at the scaled size, plus the padding on both sides. An unresolved
     // formula takes one line, which is what its literal takes.
-    val body = if (current.resolved) {
+    val body = if (current.resolved && current.displayList != null) {
       mathBlockHeight(current.height, current.depth, fontSize, 0f)
     } else {
       literal.paint.fontSpacing
@@ -153,53 +156,54 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
 /**
  * The glyphs of one formula, drawn from the engine's display list.
  *
- * A placeholder for the drawing package: it holds the layout and its paint, and
- * draws nothing until a `MathEngine` hands it a rasterized glyph set. The point of
- * keeping it a separate view is that the fallback lives in the parent, so a formula
- * with no engine never enters this class at all — [MathSegment.resolved] is false
- * in that case and the literal is what the reader sees.
+ * The fallback lives in the parent, so a formula with no layout never enters this
+ * class: [MathSegment.displayList] is null in that case and the literal is what
+ * the reader sees.
  */
 internal class MathGlyphView(context: Context) : View(context) {
   var segment: MathSegment? = null
-  var textSize = 0f
+    set(value) {
+      field = value
+      invalidate()
+    }
+
+  private val renderer = MathRenderer().also { MathFonts.attach(context) }
+  private var color = Color.BLACK
+  private var textSize = 0f
 
   /**
-   * The colour and size glyphs draw at.
-   *
-   * Set through a method rather than by assigning a whole Paint, so the view cannot
-   * hand this one a paint that has not been sized and leave a formula drawn at the
-   * default 12 points.
+   * The colour and size glyphs draw at: the theme's math colour, which an
+   * uncolored item takes, and the block's own scaled size in pixels per em.
    */
   fun setPaint(color: Int, textSize: Float) {
-    paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    paint.setColor(color)
-    paint.textSize = textSize
+    this.color = color
     this.textSize = textSize
-  }
-
-  private var paint = Paint(Paint.ANTI_ALIAS_FLAG)
-
-  /**
-   * The scale one inline-sized formula draws at.
-   *
-   * Kept here so the drawing package has one place to read it from, and so the
-   * `1.21em` that KaTeX uses is applied in exactly one place per platform.
-   */
-  val drawScale: Float get() = kInlineMathScale
-
-  /** The em metrics of [segment], or null when there is nothing to draw. */
-  fun emMetrics(): Triple<Float, Float, Float>? {
-    val current = segment ?: return null
-    if (!current.resolved) {
-      return null
-    }
-    return Triple(current.width, current.height, current.depth)
+    invalidate()
   }
 
   override fun onDraw(canvas: Canvas) {
-    // Nothing until an engine supplies glyphs. The parent's literal is hidden
-    // precisely when this view is visible, so an engine that is not installed would
-    // otherwise leave a hole — which is why `resolved` is false in that case rather
-    // than true with nothing behind it.
+    val current = segment ?: return
+    val list = current.displayList ?: return
+    if (textSize <= 0f || width <= 0) {
+      return
+    }
+    // A formula wider than the column is drawn smaller to fit rather than cut off,
+    // never below half its size; past that it is clipped at the edge, which is
+    // what an inline formula does too.
+    val natural = list.width * textSize
+    val fit = if (natural > width) (width / natural).coerceAtLeast(kMinInlineScale) else 1f
+    val size = textSize * fit
+    val drawn = list.width * size
+    val x = when (current.textAlign) {
+      0 -> 0f
+      1 -> ((width - drawn) / 2f).coerceAtLeast(0f)
+      else -> (width - drawn).coerceAtLeast(0f)
+    }
+    val y = ((height - (list.height + list.depth) * size) / 2f).coerceAtLeast(0f)
+    canvas.save()
+    canvas.clipRect(0, 0, width, height)
+    canvas.translate(x, y)
+    renderer.draw(canvas, list, size, color, resources.displayMetrics.density * 0.5f)
+    canvas.restore()
   }
 }

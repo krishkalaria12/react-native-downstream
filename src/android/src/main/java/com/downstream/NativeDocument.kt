@@ -34,7 +34,31 @@ internal class NativeDocument(
    * theme change cannot be confused with a formula laying out.
    */
   private val maths: DoubleArray,
+  /**
+   * Every formula in the slice, block and inline, with its display list, as
+   * `appendDisplayList` in `DownstreamJni.cpp` writes the records.
+   */
+  private val formulaTable: DoubleArray = DoubleArray(0),
 ) {
+  /** One formula: where it sits, and its display list when it laid out. */
+  class Formula(val block: Int, val start: Int, val end: Int, val list: MathDisplayList?)
+
+  /** The formulas in this slice, in document order, decoded once. */
+  val formulas: List<Formula> by lazy {
+    val found = ArrayList<Formula>()
+    var at = 0
+    while (at + 4 <= formulaTable.size) {
+      val block = formulaTable[at].toInt()
+      val start = formulaTable[at + 1].toInt()
+      val end = formulaTable[at + 2].toInt()
+      val length = formulaTable[at + 3].toInt()
+      val list = if (length > 0) MathDisplayList.decode(formulaTable, at + 4, length) else null
+      found.add(Formula(block, start, end, list))
+      at += 4 + length.coerceAtLeast(0)
+    }
+    found
+  }
+
   val blockCount: Int get() = blocks.size / BLOCK_STRIDE
   val runCount: Int get() = runs.size / RUN_STRIDE
   val tokenCount: Int get() = tokens.size / TOKEN_STRIDE
@@ -463,14 +487,14 @@ internal object DownstreamNative {
       val rendered = RenderedDocument.obtain(
         context,
         documentId,
-        (layout.getDouble("fontScale") ?: 1.0).toFloat(),
-        themeId = layout.getDouble("themeId")?.toLong() ?: 0L,
+        layout.numberAt("fontScale", 1.0).toFloat(),
+        themeId = layout.numberAt("themeId", 0.0).toLong(),
       ) ?: return
-      val width = (layout.getDouble("width") ?: 0.0).toFloat()
+      val width = layout.numberAt("width", 0.0).toFloat()
       if (width.isFinite() && width > 0) {
         rendered.height(
           PixelUtil.toPixelFromDIP(width.toDouble()).toInt(),
-          layout.getDouble("chrome")?.toInt() ?: 0,
+          layout.numberAt("chrome", 0.0).toInt(),
           layout.toCodeLayout(),
           layout.toImageLayout(),
         )
@@ -494,6 +518,7 @@ internal object DownstreamNative {
       tokens = parts[6] as IntArray,
       layouts = parts[7] as DoubleArray,
       maths = parts[8] as DoubleArray,
+      formulaTable = parts.getOrNull(9) as? DoubleArray ?: DoubleArray(0),
     )
   }
 
@@ -658,6 +683,42 @@ internal object DownstreamNative {
   /** The spoken form of a formula, from `math/MathSpeech.cpp`. */
   fun mathSpeech(tex: String, display: Boolean): String =
     nativeMathSpeech(tex, display) ?: ""
+
+  /** The math package's marker class, which autolinking puts on the classpath. */
+  private const val MATH_PACKAGE_CLASS = "com.downstream.math.DownstreamMathPackage"
+
+  /**
+   * Registers RaTeX with the engine when `react-native-downstream-math` is
+   * installed.
+   *
+   * Registering loads nothing: the engine opens `libratex_ffi.so` the first
+   * time a document needs a formula laid out, so an app that installs the package
+   * and never shows math never maps the library. The package's presence is its
+   * class on the classpath, which is what autolinking adds along with the library.
+   */
+  fun registerMathEngineIfInstalled() {
+    val installed = try {
+      Class.forName(MATH_PACKAGE_CLASS, false, DownstreamNative::class.java.classLoader)
+      true
+    } catch (error: ClassNotFoundException) {
+      false
+    }
+    if (installed) {
+      nativeRegisterMathEngine("libratex_ffi.so", "fonts")
+    }
+  }
+
+  @JvmStatic
+  private external fun nativeRegisterMathEngine(library: String, fontDirectory: String)
+
+  /**
+   * Records a finished image load in the engine's size cache, which the shadow node
+   * measures from. A zero size records a failure.
+   */
+  fun recordImage(url: String, width: Int, height: Int) = nativeRecordImage(url, width, height)
+
+  @JvmStatic
+  private external fun nativeRecordImage(url: String, width: Int, height: Int)
 
   @JvmStatic
   private external fun nativeMathSpeech(tex: String, display: Boolean): String?

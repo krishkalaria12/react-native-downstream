@@ -105,6 +105,8 @@ target_compile_definitions(${LIB_TARGET_NAME} PRIVATE MD4C_USE_UTF8=1 ${MD4C_SYM
 target_link_libraries(${LIB_TARGET_NAME}
   downstream_md4c
   downstream_highlight
+  # dlopen, for the math package's engine, which is found at run time.
+  dl
   fbjni
   jsi
   reactnative)

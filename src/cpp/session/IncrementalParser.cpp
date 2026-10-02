@@ -629,11 +629,12 @@ bool IncrementalParser::commitRegion(size_t boundary) {
     if (block.kind == BlockKind::CodeBlock && !block.language.empty()) {
       highlightSettledCodeBlock(lexillaHighlighter(), &block, &committedHighlight, kHighlightBudgetMs, &stats);
     }
-    // A committed formula is closed, so it is laid out here from its whole TeX
-    // and then shared, unchanged, by every later snapshot. The same argument as
-    // highlighting applies: nothing will ever revisit it, and a half-laid-out
-    // committed block would not equal the same block laid out in full.
-    if (block.kind == BlockKind::MathBlock) {
+    // A committed formula is closed, inline or display, so it is laid out here
+    // from its whole TeX and then shared, unchanged, by every later snapshot. The
+    // same argument as highlighting applies: nothing will ever revisit it, and a
+    // half-laid-out committed block would not equal the same block laid out in
+    // full.
+    if (!block.math.empty()) {
       layoutMathInBlock(&block, &committedMath);
     }
     blocks.push_back(std::move(block));

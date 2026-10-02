@@ -104,16 +104,18 @@ void PreparedDocument::prepare() {
     // synchronous-layout budget, so the platform text work that follows sees
     // finished tokens.
     result_.document = highlightSettledCodeBlocks(lexillaHighlighter(), result_.document, kHighlightBudgetMs, nullptr);
-    // Math runs after it and for the same reason, and it is cheap: a document
-    // with no formula returns the same handle and never calls the engine, which
-    // is what keeps a prose-only message off the math path entirely.
-    result_.document = layoutMath(result_.document);
     // A controlled source is complete the moment it is parsed and this result
     // is cached, so every block settles: a later snapshot would only come from
     // a different source, and this one will not be parsed again.
     const auto count = static_cast<uint32_t>(
         std::min<size_t>(result_.document->blocks.size(), std::numeric_limits<uint32_t>::max()));
     result_.document = withSettledBlocks(result_.document, count);
+    // Math runs after settling, because a formula that fails in a settled block
+    // has failed for good: its error is recorded, it turns the error color, and
+    // the view reports it. Laid out before settling, every failure would read as
+    // a formula that is still arriving. It is cheap: a document with no formula
+    // returns the same handle and never calls the engine.
+    result_.document = layoutMath(result_.document);
     // The document itself carries no theme, so one parse serves every theme and
     // only the platform rendering is per theme.
     RenderPreparer::prepare(result_.document, hintsForPrepare());

@@ -113,7 +113,9 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
   [self addSubview:_placeholder];
 
   _fallback = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, size.width, size.height)];
-  _fallback.numberOfLines = 0;
+  // One line, because the box the engine reserves for a fallback is one line tall.
+  _fallback.numberOfLines = 1;
+  _fallback.lineBreakMode = NSLineBreakByTruncatingTail;
   _fallback.textColor = self.errorColor ?: UIColor.secondaryLabelColor;
   _fallback.font = [UIFont systemFontOfSize:15];
   _fallback.hidden = YES;
@@ -199,7 +201,7 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
   }
   if (status != nil) {
     self.fallback.text = self.alt.length > 0 && state != ImageState::Disabled
-        ? [NSString stringWithFormat:@"%@\n%@", self.alt, status]
+        ? [NSString stringWithFormat:@"%@ · %@", self.alt, status]
         : status;
   } else {
     self.fallback.text = self.alt;
@@ -313,8 +315,25 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
   _segment = segment;
   NSMutableArray<DSImageBoxView *> *boxes = [NSMutableArray arrayWithCapacity:segment.images.size()];
   for (NSUInteger index = 0; index < segment.images.size(); index++) {
-    DSImageBoxView *box = [DSImageBoxView new];
+    NSString *url = index < segment.urls.size() ? @(segment.urls[index].c_str()) : @"";
+    // A box for the same picture is kept across snapshots, so a streaming message
+    // does not cancel and restart a load every time a token arrives, and a loaded
+    // picture does not flash back to its placeholder.
+    DSImageBoxView *box = nil;
+    if (index < _boxes.count && _boxes[index].ordinal == segment.images[index] &&
+        [_boxes[index].url isEqualToString:url]) {
+      box = _boxes[index];
+    } else {
+      box = [DSImageBoxView new];
+      [box buildForSize:CGSizeZero];
+    }
     box.ordinal = segment.images[index];
+    box.url = url;
+    box.alt = index < segment.altTexts.size() ? @(segment.altTexts[index].c_str()) : @"";
+    box.title = index < segment.titles.size() ? @(segment.titles[index].c_str()) : @"";
+    box.linkIndex = index < segment.links.size() ? segment.links[index] : -1;
+    box.isLink = box.linkIndex >= 0;
+    box.loadable = url.length > 0;
     box.owner = self;
     box.placeholderColor = segment.placeholderColor;
     box.borderRadius = segment.metrics.borderRadius;
@@ -325,11 +344,10 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
     box.settled = self.settled;
     box.controls = self.controls;
     box.controlsEnabled = self.controlsEnabled;
-    if (box.picture.superview == nil) {
-      [box buildForSize:CGSizeZero];
-    }
     [boxes addObject:box];
-    [self addSubview:box];
+    if (box.superview != self) {
+      [self addSubview:box];
+    }
   }
   for (DSImageBoxView *old in _boxes) {
     if (![boxes containsObject:old]) {
@@ -400,10 +418,12 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
     // it was given, and a picture drawn in the wrong box is the most visible bug
     // this library could have.
     const ImageBox measured = [segment boxAtIndex:index column:column answers:self.state];
-    const ImageEntry *entry = self.state.find(box.ordinal);
+    // The ivar, not the property: the property returns a copy, and a pointer into
+    // a temporary copy dangles before the next line reads it.
+    const ImageEntry *entry = _state.find(box.ordinal);
     const ImageState state = entry != nullptr
         ? entry->state
-        : (self.state.enabled ? ImageState::Pending : ImageState::Disabled);
+        : (_state.enabled ? ImageState::Pending : ImageState::Disabled);
     box.frame = CGRectMake(segment.contentLeading, y, measured.width, measured.height);
     [box applyState:state];
     [self startLoadFor:box at:state size:measured column:column];
@@ -415,51 +435,65 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
                  at:(ImageState)state
                size:(ImageBox)boxSize
              column:(CGFloat)column {
-  if (state != ImageState::Loading || box.load != nil || box.url.length == 0) {
+  // A `Loaded` answer with no picture is a box that was built after the load
+  // finished: a recycled view, or a message scrolled back into view. The platform
+  // loader's own cache answers it without a request.
+  const BOOL wanted = state == ImageState::Loading || (state == ImageState::Loaded && box.picture.image == nil);
+  if (!wanted || box.load != nil || !box.loadable || box.url.length == 0 || !(column > 0)) {
     return;
   }
   NSURL *url = [NSURL URLWithString:box.url];
   if (url == nil) {
     return;
   }
-  // The size the box was measured at, times the screen scale, which is what makes
-  // a 4,000-pixel photo cost a phone-sized bitmap rather than a full-size one.
   const CGFloat scale = self.screenScale > 0 ? self.screenScale : UIScreen.mainScreen.scale;
-  // The platform's own loader, taken from the context container the layout
-  // manager installed. A null handle means the bridge is not up yet, and the
-  // loader reports a failure so the box draws its fallback rather than waiting
-  // for something that is not coming.
+  // The decode bound is the column and the theme's height cap, not the box: the
+  // box is a placeholder until the picture's size is known, and decoding against
+  // it would make every picture placeholder-sized.
+  const CGFloat boundHeight = self.segment.metrics.maxHeight > 0 ? self.segment.metrics.maxHeight : column;
+  // The platform's own pipeline, read from the context container the way React
+  // Native's `ImageManager` reads it.
   DSImageLoader *loader = [DSImageLoader
       sharedLoaderWithReactLoader:(__bridge RCTImageLoader *)ImageLoaderRegistry::resolve()];
   __weak DSImageSegmentView *weakSelf = self;
+  __weak DSImageBoxView *weakBox = box;
   const std::string key = box.url.UTF8String ?: "";
   box.load = [loader loadURL:url
-                         size:CGSizeMake(boxSize.width * scale, boxSize.height * scale)
-                        scale:scale
+                        size:CGSizeMake(column * scale, boundHeight * scale)
+                       scale:scale
                     callback:^(DSImageLoad *load, DSImageLoadResult *result) {
                       DSImageSegmentView *strongSelf = weakSelf;
+                      DSImageBoxView *strongBox = weakBox;
+                      if (strongBox != nil) {
+                        strongBox.load = nil;
+                      }
                       if (strongSelf == nil) {
                         return;
                       }
-                      if (result == nil || result.status == DSImageLoadStatusFailed) {
-                        // Recorded in the engine's own cache, so a scrolled-back
-                        // message draws the fallback rather than refetching a
-                        // URL that is known to fail.
+                      // Copied, because the entry is overwritten in place below.
+                      const CachedImageSize *found = ImageSizeCache::find(key);
+                      const bool hadAnswer = found != nullptr;
+                      const CachedImageSize before = hadAnswer ? *found : CachedImageSize{};
+                      if (result == nil || result.status == DSImageLoadStatusFailed || result.image == nil) {
+                        // Recorded, so the next measurement draws the alt text and a
+                        // scrolled-back message does not refetch a picture that 404s.
                         ImageSizeCache::record(key, {ImageState::Failed, 0, 0});
-                        [strongSelf setNeedsLayout];
+                        [strongSelf.imageDelegate imagesDidChange];
                         return;
                       }
-                      // The bytes come back in the result when the platform had
-                      // them; a load that only produced a picture records the
-                      // size and leaves the fetch for a download.
-                      if (result.data != nil) {
-                        box.picture.image = [UIImage imageWithData:result.data];
+                      strongBox.picture.image = result.image;
+                      const CachedImageSize size{ImageState::Loaded, static_cast<float>(result.pixelSize.width),
+                                                 static_cast<float>(result.pixelSize.height)};
+                      ImageSizeCache::record(key, size);
+                      if (!hadAnswer || before.state != size.state || before.pixelWidth != size.pixelWidth ||
+                          before.pixelHeight != size.pixelHeight) {
+                        // The node measures again from the cache; a picture whose
+                        // answer was already known needs no new layout.
+                        [strongSelf.imageDelegate imagesDidChange];
+                      } else {
+                        [strongSelf setNeedsLayout];
                       }
-                      ImageSizeCache::record(key, {ImageState::Loaded, static_cast<float>(result.pixelSize.width),
-                                                   static_cast<float>(result.pixelSize.height)});
-                      [strongSelf setNeedsLayout];
                     }];
-  (void)column;
 }
 
 /// Saves one image, under Streamdown's own naming rules.
@@ -552,11 +586,24 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
 @interface DSMathCanvasView : UIView
 @property (nonatomic, nullable) MathLayout::Handle layout;
 @property (nonatomic) CGFloat fontSize;
+/// The theme's padding, which is where the formula's box starts inside the canvas.
+@property (nonatomic) CGFloat padding;
 @property (nonatomic, strong, nullable) UIColor *color;
 @property (nonatomic, strong, nullable) UIColor *backgroundColor;
 @end
 
 @implementation DSMathCanvasView
+
+- (instancetype)initWithFrame:(CGRect)frame {
+  if (!(self = [super initWithFrame:frame])) {
+    return nil;
+  }
+  // Transparent, because `drawRect:` only fills what the theme asks for and an
+  // opaque view shows black wherever it does not draw.
+  self.opaque = NO;
+  self.contentMode = UIViewContentModeRedraw;
+  return self;
+}
 
 - (void)setLayout:(MathLayout::Handle)layout {
   if (_layout == layout) {
@@ -589,11 +636,15 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
   // Vectors, at the size the theme and the font scale gave. The layout is in em
   // units and carries no theme, so the color below is the run's own dynamic
   // color and dark mode reaches a formula without a relayout.
+  CGContextRef context = UIGraphicsGetCurrentContext();
+  CGContextSaveGState(context);
+  CGContextTranslateCTM(context, self.padding, self.padding);
   [DSMathRenderer drawLayout:*self.layout
                         size:self.fontSize
                        color:self.color ?: UIColor.labelColor
                        scale:1
-                   inContext:UIGraphicsGetCurrentContext()];
+                   inContext:context];
+  CGContextRestoreGState(context);
 }
 
 @end
@@ -645,7 +696,10 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
     // The literal, which is `Block::text` verbatim: delimiters included, exactly
     // what the writer sent, and what a reader saw before math existed.
     self.fallback.text = literal;
-    self.fallback.textColor = segment.errorColor ?: UIColor.secondaryLabelColor;
+    // The error color only for a formula that failed. One that is still arriving
+    // has no layout yet and nothing wrong with it, so it reads in the text color.
+    self.fallback.textColor = !segment.error.empty() ? (segment.errorColor ?: UIColor.secondaryLabelColor)
+                                                      : (segment.color ?: UIColor.labelColor);
     self.accessibilityLabel = [NSString stringWithFormat:@"math, %@", literal];
     self.isAccessibilityElement = YES;
     self.accessibilityTraits = UIAccessibilityTraitStaticText;
@@ -654,6 +708,8 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
   }
   self.canvas.layout = segment.layout;
   self.canvas.fontSize = segment.fontSize;
+  self.canvas.padding = segment.padding;
+  [self.canvas setNeedsDisplay];
   self.canvas.color = segment.color;
   self.canvas.backgroundColor = segment.backgroundColor;
   // The spoken form comes from the engine's own verbalizer, because KaTeX's

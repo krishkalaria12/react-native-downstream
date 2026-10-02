@@ -208,6 +208,12 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 /// Alt texts, one per image, which is the block's own text and what accessibility,
 /// export, and the fallback all read.
 @property (nonatomic, readonly) std::vector<std::string> altTexts;
+/// Destinations, one per image, empty where the engine's policy refused one.
+@property (nonatomic, readonly) std::vector<std::string> urls;
+/// Titles, one per image, for a press event.
+@property (nonatomic, readonly) std::vector<std::string> titles;
+/// The enclosing link's index per image, or -1.
+@property (nonatomic, readonly) std::vector<int32_t> links;
 /// The block's ordinal among the document's image blocks, which is what a reader's
 /// per-image choice would be keyed by.
 @property (nonatomic, readonly) uint32_t imageOrdinal;

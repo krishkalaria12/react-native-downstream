@@ -1,6 +1,7 @@
 // JNI access to parsed documents for com.downstream.DownstreamNative.
 
 #include "DocumentRegistry.h"
+#include "ImageSizeCache.h"
 #include "Export.h"
 #include "SegmentPlan.h"
 #include "SessionTrace.h"
@@ -8,9 +9,11 @@
 #include "WorkerPool.h"
 #include "theme/Theme.h"
 #include "theme/ThemeLayout.h"
+#include "math/MathEngine.h"
 #include "math/MathSpeech.h"
 #include "theme/ThemeSlots.h"
 
+#include <dlfcn.h>
 #include <jni.h>
 
 #include <string>
@@ -297,6 +300,43 @@ Java_com_downstream_DownstreamNative_nativeMathMetrics(JNIEnv *env, jclass /*cla
   return array;
 }
 
+namespace {
+
+/// One display list, flattened for `MathDisplayList.kt`.
+///
+/// Doubles rather than floats because a color is a 32-bit word and a code point
+/// can be 21 bits, and both have to come back exact. The order is the format;
+/// `MathDisplayList.decode` reads it field for field:
+///
+///   width, height, depth,
+///   glyphs, then per glyph: x, y, scale, font, code point, color
+///   rules,  then per rule:  x, y, width, height, color, dashed
+///   paths,  then per path:  x, y, fill, stroke width, color, commands,
+///                           then per command: op, x, y, x1, y1, x2, y2
+void appendDisplayList(std::vector<double> &out, const MathLayout &layout) {
+  out.insert(out.end(), {layout.width, layout.height, layout.depth, static_cast<double>(layout.glyphs.size())});
+  for (const MathGlyph &glyph : layout.glyphs) {
+    out.insert(out.end(), {glyph.x, glyph.y, glyph.scale, static_cast<double>(glyph.font),
+                           static_cast<double>(glyph.codePoint), static_cast<double>(glyph.color)});
+  }
+  out.push_back(static_cast<double>(layout.rules.size()));
+  for (const MathRule &rule : layout.rules) {
+    out.insert(out.end(), {rule.x, rule.y, rule.width, rule.height, static_cast<double>(rule.color),
+                           rule.dashed ? 1.0 : 0.0});
+  }
+  out.push_back(static_cast<double>(layout.paths.size()));
+  for (const MathPath &path : layout.paths) {
+    out.insert(out.end(), {path.x, path.y, path.fill ? 1.0 : 0.0, path.strokeWidth, static_cast<double>(path.color),
+                           static_cast<double>(path.commands.size())});
+    for (const PathCommand &command : path.commands) {
+      out.insert(out.end(), {static_cast<double>(command.op), command.x, command.y, command.x1, command.y1,
+                             command.x2, command.y2});
+    }
+  }
+}
+
+} // namespace
+
 /// Flattens blocks [from, to) of a document into one text and integer
 /// tables, with block indices and text offsets relative to `from`. Layouts
 /// must match NativeDocument.kt. Empty blocks get a zero-width space so they
@@ -334,6 +374,11 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
   // fractional ems and `blocks` is all integers: the stride is the only place that
   // order is written down, and it has to match NativeDocument.kt.
   std::vector<double> maths;
+  // Every formula in the range, block and inline, as records of
+  // [block, start, end, length, then `length` doubles of display list]. A formula
+  // with no layout has length zero. Block indexes are relative to `from`, and
+  // start and end are UTF-16 offsets into that block's own text.
+  std::vector<double> formulas;
   std::vector<std::u16string> strings;
   // Each block's resolved typography and margins, in the fixed order
   // `theme_layout::kBlockLayoutStride` writes. Resolved here rather than in
@@ -385,6 +430,15 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
                                     static_cast<jint>(block.meta.startLine),
                                     block.meta.noLineNumbers ? 1 : 0,
                                 });
+    for (const MathSpan &span : block.math) {
+      formulas.insert(formulas.end(), {static_cast<double>(index - static_cast<size_t>(from)),
+                                       static_cast<double>(span.start), static_cast<double>(span.end), 0.0});
+      const size_t lengthAt = formulas.size() - 1;
+      if (span.layout) {
+        appendDisplayList(formulas, *span.layout);
+        formulas[lengthAt] = static_cast<double>(formulas.size() - lengthAt - 1);
+      }
+    }
     if (!block.math.empty()) {
       // A block's formula covers its whole text, so only the first span is ever
       // read here; the parser promotes a lone display formula to its own block
@@ -458,7 +512,7 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
     env->DeleteLocalRef(value);
   }
 
-  jobjectArray result = env->NewObjectArray(9, objectClass, nullptr);
+  jobjectArray result = env->NewObjectArray(10, objectClass, nullptr);
   env->SetObjectArrayElement(result, 0, toJavaString(env, text));
   env->SetObjectArrayElement(result, 1, toJavaArray(env, blocks));
   env->SetObjectArrayElement(result, 2, toJavaArray(env, containers));
@@ -476,6 +530,11 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
     env->SetDoubleArrayRegion(mathArray, 0, static_cast<jsize>(maths.size()), maths.data());
   }
   env->SetObjectArrayElement(result, 8, mathArray);
+  jdoubleArray formulaArray = env->NewDoubleArray(static_cast<jsize>(formulas.size()));
+  if (!formulas.empty()) {
+    env->SetDoubleArrayRegion(formulaArray, 0, static_cast<jsize>(formulas.size()), formulas.data());
+  }
+  env->SetObjectArrayElement(result, 9, formulaArray);
   return result;
 }
 
@@ -590,6 +649,76 @@ Java_com_downstream_DownstreamNative_nativeMathSpeech(JNIEnv *env, jclass /*claz
   const std::string spoken = downstream::math::speak(utf8, display == JNI_TRUE);
   env->ReleaseStringUTFChars(tex, utf8);
   return toJavaString(env, utf8ToUtf16(spoken));
+}
+
+namespace {
+
+/// The library `nativeRegisterMathEngine` named, opened on first use.
+std::string &mathLibraryName() {
+  static auto *name = new std::string();
+  return *name;
+}
+
+/// Opens RaTeX and finds its three functions. Runs once, under the engine's lock,
+/// the first time any document needs a formula laid out.
+bool resolveRatex(downstream::MathEngineFunctions *out) {
+  void *library = dlopen(mathLibraryName().c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (library == nullptr) {
+    return false;
+  }
+  // Never closed: the engine's function pointers point into it for the life of
+  // the process, the way a linked library's would.
+  return downstream::mathEngineFunctionsFromSymbols(dlsym(library, "ratex_parse_and_layout"),
+                                                    dlsym(library, "ratex_free_display_list"),
+                                                    dlsym(library, "ratex_get_last_error"), out);
+}
+
+} // namespace
+
+/// Registers the math package's engine without loading it. `fontDirectory` is the
+/// asset path the KaTeX fonts are under, which the Kotlin renderer reads.
+extern "C" JNIEXPORT void JNICALL
+Java_com_downstream_DownstreamNative_nativeRegisterMathEngine(JNIEnv *env, jclass /*clazz*/, jstring library,
+                                                              jstring fontDirectory) {
+  if (library == nullptr || fontDirectory == nullptr) {
+    return;
+  }
+  const char *name = env->GetStringUTFChars(library, nullptr);
+  const char *fonts = env->GetStringUTFChars(fontDirectory, nullptr);
+  if (name != nullptr && fonts != nullptr) {
+    mathLibraryName() = name;
+    downstream::MathEngine::installResolver(resolveRatex, fonts);
+  }
+  if (name != nullptr) {
+    env->ReleaseStringUTFChars(library, name);
+  }
+  if (fonts != nullptr) {
+    env->ReleaseStringUTFChars(fontDirectory, fonts);
+  }
+}
+
+/// A finished image load, recorded where the shadow node reads it.
+///
+/// The size is the decoded picture's, in pixels, which `imageBox` treats the way
+/// CSS treats an image's natural size; zero means the load failed. Keyed by URL, so
+/// every message showing the picture measures at its loaded height.
+extern "C" JNIEXPORT void JNICALL
+Java_com_downstream_DownstreamNative_nativeRecordImage(JNIEnv *env, jclass /*clazz*/, jstring url, jint width,
+                                                       jint height) {
+  if (url == nullptr) {
+    return;
+  }
+  const jsize length = env->GetStringLength(url);
+  const jchar *chars = env->GetStringChars(url, nullptr);
+  if (chars == nullptr) {
+    return;
+  }
+  const std::string key = utf16ToUtf8(std::u16string_view(reinterpret_cast<const char16_t *>(chars), length));
+  env->ReleaseStringChars(url, chars);
+  const bool loaded = width > 0 && height > 0;
+  downstream::ImageSizeCache::record(
+      key, {loaded ? downstream::ImageState::Loaded : downstream::ImageState::Failed,
+            loaded ? static_cast<float>(width) : 0.0f, loaded ? static_cast<float>(height) : 0.0f});
 }
 
 /// One link as [url, [rangeStart, rangeEnd]], or null.

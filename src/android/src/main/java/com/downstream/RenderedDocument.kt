@@ -478,6 +478,10 @@ internal class MathSegment(
   val depth: Float,
   /** Whether the layout resolved, which is what decides the literal or an error. */
   val resolved: Boolean,
+  /** The glyphs, rules and paths to draw, when the layout resolved. */
+  val displayList: MathDisplayList?,
+  /** True once the engine has given up on the formula, which is when it turns the error color. */
+  val failed: Boolean,
   /** The spoken form from `MathSpeech.h`, or the literal when there is none. */
   val speech: String,
   /** Whether the source was a `$$` line fence, which centers by default. */
@@ -950,6 +954,8 @@ internal class RenderedDocument(
         Configuration.UI_MODE_NIGHT_YES
       val key = "$documentId:$fontScale:$night:$syntaxHighlighting:$themeId"
       cache.get(key)?.let { return it }
+      // Inline formulas draw from text spans, which have no context of their own.
+      MathFonts.attach(context)
       val plan = DownstreamNative.readSegmentPlan(documentId) ?: return null
       // The document's pictures, read once. An image segment needs its destination,
       // alt text and policy answer, and reading those one field at a time over JNI
@@ -1528,6 +1534,22 @@ internal class RenderedDocument(
         }
       }
 
+      // Each laid-out inline formula draws its glyphs over its own literal. A
+      // formula with no layout keeps the literal, which is what a reader sees
+      // while it is still arriving and when it failed.
+      if (!isCode) {
+        val minimumRule = density * 0.5f
+        for (formula in document.formulas) {
+          val list = formula.list ?: continue
+          if (document.blockKind(formula.block) == NativeDocument.KIND_MATH_BLOCK) continue
+          val blockStart = document.blockStart(formula.block)
+          val start = blockStart + formula.start
+          val end = blockStart + formula.end
+          if (start < blockStart || end > text.length || end <= start) continue
+          text.setSpan(MathInlineSpan(list, minimumRule), start, end, flags)
+        }
+      }
+
       // A text segment that a committed chunk split off gets the gap it would
       // have inside one segment, so both stack to the same height.
       // The block above the segment is not in this slice, so the caller passes
@@ -1608,6 +1630,8 @@ internal class RenderedDocument(
         height = document.blockMathHeightEm(0).toFloat(),
         depth = document.blockMathDepthEm(0).toFloat(),
         resolved = document.blockMathResolved(0),
+        displayList = document.formulas.firstOrNull { it.block == 0 }?.list,
+        failed = document.blockMathError(0).isNotEmpty(),
         speech = document.blockMathSpeech(0).ifEmpty { literal },
         display = display,
         textAlign = style.mathTextAlign,
