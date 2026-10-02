@@ -3,6 +3,7 @@
 #include "MarkdownParser.h"
 #include "SessionRegistry.h"
 #include "SessionTrace.h"
+#include "math/MathEngine.h"
 
 #include <cmath>
 #include <cstdint>
@@ -215,6 +216,14 @@ void DownstreamSessionModule::setPreview(jsi::Runtime & /*rt*/, std::string sess
       !downstream::SessionRegistry::setPreview(sessionId, options)) {
     reportError(sessionId, "invalid_session", "Session is unavailable", 0, 0);
   }
+}
+
+bool DownstreamSessionModule::mathAvailable(jsi::Runtime & /*rt*/) {
+  // Asked once per process and answered from the engine's own install flag rather
+  // than from anything this module knows: the answer changes only when the app's
+  // binary does, which is a relaunch, so caching it here would be a second place
+  // that could disagree with the layout pass about whether there is an engine.
+  return downstream::available();
 }
 
 } // namespace facebook::react

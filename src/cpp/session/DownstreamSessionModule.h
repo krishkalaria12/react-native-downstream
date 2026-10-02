@@ -39,6 +39,20 @@ public:
   void setTracing(jsi::Runtime &rt, std::string sessionId, bool enabled);
   void setPreview(jsi::Runtime &rt, std::string sessionId, double features);
 
+  /**
+   * Whether a math engine is linked into this process.
+   *
+   * So JavaScript can settle the `math` prop's default during its first render
+   * rather than after a layout pass, which is the difference between a formula
+   * laying out on the first frame and one visibly re-laying a frame later.
+   *
+   * The runtime is unused and is there because React Native's generated binding
+   * requires a synchronous method on a TurboModule to take one; a synchronous
+   * method is a property with braces or a method without arguments in the
+   * TypeScript spec, and codegen rejects anything else.
+   */
+  bool mathAvailable(jsi::Runtime &rt);
+
 private:
   /// Lets session workers reach the module only while it is alive.
   struct Events;
