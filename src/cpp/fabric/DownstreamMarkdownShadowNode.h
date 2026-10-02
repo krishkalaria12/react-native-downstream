@@ -2,6 +2,7 @@
 
 #include "DownstreamMarkdownState.h"
 #include "DownstreamTextLayoutManager.h"
+#include "ImageSizeCache.h"
 #include "PreparedDocument.h"
 #include "theme/Theme.h"
 
@@ -43,6 +44,21 @@ public:
 
   void setLayoutManager(std::shared_ptr<const DownstreamTextLayoutManager> layoutManager);
 
+  /**
+   * Asks for a relayout after the view's image loads have reported.
+   *
+   * The platform has already recorded each result in `ImageSizeCache`; this
+   * reads the document's answers back out of it and dispatches the state update.
+   * Going through the cache is what makes a load that finished after its view
+   * was recycled still count, and what makes six loads in one frame produce one
+   * relayout rather than six.
+   *
+   * Static because a view holds a `std::shared_ptr<const ShadowNode>` and not
+   * the concrete node, and because the node that has to be re-measured is
+   * whichever revision is mounted by the time the update lands.
+   */
+  static void imagesChanged(const std::shared_ptr<const ShadowNode> &node);
+
   Size measureContent(const LayoutContext &layoutContext, const LayoutConstraints &layoutConstraints) const override;
 
   void layout(LayoutContext layoutContext) override;
@@ -68,10 +84,19 @@ private:
   /// Asks for a relayout once a preparation that layout did not wait for ends.
   void relayoutWhenPrepared() const;
 
+  /// Sends `onMathError` for the formulas that newly failed in `document`.
+  void reportMathErrors(const downstream::DocumentHandle &document,
+                        const downstream::DocumentHandle &previous) const;
+
   /// The node's layout hint at a scale and a width. Carries the theme, so the
   /// worker builds the rendering the view will mount and Fabric measures the
   /// sizes the view draws.
-  downstream::LayoutHint layoutHint(react::Float fontScale, react::Float width) const;
+  /// The hint a preparation is made for. `document` is the one whose image answers
+  /// it carries: the node's resolved document when measuring, and the fallback
+  /// it already holds when requesting a preparation, because resolving the
+  /// document there would read a preparation that does not exist yet.
+  downstream::LayoutHint layoutHint(react::Float fontScale, react::Float width,
+                                    const downstream::DocumentHandle &document) const;
 
   /// The chrome a document lays out with, from the props and the reader's
   /// choices. It is a height, not a rendering, so it is recomputed here rather
@@ -92,6 +117,19 @@ private:
   /// props are read here rather than from the state, because a prop change
   /// lands in props a revision before the state that records it does.
   downstream::CodeLayout codeLayout(const DownstreamMarkdownState &state) const;
+  /// What each image in the document is, from the process-wide size cache and
+  /// the props. Rebuilt on every measurement, which is cheap: the cache is a
+  /// lookup per image and a document has as many images as it has pictures.
+  downstream::ImageLayout imageLayout(const downstream::DocumentHandle &document) const;
+  /// The same answers without the policy, for the state. A view draws from this
+  /// and never needs to know which prefixes the app allows.
+  downstream::ImageStateLayout imageState(const downstream::ImageLayout &layout) const {
+    return layout.state;
+  }
+  /// Asks for a relayout once images that have not answered do. The platform
+  /// records a finished load in the cache and calls in, exactly as
+  /// `relayoutWhenPrepared` is called when a parse finishes.
+  void relayoutWhenImagesChange(downstream::ImageStateLayout answers) const;
 
   /// The caret this document draws, from the `caret` and `animating` props and
   /// the document's own `streaming` flag.

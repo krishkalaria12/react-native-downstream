@@ -2,6 +2,7 @@
 
 #ifdef __cplusplus
 #include "CodeLayout.h"
+#include "ImageLayout.h"
 #endif
 
 #import <UIKit/UIKit.h>
@@ -22,6 +23,7 @@ NS_ASSUME_NONNULL_BEGIN
 typedef NS_ENUM(NSInteger, DSBlockKind) {
   DSBlockKindCode = 2,
   DSBlockKindTableRow = 5,
+  DSBlockKindImage = 7,
 };
 
 /// Formats a control can produce, matching `ExportFormat` in the engine.
@@ -51,6 +53,20 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 - (void)didToggleExpandAtOrdinal:(uint32_t)ordinal language:(NSString *)language expanded:(BOOL)expanded;
 /// A copy, a download, or a save that failed.
 - (void)didFailControlOfKind:(DSBlockKind)kind action:(NSString *)action message:(NSString *)message;
+@end
+
+@protocol DSImageDelegate <NSObject>
+/// A press on a loaded image that is not inside a link, so the app can open its
+/// own viewer. The library opens nothing: a tap is the app's decision, because an
+/// app that has a viewer wants it and one that does not does not.
+- (void)didPressImageWithURL:(NSString *)url
+                         alt:(NSString *)alt
+                       title:(NSString *)title
+                    ordinal:(uint32_t)ordinal;
+/// A load finished and its answer is in the engine's size cache. The host asks
+/// the shadow node to measure again, which is how a picture arriving makes the
+/// message taller without a React render.
+- (void)imagesDidChange;
 @end
 
 @protocol DSSegmentView <NSObject>
@@ -143,6 +159,46 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
 @end
 
+/**
+ * One image block: a stack of boxes, each a picture or the placeholder for it.
+ *
+ * The view draws what `imageBox` decided and nothing else, so a measured image
+ * and a drawn one are the same size. A load that finishes records its result,
+ * the shadow node measures again through a state update, and the box the view
+ * draws is the box the measurement made.
+ */
+@interface DSImageSegmentView : UIView <DSSegmentView>
+@property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
+@property (nonatomic, weak, nullable) id<DSControlDelegate> controlDelegate;
+@property (nonatomic, weak, nullable) id<DSImageDelegate> imageDelegate;
+@property (nonatomic) BOOL controlsEnabled;
+@property (nonatomic) uint32_t controls;
+/// Label strings in the order `src/controls.ts` sends them.
+- (void)setControlLabels:(NSArray<NSString *> *)labels;
+/// The state each image is in, which is what the boxes are drawn from.
+- (void)setImageState:(const downstream::ImageStateLayout &)state;
+/// True when this block is settled, which is what turns a control on and stops a
+/// pending box from flashing.
+@property (nonatomic) BOOL settled;
+/// The screen scale the pictures were decoded at, which is what a press's
+/// download name and a re-request need.
+@property (nonatomic) CGFloat screenScale;
+- (void)setSegment:(DSImageSegment *)segment;
+@end
+
+/**
+ * One display formula: a horizontal scroll view around a view that draws vectors.
+ *
+ * A formula wider than the column scrolls rather than being scaled into it, which
+ * is what KaTeX does and what keeps a wide matrix readable. The drag rules are
+ * the code card's: this scroll view takes a horizontal drag while it can scroll
+ * that way and refuses at the edge, so a chat list's own pan takes over.
+ */
+@interface DSMathSegmentView : UIView <DSSegmentView>
+@property (nonatomic) BOOL streaming;
+- (void)setSegment:(DSMathSegment *)segment;
+@end
+
 /// Stacks segment views at the frames the measurement computed.
 @interface DSDocumentView : UIView
 /// Where the document's fading characters are. Weak, because the provider is the
@@ -153,12 +209,18 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 - (NSArray<UIView<DSRevealInvalidatable> *> *)revealViewsForBlock:(NSInteger)block;
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
 @property (nonatomic, weak, nullable) id<DSControlDelegate> controlDelegate;
+@property (nonatomic, weak, nullable) id<DSImageDelegate> imageDelegate;
 @property (nonatomic) BOOL selectable;
 @property (nonatomic) uint32_t controls;
 /// The whole code layout: the `lineNumbers`, `codeBlockWrap`, and
 /// `codeBlockMaxHeight` props, plus the reader's own per-block wrap and expand
 /// choices. One value, so a frame and the layout drawn inside it cannot disagree.
 @property (nonatomic) downstream::CodeLayout codeLayout;
+/// What each image is, which the image views draw from and the frames are
+/// stacked with.
+@property (nonatomic) downstream::ImageStateLayout imageState;
+/// The screen scale pictures are decoded at.
+@property (nonatomic) CGFloat screenScale;
 /// Label strings in the order `src/controls.ts` sends them.
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
 - (void)setRendered:(nullable DSRenderedDocument *)rendered;

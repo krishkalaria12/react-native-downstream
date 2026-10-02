@@ -1,12 +1,19 @@
 #import "DSSegmentViews.h"
 
+#import "DSFileExporter.h"
+#import "DSImageLoader.h"
 #import "DSLayoutManager.h"
+#import "DSMathFonts.h"
+#import "DSRenderedDocument.h"
 
 #include "Controls.h"
 #include "Reveal.h"
+#include "ImageSizeCache.h"
+#include "math/MathSpeech.h"
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 using namespace downstream;
 // The slot names a themed drawing reads. The layout helpers they sit beside live
@@ -267,9 +274,16 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
   if (range.length == 0) {
     return;
   }
-  NSString *text = [[_stack.textStorage.string substringWithRange:range] stringByReplacingOccurrencesOfString:kPlaceholder
-                                                                                                   withString:@""];
-  UIPasteboard.generalPasteboard.string = text;
+  // An inline formula is one attachment character carrying its literal, and the
+  // literal is what a reader copying the sentence expects.
+  NSMutableString *text = [NSMutableString string];
+  [_stack.textStorage enumerateAttribute:DSMathLiteralAttributeName
+                                 inRange:range
+                                 options:0
+                              usingBlock:^(NSString *literal, NSRange part, BOOL *stop) {
+                                [text appendString:literal ?: [self->_stack.textStorage.string substringWithRange:part]];
+                              }];
+  UIPasteboard.generalPasteboard.string = [text stringByReplacingOccurrencesOfString:kPlaceholder withString:@""];
 }
 
 - (NSInteger)linkIndexAtPoint:(CGPoint)point {
@@ -366,7 +380,14 @@ typedef NS_ENUM(NSInteger, DSControlLabel) {
   DSControlLabelTableFormatMarkdown = 14,
   DSControlLabelTableFormatCsv = 15,
   DSControlLabelTableFormatTsv = 16,
-  DSControlLabelCount = 17,
+  // Appended, in `src/controls.ts`'s order. The four image keys: what a failed
+  // image says, what its button says, and the two names a screen reader needs
+  // when the alt text is empty or the prefix list blocked it.
+  DSControlLabelImageNotAvailable = 17,
+  DSControlLabelDownloadImage = 18,
+  DSControlLabelImage = 19,
+  DSControlLabelImageBlocked = 20,
+  DSControlLabelCount = 21,
 };
 
 NSString *const kSymbolCopy = @"doc.on.doc";
@@ -1115,9 +1136,6 @@ constexpr CGFloat kPinThreshold = 8;
   }
 }
 
-/// Rebuilds the header's buttons from the current controls, enabled state, and
-/// layout. The buttons are created once; only their glyphs, labels, and states
-/// change, which is what keeps a snapshot from allocating any.
 /// Rebuilds the header's buttons from the current controls, enabled state, and
 /// layout. The buttons are created once; only their glyphs, labels, and states
 /// change, which is what keeps a snapshot from allocating any.
@@ -2065,6 +2083,15 @@ constexpr CGFloat kPinThreshold = 8;
   /// The whole code layout, which both the card views and the frame stack read,
   /// so a block's drawn layout and its measured height are the same decision.
   downstream::CodeLayout _codeLayout;
+  /// What each image is, which the image views draw from and the frame stack is
+  /// keyed by. A load changes an entry, which re-stacks the frames.
+  downstream::ImageStateLayout _imageState;
+  /// Whether the document's blocks are all settled, which turns an image
+  /// block's controls on and stops a pending box from being a control's target.
+  BOOL _settled;
+  /// The screen scale pictures are decoded at, so a 4,000-pixel photo costs a
+  /// phone-sized bitmap.
+  CGFloat _screenScale;
   /// The theme's selection color, applied to every text view in the stack.
   UIColor *_selectionColor;
   /// Where this stack's fading characters are. Weak, because the layout manager is
@@ -2081,11 +2108,26 @@ constexpr CGFloat kPinThreshold = 8;
   return self;
 }
 
-static Class segmentViewClass(BOOL isText, BOOL isCode) {
-  if (isText) {
+/// The view class a segment is drawn by, so a recycled view of the wrong kind is
+/// replaced rather than reconfigured into something it cannot be.
+///
+/// The kind is compared rather than the class, because a segment's class is what
+/// a recycled view's `isKindOfClass:` answers to and a class comparison would say
+/// "not reusable" for a subclass a future release introduces.
+static Class segmentViewClassFor(id segment) {
+  if ([segment isKindOfClass:DSTextSegment.class]) {
     return DSTextSegmentView.class;
   }
-  return isCode ? DSCodeSegmentView.class : DSTableSegmentView.class;
+  if ([segment isKindOfClass:DSCodeSegment.class]) {
+    return DSCodeSegmentView.class;
+  }
+  if ([segment isKindOfClass:DSMathSegment.class]) {
+    return DSMathSegmentView.class;
+  }
+  if ([segment isKindOfClass:DSImageSegment.class]) {
+    return DSImageSegmentView.class;
+  }
+  return DSTableSegmentView.class;
 }
 
 /// A segment's controls and its selection turn on once every block it covers
@@ -2126,6 +2168,24 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
     }
     return;
   }
+  if ([view isKindOfClass:DSImageSegmentView.class]) {
+    // An image block's button and its pending state both turn on once the block
+    // is settled, which is the same rule a code block's controls follow.
+    DSImageSegmentView *pictures = (DSImageSegmentView *)view;
+    pictures.controls = _controls;
+    pictures.controlsEnabled = [self isSegmentSettledAtIndex:index];
+    pictures.settled = [self isSegmentSettledAtIndex:index];
+    pictures.screenScale = _screenScale;
+    [pictures setImageState:_imageState];
+    return;
+  }
+  if ([view isKindOfClass:DSMathSegmentView.class]) {
+    // A formula has no controls and nothing to settle: its layout is the same
+    // whether the fence has closed or not, because an open fence's last good
+    // layout is what it draws.
+    ((DSMathSegmentView *)view).streaming = ![self isSegmentSettledAtIndex:index];
+    return;
+  }
   DSTableSegmentView *table = (DSTableSegmentView *)view;
   table.showsToolbar = (_chrome & downstream::kChromeTableToolbar) != 0;
   table.controls = _controls;
@@ -2164,13 +2224,8 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
   _codeOrdinals = ordinals;
   for (NSUInteger index = 0; index < segments.count; index++) {
     id segment = segments[index];
-    const Class text = DSTextSegmentView.class;
-    const Class code = DSCodeSegmentView.class;
-    const Class table = DSTableSegmentView.class;
     UIView<DSSegmentView> *view = index < _segmentViews.count ? _segmentViews[index] : nil;
-    const BOOL reusable = view != nil && [view isKindOfClass:segmentViewClass(
-                                                        [segment isKindOfClass:DSTextSegment.class],
-                                                        [segment isKindOfClass:DSCodeSegment.class])];
+    const BOOL reusable = view != nil && [view isKindOfClass:segmentViewClassFor(segment)];
     if (!reusable) {
       [view removeFromSuperview];
       if ([segment isKindOfClass:DSTextSegment.class]) {
@@ -2183,6 +2238,17 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
         codeView.controlDelegate = self.controlDelegate;
         [codeView setControlLabels:_labels];
         view = codeView;
+      } else if ([segment isKindOfClass:DSMathSegment.class]) {
+        // A formula has no controls and no links, so it is given neither
+        // delegate: a button that does nothing is worse than no button.
+        view = [DSMathSegmentView new];
+      } else if ([segment isKindOfClass:DSImageSegment.class]) {
+        DSImageSegmentView *imageView = [DSImageSegmentView new];
+        imageView.linkDelegate = _linkDelegate;
+        imageView.imageDelegate = _imageDelegate;
+        imageView.controlDelegate = self.controlDelegate;
+        [imageView setControlLabels:_labels];
+        view = imageView;
       } else {
         DSTableSegmentView *tableView = [DSTableSegmentView new];
         tableView.linkDelegate = _linkDelegate;
@@ -2201,6 +2267,12 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
       [(DSTextSegmentView *)view setSegment:segment];
     } else if ([segment isKindOfClass:DSCodeSegment.class]) {
       [(DSCodeSegmentView *)view setSegment:segment];
+    } else if ([segment isKindOfClass:DSMathSegment.class]) {
+      [(DSMathSegmentView *)view setSegment:segment];
+    } else if ([segment isKindOfClass:DSImageSegment.class]) {
+      DSImageSegmentView *imageView = (DSImageSegmentView *)view;
+      imageView.imageDelegate = _imageDelegate;
+      [imageView setSegment:segment];
     } else {
       [(DSTableSegmentView *)view setSegment:segment];
     }
@@ -2227,9 +2299,6 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
         table.revealProvider = _revealProvider;
       }
     }
-    (void)text;
-    (void)code;
-    (void)table;
     // A view created here has not seen the selection color yet, and a theme can
     // arrive after the segments do.
     if (_selectionColor != nil) {
@@ -2319,6 +2388,49 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
   [self reapplyState];
 }
 
+- (void)setImageState:(downstream::ImageStateLayout)imageState {
+  if (imageState == _imageState) {
+    return;
+  }
+  _imageState = imageState;
+  for (UIView<DSSegmentView> *view in _segmentViews) {
+    if ([view isKindOfClass:DSImageSegmentView.class]) {
+      [(DSImageSegmentView *)view setImageState:imageState];
+    }
+  }
+  [self setNeedsLayout];
+}
+
+- (void)setSettled:(BOOL)settled {
+  if (settled == _settled) {
+    return;
+  }
+  _settled = settled;
+  for (UIView<DSSegmentView> *view in _segmentViews) {
+    if ([view isKindOfClass:DSImageSegmentView.class]) {
+      ((DSImageSegmentView *)view).settled = settled;
+    }
+  }
+}
+
+- (void)setScreenScale:(CGFloat)screenScale {
+  _screenScale = screenScale;
+  for (UIView<DSSegmentView> *view in _segmentViews) {
+    if ([view isKindOfClass:DSImageSegmentView.class]) {
+      ((DSImageSegmentView *)view).screenScale = screenScale;
+    }
+  }
+}
+
+- (void)setImageDelegate:(id<DSImageDelegate>)imageDelegate {
+  _imageDelegate = imageDelegate;
+  for (UIView<DSSegmentView> *view in _segmentViews) {
+    if ([view isKindOfClass:DSImageSegmentView.class]) {
+      ((DSImageSegmentView *)view).imageDelegate = imageDelegate;
+    }
+  }
+}
+
 - (void)reapplyState {
   for (NSUInteger index = 0; index < _segmentViews.count; index++) {
     [self applyStateToSegmentView:_segmentViews[index] atIndex:index];
@@ -2380,9 +2492,12 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
   // The frames are measured under the same wrap choices the code cards are
   // drawn with, so a block's frame and its drawn layout are one decision. The
   // set is the reader's own, and `codeWraps` is what the card views call too.
+  // The image answers are part of the key, so a load that finished re-stacks the
+  // frames rather than leaving a picture in the box it was measured at.
   NSArray<NSValue *> *frames = [_rendered segmentFramesForWidth:self.bounds.size.width
                                                           chrome:_chrome
-                                                             code:_codeLayout];
+                                                             code:_codeLayout
+                                                           images:_imageState];
   for (NSUInteger index = 0; index < _segmentViews.count && index < frames.count; index++) {
     _segmentViews[index].frame = frames[index].CGRectValue;
   }
@@ -2396,7 +2511,5 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
   }
   return -1;
 }
-
-
 
 @end

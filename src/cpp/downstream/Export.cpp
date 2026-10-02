@@ -207,6 +207,12 @@ void appendMarkdownCell(std::u16string &out, const Document &document, const Blo
     const bool strong = (styles & InlineStyle::Strong) != 0;
     const bool emphasis = (styles & InlineStyle::Emphasis) != 0;
     const bool code = (styles & InlineStyle::Code) != 0;
+    // A formula is written back as its own source, delimiters included and
+    // unescaped. Escaping it would turn `$$a*b$$` into `$$a\*b$$`, which no
+    // longer reads as math, and the point of a table export is that pasting it
+    // somewhere else reproduces what the reader saw. The literal is in
+    // `Block::text` precisely so this is a copy rather than a re-serialization.
+    const bool math = (styles & InlineStyle::Math) != 0;
     const Link *link = acceptedLink(document, piece.link);
     // Outermost first and code innermost, so re-parsing nests the emphasis
     // inside the link the way the original span nest.
@@ -224,7 +230,9 @@ void appendMarkdownCell(std::u16string &out, const Document &document, const Blo
     }
     // Image alt text is plain text today, and a footnote reference is written
     // as the number the reader sees; neither carries its own markup.
-    if (code) {
+    if (math) {
+      out.append(text);
+    } else if (code) {
       appendMarkdownCode(out, text);
     } else {
       appendMarkdownPlain(out, text);
@@ -360,6 +368,10 @@ void appendHtmlCell(std::u16string &out, const Document &document, const Block &
     const bool strong = (styles & InlineStyle::Strong) != 0;
     const bool emphasis = (styles & InlineStyle::Emphasis) != 0;
     const bool code = (styles & InlineStyle::Code) != 0;
+    // A formula needs no special case here: HTML has no math dialect this
+    // engine targets, and the cell's literal is already in the text, so
+    // escaping it writes the formula's source. That is what a paste into a
+    // Markdown editor wants, and what a paste into a page shows.
     const Link *link = acceptedLink(document, piece.link);
     if (link != nullptr) {
       out.append(u"<a href=\"");
@@ -551,6 +563,79 @@ std::string tableDownloadName(const std::string &configuredBase, std::string_vie
   }
   base.push_back('.');
   base.append(extension.empty() ? std::string_view("txt") : extension);
+  return base;
+}
+
+namespace {
+
+/// The extension a URL names, or empty. Streamdown's rule: only a short suffix
+/// counts, because a path segment is not an extension and `a/b.c/d` ends in a
+/// directory that happens to have a dot in it.
+std::string_view extensionFromUrl(std::string_view url) {
+  // The query and the fragment are not part of the name: `chart.png?v=2` is a
+  // PNG called chart.png, and taking the suffix after the `?` would call it
+  // "2".
+  size_t end = url.find_first_of("?#");
+  if (end == std::string_view::npos) {
+    end = url.size();
+  }
+  const std::string_view path = url.substr(0, end);
+  const size_t slash = path.rfind('/');
+  const std::string_view last = slash == std::string_view::npos ? path : path.substr(slash + 1);
+  const size_t dot = last.rfind('.');
+  // At most four characters, which is Streamdown's cap and is what keeps
+  // `archive.tar.gz` from becoming a `.tar.gz` extension.
+  if (dot == std::string_view::npos || dot == 0 || last.size() - dot - 1 > 4 || last.size() - dot - 1 == 0) {
+    return {};
+  }
+  const std::string_view extension = last.substr(dot + 1);
+  for (const char unit : extension) {
+    if (unit < 'a' || unit > 'z') {
+      // Only a lower-case suffix, so a name that merely ends in a capitalized
+      // word does not become a file called `chart.The`.
+      return {};
+    }
+  }
+  return extension;
+}
+
+} // namespace
+
+std::string imageDownloadName(std::string_view url, std::string_view alt, std::string_view mimeType,
+                              const std::string &configuredBase) {
+  // Streamdown's three rules in order: the URL's own extension, else the MIME
+  // type's, else `png`. Each is a guess about a file the reader cannot see, and
+  // the base is the alt text because a writer who wrote alt text is the only
+  // one who knows what the picture is.
+  std::string extension(extensionFromUrl(url));
+  if (extension.empty() && mimeType.find('/') != std::string_view::npos) {
+    const std::string_view subtype = mimeType.substr(mimeType.find('/') + 1);
+    const size_t semicolon = subtype.find(';');
+    // Copy the sanitized suffix into extension before this local goes away.
+    const std::string sanitized = sanitizeBase(semicolon == std::string_view::npos ? subtype : subtype.substr(0, semicolon));
+    if (!sanitized.empty() && sanitized.size() <= 4) {
+      extension = sanitized;
+    }
+  }
+  if (extension.empty()) {
+    extension = "png";
+  }
+
+  // The alt text, without an extension it already carries: a writer who wrote
+  // `![chart.png]` named the file, and appending a second one would give
+  // `chart.png.png`.
+  std::string base = sanitizeBase(alt);
+  if (hasExtension(base)) {
+    base = sanitizeBase(base.substr(0, base.rfind('.')));
+  }
+  if (base.empty()) {
+    base = sanitizeBase(lastComponent(configuredBase));
+  }
+  if (base.empty()) {
+    base = "image";
+  }
+  base.push_back('.');
+  base.append(extension);
   return base;
 }
 

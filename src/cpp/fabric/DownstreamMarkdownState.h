@@ -5,6 +5,7 @@
 #include "Controls.h"
 #include "Document.h"
 #include "DocumentRegistry.h"
+#include "ImageLayout.h"
 #include "RenderPreparer.h"
 #include "theme/Theme.h"
 
@@ -38,13 +39,15 @@ public:
 
   DownstreamMarkdownState(downstream::DocumentHandle document, Float fontSizeMultiplier, uint32_t chrome = 0,
                           downstream::CodeLayout code = {}, downstream::Theme::Handle theme = nullptr,
-                          downstream::PlacedCaret caret = {})
+                          downstream::PlacedCaret caret = {},
+                          downstream::ImageStateLayout images = {})
       : document(std::move(document)),
         fontSizeMultiplier(fontSizeMultiplier),
         chrome(chrome),
         code(std::move(code)),
         theme(std::move(theme)),
-        caret(caret) {}
+        caret(caret),
+        images(std::move(images)) {}
 
   downstream::DocumentHandle document;
   Float fontSizeMultiplier{1.0};
@@ -68,6 +71,14 @@ public:
   /// the shadow node measures with it and the view draws with it for the same
   /// reason `chrome` does.
   downstream::PlacedCaret caret;
+  /// What this view knows about each image: whether images are on, and each
+  /// one's state and pixel size.
+  ///
+  /// It lives in the state rather than in the document because it is a property
+  /// of a view and of a moment, not of the Markdown. A load finishing changes an
+  /// entry, the shadow node notices, and the frame is re-measured and re-mounted
+  /// with no React render — which is the same path a code block's expand takes.
+  downstream::ImageStateLayout images;
 
   /// The theme to draw with, resolving null to the default so a platform never
   /// has to check.
@@ -110,6 +121,13 @@ public:
     return next;
   }
 
+  /// A copy with new image answers, which is what a finished load produces.
+  DownstreamMarkdownState withImages(downstream::ImageStateLayout answers) const {
+    DownstreamMarkdownState next(*this);
+    next.images = std::move(answers);
+    return next;
+  }
+
 #ifdef RN_SERIALIZABLE_STATE
   /// The view hands a new state back through StateWrapper, so the choices the
   /// reader just made have to survive the round trip through JNI. The arrays are
@@ -120,7 +138,8 @@ public:
         chrome(previous.chrome),
         code(previous.code),
         theme(previous.theme),
-        caret(previous.caret) {
+        caret(previous.caret),
+        images(previous.images) {
     if (!data.isObject()) {
       return;
     }
@@ -148,6 +167,14 @@ public:
     if (auto value = data.get_ptr("caretPlace")) {
       caret.place = static_cast<downstream::CaretPlace>(static_cast<int>(value->asDouble()));
     }
+    // The image answers, in the shape `codeLayoutData` writes on Android, so
+    // the measure map, the state and a round trip all read one set of keys.
+    if (auto value = data.get_ptr("imagesEnabled")) {
+      images.enabled = value->asDouble() != 0;
+    }
+    if (auto value = data.get_ptr("imageEntries")) {
+      readImages(*value, &images);
+    }
   }
 
   /// Java resolves the document through the native registry by id rather than
@@ -168,10 +195,51 @@ public:
         "caretKind", static_cast<double>(caret.kind))("caretPlace", static_cast<double>(caret.place))(
         // By id, as the document is: Java resolves the theme through the
         // registry rather than copying its values across JNI on every update.
-        "themeId", static_cast<double>(themeId()));
+        "themeId", static_cast<double>(themeId()))(
+        // The same keys the Android measure map uses, because the view reads
+        // this state and that map through one function.
+        "imagesEnabled", images.enabled ? 1.0 : 0.0)("imageEntries", writeImages(images));
   }
 
 private:
+  /// One object per image, as `codeLayoutData` writes them.
+  static folly::dynamic writeImages(const downstream::ImageStateLayout &images) {
+    auto array = folly::dynamic::array();
+    for (const downstream::ImageEntry &entry : images.entries) {
+      array.push_back(folly::dynamic::object("ordinal", static_cast<double>(entry.ordinal))(
+          "state", static_cast<double>(entry.state))("pixelWidth", static_cast<double>(entry.pixelWidth))(
+          "pixelHeight", static_cast<double>(entry.pixelHeight)));
+    }
+    return array;
+  }
+
+  static void readImages(const folly::dynamic &array, downstream::ImageStateLayout *out) {
+    out->entries.clear();
+    if (!array.isArray()) {
+      return;
+    }
+    out->entries.reserve(array.size());
+    const auto number = [](const folly::dynamic &object, const char *key) {
+      const auto *value = object.get_ptr(key);
+      return value != nullptr && value->isNumber() ? value->asDouble() : 0.0;
+    };
+    for (const auto &object : array) {
+      if (!object.isObject()) {
+        continue;
+      }
+      downstream::ImageEntry entry;
+      entry.ordinal = static_cast<uint32_t>(number(object, "ordinal"));
+      entry.state = static_cast<downstream::ImageState>(static_cast<uint8_t>(number(object, "state")));
+      entry.pixelWidth = static_cast<float>(number(object, "pixelWidth"));
+      entry.pixelHeight = static_cast<float>(number(object, "pixelHeight"));
+      out->entries.push_back(entry);
+    }
+    std::sort(out->entries.begin(), out->entries.end(),
+              [](const downstream::ImageEntry &a, const downstream::ImageEntry &b) {
+                return a.ordinal < b.ordinal;
+              });
+  }
+
   static std::vector<uint32_t> readOrdinals(const folly::dynamic &array) {
     std::vector<uint32_t> ordinals;
     if (!array.isArray()) {

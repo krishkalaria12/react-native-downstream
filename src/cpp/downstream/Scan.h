@@ -56,8 +56,9 @@ struct Fence {
   std::string_view info;
 };
 
-/// An opening fence on this line, if the line opens one.
-std::optional<Fence> fenceOpener(std::string_view line);
+/// An opening fence on this line, if the line opens one. Backticks, tildes,
+/// and — when `mathFences` is set — a line that is exactly `$$`.
+std::optional<Fence> fenceOpener(std::string_view line, bool mathFences = false);
 
 /// Whether this line closes a fence opened with `marker` repeated `length`
 /// times. The marker run must be at least as long and the rest must be blank,
@@ -75,6 +76,16 @@ bool isFenceLine(std::string_view line);
 /// indented code block can also continue, but it is not a fence and md4c will
 /// not tell a caller which it was, so this answers only for fences.
 bool endsInsideFence(std::string_view source);
+
+/// Whether this line is a `$$` display-math fence delimiter: a line that is
+/// exactly two dollars, after up to three spaces, with nothing after it.
+///
+/// Its own predicate rather than a `fenceOpener` call, because the caller is
+/// usually asking whether a math block has been closed, and the answer for a
+/// backtick fence is irrelevant there. A fence the incremental parser does not
+/// recognize is a boundary it will commit inside, which is how a blank line in
+/// an `aligned` environment would split a formula.
+bool isMathFenceLine(std::string_view line);
 
 // --- inline destinations ---
 

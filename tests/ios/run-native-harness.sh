@@ -27,14 +27,29 @@ for directory in ios cpp cpp/downstream cpp/theme cpp/highlight cpp/session; do
 done
 [ "$source_root" = "$repo" ] || flags+=(-DBASELINE)
 objects=()
-for relative in \
+sources=(
   ios/DSRenderedDocument.mm ios/DSSegmentViews.mm ios/DSLayoutManager.mm ios/DSThemeColors.mm \
-  cpp/theme/Theme.cpp cpp/theme/ThemeLayout.cpp cpp/downstream/CodeLayout.cpp cpp/downstream/SegmentPlan.cpp; do
+  cpp/theme/Theme.cpp cpp/theme/ThemeLayout.cpp cpp/downstream/CodeLayout.cpp cpp/downstream/SegmentPlan.cpp
+)
+harness_sources=(DSFontsShim.mm main.mm)
+if [ -f "$source_root/src/ios/DSBoxSegmentViews.mm" ]; then
+  # Use the real box views and math renderer. Only React's image transport and
+  # presentation entry point are unavailable in this standalone executable.
+  sources+=(
+    ios/DSBoxSegmentViews.mm ios/DSMathFonts.mm ios/DSFileExporter.mm
+    cpp/downstream/ImageLayout.cpp cpp/downstream/ImageLoaderRegistry.cpp cpp/downstream/ImageSizeCache.cpp
+    cpp/downstream/Export.cpp cpp/downstream/ExportNames.cpp cpp/downstream/Unicode.cpp cpp/downstream/WorkerPool.cpp
+    cpp/math/MathEngine.cpp cpp/math/MathDisplayList.cpp cpp/math/MathLayout.cpp cpp/math/MathSpeech.cpp
+  )
+  flags+=("-I$ios_dir/Sources/NativeTextKitHarness/UnavailableReact")
+  harness_sources+=(UnavailableReactServices.mm)
+fi
+for relative in "${sources[@]}"; do
   object="$build/$(basename "$relative").o"
   "$clang" "${flags[@]}" -c "$source_root/src/$relative" -o "$object"
   objects+=("$object")
 done
-for source in DSFontsShim.mm main.mm; do
+for source in "${harness_sources[@]}"; do
   object="$build/$source.o"
   "$clang" "${flags[@]}" -c "$ios_dir/Sources/NativeTextKitHarness/$source" -o "$object"
   objects+=("$object")
@@ -42,7 +57,8 @@ done
 app="$build/NativeTextKitHarness.app"
 mkdir -p "$app"
 "$clang" -target "$target" -isysroot "$sdk" "${objects[@]}" \
-  -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore -o "$app/NativeTextKitHarness"
+  -framework Foundation -framework UIKit -framework CoreGraphics -framework CoreText -framework QuartzCore \
+  -o "$app/NativeTextKitHarness"
 cp "$ios_dir/NativeTextKitHarness-Info.plist" "$app/Info.plist"
 xcrun simctl boot "$device" >/dev/null 2>&1 || true
 xcrun simctl bootstatus "$device" -b >/dev/null

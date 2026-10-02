@@ -40,7 +40,7 @@ An open span renders as the literal text the writer sent, so a half-arrived `**b
 
 ```tsx
 const stream = createMarkdownStream({ preview: true });
-// Or one feature at a time: { preview: { emphasis: true, links: true } }
+// Or one feature at a time: { preview: { emphasis: true, links: true, math: true } }
 ```
 
 The pass only ever repairs the stream's unstable tail, and only when reparsing proves the repair changed nothing but the block it aimed at. It never touches `getSource()` or source ranges, and `finish()` drops it, so the settled document is always a parse of the bytes you appended; see [provisional styling](docs/streaming-semantics.md#provisional-styling).
@@ -52,6 +52,23 @@ Fenced code is colored by the language in its info string, on the same worker th
 ```
 
 `ts`, `tsx`, `js`, `java`, `c`, `cpp`, `cs`, `go`, `swift`, `kt`, `dart`, `scala`, `objc`, `py`, `sh`, `json`, `html`, `xml`, `css`, `sql`, `rs`, `yaml`, `toml`, `rb`, `lua`, `diff`, and `md` are colored; anything else renders plain, as it does in Streamdown. The palette follows GitHub's light and dark code themes and is the same on both platforms. A block with no language, an unknown language, and a block over 64 KiB of code stay plain, and a document with no fenced code never loads a lexer. Highlighting only sets colors, so selection, copy, and accessibility text are unchanged; see [the plan](docs/syntax-highlighting-plan.html) for how a streaming block stays cheap.
+
+### Images and math
+
+An image-only paragraph becomes a picture, fetched through the platform's own image pipeline so your HTTP stack, cache and URL handlers apply. A picture that has not arrived shows a placeholder, one that fails shows its alt text, and `allowedImagePrefixes` decides what may be fetched at all. A press on a picture reports `onImagePress`; the package opens nothing.
+
+```tsx
+<DownstreamMarkdown markdown={message} images allowedImagePrefixes={['https://cdn.example.com/']} />
+```
+
+Math is off by default, so a document without it parses exactly as it did before and every formula stays readable source. Turn it on for `$$…$$`, a `$$` line fence, a ` ```math ` fence, and — unlike Streamdown — `\(…\)` and `\[…\]`, which `math={{ brackets: false }}` turns back off:
+
+```tsx
+<DownstreamMarkdown markdown={message} math />
+<DownstreamMarkdown markdown={message} math={{ singleDollarTextMath: true }} />
+```
+
+Typesetting a formula needs an engine, which ships as the separate opt-in package. Without it a formula keeps its literal and delimiters — which is also what copy returns and what a screen reader reads — is drawn in the theme's error colour, and reports `onMathError`. A formula that is laid out keeps its last good layout while it streams, so it does not re-shape on every token. See [the plan](docs/math-and-images-plan.html) for the delimiter grammar and the engine's C ABI.
 
 ### Theming
 
@@ -238,6 +255,76 @@ subprocess and replays earlier operations at every update; the Streamdown RN
 adapter uses React DOM. Their different overhead prevents these timings from
 ranking the native renderers. The example app's Bench and Testing screens
 collect device traces.
+
+## Running CI locally
+
+CI runs three workflows. `ci.yml` runs on every push. `ios.yml` and
+`android.yml` run only when native code or the native specs change (`src/cpp`,
+`src/ios`, `src/android`, `src/specs`, the `Native*.ts` files, and the `math/`
+workspace package). The commands below reproduce the CI checks. Run them from
+the repository root after `pnpm install`.
+
+```sh
+pnpm lint && pnpm typecheck   # lint
+pnpm test                     # test
+pnpm test:native              # test-native: builds and tests the C++ engine
+pnpm test:kotlin              # test-kotlin: needs kotlinc (brew install kotlin)
+pnpm prepare                  # build-library
+pnpm example exec expo export --platform web   # build-web
+```
+
+### iOS
+
+Needs Xcode and CocoaPods. Vendor the pinned RaTeX framework and KaTeX fonts
+before installing pods; the script verifies both downloads against their
+SHA-256 pins. The `DownstreamMath` scheme compiles the math installer, the
+`Downstream` pod, and their dependencies for the simulator without building or
+signing the app:
+
+```sh
+node math/scripts/vendor-ratex.mjs
+pnpm example exec expo prebuild --platform ios --no-install
+(cd example/ios && pod install)
+xcodebuild -project example/ios/Pods/Pods.xcodeproj -scheme DownstreamMath \
+  -configuration Debug -sdk iphonesimulator \
+  -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath /tmp/downstream-ios-build \
+  CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO build
+```
+
+If `xcode-select` points at the Command Line Tools, prefix the command with
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`. Newer Xcode releases
+reject a dependency's iOS 6.0 deployment target. Add
+`IPHONEOS_DEPLOYMENT_TARGET=15.1` to the `xcodebuild` line to work around it.
+
+### Android
+
+Needs JDK 17, the Android SDK, and NDK 27.1, with `ANDROID_HOME` set. This
+compiles the Kotlin sources and the JNI and Fabric C++ for one ABI, without an
+emulator or an APK:
+
+```sh
+pnpm example exec expo prebuild --platform android --no-install
+(cd example/android && ./gradlew :react-native-downstream:compileDebugKotlin \
+  :react-native-downstream-math:compileDebugKotlin \
+  :app:externalNativeBuildDebug -PreactNativeArchitectures=x86_64)
+```
+
+An additional local check compiles the Android source set and the JNI without
+Gradle:
+
+```sh
+pnpm typecheck:android
+```
+
+`typecheck:android` needs the Android SDK, an NDK, kotlinc, and a populated
+Gradle cache, and skips with a message when one is missing. It resolves
+`react-android` out of that cache and runs React Native's own codegen, so the view
+manager interface it checks against is the generated one.
+
+The Android build compiles C++ with `-Werror`, so a deprecation warning that iOS
+lets through fails here. `example/ios` and `example/android` are generated and
+ignored by git. Delete them and prebuild again when a native dependency changes.
 
 ## License
 

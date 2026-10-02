@@ -43,6 +43,53 @@ export type MarkdownLinkPressEvent = Readonly<{
 }>;
 
 /**
+ * A formula the engine could not typeset.
+ *
+ * Reported once per distinct source per view, and only after the block holding
+ * it settles, so a formula that is still arriving does not report a failure for
+ * every token it grows through.
+ */
+export type MarkdownMathErrorEvent = Readonly<{
+  /** The TeX between the delimiters, as written. */
+  source: string;
+  /** The engine's message. Empty when the math package is not installed. */
+  message: string;
+  /** True for a block or a promoted `$$…$$` paragraph, false for inline math. */
+  display: boolean;
+  /** Source generation, so an error from a replaced document can be dropped. */
+  generation: number;
+}>;
+
+/** A press on an image, or a link around one. */
+export type MarkdownImageEvent = Readonly<{
+  url: string;
+  alt: string;
+  title?: string;
+  /** The `![…](…)` occurrence, so a press can be mapped back to the source. */
+  range: MarkdownSourceRange;
+}>;
+
+/**
+ * How the engine recognizes math.
+ *
+ * Every form is off unless the view opts into math at all, so a document with no
+ * formula parses exactly as it did before math existed.
+ */
+export type MarkdownMathOptions = Readonly<{
+  /**
+   * `$…$` as inline math. Off by default, as in Streamdown, so `$5 and $10`
+   * stays text.
+   */
+  singleDollarTextMath?: boolean;
+  /**
+   * `\(…\)` and `\[…\]`. On by default; Streamdown does not parse them, and they
+   * are what OpenAI-family models emit. Pass `false` where `\(…\)` in prose
+   * means literal parentheses.
+   */
+  brackets?: boolean;
+}>;
+
+/**
  * Which provisional repairs a stream may make to its unstable tail.
  *
  * An open span renders literally unless a feature here is enabled, and even
@@ -71,6 +118,12 @@ export type MarkdownPreviewOptions = Readonly<{
    * which is how a finished image renders too.
    */
   images?: boolean;
+  /**
+   * Close an unfinished inline `$$…$$` span so the text after it shows as math
+   * once the prefix lays out. Off by default, and proven by reparsing like every
+   * other repair. Streamdown closes it unconditionally; this does not.
+   */
+  math?: boolean;
 }>;
 
 export type MarkdownStreamOptions = Readonly<{
@@ -84,6 +137,14 @@ export type MarkdownStreamOptions = Readonly<{
    * canonical source.
    */
   preview?: boolean | MarkdownPreviewOptions;
+  /**
+   * Math parsing for this stream, read once at creation and kept by `reset()`.
+   *
+   * Parse options are part of a source's identity, so a stream takes them when
+   * it is created rather than per snapshot. The view's `math` prop still decides
+   * whether parsed formulas are typeset.
+   */
+  math?: boolean | MarkdownMathOptions;
 }>;
 
 /** Created by createMarkdownStream(options), planned for the native session phase. */
@@ -101,7 +162,7 @@ export interface MarkdownStreamController {
 }
 
 /** Which kind of block a control acted on. */
-export type MarkdownControlKind = 'code' | 'table';
+export type MarkdownControlKind = 'code' | 'table' | 'image';
 
 /** What a control button did. */
 export type MarkdownControlAction = 'copy' | 'download' | 'wrap' | 'expand';
@@ -124,6 +185,8 @@ export type MarkdownControlEvent = Readonly<{
   language: string;
   /** Saved file name, for downloads. */
   filename?: string;
+  /** The image's destination, for an `image` block. */
+  url?: string;
 }>;
 
 export type MarkdownCopyControl =
@@ -182,6 +245,24 @@ export type MarkdownControls =
             download?: MarkdownDownloadControl;
             csvSeparator?: ',' | ';' | '\t' | 'auto';
           }>;
+      /**
+       * The download button on a loaded image, as Streamdown's
+       * `controls.image.download`. There is no copy button: selecting and
+       * copying an image's alt text is what a reader means by copying it, and
+       * Streamdown has none.
+       */
+      image?:
+        | boolean
+        | Readonly<{
+            download?:
+              | boolean
+              | Readonly<{
+                  /** Base name without an extension. The extension is guessed. */
+                  filename?: string;
+                  onDownload?: (event: MarkdownControlEvent) => void;
+                  onError?: (error: MarkdownErrorEvent) => void;
+                }>;
+          }>;
     }>;
 
 /**
@@ -216,6 +297,14 @@ export type MarkdownTranslations = Readonly<{
   tableFormatMarkdown: string;
   tableFormatCsv: string;
   tableFormatTsv: string;
+  /** Shown in place of an image whose load failed. */
+  imageNotAvailable: string;
+  /** The label of a loaded image's download button. */
+  downloadImage: string;
+  /** The accessible name of an image with no alt text. */
+  image: string;
+  /** The accessible name of an image the prefix list does not allow. */
+  imageBlocked: string;
 }>;
 
 /**
@@ -265,6 +354,10 @@ export const defaultTranslations: MarkdownTranslations = {
   tableFormatMarkdown: 'Markdown',
   tableFormatCsv: 'CSV',
   tableFormatTsv: 'TSV',
+  imageNotAvailable: 'Image not available',
+  downloadImage: 'Download image',
+  image: 'Image',
+  imageBlocked: 'Image blocked',
 };
 
 /**
@@ -475,6 +568,29 @@ export type MarkdownStyle = Readonly<{
   >;
   footnote?: { color?: MarkdownColor };
   imageAlt?: { color?: MarkdownColor };
+  /** A display formula's own box. enriched-markdown's `latex` keys. */
+  math?: {
+    fontSize?: number;
+    color?: MarkdownColor;
+    backgroundColor?: MarkdownColor;
+    padding?: number;
+    marginTop?: number;
+    marginBottom?: number;
+    textAlign?: 'left' | 'center' | 'right';
+    /** A formula that could not be typeset, drawn as its source. Downstream only. */
+    errorColor?: MarkdownColor;
+  };
+  /** A formula in the middle of a sentence. enriched-markdown's `inlineLatex`. */
+  inlineMath?: { color?: MarkdownColor };
+  /** A loaded image's own box. */
+  image?: {
+    maxHeight?: number;
+    borderRadius?: number;
+    marginTop?: number;
+    marginBottom?: number;
+    /** The pulsing box drawn before a size is known. Downstream only. */
+    placeholderColor?: MarkdownColor;
+  };
 }>;
 
 /**
@@ -603,6 +719,37 @@ type MarkdownViewBaseProps = Readonly<{
    * default. Keys this renderer does not draw are reported once in development.
    */
   markdownStyle?: Composable<MarkdownStyle>;
+  /**
+   * Typeset math. On when `react-native-downstream-math` is installed and off
+   * otherwise; `false` keeps every formula literal, which is exactly today's
+   * parse and display.
+   *
+   * A `stream` takes its parse options from `createMarkdownStream`, and this
+   * prop then only decides whether parsed formulas are typeset. Unsupported
+   * syntax, and every formula when the math package is absent, shows its source
+   * with its delimiters, as KaTeX's `throwOnError: false` does.
+   */
+  math?: boolean | MarkdownMathOptions;
+  /** A formula that could not be typeset, once per distinct source per view. */
+  onMathError?: (event: MarkdownMathErrorEvent) => void;
+  /**
+   * Load images. On by default, as in Streamdown.
+   *
+   * `false` shows alt text and makes no request. Images are HTTPS only, at most
+   * four requests at once, and cancelled when no view needs them.
+   */
+  images?: boolean;
+  /**
+   * rehype-harden's option: the URL prefixes an image may load from. `['*']` by
+   * default, which allows any HTTPS host.
+   *
+   * Every image URL comes from model output, and a model that reads untrusted
+   * text can be made to fetch any URL, so an app whose models read web pages,
+   * tool output or email should pass its own CDN prefixes here.
+   */
+  allowedImagePrefixes?: readonly string[];
+  /** A press on a loaded image that is not inside a link. */
+  onImagePress?: (event: MarkdownImageEvent) => void;
   /**
    * Fade newly arriving text in, word by word, while the view is animating. Off
    * by default, as in Streamdown.

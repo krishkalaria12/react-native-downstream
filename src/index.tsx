@@ -7,10 +7,12 @@ export {
   resolveEasing,
 } from './animation';
 export { createMarkdownStream } from './createMarkdownStream';
+export { mathAvailable } from './math';
 export { presets } from './presets';
 export { syntaxColorsFromTheme } from './syntaxTheme';
 export { defaultTranslations, resolveMaxHeight } from './types';
 export type { DownstreamMarkdownProps } from './DownstreamMarkdown';
+export type { ResolvedMath } from './math';
 export type { ResolvedAnimate } from './animation';
 export type { SyntaxColorsFromTheme } from './syntaxTheme';
 export type {
@@ -26,7 +28,10 @@ export type {
   MarkdownErrorCode,
   MarkdownErrorEvent,
   MarkdownFontWeight,
+  MarkdownImageEvent,
   MarkdownLinkPressEvent,
+  MarkdownMathErrorEvent,
+  MarkdownMathOptions,
   MarkdownOperationError,
   MarkdownPreset,
   MarkdownPreviewOptions,

@@ -3,6 +3,7 @@
 #include "Caret.h"
 #include "CodeLayout.h"
 #include "Document.h"
+#include "ImageLayout.h"
 #include "theme/Theme.h"
 
 #include <cstdint>
@@ -48,6 +49,15 @@ struct LayoutHint {
   /// last segment changes, but a layout measured without it and a layout drawn
   /// with it would not agree about where the document ends.
   PlacedCaret caret;
+  /// The image layout: whether images are on, the app's prefix list, and what
+  /// this process already knows about each image's size.
+  ///
+  /// It travels in the hint for the same reason the code layout does — every
+  /// input that changes a picture's height has to reach the worker, or the
+  /// worker would measure a layout the view is not about to draw. Almost always
+  /// empty, so the comparison is one size check in practice.
+  ImageLayout images;
+
   /// The theme this view draws with, or null for the default one. A worker
   /// builds the rendering the view will mount, so the theme has to be part of
   /// the hint: without it the worker would prepare an unthemed layout that
@@ -65,6 +75,10 @@ struct LayoutHint {
   LayoutHint(float scale, float at, uint32_t chromeIn, CodeLayout codeIn, PlacedCaret caretIn,
              Theme::Handle themeIn = nullptr)
       : fontScale(scale), width(at), chrome(chromeIn), code(std::move(codeIn)), caret(caretIn), theme(std::move(themeIn)) {}
+  LayoutHint(float scale, float at, uint32_t chromeIn, CodeLayout codeIn, PlacedCaret caretIn, ImageLayout imagesIn,
+             Theme::Handle themeIn = nullptr)
+      : fontScale(scale), width(at), chrome(chromeIn), code(std::move(codeIn)), caret(caretIn),
+        images(std::move(imagesIn)), theme(std::move(themeIn)) {}
 
   /// Equal when two layouts would draw the same sizes. The theme compares by
   /// id rather than by pointer, so two equal themes are one layout hint and a
@@ -72,7 +86,7 @@ struct LayoutHint {
   /// rendering rather than rebuilding them.
   bool operator==(const LayoutHint &other) const {
     return fontScale == other.fontScale && width == other.width && chrome == other.chrome &&
-        code == other.code && caret == other.caret && themeId() == other.themeId();
+           code == other.code && caret == other.caret && images == other.images && themeId() == other.themeId();
   }
 
   /// The theme's id, or 0 for the default one, which is its id too.

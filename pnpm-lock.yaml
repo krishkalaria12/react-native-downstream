@@ -314,6 +314,9 @@ importers:
       react-native-downstream:
         specifier: workspace:*
         version: link:..
+      react-native-downstream-math:
+        specifier: workspace:*
+        version: link:../math
       react-native-enriched-markdown:
         specifier: 0.6.0
         version: 0.6.0(@expo/config-plugins@55.0.11(supports-color@8.1.1))(katex@0.16.22)(react-native@0.83.2(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.83.8(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.3.0)(react@19.2.0)(supports-color@8.1.1))(react@19.2.0)
@@ -345,6 +348,12 @@ importers:
       react-native-builder-bob:
         specifier: ^0.40.18
         version: 0.40.18(supports-color@8.1.1)
+
+  math:
+    devDependencies:
+      react-native-downstream:
+        specifier: workspace:*
+        version: link:..
 
 packages:
 
@@ -12953,7 +12962,7 @@ snapshots:
       '@babel/plugin-transform-shorthand-properties': 7.29.7(@babel/core@7.29.7(supports-color@8.1.1))
       '@babel/plugin-transform-template-literals': 7.29.7(@babel/core@7.29.7(supports-color@8.1.1))
       '@babel/plugin-transform-unicode-regex': 7.29.7(@babel/core@7.29.7(supports-color@8.1.1))
-      '@babel/preset-typescript': 7.29.7(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1)
+      '@babel/preset-typescript': 7.28.5(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1)
       '@react-native/metro-config': 0.87.1(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1)
       convert-source-map: 2.0.0
       react: 19.2.0

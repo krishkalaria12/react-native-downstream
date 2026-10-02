@@ -20,6 +20,10 @@ constexpr uint32_t TableCopy = 1u << 2;
 constexpr uint32_t TableDownload = 1u << 3;
 constexpr uint32_t CodeWrap = 1u << 4;
 constexpr uint32_t CodeExpand = 1u << 5;
+/// A loaded image's save button. No chrome bit goes with it: the button is
+/// drawn over the image rather than in a row above it, so turning it on changes
+/// no block's height and therefore nothing about a document's layout.
+constexpr uint32_t ImageDownload = 1u << 6;
 } // namespace ControlBits
 
 /// True when any code control is on, so a code block gets a header.

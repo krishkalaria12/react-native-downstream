@@ -151,12 +151,12 @@
               <tr>
                 <td>Math<br /><span class="tag planned">planned</span></td>
                 <td>Literal delimiters and source</td>
-                <td><code>@streamdown/math</code> uses remark-math and KaTeX, with an opt-in for single-dollar inline math. md4c already has <code>MD_FLAG_LATEXMATHSPANS</code>, so parsing is cheap; native math layout is the real work.</td>
+                <td><code>@streamdown/math</code> uses remark-math and KaTeX, with an opt-in for single-dollar inline math. md4c already has <code>MD_FLAG_LATEXMATHSPANS</code>, so parsing is cheap; native math layout is the real work. See <a href="math-and-images-plan.html">the math and images plan</a>.</td>
               </tr>
               <tr>
                 <td>Images<br /><span class="tag planned">planned</span></td>
                 <td>Alt text only, no request</td>
-                <td>Streamdown loads the image, shows a placeholder while the URL is still streaming, falls back to "Image not available" on error, and offers a download control. The contract already fixes the rules: HTTPS only, four concurrent requests, cancellation.</td>
+                <td>Streamdown loads the image, shows a placeholder while the URL is still streaming, falls back to "Image not available" on error, and offers a download control. The contract already fixes the rules: HTTPS only, four concurrent requests, cancellation. See <a href="math-and-images-plan.html">the math and images plan</a>.</td>
               </tr>
               <tr>
                 <td>Streaming animation and caret<br /><span class="tag done">shipped</span></td>

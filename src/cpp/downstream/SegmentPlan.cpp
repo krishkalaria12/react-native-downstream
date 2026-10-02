@@ -26,8 +26,28 @@ std::vector<SegmentPlan> planSegments(const Document &document) {
       // One code block is one card. A card carries its own header row and a
       // body that scrolls sideways, so it can never share a text segment with
       // the prose around it.
-      plan.push_back({from, from + 1, SegmentKind::Code, codeOrdinal, committed});
+      plan.push_back({from, from + 1, SegmentKind::Code, codeOrdinal, -1, committed});
       codeOrdinal++;
+      from += 1;
+      continue;
+    }
+
+    if (first.kind == BlockKind::MathBlock) {
+      // One formula is one box. A wide formula scrolls sideways inside its own
+      // viewport rather than being scaled into the column, and a text segment
+      // has neither a scroll view nor a drawable of its own.
+      plan.push_back({from, from + 1, SegmentKind::Math, -1, -1, committed});
+      from += 1;
+      continue;
+    }
+
+    if (first.kind == BlockKind::Image) {
+      // One image block is one segment. Several images in one paragraph stack
+      // vertically inside it, which is the same decision Streamdown's own
+      // image-only paragraph makes, and it keeps a load from resizing a segment
+      // that also holds prose.
+      plan.push_back(
+          {from, from + 1, SegmentKind::Image, -1, static_cast<int32_t>(first.images.front()), committed});
       from += 1;
       continue;
     }
@@ -37,18 +57,18 @@ std::vector<SegmentPlan> planSegments(const Document &document) {
       while (to < limit && blocks[to].kind == BlockKind::TableRow && blocks[to].table == first.table) {
         to++;
       }
-      plan.push_back({from, to, SegmentKind::Table, -1, committed});
+      plan.push_back({from, to, SegmentKind::Table, -1, -1, committed});
       from = to;
       continue;
     }
 
     size_t to = from + 1;
-    while (to < limit && blocks[to].kind != BlockKind::TableRow &&
-           blocks[to].kind != BlockKind::CodeBlock &&
+    while (to < limit && blocks[to].kind != BlockKind::TableRow && blocks[to].kind != BlockKind::CodeBlock &&
+           blocks[to].kind != BlockKind::MathBlock && blocks[to].kind != BlockKind::Image &&
            !(committed && to - from >= kCommittedChunkBlocks && blocks[to - 1].containers.empty())) {
       to++;
     }
-    plan.push_back({from, to, SegmentKind::Text, -1, committed});
+    plan.push_back({from, to, SegmentKind::Text, -1, -1, committed});
     from = to;
   }
   return plan;

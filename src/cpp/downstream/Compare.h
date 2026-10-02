@@ -14,8 +14,15 @@ namespace downstream::scan {
 
 /// True when two blocks would lay out and paint identically. Identity and
 /// sourceRange are excluded: they describe where a block came from, not what
-/// it is.
+/// it is. A formula's layout is excluded too, for the same reason and by
+/// `MathSpan`'s own operator==.
 bool sameBlock(const Block &a, const Block &b);
+
+/// True when two images would draw identically. The load state is not an image
+/// property: it belongs to a view and lives in `ImageStateLayout`, so two
+/// records that name the same picture are the same record however differently
+/// they have loaded.
+bool sameImage(const Image &a, const Image &b);
 
 /// True when two documents would lay out and paint identically. Document ids
 /// differ between parses by construction, so they are not compared.

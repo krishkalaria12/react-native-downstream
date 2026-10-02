@@ -23,6 +23,7 @@ import {
 import { resolveControls, type ResolvedControls } from './controls';
 import NativeDownstreamMarkdownView from './DownstreamMarkdownViewNativeComponent';
 import { getStreamState, type StreamState } from './createMarkdownStream';
+import { mathAvailable, resolveMath, warnAboutMissingMathEngine } from './math';
 import { resolveTheme, type ResolvedTheme } from './theme';
 import type {
   MarkdownControlAction,
@@ -30,7 +31,9 @@ import type {
   MarkdownControls,
   MarkdownErrorCode,
   MarkdownErrorEvent,
+  MarkdownImageEvent,
   MarkdownLinkPressEvent,
+  MarkdownMathErrorEvent,
   MarkdownTranslations,
   MarkdownViewProps,
 } from './types';
@@ -39,6 +42,19 @@ import { resolveMaxHeight } from './types';
 export type DownstreamMarkdownProps = MarkdownViewProps;
 
 type NativeLinkPress = Readonly<{ url: string; start: number; end: number }>;
+type NativeImagePress = Readonly<{
+  url: string;
+  alt: string;
+  title: string;
+  start: number;
+  end: number;
+}>;
+type NativeMathError = Readonly<{
+  source: string;
+  message: string;
+  display: boolean;
+  generation: number;
+}>;
 type NativeMarkdownError = Readonly<{
   code: string;
   message: string;
@@ -54,6 +70,7 @@ type NativeControlAction = Readonly<{
   format: string;
   language: string;
   filename: string;
+  url: string;
   wrapped: boolean;
   expanded: boolean;
   generation: number;
@@ -72,6 +89,7 @@ const ERROR_CODES: ReadonlySet<string> = new Set<MarkdownErrorCode>([
 const CONTROL_BLOCKS: ReadonlySet<string> = new Set<MarkdownControlKind>([
   'code',
   'table',
+  'image',
 ]);
 const CONTROL_ACTIONS: ReadonlySet<string> = new Set<MarkdownControlAction>([
   'copy',
@@ -80,6 +98,13 @@ const CONTROL_ACTIONS: ReadonlySet<string> = new Set<MarkdownControlAction>([
   'expand',
 ]);
 const CONTROL_FORMATS = new Set(['text', 'markdown', 'csv', 'tsv']);
+
+/**
+ * rehype-harden's and Streamdown's default: any HTTPS host. A module-level
+ * constant so a view that passes nothing sends the same array every time rather
+ * than a fresh literal.
+ */
+const IMAGE_PREFIX_ALLOW_ALL: readonly string[] = ['*'];
 
 function controlKind(value: string): MarkdownControlKind | undefined {
   return CONTROL_BLOCKS.has(value) ? (value as MarkdownControlKind) : undefined;
@@ -107,6 +132,7 @@ function toControlEvent(action: NativeControlAction) {
     wrapped?: boolean;
     expanded?: boolean;
     filename?: string;
+    url?: string;
   } = { block, action: which, language: action.language };
   if (which === 'wrap') {
     event.wrapped = action.wrapped;
@@ -118,6 +144,12 @@ function toControlEvent(action: NativeControlAction) {
     }
     if (which === 'download' && action.filename !== '') {
       event.filename = action.filename;
+    }
+    // An image saves its own bytes, so a format is meaningless and only the
+    // destination is worth reporting.
+    if (block === 'image' && action.url !== '') {
+      event.url = action.url;
+      delete event.format;
     }
   }
   return event;
@@ -274,6 +306,7 @@ function useStableResolved(resolved: ResolvedControls): ResolvedControls {
     previous.flags !== resolved.flags ||
     previous.codeFilename !== resolved.codeFilename ||
     previous.tableFilename !== resolved.tableFilename ||
+    previous.imageFilename !== resolved.imageFilename ||
     previous.csvSeparator !== resolved.csvSeparator ||
     previous.labels.length !== resolved.labels.length ||
     previous.labels.some((label, index) => label !== resolved.labels[index])
@@ -351,6 +384,8 @@ function useControls(
         handlers.codeWrap?.(event);
       } else if (event.action === 'expand') {
         handlers.codeExpand?.(event);
+      } else if (event.block === 'image') {
+        handlers.imageDownload?.(event);
       } else if (event.action === 'copy') {
         (event.block === 'code' ? handlers.codeCopy : handlers.tableCopy)?.(
           event
@@ -385,6 +420,8 @@ function useControls(
           : action === 'download'
           ? block === 'code'
             ? handlers.codeDownloadError
+            : block === 'image'
+            ? handlers.imageDownloadError
             : handlers.tableDownloadError
           : undefined;
       if (handler) {
@@ -397,6 +434,115 @@ function useControls(
   );
 
   return { resolved, controlError, handleControlAction };
+}
+
+/**
+ * Resolves the math and image props, and the callbacks that route their native
+ * events back to the caller.
+ *
+ * The math default is settled once per process rather than per render, because
+ * it is a question about the binary and not about the document: a view that
+ * decided "off" and then turned "on" would lay the same source out twice with
+ * two different answers, and the second one is a relayout the reader sees.
+ *
+ * `allowedImagePrefixes` is normalized and kept by value for the same reason
+ * `controls` is: it is almost always an inline literal, and a new array on every
+ * render would send a props update for a policy that has not changed.
+ */
+function useMathAndImages(
+  props: {
+    math?: MarkdownViewProps['math'];
+    images?: boolean;
+    allowedImagePrefixes?: readonly string[];
+    onMathError?: (event: MarkdownMathErrorEvent) => void;
+    onImagePress?: (event: MarkdownImageEvent) => void;
+  },
+  currentGeneration: () => number
+) {
+  const { math, images, allowedImagePrefixes, onMathError, onImagePress } =
+    props;
+
+  // One read of the platform's answer for the lifetime of the process. A test
+  // that installs a mock engine calls the reset hook to observe the change.
+  const engine = useRef<boolean | undefined>(undefined);
+  if (engine.current === undefined) engine.current = mathAvailable();
+
+  const resolved = useMemo(() => resolveMath(math, engine.current), [math]);
+  const resolvedStable = useRef(resolved);
+  if (resolvedStable.current.flags !== resolved.flags) {
+    resolvedStable.current = resolved;
+  }
+
+  // `['*']` is the default, and a view that passes the default explicitly is the
+  // same view as one that passes nothing, so both send the same array.
+  const prefixes = useMemo(
+    () =>
+      allowedImagePrefixes === undefined || allowedImagePrefixes.length === 0
+        ? IMAGE_PREFIX_ALLOW_ALL
+        : allowedImagePrefixes,
+    [allowedImagePrefixes]
+  );
+  const prefixesStable = useRef<readonly string[]>(prefixes);
+  if (
+    prefixesStable.current.length !== prefixes.length ||
+    prefixesStable.current.some((entry, index) => entry !== prefixes[index])
+  ) {
+    prefixesStable.current = prefixes;
+  }
+
+  // Formulas the reader has already been told about, so `onMathError` fires once
+  // per distinct source per view rather than once per snapshot that contains it.
+  const reportedMathErrors = useRef(new Set<string>());
+  const latest = useRef({ onImagePress, onMathError, currentGeneration });
+  latest.current = { onImagePress, onMathError, currentGeneration };
+
+  const handleImagePress = useCallback(
+    (event: NativeSyntheticEvent<NativeImagePress>) => {
+      const { url, alt, title, start, end } = event.nativeEvent;
+      // The title is a native empty string when the writer gave none, and the
+      // public shape makes it optional rather than always-present.
+      const payload: MarkdownImageEvent =
+        title === ''
+          ? { url, alt, range: { start, end } }
+          : { url, alt, title, range: { start, end } };
+      latest.current.onImagePress?.(payload);
+    },
+    []
+  );
+
+  const handleMathError = useCallback(
+    (event: NativeSyntheticEvent<NativeMathError>) => {
+      const native = event.nativeEvent;
+      // An error from a document that has since been replaced describes a
+      // formula the reader is no longer looking at.
+      if (native.generation !== latest.current.currentGeneration()) return;
+      const key = `${native.display ? 'd' : 'i'}\u0000${native.source}`;
+      if (reportedMathErrors.current.has(key)) return;
+      reportedMathErrors.current.add(key);
+      if (!engine.current && __DEV__) {
+        // A formula with no engine is not an error the caller can act on beyond
+        // installing the package, so it is a development warning instead of an
+        // event per formula.
+        warnAboutMissingMathEngine();
+        return;
+      }
+      latest.current.onMathError?.({
+        source: native.source,
+        message: native.message,
+        display: native.display,
+        generation: native.generation,
+      });
+    },
+    []
+  );
+
+  return {
+    mathFlags: resolvedStable.current.flags,
+    images: images !== false,
+    allowedImagePrefixes: prefixesStable.current,
+    onImagePress: onImagePress ? handleImagePress : undefined,
+    onMathError: handleMathError,
+  };
 }
 
 /**
@@ -432,6 +578,7 @@ function ControlledMarkdown({
   onAnimationEnd,
   onLinkPress,
   onError,
+  ...mathAndImages
 }: Extract<MarkdownViewProps, { markdown: string }>) {
   const [controlled, setControlled] = useState(() =>
     initialControlledSource(markdown)
@@ -460,6 +607,7 @@ function ControlledMarkdown({
     onError,
     generationRef
   );
+  const images = useMathAndImages(mathAndImages, () => generationRef.current);
   const resolvedTheme = useStableTheme(
     useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
   );
@@ -510,8 +658,12 @@ function ControlledMarkdown({
       controls={resolved.flags}
       codeFilename={resolved.codeFilename}
       tableFilename={resolved.tableFilename}
+      imageFilename={resolved.imageFilename}
       csvSeparator={resolved.csvSeparator}
       controlLabels={resolved.labels}
+      mathFlags={images.mathFlags}
+      images={images.images}
+      allowedImagePrefixes={images.allowedImagePrefixes}
       themeSlots={resolvedTheme.slots}
       themeValues={resolvedTheme.values}
       themeFonts={resolvedTheme.fonts}
@@ -521,6 +673,8 @@ function ControlledMarkdown({
       animating={animation.animating}
       caret={animation.caret}
       onLinkPress={onLinkPress ? handleLinkPress : undefined}
+      onImagePress={images.onImagePress}
+      onMathError={images.onMathError}
       onMarkdownError={handleError}
       onControlAction={handleControlAction}
     />
@@ -546,6 +700,7 @@ function StreamMarkdown({
   onAnimationEnd,
   onLinkPress,
   onError,
+  ...mathAndImages
 }: Extract<
   MarkdownViewProps,
   { stream: NonNullable<MarkdownViewProps['stream']> }
@@ -570,6 +725,10 @@ function StreamMarkdown({
     translations,
     onError,
     generationRef
+  );
+  const images = useMathAndImages(
+    mathAndImages,
+    () => state.binding().generation
   );
   // A stream keeps its theme across a rebind, so a theme that has not changed
   // sends nothing however often a snapshot arrives.
@@ -633,8 +792,12 @@ function StreamMarkdown({
       controls={resolved.flags}
       codeFilename={resolved.codeFilename}
       tableFilename={resolved.tableFilename}
+      imageFilename={resolved.imageFilename}
       csvSeparator={resolved.csvSeparator}
       controlLabels={resolved.labels}
+      mathFlags={images.mathFlags}
+      images={images.images}
+      allowedImagePrefixes={images.allowedImagePrefixes}
       themeSlots={resolvedTheme.slots}
       themeValues={resolvedTheme.values}
       themeFonts={resolvedTheme.fonts}
@@ -644,6 +807,8 @@ function StreamMarkdown({
       animating={animation.animating}
       caret={animation.caret}
       onLinkPress={onLinkPress ? handleLinkPress : undefined}
+      onImagePress={images.onImagePress}
+      onMathError={images.onMathError}
       onMarkdownError={handleError}
       onControlAction={handleControlAction}
     />

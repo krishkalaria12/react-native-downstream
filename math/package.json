@@ -1,0 +1,48 @@
+{
+  "name": "react-native-downstream-math",
+  "version": "0.1.0",
+  "description": "Math typesetting for React Native Downstream: RaTeX and the KaTeX fonts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/krishkalaria12/react-native-downstream.git",
+    "directory": "math"
+  },
+  "author": "Krish Kalaria <codewithkrish12@gmail.com>",
+  "homepage": "https://github.com/krishkalaria12/react-native-downstream/tree/main/math#readme",
+  "license": "MIT",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "ios",
+    "android/build.gradle",
+    "android/src",
+    "vendor/RaTeX.xcframework",
+    "vendor/fonts",
+    "vendor/.version",
+    "licenses",
+    "ratex-version.json",
+    "scripts",
+    "DownstreamMath.podspec",
+    "react-native.config.js",
+    "README.md"
+  ],
+  "scripts": {
+    "vendor": "node scripts/vendor-ratex.mjs",
+    "prepack": "node scripts/vendor-ratex.mjs"
+  },
+  "keywords": [
+    "react-native",
+    "markdown",
+    "math",
+    "latex",
+    "katex"
+  ],
+  "peerDependencies": {
+    "react-native-downstream": "*"
+  },
+  "devDependencies": {
+    "react-native-downstream": "workspace:*"
+  }
+}

@@ -474,9 +474,47 @@ internal object ThemeSlots {
   const val SLOT_SYNTAX_HEADING = 231
   /** "syntax.heading", dark half */
   const val SLOT_SYNTAX_HEADING_DARK = 232
+  /** "math.fontSize" */
+  const val SLOT_MATH_FONT_SIZE = 233
+  /** "math.color" */
+  const val SLOT_MATH_COLOR = 234
+  /** "math.color", dark half */
+  const val SLOT_MATH_COLOR_DARK = 235
+  /** "math.backgroundColor" */
+  const val SLOT_MATH_BACKGROUND_COLOR = 236
+  /** "math.backgroundColor", dark half */
+  const val SLOT_MATH_BACKGROUND_COLOR_DARK = 237
+  /** "math.padding" */
+  const val SLOT_MATH_PADDING = 238
+  /** "math.marginTop" */
+  const val SLOT_MATH_MARGIN_TOP = 239
+  /** "math.marginBottom" */
+  const val SLOT_MATH_MARGIN_BOTTOM = 240
+  /** "math.textAlign" */
+  const val SLOT_MATH_TEXT_ALIGN = 241
+  /** "math.errorColor" */
+  const val SLOT_MATH_ERROR_COLOR = 242
+  /** "math.errorColor", dark half */
+  const val SLOT_MATH_ERROR_COLOR_DARK = 243
+  /** "inlineMath.color" */
+  const val SLOT_INLINE_MATH_COLOR = 244
+  /** "inlineMath.color", dark half */
+  const val SLOT_INLINE_MATH_COLOR_DARK = 245
+  /** "image.maxHeight" */
+  const val SLOT_IMAGE_MAX_HEIGHT = 246
+  /** "image.borderRadius" */
+  const val SLOT_IMAGE_BORDER_RADIUS = 247
+  /** "image.marginTop" */
+  const val SLOT_IMAGE_MARGIN_TOP = 248
+  /** "image.marginBottom" */
+  const val SLOT_IMAGE_MARGIN_BOTTOM = 249
+  /** "image.placeholderColor" */
+  const val SLOT_IMAGE_PLACEHOLDER_COLOR = 250
+  /** "image.placeholderColor", dark half */
+  const val SLOT_IMAGE_PLACEHOLDER_COLOR_DARK = 251
 
   /** One past the highest id in use. */
-  const val SLOT_ID_COUNT = 233
+  const val SLOT_ID_COUNT = 252
 
 
   /**

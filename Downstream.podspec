@@ -26,6 +26,10 @@ Pod::Spec.new do |s|
     "src/cpp/remend/*.{h,cpp}",
     "src/cpp/highlight/*.{h,cpp}",
     "src/cpp/theme/*.{h,cpp}",
+    # Math: the sizing, the display-list decoder, and the block pass. Listed
+    # because it is its own directory rather than a subdirectory of `downstream`,
+    # and a source file the pod does not ship is a link error at install time.
+    "src/cpp/math/*.{h,cpp}",
     "src/cpp/lexilla/*.{h,cxx}",
     "src/cpp/lexilla/lexers/*.cxx",
     "src/cpp/lexilla/lexlib/*.{h,cxx}",
@@ -48,6 +52,10 @@ Pod::Spec.new do |s|
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/remend\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/highlight\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/theme\"",
+      # `downstream/PreparedDocument.cpp` spells the math headers as
+      # `MathBlocks.h`, so the directory itself has to be on the path and not only
+      # its parent.
+      "\"$(PODS_TARGET_SRCROOT)/src/cpp/math\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/lexilla\"",
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/lexilla/lexlib\"",
     ].join(" "),

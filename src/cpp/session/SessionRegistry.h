@@ -45,7 +45,7 @@ public:
   /// the next pass, which this queues, so it applies even when no new input has
   /// arrived. Returns false when the session does not exist.
   static bool setPreview(const std::string &id, remend::PreviewOptions options);
-  /// Records the document a view last showed for this session, so a view that
+/// Records the document a view last showed for this session, so a view that
   /// binds later — a virtualized list scrolling a live message back into view —
   /// starts its reveal tracker from what was already on screen instead of
   /// fading the whole message in again.
@@ -54,6 +54,16 @@ public:
   static void noteShown(const std::string &id, const DocumentHandle &document);
   /// The last recorded shown document, or null.
   static DocumentHandle shown(const std::string &id);
+  /**
+   * Replaces the delimiters the session's parse recognizes. Takes effect on the
+   * next pass, which this queues.
+   *
+   * Set once, right after `create`, rather than as an argument to it: the session
+   * already exists by the time any input can arrive, so a separate call has the
+   * same guarantee and one less thing the create path has to get right. Returns
+   * false when the session does not exist.
+   */
+  static bool setMath(const std::string &id, MathOptions math);
 };
 
 } // namespace downstream

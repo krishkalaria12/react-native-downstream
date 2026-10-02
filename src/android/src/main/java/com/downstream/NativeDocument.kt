@@ -3,6 +3,7 @@ package com.downstream
 import android.content.Context
 import android.os.Build
 import com.facebook.proguard.annotations.DoNotStrip
+import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.uimanager.PixelUtil
 import java.lang.ref.WeakReference
 
@@ -26,7 +27,39 @@ internal class NativeDocument(
    * A final field holds the preceding block's bottom margin for this slice.
    */
   private val layouts: DoubleArray,
+  /**
+   * Each block's formula, one entry per block per [MATH_STRIDE] fields.
+   *
+   * A separate table from [layouts] because these are the document's own ems
+   * rather than the theme's resolved metrics: one table per source of truth, so a
+   * theme change cannot be confused with a formula laying out.
+   */
+  private val maths: DoubleArray,
+  /**
+   * Every formula in the slice, block and inline, with its display list, as
+   * `appendDisplayList` in `DownstreamJni.cpp` writes the records.
+   */
+  private val formulaTable: DoubleArray = DoubleArray(0),
 ) {
+  /** One formula: where it sits, and its display list when it laid out. */
+  class Formula(val block: Int, val start: Int, val end: Int, val list: MathDisplayList?)
+
+  /** The formulas in this slice, in document order, decoded once. */
+  val formulas: List<Formula> by lazy {
+    val found = ArrayList<Formula>()
+    var at = 0
+    while (at + 4 <= formulaTable.size) {
+      val block = formulaTable[at].toInt()
+      val start = formulaTable[at + 1].toInt()
+      val end = formulaTable[at + 2].toInt()
+      val length = formulaTable[at + 3].toInt()
+      val list = if (length > 0) MathDisplayList.decode(formulaTable, at + 4, length) else null
+      found.add(Formula(block, start, end, list))
+      at += 4 + length.coerceAtLeast(0)
+    }
+    found
+  }
+
   val blockCount: Int get() = blocks.size / BLOCK_STRIDE
   val runCount: Int get() = runs.size / RUN_STRIDE
   val tokenCount: Int get() = tokens.size / TOKEN_STRIDE
@@ -47,6 +80,75 @@ internal class NativeDocument(
 
   /** The synthetic title paragraph of an admonition, decided document-wide. */
   fun isAdmonitionTitle(block: Int) = blocks[block * BLOCK_STRIDE + 11] != 0
+
+  /**
+   * The formula's advance in ems, or zero when this block has none.
+   *
+   * A block with no formula reads as zero rather than throwing, so a caller that
+   * reached this without checking [blockKind] gets a formula that takes no room
+   * rather than an exception — which is the answer that keeps the text readable.
+   */
+  fun blockMathWidthEm(block: Int) = mathAt(block, 0)
+
+  /** The height above the baseline in ems. The baseline sits at `y = height`. */
+  fun blockMathHeightEm(block: Int) = mathAt(block, 1)
+
+  /** The depth below the baseline in ems. */
+  fun blockMathDepthEm(block: Int) = mathAt(block, 2)
+
+  /**
+   * Whether the formula was laid out.
+   *
+   * False means either that it has not been laid out yet — a stream still arriving
+   * — or that it failed, and [blockMathError] is what tells the two apart.
+   */
+  fun blockMathResolved(block: Int) = mathAt(block, 3) != 0.0
+
+  /** Whether the source was a display delimiter rather than an inline one. */
+  fun blockMathDisplay(block: Int) = mathAt(block, 4) != 0.0
+
+  /** The TeX between the delimiters, or empty when this block has no formula. */
+  fun blockMathTex(block: Int): String {
+    val index = mathAt(block, 5).toInt()
+    return if (index >= 0 && index < strings.size) strings[index] else ""
+  }
+
+  /** The engine's message when the formula failed, or empty. */
+  fun blockMathError(block: Int): String {
+    val index = mathAt(block, 6).toInt()
+    return if (index >= 0 && index < strings.size) strings[index] else ""
+  }
+
+  /**
+   * The spoken form, from the engine's own verbalizer.
+   *
+   * Computed rather than carried, because it is a function of the TeX and the
+   * display flag and would be a string per block in the document read for something
+   * only a screen reader asks for. Empty when there is no formula, or when the
+   * native call is unavailable, which the view falls back to the literal from.
+   */
+  fun blockMathSpeech(block: Int): String {
+    if (blockKind(block) != KIND_MATH_BLOCK) {
+      return ""
+    }
+    val tex = blockMathTex(block)
+    if (tex.isEmpty()) {
+      return ""
+    }
+    return DownstreamNative.mathSpeech(tex, blockMathDisplay(block))
+  }
+
+  /**
+   * One field of block [block]'s formula.
+   *
+   * A short table falls back to zeros rather than throwing: a maths table that is
+   * absent or short means the read came from a native library built without math,
+   * and a block that has no formula should read as no formula either way.
+   */
+  private fun mathAt(block: Int, field: Int): Double {
+    val offset = block * MATH_STRIDE + field
+    return if (offset >= 0 && offset < maths.size) maths[offset] else 0.0
+  }
 
   /**
    * Which block an offset in the flattened text falls in.
@@ -151,6 +253,24 @@ internal class NativeDocument(
      */
     private const val BLOCK_LAYOUT_STRIDE = 9
 
+    /**
+     * One block's formula as [widthEm, heightEm, depthEm, resolved, display, tex,
+     * error], seven fields each.
+     *
+     * The width, height and depth are the layout's own ems with the baseline at
+     * `y = height`, which is what `mathBlockHeight` expects on both platforms. `tex`
+     * and `error` are indexes into `strings`, or -1 when there is none, so a
+     * formula that has not failed does not carry an empty string per block.
+     *
+     * `resolved` is separate from the ems because a formula that has not been laid
+     * out and one that failed are different answers: the first is still arriving,
+     * the second is a literal.
+     *
+     * The stride is the only place that order is written down, and it has to match
+     * `DownstreamJni.cpp` exactly.
+     */
+    private const val MATH_STRIDE = 7
+
     /** `theme_layout::BlockElement`. A block draws as code at this index. */
     private const val ELEMENT_CODE = 2
 
@@ -169,6 +289,10 @@ internal class NativeDocument(
     const val KIND_HTML = 3
     const val KIND_RULE = 4
     const val KIND_TABLE_ROW = 5
+    /** A lone display formula, promoted to a block of its own. */
+    const val KIND_MATH_BLOCK = 6
+    /** A paragraph holding nothing but pictures, promoted to a block of its own. */
+    const val KIND_IMAGE = 7
 
     const val CONTAINER_QUOTE = 0
     const val CONTAINER_LIST_ITEM = 1
@@ -213,6 +337,30 @@ internal class NativeDocument(
   }
 }
 
+/**
+ * What a segment is, as `SegmentKind` in `SegmentPlan.h` numbers it.
+ *
+ * A kind rather than a table and a code flag, because the plan has five and two
+ * more were added for math and images; a boolean per kind is how the fifth one gets
+ * forgotten.
+ */
+internal const val SEGMENT_TEXT = 0
+internal const val SEGMENT_TABLE = 1
+internal const val SEGMENT_CODE = 2
+internal const val SEGMENT_MATH = 3
+internal const val SEGMENT_IMAGE = 4
+
+private val SEGMENT_KINDS = intArrayOf(SEGMENT_TEXT, SEGMENT_TABLE, SEGMENT_CODE, SEGMENT_MATH, SEGMENT_IMAGE)
+
+/** A formula block's own metrics, as the theme resolves them. */
+internal data class MathMetrics(
+  val padding: Float,
+  /** `math.textAlign`: 0 left, 1 center, 2 right. */
+  val textAlign: Int,
+  val marginTop: Float,
+  val marginBottom: Float,
+)
+
 /** One segment of a document's layout plan (SegmentPlan.h). */
 internal class PlannedSegment(
   val from: Int,
@@ -229,7 +377,70 @@ internal class PlannedSegment(
    * as it is built, so a wrap choice resolves without walking the document.
    */
   val codeOrdinal: Int,
+  /** One of `SEGMENT_TEXT`, `SEGMENT_TABLE`, `SEGMENT_CODE`, `SEGMENT_MATH`, `SEGMENT_IMAGE`. */
+  val kind: Int,
+  /**
+   * This segment's first picture's index in `Document::images`, or -1.
+   *
+   * Counted by the plan rather than by the view, so a segment view matches a
+   * picture to its state entry without walking the document. An image segment
+   * holds exactly one block, so one ordinal is the whole of it.
+   */
+  val imageOrdinal: Int,
 )
+
+/**
+ * Every image the document holds, as the engine recorded them
+ * (`Document::images`).
+ *
+ * What is not here is each image's state: that belongs to a view rather than to
+ * the document, and it arrives in the layout map instead. So this read is the
+ * same for a view that has loaded its pictures and one that has not, which is why
+ * it is a document read and not a state read.
+ */
+internal class NativeImages(
+  val urls: Array<String>,
+  val alts: Array<String>,
+  val titles: Array<String>,
+  /**
+   * [start, end, loadable, link] per image, four fields each. `loadable` is the
+   * engine's own policy answer rather than the view's, and `link` is the
+   * enclosing link's index, or -1 for a picture that is not inside one.
+   */
+  private val records: IntArray,
+) {
+  val count: Int get() = urls.size
+
+  fun url(ordinal: Int) = urls[ordinal]
+
+  /** Plain alt text, as written. Empty is a real answer, not a missing one. */
+  fun alt(ordinal: Int) = alts[ordinal]
+
+  /** The optional title, which is never drawn. */
+  fun title(ordinal: Int) = titles[ordinal]
+
+  /** Where the `![…](…)` sits in the source, for an event that reports a press. */
+  fun range(ordinal: Int) = records[ordinal * 4] until records[ordinal * 4 + 1] + 1
+
+  /**
+   * Whether the engine's own policy allows this destination: HTTPS, complete,
+   * with a host and no control characters or spaces.
+   */
+  fun loadable(ordinal: Int) = records[ordinal * 4 + 2] != 0
+
+  /** The enclosing link's index, or -1. */
+  fun link(ordinal: Int) = records[ordinal * 4 + 3]
+
+  companion object {
+    /**
+     * A document with no pictures.
+     *
+     * An answer rather than a null, because a document with no images is ordinary
+     * and every caller here has to do something sensible with one.
+     */
+    val EMPTY = NativeImages(emptyArray(), emptyArray(), emptyArray(), IntArray(0))
+  }
+}
 
 internal class NativeLink(val url: String, val start: Int, val end: Int)
 
@@ -264,33 +475,39 @@ internal object DownstreamNative {
    * parsed (DownstreamTextLayoutManager.cpp), so Fabric's measurement on the
    * JavaScript thread and the view's mount find it in the cache.
    *
-   * [width] is in points, as Fabric passes it to measure. The whole code layout
-   * comes along, because a prepared height is only the height of the layout the
-   * reader actually has.
+   * [layout] is the same map `measure` and `updateState` carry: the width, the
+   * code layout, the caret, and the image answers. One shape rather than a
+   * positional list, so a worker cannot prepare a layout that differs from the
+   * one the view draws by an argument the two callers happened to pass in a
+   * different order.
    */
   @JvmStatic
   @DoNotStrip
-  fun prepare(
-    documentId: Long,
-    fontScale: Float,
-    width: Float,
-    chrome: Int,
-    codeBlockWrap: Boolean,
-    lineNumbers: Boolean,
-    codeBlockMaxHeight: Float,
-    wrapToggles: IntArray,
-    expanded: IntArray,
-    themeId: Long,
-  ) {
+  fun prepare(documentId: Long, layout: ReadableMap) {
     val context = preparationContext?.get() ?: return
     try {
-      val rendered = RenderedDocument.obtain(context, documentId, fontScale, themeId = themeId) ?: return
+      // The caret is read here rather than left to a later measure, because its
+      // placeholder is part of the text this pass lays out: prepared without it,
+      // the height a worker records is one the view never draws.
+      val caret = PlacedCaret(
+        layout.numberAt("caretKind", 0.0).toInt(),
+        layout.numberAt("caretPlace", 0.0).toInt(),
+      )
+      val rendered = RenderedDocument.obtain(
+        context,
+        documentId,
+        layout.numberAt("fontScale", 1.0).toFloat(),
+        themeId = layout.numberAt("themeId", 0.0).toLong(),
+        caret = caret,
+      ) ?: return
+      val width = layout.numberAt("width", 0.0).toFloat()
       if (width.isFinite() && width > 0) {
-        val layout = CodeLayout(
-          CodeLayoutProps(codeBlockWrap, lineNumbers, PixelUtil.toPixelFromDIP(codeBlockMaxHeight.toDouble()).toFloat()),
-          CodeChoices(wrapToggles, expanded),
+        rendered.height(
+          PixelUtil.toPixelFromDIP(width.toDouble()).toInt(),
+          layout.numberAt("chrome", 0.0).toInt(),
+          layout.toCodeLayout(),
+          layout.toImageLayout(),
         )
-        rendered.height(PixelUtil.toPixelFromDIP(width).toInt(), chrome, layout)
       }
     } catch (error: RuntimeException) {
       // Measurement builds the rendering again on its own thread.
@@ -310,6 +527,8 @@ internal object DownstreamNative {
       cells = parts[5] as IntArray,
       tokens = parts[6] as IntArray,
       layouts = parts[7] as DoubleArray,
+      maths = parts[8] as DoubleArray,
+      formulaTable = parts.getOrNull(9) as? DoubleArray ?: DoubleArray(0),
     )
   }
 
@@ -327,8 +546,54 @@ internal object DownstreamNative {
         values[it + 3],
         values[it + 4].toInt(),
         values[it + 5].toInt(),
+        SEGMENT_KINDS.getOrElse(values[it + 6].toInt()) { SEGMENT_TEXT },
+        values[it + 7].toInt(),
       )
     }
+  }
+
+  /**
+   * The theme's image metrics, in points, as `theme_layout::imageMetrics` resolves
+   * them. Resolved in C++ so a measurement and a draw read one value.
+   */
+  fun imageMetrics(id: Long): ImageMetrics {
+    val values = nativeImageMetrics(id) ?: return ImageMetrics()
+    return ImageMetrics(
+      maxHeight = values.getOrElse(0) { 0.0 }.toFloat(),
+      borderRadius = values.getOrElse(1) { 8.0 }.toFloat(),
+      marginTop = values.getOrElse(2) { 0.0 }.toFloat(),
+      marginBottom = values.getOrElse(3) { 0.0 }.toFloat(),
+      fallbackTextHeight = values.getOrElse(4) { kImageFallbackLineHeight.toDouble() }.toFloat(),
+    )
+  }
+
+  /**
+   * The theme's math metrics: vertical padding, text alignment as 0, 1, or 2, and
+   * the margins above and below.
+   *
+   * Read in C++ so a measurement and a draw agree, and so Android and iOS read one
+   * value rather than the same slot in two places.
+   */
+  fun mathMetrics(id: Long): MathMetrics {
+    val values = nativeMathMetrics(id)
+    return MathMetrics(
+      padding = values?.getOrElse(0) { 0.0 }?.toFloat() ?: 0f,
+      textAlign = values?.getOrElse(1) { 1.0 }?.toInt() ?: 1,
+      marginTop = values?.getOrElse(2) { 0.0 }?.toFloat() ?: 0f,
+      marginBottom = values?.getOrElse(3) { 0.0 }?.toFloat() ?: 0f,
+    )
+  }
+
+  /** Returns null when the document is no longer alive. */
+  fun readImages(id: Long): NativeImages? {
+    val parts = nativeReadImages(id) ?: return null
+    @Suppress("UNCHECKED_CAST")
+    return NativeImages(
+      urls = parts[0] as Array<String>,
+      alts = parts[1] as Array<String>,
+      titles = parts[2] as Array<String>,
+      records = parts[3] as IntArray,
+    )
   }
 
   /** Returns null when the document or link is gone. */
@@ -455,7 +720,7 @@ internal object DownstreamNative {
     }
   }
 
-  private const val PLAN_STRIDE = 6
+  private const val PLAN_STRIDE = 8
 
   // Implemented in DownstreamJni.cpp, which links into libappmodules.so.
   @JvmStatic
@@ -494,6 +759,11 @@ internal object DownstreamNative {
   @JvmStatic
   fun tableName(configured: String, extension: String): String? = nativeTableName(configured, extension)
 
+  /** The image download name, using the shared URL, caption and MIME rules. */
+  @JvmStatic
+  fun imageName(url: String, alt: String, mimeType: String, configured: String): String? =
+    nativeImageName(url, alt, mimeType, configured)
+
   @JvmStatic
   private external fun nativeExport(id: Long, from: Int, to: Int, format: Int, separator: Int): String?
 
@@ -508,6 +778,61 @@ internal object DownstreamNative {
 
   @JvmStatic
   private external fun nativeTableName(configured: String, extension: String): String?
+
+  @JvmStatic
+  private external fun nativeImageName(url: String, alt: String, mimeType: String, configured: String): String?
+
+  /** The spoken form of a formula, from `math/MathSpeech.cpp`. */
+  fun mathSpeech(tex: String, display: Boolean): String =
+    nativeMathSpeech(tex, display) ?: ""
+
+  /** The math package's marker class, which autolinking puts on the classpath. */
+  private const val MATH_PACKAGE_CLASS = "com.downstream.math.DownstreamMathPackage"
+
+  /**
+   * Registers RaTeX with the engine when `react-native-downstream-math` is
+   * installed.
+   *
+   * Registering loads nothing: the engine opens `libratex_ffi.so` the first
+   * time a document needs a formula laid out, so an app that installs the package
+   * and never shows math never maps the library. The package's presence is its
+   * class on the classpath, which is what autolinking adds along with the library.
+   */
+  fun registerMathEngineIfInstalled() {
+    val installed = try {
+      Class.forName(MATH_PACKAGE_CLASS, false, DownstreamNative::class.java.classLoader)
+      true
+    } catch (error: ClassNotFoundException) {
+      false
+    }
+    if (installed) {
+      nativeRegisterMathEngine("libratex_ffi.so", "fonts")
+    }
+  }
+
+  @JvmStatic
+  private external fun nativeRegisterMathEngine(library: String, fontDirectory: String)
+
+  /**
+   * Records a finished image load in the engine's size cache, which the shadow node
+   * measures from. A zero size records a failure.
+   */
+  fun recordImage(url: String, width: Int, height: Int) = nativeRecordImage(url, width, height)
+
+  @JvmStatic
+  private external fun nativeRecordImage(url: String, width: Int, height: Int)
+
+  @JvmStatic
+  private external fun nativeMathSpeech(tex: String, display: Boolean): String?
+
+  @JvmStatic
+  private external fun nativeImageMetrics(id: Long): DoubleArray?
+
+  @JvmStatic
+  private external fun nativeMathMetrics(id: Long): DoubleArray?
+
+  @JvmStatic
+  private external fun nativeReadImages(id: Long): Array<Any>?
 
   @JvmStatic
   private external fun nativeReadLink(id: Long, index: Int): Array<Any>?

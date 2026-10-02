@@ -48,9 +48,21 @@ bool isWordish(char16_t unit) {
   return true;
 }
 
-std::optional<Fence> fenceOpener(std::string_view line) {
+std::optional<Fence> fenceOpener(std::string_view line, bool mathFences) {
   const size_t start = afterIndent(line);
-  if (start == kNoOffset || start >= line.size() || (line[start] != '`' && line[start] != '~')) {
+  if (start == kNoOffset || start >= line.size()) {
+    return std::nullopt;
+  }
+  if (mathFences && line[start] == '$') {
+    // The same shape md4c's patched fence check has, so the two agree on which
+    // line opens and which closes. A disagreement here would let a commit land
+    // between them.
+    if (isMathFenceLine(line)) {
+      return Fence{'$', 2, start, std::string_view()};
+    }
+    return std::nullopt;
+  }
+  if (line[start] != '`' && line[start] != '~') {
     return std::nullopt;
   }
   const char marker = line[start];
@@ -75,6 +87,14 @@ bool closesFence(std::string_view line, char marker, size_t length) {
     end++;
   }
   return end - start >= length && isBlankLine(line.substr(end));
+}
+
+bool isMathFenceLine(std::string_view line) {
+  const size_t start = afterIndent(line);
+  // Exactly two dollars, and nothing after them but whitespace. A run of three
+  // is a code span, and a `$$ x` is prose rather than a fence.
+  return start != kNoOffset && line.size() >= start + 2 && line[start] == '$' && line[start + 1] == '$' &&
+      isBlankLine(line.substr(start + 2));
 }
 
 bool isFenceLine(std::string_view line) {

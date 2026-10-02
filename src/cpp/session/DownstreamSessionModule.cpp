@@ -3,7 +3,9 @@
 #include "MarkdownParser.h"
 #include "SessionRegistry.h"
 #include "SessionTrace.h"
+#include "math/MathEngine.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <exception>
@@ -89,11 +91,17 @@ void DownstreamSessionModule::reportError(const std::string &sessionId, const st
       SessionErrorEvent{sessionId, eventCounter(generation), eventCounter(sequence), code, message, true});
 }
 
-void DownstreamSessionModule::create(jsi::Runtime & /*rt*/, std::string sessionId, std::string mode) {
+void DownstreamSessionModule::create(jsi::Runtime & /*rt*/, std::string sessionId, std::string mode,
+                                     double mathFlags) {
   if (sessionId.empty() || (mode != "full" && mode != "incremental")) {
     reportError(sessionId, "invalid_session", "A nonempty session ID and valid parse mode are required", 0, 0);
     return;
   }
+  // A bitmask crosses the bridge as a number. Anything negative or above 2^32 is a
+  // caller that is not this library, and an unset parse is the safe answer: every
+  // formula stays literal rather than one being read as a flag it was not.
+  const double validated = std::clamp(mathFlags, 0.0, 4294967295.0);
+  const auto mathOptions = downstream::MathOptions{static_cast<uint32_t>(validated)};
   const auto parseMode =
       mode == "incremental" ? downstream::ParseMode::IncrementalTail : downstream::ParseMode::FullParse;
   try {
@@ -116,6 +124,10 @@ void DownstreamSessionModule::create(jsi::Runtime & /*rt*/, std::string sessionI
       return;
     }
     sessions_.insert(sessionId);
+    // Applied after the session exists, which is the only order that works: a
+    // parse queued before this would read the default flags and lay the same
+    // source out two different ways.
+    downstream::SessionRegistry::setMath(sessionId, mathOptions);
   } catch (const std::exception &error) {
     reportError(sessionId, "create_failed", error.what(), 0, 0);
   }
@@ -215,6 +227,14 @@ void DownstreamSessionModule::setPreview(jsi::Runtime & /*rt*/, std::string sess
       !downstream::SessionRegistry::setPreview(sessionId, options)) {
     reportError(sessionId, "invalid_session", "Session is unavailable", 0, 0);
   }
+}
+
+bool DownstreamSessionModule::mathAvailable(jsi::Runtime & /*rt*/) {
+  // Asked once per process and answered from the engine's own install flag rather
+  // than from anything this module knows: the answer changes only when the app's
+  // binary does, which is a relaunch, so caching it here would be a second place
+  // that could disagree with the layout pass about whether there is an engine.
+  return downstream::MathEngine::available();
 }
 
 } // namespace facebook::react

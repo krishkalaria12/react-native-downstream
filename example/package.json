@@ -24,6 +24,7 @@
     "react-dom": "19.2.0",
     "react-native": "0.83.2",
     "react-native-downstream": "workspace:*",
+    "react-native-downstream-math": "workspace:*",
     "react-native-enriched-markdown": "0.6.0",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-streamdown": "0.2.0",

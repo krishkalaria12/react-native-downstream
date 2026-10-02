@@ -2,6 +2,7 @@
 
 #include "CodeBlocks.h"
 #include "Compare.h"
+#include "MathBlocks.h"
 #include "Scan.h"
 #include "Unicode.h"
 
@@ -19,6 +20,7 @@ using scan::fenceOpener;
 using scan::Fence;
 using scan::isBlankLine;
 using scan::isFenceLine;
+using scan::isMathFenceLine;
 using scan::kNoOffset;
 using scan::sameBlock;
 using scan::startsWith;
@@ -62,7 +64,11 @@ std::string_view lastLine(std::string_view region) {
 /// Literal brackets outside code may become a reference link once a later
 /// definition arrives.
 bool hasUnresolvedBracket(const Block &block) {
-  if (block.kind == BlockKind::CodeBlock || block.kind == BlockKind::HtmlBlock) {
+  // A code block's and a math block's contents are verbatim, and a reference
+  // link cannot be defined inside one, so a bracket in either is not a
+  // bracket that can still resolve.
+  if (block.kind == BlockKind::CodeBlock || block.kind == BlockKind::HtmlBlock ||
+      block.kind == BlockKind::MathBlock) {
     return false;
   }
   for (size_t index = 0; index < block.text.size(); index++) {
@@ -117,9 +123,17 @@ bool provesClosed(std::string_view region, const ParseResult &parsed) {
     case BlockKind::CodeBlock:
       // Indented code continues after blank lines; only a fence can close.
       return isFenceLine(lastNonBlankLine(region));
+    case BlockKind::MathBlock:
+      // A `$$` fence is a fence, so the same rule: a blank line inside an
+      // `aligned` environment does not end the formula, and only the closing
+      // delimiter does. Without this a commit would land inside a formula.
+      return isMathFenceLine(lastNonBlankLine(region)) || isFenceLine(lastNonBlankLine(region));
     case BlockKind::Paragraph:
     case BlockKind::TableRow:
     case BlockKind::HtmlBlock:
+    case BlockKind::Image:
+      // An image block is a paragraph, so a blank line ends it exactly as it
+      // ends the paragraph it was promoted from.
       return isBlankLine(lastLine(region));
   }
   return false;
@@ -144,7 +158,7 @@ bool splitsBefore(const ParseResult &parsed, const ParseResult &probed) {
   return true;
 }
 
-void offsetIds(Block &block, uint32_t containers, uint32_t tables, size_t links) {
+void offsetIds(Block &block, uint32_t containers, uint32_t tables, size_t links, size_t images) {
   for (Container &container : block.containers) {
     container.id += containers;
   }
@@ -155,6 +169,25 @@ void offsetIds(Block &block, uint32_t containers, uint32_t tables, size_t links)
     if (run.link >= 0) {
       run.link += static_cast<int32_t>(links);
     }
+  }
+  // A block's image indexes are into the document's image list, so a spliced
+  // parse moves them the same way it moves a run's link index. Getting this
+  // wrong would make a promoted image block name somebody else's picture, which
+  // is the kind of bug that only shows up in a long chat.
+  for (uint32_t &index : block.images) {
+    index += static_cast<uint32_t>(images);
+  }
+}
+
+void offsetImage(Image &image, int32_t links, uint32_t utf16) {
+  // A linked image's press reaches the enclosing link, so the image holds an
+  // index into the same list a run's `link` field indexes.
+  if (image.link >= 0) {
+    image.link += links;
+  }
+  if (image.range.end > image.range.start) {
+    image.range.start += utf16;
+    image.range.end += utf16;
   }
 }
 
@@ -204,6 +237,7 @@ size_t IncrementalParser::committedCount() const {
 void IncrementalParser::clearCommitted() {
   committedBlocks_.reset();
   committedLinks_.reset();
+  committedImages_.reset();
   committedBytes_ = 0;
   committedUtf16_ = 0;
   committedContainers_ = 0;
@@ -247,11 +281,11 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   // one even though this parse covers them.
   ParseResult result;
   if (previewable) {
-    const remend::PreviewResult preview = preview_.apply(source, 0, committedCount());
+    const remend::PreviewResult preview = preview_.apply(source, 0, committedCount(), math_);
     notePreview(preview);
     result = preview.parsed;
   } else {
-    result = parseMarkdown(source);
+    result = parseMarkdown(source, math_);
     counters_.bytesParsed += source.size();
   }
   counters_.fullParses++;
@@ -278,6 +312,14 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   result.document = highlightSettledCodeBlocks(lexillaHighlighter(), result.document, kHighlightBudgetMs, &stats,
                                                replaced_ ? nullptr : document_);
   noteHighlight(stats);
+  // Math runs after highlighting and before anything compares blocks, for the
+  // same reason: a layout is part of what a block draws, so comparing a block
+  // whose formula has not been laid out against one whose formula has would
+  // find them different. A MathSpan's own identity excludes its layout, so a
+  // block keeps its identity while the pass fills it in.
+  MathLayoutStats mathStats;
+  result.document = layoutMath(result.document, replaced_ ? nullptr : document_, &mathStats);
+  noteMath(mathStats);
   // A full parse has no proof that any particular block is closed, so nothing
   // is settled until the stream finishes. Only a finished stream settles; a
   // controlled document settles in PreparedDocument, the moment it is parsed.
@@ -293,9 +335,10 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   // storage and identity when md4c still produces them unchanged.
   const size_t committed = committedCount();
   const size_t committedLinks = committedLinks_ ? committedLinks_->size() : 0;
+  const size_t committedImages = committedImages_ ? committedImages_->size() : 0;
   const Document &parsed = *result.document;
   bool confirmed = committed > 0 && source.size() >= committedBytes_ && parsed.blocks.size() >= committed &&
-      parsed.links.size() >= committedLinks;
+      parsed.links.size() >= committedLinks && parsed.images.size() >= committedImages;
   for (size_t i = 0; confirmed && i < committed; i++) {
     confirmed = sameBlock((*committedBlocks_)[i], parsed.blocks[i]);
   }
@@ -303,13 +346,18 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
     const Link &link = (*committedLinks_)[i];
     confirmed = link.url == parsed.links[i].url && link.range == parsed.links[i].range;
   }
+  for (size_t i = 0; confirmed && i < committedImages; i++) {
+    confirmed = scan::sameImage((*committedImages_)[i], parsed.images[i]);
+  }
   if (confirmed) {
     const auto &blocks = parsed.blocks.tail();
     const auto &links = parsed.links.tail();
+    const auto &images = parsed.images.tail();
     auto shared = std::make_shared<Document>();
     shared->id = parsed.id;
     shared->blocks = SharedList<Block>(committedBlocks_, std::vector<Block>(blocks.begin() + committed, blocks.end()));
     shared->links = SharedList<Link>(committedLinks_, std::vector<Link>(links.begin() + committedLinks, links.end()));
+    shared->images = SharedList<Image>(committedImages_, std::vector<Image>(images.begin() + committedImages, images.end()));
     shared->settledBlocks = result.document->settledBlocks;
     result.document = shared;
     counters_.cacheHits += committed;
@@ -373,6 +421,32 @@ void IncrementalParser::highlightTail(Document *document) {
   noteHighlight(stats);
 }
 
+/**
+ * Lays out the tail's formulas, keeping the last good layout for one that is
+ * still arriving.
+ *
+ * Unlike highlighting there is no budget to respect: a formula is one call
+ * through a cache, and a streaming snapshot that skipped it would leave a
+ * formula showing its source for a frame it did not have to. The pass returns
+ * the same handle when the tail has no formula, so a prose-only snapshot costs
+ * one scan of the tail's kinds.
+ */
+void IncrementalParser::layoutTail(Document *document) {
+  if (document == nullptr) {
+    return;
+  }
+  MathLayoutStats stats;
+  layoutMathTail(&document->blocks.tail(), document_.get(), &stats);
+  noteMath(stats);
+}
+
+void IncrementalParser::noteMath(const MathLayoutStats &stats) {
+  counters_.formulasLaidOut += stats.laidOut;
+  counters_.mathLastGoodKept += stats.lastGoodKept;
+  counters_.mathSkippedTooLarge += stats.skippedTooLarge;
+  counters_.mathFailed += stats.failed;
+}
+
 void IncrementalParser::notePreview(const remend::PreviewResult &preview) {
   previewStats_.probes += preview.stats.probes;
   previewStats_.applied += preview.stats.applied;
@@ -428,7 +502,7 @@ ParseResult IncrementalParser::parseTail() {
   // rebuilds from scratch. Everything below committedBytes_ lives in storage
   // the repair cannot reach, so no repair can restyle a block a reader has
   // already seen settled.
-  const remend::PreviewResult preview = preview_.apply(tail, committedBytes_);
+  const remend::PreviewResult preview = preview_.apply(tail, committedBytes_, 0, math_);
   notePreview(preview);
   ParseResult result = preview.parsed;
   counters_.tailParses++;
@@ -438,9 +512,10 @@ ParseResult IncrementalParser::parseTail() {
 
   const size_t committed = committedCount();
   const size_t committedLinks = committedLinks_ ? committedLinks_->size() : 0;
+  const size_t committedImages = committedImages_ ? committedImages_->size() : 0;
   std::vector<Block> blocks(result.document->blocks.begin(), result.document->blocks.end());
   for (Block &block : blocks) {
-    offsetIds(block, committedContainers_, committedTables_, committedLinks);
+    offsetIds(block, committedContainers_, committedTables_, committedLinks, committedImages);
   }
   // The tail parse saw an empty document before its first block.
   if (committed > 0 && !blocks.empty()) {
@@ -450,10 +525,15 @@ ParseResult IncrementalParser::parseTail() {
   for (Link &link : links) {
     offsetLink(link, committedUtf16_);
   }
+  std::vector<Image> images(result.document->images.begin(), result.document->images.end());
+  for (Image &image : images) {
+    offsetImage(image, static_cast<int32_t>(committedLinks), committedUtf16_);
+  }
   auto combined = std::make_shared<Document>();
   combined->id = result.document->id;
   combined->blocks = SharedList<Block>(committedBlocks_, std::move(blocks));
   combined->links = SharedList<Link>(committedLinks_, std::move(links));
+  combined->images = SharedList<Image>(committedImages_, std::move(images));
   // The committed prefix is exactly what md4c has proved no later input can
   // change, so it is what a control or a selection may act on.
   combined->settledBlocks = static_cast<uint32_t>(std::min<size_t>(committed, UINT32_MAX));
@@ -461,6 +541,7 @@ ParseResult IncrementalParser::parseTail() {
   counters_.cacheHits += committed;
   result.document = combined;
   highlightTail(combined.get());
+  layoutTail(combined.get());
   result.document = publish(combined, combined->settledBlocks);
   watchOpenFence(source, committedBytes_, committed);
   return result;
@@ -521,7 +602,7 @@ bool IncrementalParser::commitRegion(size_t boundary) {
   const std::string_view region = std::string_view(source_).substr(committedBytes_, boundary - committedBytes_);
   counters_.commitAttempts++;
   counters_.bytesParsed += region.size();
-  const ParseResult parsed = parseMarkdownAt(region, committedBytes_);
+  const ParseResult parsed = parseMarkdownAt(region, committedBytes_, math_);
   bool closed = provesClosed(region, parsed) &&
       committedCount() + parsed.document->blocks.size() <= kMaxCommittedBlocks;
   if (closed && !parsed.document->blocks.empty()) {
@@ -531,7 +612,7 @@ bool IncrementalParser::commitRegion(size_t boundary) {
       std::string probe(region);
       probe += "x\n";
       counters_.bytesParsed += probe.size();
-      closed = splitsBefore(parsed, parseMarkdownAt(probe, committedBytes_));
+      closed = splitsBefore(parsed, parseMarkdownAt(probe, committedBytes_, math_));
     }
   }
   if (!closed) {
@@ -542,11 +623,13 @@ bool IncrementalParser::commitRegion(size_t boundary) {
   const auto &parsedBlocks = parsed.document->blocks;
   const size_t committed = committedCount();
   const size_t committedLinks = committedLinks_ ? committedLinks_->size() : 0;
+  const size_t committedImages = committedImages_ ? committedImages_->size() : 0;
   Utf16OffsetMap offsets(region);
   // Reused across the region's blocks, so consecutive ones of the same
   // language share a configured lexer.
   HighlightState committedHighlight;
   HighlightStats stats;
+  MathLayoutStats committedMath;
   std::vector<Block> blocks;
   blocks.reserve(parsedBlocks.size());
   for (size_t i = 0; i < parsedBlocks.size(); i++) {
@@ -554,7 +637,7 @@ bool IncrementalParser::commitRegion(size_t boundary) {
     block.identity = nextBlockIdentity.fetch_add(1, std::memory_order_relaxed);
     const ByteRange bytes = parsed.blockSource[i];
     block.sourceRange = {committedUtf16_ + offsets.toUtf16(bytes.start), committedUtf16_ + offsets.toUtf16(bytes.end)};
-    offsetIds(block, committedContainers_, committedTables_, committedLinks);
+    offsetIds(block, committedContainers_, committedTables_, committedLinks, committedImages);
     if (i == 0 && committed > 0) {
       block.spacingBefore = BlockSpacing::Normal;
     }
@@ -565,6 +648,14 @@ bool IncrementalParser::commitRegion(size_t boundary) {
     // A local state keeps this away from the tail's.
     if (block.kind == BlockKind::CodeBlock && !block.language.empty()) {
       highlightSettledCodeBlock(lexillaHighlighter(), &block, &committedHighlight, kHighlightBudgetMs, &stats);
+    }
+    // A committed formula is closed, inline or display, so it is laid out here
+    // from its whole TeX and then shared, unchanged, by every later snapshot. The
+    // same argument as highlighting applies: nothing will ever revisit it, and a
+    // half-laid-out committed block would not equal the same block laid out in
+    // full.
+    if (!block.math.empty()) {
+      layoutMathInBlock(&block, &committedMath);
     }
     blocks.push_back(std::move(block));
   }
@@ -578,7 +669,15 @@ bool IncrementalParser::commitRegion(size_t boundary) {
     }
     committedLinks_ = SharedList<Link>::Prefix::extend(committedLinks_, std::move(links));
   }
+  if (!parsed.document->images.empty()) {
+    std::vector<Image> images(parsed.document->images.begin(), parsed.document->images.end());
+    for (Image &image : images) {
+      offsetImage(image, static_cast<int32_t>(committedLinks), committedUtf16_);
+    }
+    committedImages_ = SharedList<Image>::Prefix::extend(committedImages_, std::move(images));
+  }
   noteHighlight(stats);
+  noteMath(committedMath);
   committedBytes_ = boundary;
   committedUtf16_ += offsets.toUtf16(region.size());
   committedContainers_ += parsed.containerCount;
@@ -594,7 +693,12 @@ void IncrementalParser::watchOpenFence(std::string_view source, size_t from, siz
     return;
   }
   const Block &last = document_->blocks.back();
-  if (last.kind != BlockKind::CodeBlock || !last.containers.empty() || !last.runs.empty()) {
+  // A math block counts here for the same reason a code block does: a `$$`
+  // fence is a fence, and the open-fence fast path is what lets an `aligned`
+  // environment grow a line at a time instead of reparsing the formula for
+  // every token. A block with runs is a paragraph, never a fence body.
+  if ((last.kind != BlockKind::CodeBlock && last.kind != BlockKind::MathBlock) || !last.containers.empty() ||
+      !last.runs.empty()) {
     return;
   }
 
@@ -609,12 +713,13 @@ void IncrementalParser::watchOpenFence(std::string_view source, size_t from, siz
       if (closesFence(line, open->marker, open->length)) {
         open.reset();
       }
-    } else if (fenceOpener(line)) {
-      // An opener still being typed can change its info string.
+    } else if (const auto candidate = fenceOpener(line, math_.enabled() && last.kind == BlockKind::MathBlock)) {
+      // An opener still being typed can change its info string, and a `$$` line
+      // with no newline yet is not yet a fence.
       if (newline == kNoOffset) {
         return;
       }
-      open = fenceOpener(line);
+      open = candidate;
       contentStart = newline + 1;
     }
     if (newline == kNoOffset) {
@@ -653,13 +758,13 @@ void IncrementalParser::watchOpenFence(std::string_view source, size_t from, siz
   std::string probe(source.substr(from));
   probe.push_back('x');
   counters_.bytesParsed += probe.size();
-  const ParseResult probed = parseMarkdownAt(probe, from);
+  const ParseResult probed = parseMarkdownAt(probe, from, math_);
   if (pendingNewline) {
     projected.push_back(u'\n');
   }
   projected.push_back(u'x');
   if (probed.status != ParseStatus::Ok || probed.document->blocks.size() != document_->blocks.size() - blocksBefore ||
-      probed.document->blocks.back().kind != BlockKind::CodeBlock || probed.document->blocks.back().text != projected) {
+      probed.document->blocks.back().kind != last.kind || probed.document->blocks.back().text != projected) {
     return;
   }
   openFence_ = true;
@@ -686,6 +791,12 @@ bool IncrementalParser::appendOpenFence() {
     if (startsWith(line, '`') || startsWith(line, '~')) {
       return false;
     }
+    // A `$$` line closes a math fence, so the fast path must decline whenever
+    // the new bytes could be one. Otherwise a formula would keep growing past
+    // the line that ended it.
+    if (math_.enabled() && (isMathFenceLine(line) || startsWith(line, '$'))) {
+      return false;
+    }
     if (newline == kNoOffset) {
       break;
     }
@@ -708,6 +819,7 @@ bool IncrementalParser::appendOpenFence() {
     text.pop_back();
   }
   highlightTail(next.get());
+  layoutTail(next.get());
   publish(next, next->settledBlocks);
   counters_.openFenceFastUpdates++;
   return true;

@@ -62,6 +62,10 @@ BlockElement elementFor(const Block &block) {
       return BlockElement::Table;
     case BlockKind::ThematicBreak:
       return BlockElement::Rule;
+    case BlockKind::MathBlock:
+      return BlockElement::Math;
+    case BlockKind::Image:
+      return BlockElement::Image;
     case BlockKind::Paragraph:
       break;
   }
@@ -81,6 +85,33 @@ BlockFont codeFont(const Theme &theme) {
 }
 
 BlockFont paragraphFont(const Theme &theme) { return blockFont(theme, paragraphLike()); }
+
+BlockFont mathFont(const Theme &theme) {
+  BlockFont font;
+  // The slot holds a point size already, so it is the whole answer. Its default
+  // is the paragraph size times KaTeX's own 1.21, which is what the slot table
+  // stores rather than a multiplier, so a theme that sets one number gets one
+  // number's worth of control.
+  font.size = theme.number(kSlotMathFontSize);
+  font.weight = 400;
+  font.family = {};
+  font.lineHeight = 0;
+  font.colorSlot = kSlotMathColor;
+  return font;
+}
+
+BlockFont inlineMathFont(const Theme &theme, const BlockFont &block) {
+  BlockFont font = block;
+  // KaTeX's own `.katex { font-size: 1.21em }`, so a formula in a heading is a
+  // heading-sized formula rather than a paragraph-sized one inside a heading.
+  // The run's own scaled size carries the font scale, so Dynamic Type moves a
+  // formula with the text around it.
+  font.size = block.size * kInlineMathScale;
+  // `inherit` is the default, which leaves the run's color alone, so a formula
+  // in a link is the link's color and a formula in a quote is the quote's.
+  font.colorSlot = theme.slotSet(kSlotInlineMathColor) ? kSlotInlineMathColor : block.colorSlot;
+  return font;
+}
 
 BlockFont listMarkerFont(const Theme &theme) {
   BlockFont font;
@@ -165,6 +196,24 @@ BlockFont blockFont(const Theme &theme, const Block &block) {
       font.marginTop = kSlotThematicBreakMarginTop;
       font.marginBottom = kSlotThematicBreakMarginBottom;
       return font;
+    case BlockElement::Math: {
+      // A formula's own box, layered over the block font rather than replacing
+      // it: an `aligned` environment inside a quote keeps the quote's size,
+      // because a theme that shrinks quoted text means the quote. Only the
+      // size comes from the math slot, because a formula has one face.
+      const BlockFont formula = mathFont(theme);
+      font.size = formula.size;
+      font.weight = formula.weight;
+      font.colorSlot = formula.colorSlot;
+      font.marginTop = kSlotMathMarginTop;
+      font.marginBottom = kSlotMathMarginBottom;
+      break;
+    }
+    case BlockElement::Image:
+      // An image draws no text, so it has no typography to speak of. What it
+      // does have is the paragraph's margins, which is where a reader expects
+      // the gap above a picture to come from.
+      break;
     case BlockElement::Paragraph:
     case BlockElement::Count:
       break;
@@ -180,6 +229,31 @@ BlockLayout blockLayout(const Theme &theme, const Block &block) {
   layout.marginTop = layout.font.marginTop;
   layout.marginBottom = layout.font.marginBottom;
   return layout;
+}
+
+double mathPadding(const Theme &theme) { return theme.number(kSlotMathPadding); }
+
+double mathTextAlign(const Theme &theme) { return theme.number(kSlotMathTextAlign); }
+
+double mathMarginTop(const Theme &theme) { return theme.number(kSlotMathMarginTop); }
+
+double mathMarginBottom(const Theme &theme) { return theme.number(kSlotMathMarginBottom); }
+
+ImageMetrics imageMetrics(const Theme &theme) {
+  ImageMetrics metrics;
+  metrics.maxHeight = static_cast<float>(theme.number(kSlotImageMaxHeight));
+  metrics.borderRadius = static_cast<float>(theme.number(kSlotImageBorderRadius));
+  metrics.marginTop = static_cast<float>(theme.number(kSlotImageMarginTop));
+  metrics.marginBottom = static_cast<float>(theme.number(kSlotImageMarginBottom));
+  // The fallback line is the paragraph's line height rather than a constant, so
+  // a broken image at the largest Dynamic Type size occupies the same room a
+  // line of prose would. A theme that never sets a line height leaves the
+  // platform's own, which is the value the default already carries.
+  const double lineHeight = theme.number(kSlotParagraphLineHeight);
+  if (lineHeight > 0) {
+    metrics.fallbackTextHeight = static_cast<float>(lineHeight);
+  }
+  return metrics;
 }
 
 void writeBlockLayout(const Theme &theme, const BlockLayout &layout, std::vector<double> &out, size_t offset) {

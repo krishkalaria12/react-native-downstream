@@ -28,12 +28,30 @@ type NativeMarkdownErrorEvent = Readonly<{
   action: string;
 }>;
 
+type NativeImagePressEvent = Readonly<{
+  url: string;
+  alt: string;
+  title: string;
+  start: CodegenTypes.Int32;
+  end: CodegenTypes.Int32;
+}>;
+
+type NativeMathErrorEvent = Readonly<{
+  /** The TeX between the delimiters, as written. */
+  source: string;
+  message: string;
+  display: boolean;
+  generation: CodegenTypes.Int32;
+}>;
+
 type NativeControlActionEvent = Readonly<{
   block: string;
   action: string;
   format: string;
   language: string;
   filename: string;
+  /** The image's destination, for an `image` block. Empty otherwise. */
+  url: string;
   wrapped: boolean;
   /** Expand only: whether the block's height cap is lifted after the press. */
   expanded: boolean;
@@ -69,9 +87,10 @@ export interface NativeProps extends ViewProps {
   codeBlockWrap?: CodegenTypes.WithDefault<boolean, false>;
   /**
    * Which control buttons to build, as a bitmask of code copy, code
-   * download, table copy, table download, code wrap, and code expand.
+   * download, table copy, table download, code wrap, code expand, and image
+   * download.
    */
-  controls?: CodegenTypes.WithDefault<CodegenTypes.Int32, 63>;
+  controls?: CodegenTypes.WithDefault<CodegenTypes.Int32, 127>;
   /**
    * Draw line numbers beside code. Layout only, and they are never copied,
    * selected, or spoken.
@@ -86,6 +105,26 @@ export interface NativeProps extends ViewProps {
   codeFilename?: string;
   /** Base name for a table download, without an extension. */
   tableFilename?: string;
+  /** Base name for an image download, without an extension. */
+  imageFilename?: string;
+  /**
+   * Math parse options as a bitmask: enabled, single-dollar text math, and
+   * bracket delimiters. Sent rather than resolved here because the parser is
+   * the first thing that reads them, and a formula that is never recognized can
+   * never be laid out.
+   */
+  mathFlags?: CodegenTypes.WithDefault<CodegenTypes.Int32, 0>;
+  /**
+   * Load images. Off shows alt text and makes no request, which is also what a
+   * document with no image does whatever this says.
+   */
+  images?: CodegenTypes.WithDefault<boolean, true>;
+  /**
+   * The URL prefixes an image may load from; `['*']` allows any. Part of the
+   * parse's inputs but not of the document, so the same string parses the same
+   * under two prefix lists and only the box rule differs.
+   */
+  allowedImagePrefixes?: ReadonlyArray<string>;
   /** `,`, `;`, a tab, or `auto`, which the platform resolves from its locale. */
   csvSeparator?: string;
   /** Control labels in a fixed key order; see src/controls.ts. */
@@ -135,6 +174,8 @@ export interface NativeProps extends ViewProps {
   /** The shape drawn after the newest text while animating. */
   caret?: CodegenTypes.WithDefault<'none' | 'block' | 'circle', 'none'>;
   onLinkPress?: CodegenTypes.DirectEventHandler<NativeLinkPressEvent>;
+  onImagePress?: CodegenTypes.DirectEventHandler<NativeImagePressEvent>;
+  onMathError?: CodegenTypes.DirectEventHandler<NativeMathErrorEvent>;
   onMarkdownError?: CodegenTypes.DirectEventHandler<NativeMarkdownErrorEvent>;
   onControlAction?: CodegenTypes.DirectEventHandler<NativeControlActionEvent>;
 }
