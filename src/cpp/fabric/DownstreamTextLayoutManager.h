@@ -25,7 +25,15 @@ public:
   explicit DownstreamTextLayoutManager(std::shared_ptr<const ContextContainer> contextContainer)
       : contextContainer_(std::move(contextContainer)) {
     downstream::RenderPreparer::install(&DownstreamTextLayoutManager::prepare);
+    // The container is the only place the platform's own image loader lives, and
+    // this is the first code of ours that runs with it in hand, so the install
+    // happens here rather than in a view that may not exist yet.
+    installPlatformServices(*contextContainer_);
   }
+
+  /// Hands the engine the platform services that need the context container.
+  /// Implemented per platform next to `measurePlatform`.
+  static void installPlatformServices(const ContextContainer &contextContainer);
 
   /// Builds a document's platform rendering and measures it at each hint on
   /// the calling worker thread, filling the caches measurePlatform and the

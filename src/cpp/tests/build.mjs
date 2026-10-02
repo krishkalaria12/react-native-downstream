@@ -69,6 +69,7 @@ export const ENGINE = [
     'FenceMeta.cpp',
     'CodeLayout.cpp',
     'ImageLayout.cpp',
+    'ImageLoaderRegistry.cpp',
     'ImageSizeCache.cpp',
     'MathScan.cpp',
   ].map((name) => join(CPP, 'downstream', name)),
