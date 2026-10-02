@@ -29,6 +29,7 @@ folly::dynamic ordinalArray(const std::vector<uint32_t> &ordinals) {
 /// height or about the colors it drew it with.
 folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontScale, uint32_t chrome,
                               const downstream::CodeLayout &code,
+                              const downstream::PlacedCaret &caret = {},
                               const downstream::Theme::Handle &theme = nullptr) {
   return folly::dynamic::object("documentId", static_cast<double>(documentId))(
       "fontScale", static_cast<double>(fontScale))("chrome", static_cast<double>(chrome))(
@@ -36,6 +37,8 @@ folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontSc
       "codeBlockWrap", code.props.wrap ? 1.0 : 0.0)("lineNumbers", code.props.lineNumbers ? 1.0 : 0.0)(
       "codeBlockMaxHeight", static_cast<double>(code.props.maxHeight))(
       "wrapToggles", ordinalArray(code.choices.wrapToggles))("expanded", ordinalArray(code.choices.expanded))(
+      // The caret's two small enums, the same way.
+      "caretKind", static_cast<double>(caret.kind))("caretPlace", static_cast<double>(caret.place))(
       // By id, as the document is: no slot value is copied on every measurement.
       "themeId", static_cast<double>(theme ? theme->id() : 0));
 }
@@ -87,8 +90,8 @@ Java_com_downstream_DownstreamNative_nativeInstallPreparer(JNIEnv *env, jclass c
     return;
   }
   // documentId, fontScale, width, chrome, codeBlockWrap, lineNumbers,
-  // codeBlockMaxHeight, wrapToggles, expanded, themeId.
-  const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JFFIZZF[I[IJ)V");
+  // codeBlockMaxHeight, wrapToggles, expanded, caretKind, caretPlace, themeId.
+  const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JFFIZZF[I[IIIJ)V");
   if (method == nullptr || env->GetJavaVM(&javaVm) != JNI_OK) {
     env->ExceptionClear();
     return;
@@ -108,6 +111,7 @@ Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHand
                                                   Float fontSizeMultiplier, Float maximumWidth,
                                                   SurfaceId surfaceId, uint32_t chrome,
                                                   const downstream::CodeLayout &code,
+                                                  const downstream::PlacedCaret &caret,
                                                   const downstream::Theme::Handle &theme) const {
   // Java resolves the theme through the registry by id, the way it resolves the
   // document, so no slot value is copied across JNI on a measurement. Zero is
@@ -130,7 +134,7 @@ Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHand
   // The same map shape is what the view manager reads in `updateState` and in
   // `measure`, so all three resolve one layout rather than three.
   auto localDataMap = ReadableNativeMap::newObjectCxxArgs(
-      codeLayoutData(document->id, fontSizeMultiplier, chrome, code, theme));
+      codeLayoutData(document->id, fontSizeMultiplier, chrome, code, caret, theme));
 
   auto propsMap = ReadableNativeMap::newObjectCxxArgs(folly::dynamic::object());
   auto componentName = make_jstring("DownstreamMarkdownView");
@@ -166,6 +170,7 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
                               static_cast<jboolean>(hint.code.props.wrap ? JNI_TRUE : JNI_FALSE),
                               static_cast<jboolean>(hint.code.props.lineNumbers ? JNI_TRUE : JNI_FALSE),
                               static_cast<jfloat>(hint.code.props.maxHeight), toggles, expanded,
+                              static_cast<jint>(hint.caret.kind), static_cast<jint>(hint.caret.place),
                               static_cast<jlong>(hint.themeId()));
     env->DeleteLocalRef(toggles);
     env->DeleteLocalRef(expanded);

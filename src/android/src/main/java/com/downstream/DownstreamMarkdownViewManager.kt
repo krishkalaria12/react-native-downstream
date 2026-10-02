@@ -98,6 +98,33 @@ class DownstreamMarkdownViewManager :
   // there, because a height belongs to the measurement rather than to a prop.
   override fun setCodeBlockWrap(view: DownstreamMarkdownView, value: Boolean) = Unit
 
+  /**
+   * The effect and the split are already inside the flat timing array the shadow
+   * node reads, and resolved once in `src/animation.ts`, so the view never sees
+   * them as separate props. Both are accepted and dropped: the delegate requires
+   * them, and a prop that arrives twice would otherwise be resolved twice in two
+   * places.
+   */
+  override fun setAnimation(view: DownstreamMarkdownView, value: String?) = Unit
+
+  override fun setAnimationSplit(view: DownstreamMarkdownView, value: String?) = Unit
+
+  override fun setAnimationTiming(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.setAnimationTiming(value?.let { array ->
+      DoubleArray(array.size()) { array.getDouble(it) }
+    })
+  }
+
+  /**
+   * `auto`, `on` and `off` reach the engine as part of the caret, which the state
+   * carries already resolved against the document's own streaming flag. A
+   * controlled view has no stream, so the flag is the whole answer and there is
+   * nothing for the view to do with the string.
+   */
+  override fun setAnimating(view: DownstreamMarkdownView, value: String?) = Unit
+
+  override fun setCaret(view: DownstreamMarkdownView, value: String?) = Unit
+
   override fun setLineNumbers(view: DownstreamMarkdownView, value: Boolean) = Unit
 
   override fun setCodeBlockMaxHeight(view: DownstreamMarkdownView, value: Double) = Unit
@@ -149,6 +176,17 @@ class DownstreamMarkdownViewManager :
       state.getOrdinals("expanded"),
     )
     view.setChrome(state.getDouble("chrome").toInt())
+    // The caret is resolved in the node, against the document and its streaming
+    // flag, so the view never decides where a caret goes. It is a state field
+    // rather than a prop for the same reason `chrome` is: its placeholder is
+    // measured with the text, so a change reaches the view through a state update
+    // on the next layout.
+    view.setCaret(
+      PlacedCaret(
+        state.getDouble("caretKind")?.toInt() ?: 0,
+        state.getDouble("caretPlace")?.toInt() ?: 0,
+      ),
+    )
     // The theme travels as its id, the way the document does, so a state update
     // carries one number rather than every slot the theme sets.
     view.setDocument(
@@ -197,7 +235,14 @@ class DownstreamMarkdownViewManager :
     if (DownstreamNative.preparationContext?.get() !== context) {
       DownstreamNative.preparationContext = WeakReference(context)
     }
-    val rendered = RenderedDocument.obtain(context, documentId, fontScale, themeId = themeId)
+    // The caret is measured with everything else: its placeholder is a real
+    // character in the text, so measuring without it would put the last line
+    // somewhere the view then does not draw it.
+    val caret = PlacedCaret(
+      localData?.getDouble("caretKind")?.toInt() ?: 0,
+      localData?.getDouble("caretPlace")?.toInt() ?: 0,
+    )
+    val rendered = RenderedDocument.obtain(context, documentId, fontScale, themeId = themeId, caret = caret)
       ?: return YogaMeasureOutput.make(0f, 0f)
     val layoutWidth = if (widthMode == YogaMeasureMode.UNDEFINED || !width.isFinite()) {
       rendered.desiredWidth(code)
