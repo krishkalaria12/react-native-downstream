@@ -183,16 +183,28 @@ void drainQueue(void) {
     RCTImageURISource *source =
         [[RCTImageURISource alloc] initWithURL:url size:request->size scale:request->scale];
     const std::shared_ptr<Request> held = request;
+    // The full overload, because there is no shorter one on the loader's protocol:
+    // `size:scale:resizeMode:` alone is a `UIImageView` category method, not an
+    // `RCTImageLoaderProtocol` one, and calling it here would compile only if the
+    // concrete class happened to declare it. The two blocks it also takes are the
+    // progressive-decode ones, and nil for both is what "draw the image when it is
+    // whole" means.
+    //
+    // `RCTResizeModeCenter` rather than `Cover`: the box was already fitted to the
+    // image's own proportions by `imageBox`, so letting the loader cover this box
+    // would crop a picture to a rectangle it was never measured against.
     [loader loadImageWithURLRequest:source
-                                size:request->size
-                               scale:request->scale
+                               size:request->size
+                              scale:request->scale
                             clipped:NO
-                          resizeMode:RCTResizeModeModeCenter
-                           callback:^(NSError *error, UIImage *image) {
-                             deliver(held, error != nil || image == nil
-                                                  ? failureResult()
-                                                  : resultFor(nil, image));
-                           }];
+                          resizeMode:RCTResizeModeCenter
+                       progressBlock:nil
+                    partialLoadBlock:nil
+                     completionBlock:^(NSError *error, UIImage *image) {
+                       deliver(held, error != nil || image == nil
+                                            ? failureResult()
+                                            : resultFor(nil, image));
+                     }];
   }
 }
 

@@ -2,8 +2,10 @@
 
 #import "DSRenderedDocument.h"
 
-#import <React/RCTImageLoader.h>
+#import <React/RCTImageLoaderProtocol.h>
+#import <React/RCTImageLoaderWithAttributionProtocol.h>
 #import <React/RCTUtils.h>
+#import <react/utils/ManagedObjectWrapper.h>
 
 #include "ImageLoaderRegistry.h"
 #include "theme/Theme.h"
@@ -14,6 +16,13 @@
 namespace facebook::react {
 
 namespace {
+
+/// The container the image resolver reads, installed once by
+/// `installPlatformServices` below.
+std::shared_ptr<const facebook::react::ContextContainer> &DSImageContext() {
+  static std::shared_ptr<const facebook::react::ContextContainer> container;
+  return container;
+}
 
 /// The theme a layout is prepared and measured with.
 ///
@@ -27,37 +36,52 @@ const downstream::Theme::Handle &resolve(const downstream::Theme::Handle &theme)
 
 } // namespace
 
-/// Hands the engine the platform's own image loader, once.
+/// The app's own image loader, or null.
 ///
-/// The container is captured by the layout manager, which React Native builds
-/// before any view, so the resolver below is a function rather than a stored
-/// pointer: the container outlives every view, and a view that mounts after the
-/// bridge is up still finds the loader. This is the same object React Native's
-/// own `<Image>` reads, under the same key, so the app's HTTP stack, its cookies,
-/// its disk cache, and any custom URL handlers all apply to a picture a model
-/// wrote.
-static RCTImageLoader *DSResolveReactImageLoader() {
-  static std::shared_ptr<const facebook::react::ContextContainer> container;
+/// Read exactly the way React Native's own `ImageManager` reads it: the context
+/// container holds it under `"RCTImageLoader"` as a managed object, and
+/// `unwrapManagedObject` is what gets the Objective-C pointer back. That is the
+/// object React Native's own `<Image>` loads through, so the app's HTTP stack, its
+/// cookies, its disk cache, and any custom URL handlers all apply to a picture a
+/// model wrote. A separate fetcher would do none of that.
+///
+/// A function rather than a stored pointer because JavaScript asks on every image
+/// load and the container outlives every view: a view that mounts after the bridge is
+/// up still finds the loader.
+static void *DSResolveReactImageLoader() {
+  // Read through the accessor every time rather than caching into a `static` copy:
+  // a static initialised from it would take whatever the value was on the first
+  // call, which is before any container has been installed.
+  const auto &container = DSImageContext();
   if (container == nullptr) {
-    return nil;
+    return nullptr;
   }
-  RCTImageLoader *loader = container->getObject<RCTImageLoader>("RCTImageLoader");
-  return loader != nullptr ? [loader weakVectorSingleton] : nil;
+  // `at` throws when the key is absent, and the loader is only registered once the
+  // bridge is up. `find` is the answer to that, so a view that mounts first draws
+  // its placeholder rather than unwinding.
+  auto loader = container->find<std::shared_ptr<void>>("RCTImageLoader");
+  if (!loader.has_value() || !loader.value()) {
+    return nullptr;
+  }
+  // Cast to the registry's opaque handle: the engine never names an Objective-C
+  // class, and the value it hands back is only ever cast again by this platform's
+  // own loader, which is the only code that knows what it is.
+  return (void *)unwrapManagedObject(loader.value());
 }
 
 void DownstreamTextLayoutManager::installPlatformServices(
     const facebook::react::ContextContainer &contextContainer) {
-  // The container is captured for the life of the process, so the resolver reads
-  // it rather than being handed a pointer that could dangle. It is captured
-  // rather than the layout manager's own copy because the manager is per bridge
-  // and a second bridge should find the loader it brought.
-  static std::shared_ptr<const facebook::react::ContextContainer> held;
+  // Referenced, not copied: a `ContextContainer` owns its instances behind its own
+  // lock and offers no way to construct one from another. The layout manager holds
+  // a shared pointer to the same container for the life of the process, and this
+  // keeps one of its own because the manager is per bridge while the answer is per
+  // process. The no-op deleter is the honest one: this code does not own the
+  // container and must not free it.
   static std::mutex once;
   {
     std::lock_guard<std::mutex> lock(once);
-    held = std::make_shared<const facebook::react::ContextContainer>(contextContainer);
+    DSImageContext() = std::shared_ptr<const facebook::react::ContextContainer>(&contextContainer, [](const void *) {});
   }
-  (void)held;
   // The last install wins, so a bridge that arrives after an early view still
   // replaces the null a first bridge would have left.
   downstream::ImageLoaderRegistry::install(&DSResolveReactImageLoader);

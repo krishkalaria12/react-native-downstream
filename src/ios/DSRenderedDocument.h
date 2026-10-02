@@ -164,7 +164,7 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 /// The formula's display list, or null when the engine has no layout for it: a
 /// formula that failed, or a document with no math package installed. Either way
 /// the segment draws the formula's source, which is what a reader sees today.
-@property (nonatomic, readonly, nullable) MathLayout::Handle layout;
+@property (nonatomic, readonly, nullable) downstream::MathLayout::Handle layout;
 /// The TeX, for the fallback and for the spoken form.
 @property (nonatomic, readonly) std::string tex;
 /// The source the reader sees when there is no layout: the delimiters and the
