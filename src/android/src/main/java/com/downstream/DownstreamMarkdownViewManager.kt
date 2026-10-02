@@ -114,6 +114,37 @@ class DownstreamMarkdownViewManager :
     view.setTableFilename(value ?: "table")
   }
 
+  override fun setImageFilename(view: DownstreamMarkdownView, value: String?) {
+    view.setImageFilename(value ?: "image")
+  }
+
+  /**
+   * The math flags, and the `images` switch, are props the shadow node parses: it
+   * decides whether a formula resolves and whether a URL may be fetched at all, and
+   * it writes both answers into the state this view draws from. The view keeps the
+   * flags for the one decision the state does not carry — what a picture's save is
+   * named — and nothing else.
+   */
+  override fun setMathFlags(view: DownstreamMarkdownView, value: Int) {
+    view.setMathFlags(value)
+  }
+
+  override fun setImages(view: DownstreamMarkdownView, value: Boolean) {
+    view.setImages(value)
+  }
+
+  /**
+   * The prefix list, which only a measurement reads: the state already says which
+   * destinations were blocked. The view does not re-check it, because a view that
+   * fetched a URL the measurement refused would draw a picture inside a box that was
+   * reserved for a line of alt text.
+   */
+  override fun setAllowedImagePrefixes(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.setAllowedImagePrefixes(value?.let { array ->
+      List(array.size()) { index -> array.getString(index).orEmpty() }
+    } ?: emptyList())
+  }
+
   override fun setCsvSeparator(view: DownstreamMarkdownView, value: String?) {
     view.setCsvSeparator(value ?: ",")
   }

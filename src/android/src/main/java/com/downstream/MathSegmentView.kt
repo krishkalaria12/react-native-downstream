@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
+import android.view.View
 import android.widget.FrameLayout
 import android.widget.TextView
 
@@ -63,8 +64,7 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
     textColor = color
     this.errorColor = errorColor
     errorPaint.color = errorColor
-    glyphs.paint.color = color
-    glyphs.textSize = fontSize
+    glyphs.setPaint(color, fontSize)
     // No background is no background, rather than a fill of the default light
     // color on a dark theme: a theme that sets no math background wants the page's.
     background.visibility = if (backgroundColor == null) GONE else VISIBLE
@@ -163,9 +163,21 @@ internal class MathGlyphView(context: Context) : View(context) {
   var segment: MathSegment? = null
   var textSize = 0f
 
-  private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-    textSize = 0f
+  /**
+   * The colour and size glyphs draw at.
+   *
+   * Set through a method rather than by assigning a whole Paint, so the view cannot
+   * hand this one a paint that has not been sized and leave a formula drawn at the
+   * default 12 points.
+   */
+  fun setPaint(color: Int, textSize: Float) {
+    paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    paint.setColor(color)
+    paint.textSize = textSize
+    this.textSize = textSize
   }
+
+  private var paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
   /**
    * The scale one inline-sized formula draws at.

@@ -200,6 +200,9 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   private var csvSeparator = ","
   private var codeFilename = "file"
   private var tableFilename = "table"
+  private var imageFilename = "image"
+  private var mathFlags = 0
+  private var allowedImagePrefixes: List<String> = emptyList()
   private var exporter = DocumentExporter(context)
   private var generation = 0
   private var sessionId: String? = null
@@ -323,6 +326,50 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   fun setTableFilename(value: String) {
     tableFilename = value
   }
+
+  /**
+   * The name a picture's save uses when the app named none.
+   *
+   * The engine's `imageDownloadName` turns this into a file name from the URL's
+   * extension, the destination's MIME subtype, or this as a last resort, so a
+   * picture called `?id=7` still saves as something rather than as nothing.
+   */
+  fun setImageFilename(value: String) {
+    imageFilename = value
+  }
+
+  /**
+   * The math flags, as the engine's bitmask.
+   *
+   * Held so an unresolved formula can be told apart from one that was never meant to
+   * be laid out: with the flag off the engine leaves the literal alone and this view
+   * has nothing to do, and with it on an unresolved formula draws in the theme's
+   * error color. Both answers are otherwise in the state.
+   */
+  fun setMathFlags(value: Int) {
+    mathFlags = value
+  }
+
+  /** Whether pictures are fetched at all. The state says so per picture as well. */
+  fun setImages(value: Boolean) {
+    imagesEnabled = value
+    imageLayout = if (value) imageLayout else imageLayout.copy(state = imageLayout.state.copy(enabled = false))
+    syncSegmentViews()
+  }
+
+  /**
+   * The prefixes a measurement resolved against.
+   *
+   * Kept so the value that produced the state is readable next to it: a view that
+   * shows a blocked picture's alt text should be able to say which prefix list said
+   * so. The list itself is not re-applied here.
+   */
+  fun setAllowedImagePrefixes(value: List<String>) {
+    allowedImagePrefixes = value
+  }
+
+  /** The image answers with this app's policy applied, which is what frames use. */
+  private var imagesEnabled = true
 
   fun setCsvSeparator(value: String) {
     csvSeparator = value
@@ -691,7 +738,8 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   // Reuse views of the same kind in place, so unchanged segments keep their
   // selection and scroll position across updates.
   private fun syncSegmentViews() {
-    val segments = rendered?.segments.orEmpty()
+    val document = rendered
+    val segments = document?.segments.orEmpty()
     segments.forEachIndexed { index, segment ->
       var view = if (index < childCount) getChildAt(index) else null
       val reusable = when (segment) {
@@ -720,22 +768,28 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
         addView(view, index)
       }
       when (segment) {
-        is TextSegment -> (view as TextSegmentView).setSegment(segment, rendered!!)
-        is CodeSegment -> (view as CodeSegmentView).setSegment(segment, rendered!!)
-        is TableSegment -> (view as TableSegmentView).setSegment(segment, sourceEpoch, rendered!!.style.chromeRowHeight)
+        is TextSegment -> (view as TextSegmentView).setSegment(segment, document!!)
+        is CodeSegment -> (view as CodeSegmentView).setSegment(segment, document!!)
+        is TableSegment -> (view as TableSegmentView).setSegment(segment, sourceEpoch, document!!.style.chromeRowHeight)
+        // Read once into the local rather than off `rendered` per field: it is a
+        // mutable property, so the compiler will not smart-cast it, and five reads
+        // of a field another thread can replace is five chances to mix one
+        // snapshot's metrics with another's.
         is ImageSegment -> (view as ImageSegmentView).apply {
-          setStyle(rendered!!.style.imageMetrics, rendered.style.imageAltColor)
+          val style = document!!.style
+          setStyle(style.imageMetrics, style.imageAltColor)
           setImageLayout(imageLayout)
           setSegment(segment)
         }
         is MathSegment -> (view as MathSegmentView).apply {
+          val style = document!!.style
           setStyle(
-            rendered!!.style.mathFontSize,
-            rendered.style.mathColor,
-            rendered.style.mathBackground,
-            rendered.style.mathErrorColor,
-            rendered.style.mathPadding,
-            rendered.style.mathRadius,
+            style.mathFontSize,
+            style.mathColor,
+            style.mathBackground,
+            style.mathErrorColor,
+            style.mathPadding,
+            style.mathRadius,
           )
           setSegment(segment)
         }
@@ -759,10 +813,10 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   private var imageLayout = ImageLayout()
 
   /** Set by the view manager: a picture's answer goes back into the state. */
-  var onImageAnswer: ((ordinal: Int, state: ImageState) -> Unit)? = null
+  internal var onImageAnswer: ((ordinal: Int, state: ImageState) -> Unit)? = null
 
   /** Set by the view manager: a press on a picture that is not inside a link. */
-  var onImagePress: ((url: String, alt: String, title: String, ordinal: Int) -> Unit)? = null
+  internal var onImagePress: ((url: String, alt: String, title: String, ordinal: Int) -> Unit)? = null
 
   /**
    * Sets the answers and restacks, because a picture's height is its state.
@@ -770,7 +824,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    * The frames are keyed on the answers as well as the width, so a load that
    * finishes collapses the placeholder and moves the text under it in one pass.
    */
-  fun setImageLayout(value: ImageLayout) {
+  internal fun setImageLayout(value: ImageLayout) {
     if (imageLayout == value) {
       return
     }

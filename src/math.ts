@@ -55,7 +55,7 @@ function options(value: unknown): Section | undefined {
  */
 export function mathAvailable(): boolean {
   try {
-    return NativeDownstreamSession.mathAvailable === true;
+    return NativeDownstreamSession.mathAvailable() === true;
   } catch {
     // A host with no TurboModule at all — a bare test renderer, a server render
     // — has no engine, which is the same answer as a platform that reports the

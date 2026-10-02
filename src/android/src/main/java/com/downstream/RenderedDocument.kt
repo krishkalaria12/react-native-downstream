@@ -769,11 +769,11 @@ internal class RenderedDocument(
       // cannot be laid out reads rather than vanishing.
       is MathSegment ->
         if (segment.resolved) {
-          mathBlockHeight(segment.height, segment.depth, style.mathFontSize, style.mathPadding)
+          mathBlockHeight(segment.height, segment.depth, style.mathFontSize, style.mathPadding).toInt()
         } else {
           // An unresolved formula takes one line, which is what its literal takes,
           // so a formula that cannot be laid out still occupies readable space.
-          style.bodySize * LINE_HEIGHT + style.mathPadding * 2
+          (style.bodySize * LINE_HEIGHT + style.mathPadding * 2).toInt()
         }
       is CodeSegment -> {
         // The one definition: the props, the reader's choices, and this block's
@@ -848,7 +848,7 @@ internal class RenderedDocument(
         // picture that wanted 4,000 pixels of width would make every other
         // segment in the message measure against it.
         is ImageSegment -> style.imageMetrics.placeholderWidth
-        is MathSegment -> segment.width * segment.fontSize
+        is MathSegment -> segment.width * style.mathFontSize
         is CodeSegment -> {
           val layout = resolveCodeBlock(code, segment.codeOrdinal, segment.fenceMeta)
           val gutter = segment.gutterWidth(layout)
@@ -870,6 +870,16 @@ internal class RenderedDocument(
     private const val MAX_WIDTH = 100_000f
     /** The card width an unconstrained measure passes to a code segment. */
     private const val UNCONSTRAINED_WIDTH = 100_000
+    /**
+     * The line height a one-line fallback takes, as a multiple of the font size.
+     *
+     * Android's own default for a body text view, which is what an unresolved
+     * formula's literal is measured against so it occupies the room a line of prose
+     * would. Not read from a slot: the formula's literal is body text, so it takes
+     * the body's line height rather than a math-specific one.
+     */
+    const val LINE_HEIGHT = 1.2f
+
     /// Which control rows a document lays out with. See `Controls.h`.
     const val CHROME_CODE_HEADER = 1
     const val CHROME_TABLE_TOOLBAR = 2
@@ -890,6 +900,11 @@ internal class RenderedDocument(
         is TextSegment -> value.text.length * 24 + 256
         is CodeSegment -> value.text.length * 24 + 512
         is TableSegment -> value.accessibilityText.length * 32 + 1024
+        // A picture and a formula hold no text at all, so their weight is what the
+        // view holds: the bitmap belongs to the pipeline's cache and is counted
+        // there, and a formula's glyphs belong to whatever drew them.
+        is ImageSegment -> 512
+        is MathSegment -> 512
       }
     }
 

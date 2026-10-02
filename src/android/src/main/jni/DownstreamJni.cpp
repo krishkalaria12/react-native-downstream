@@ -256,9 +256,15 @@ Java_com_downstream_DownstreamNative_nativeFontScaleCap(JNIEnv * /*env*/,
  */
 extern "C" JNIEXPORT jdoubleArray JNICALL
 Java_com_downstream_DownstreamNative_nativeImageMetrics(JNIEnv *env, jclass /*clazz*/, jlong id) {
-  const Theme::Handle theme = ThemeRegistry::find(static_cast<uint64_t>(id));
-  const ImageMetrics metrics =
-    theme_layout::imageMetrics(theme ? *theme : Theme::defaultTheme());
+  // The default theme rather than zeros, the same way `nativeReadDocument` answers
+  // a stale id: a view that mounted before its theme resolved gets the platform
+  // defaults instead of a picture with no height. Held in a handle because
+  // `defaultTheme` returns one, and dereferencing the temporary would dangle.
+  Theme::Handle theme = ThemeRegistry::find(static_cast<uint64_t>(id));
+  if (theme == nullptr) {
+    theme = Theme::defaultTheme();
+  }
+  const ImageMetrics metrics = theme_layout::imageMetrics(*theme);
   const jdouble values[] = {metrics.maxHeight, metrics.borderRadius, metrics.marginTop, metrics.marginBottom,
                             metrics.fallbackTextHeight};
   jdoubleArray array = env->NewDoubleArray(5);
@@ -277,9 +283,11 @@ Java_com_downstream_DownstreamNative_nativeImageMetrics(JNIEnv *env, jclass /*cl
  */
 extern "C" JNIEXPORT jdoubleArray JNICALL
 Java_com_downstream_DownstreamNative_nativeMathMetrics(JNIEnv *env, jclass /*clazz*/, jlong id) {
-  const Theme::Handle theme = ThemeRegistry::find(static_cast<uint64_t>(id));
-  const Theme &resolved = theme ? *theme : Theme::defaultTheme();
-  const jdouble values[] = {theme_layout::mathPadding(resolved), theme_layout::mathTextAlign(resolved)};
+  Theme::Handle theme = ThemeRegistry::find(static_cast<uint64_t>(id));
+  if (theme == nullptr) {
+    theme = Theme::defaultTheme();
+  }
+  const jdouble values[] = {theme_layout::mathPadding(*theme), theme_layout::mathTextAlign(*theme)};
   jdoubleArray array = env->NewDoubleArray(2);
   if (array != nullptr) {
     env->SetDoubleArrayRegion(array, 0, 2, values);

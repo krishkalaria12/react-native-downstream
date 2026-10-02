@@ -128,7 +128,7 @@ function publish(session: Session, sessionId: string): void {
 export const realEngineModule = {
   __esModule: true,
   default: {
-    mathAvailable: true,
+    mathAvailable: () => true,
 
     create(sessionId: string, mode: string, mathFlags = 0) {
       sessions.set(sessionId, {

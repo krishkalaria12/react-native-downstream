@@ -51,10 +51,12 @@ export interface Spec extends TurboModule {
    * Whether a math engine is linked into this process, so JavaScript can settle
    * the `math` prop's default during render instead of after a first pass.
    *
-   * A field read on the platform side: the answer only changes when the app's
-   * binary does, which is a relaunch.
+   * A method rather than a field because codegen only allows a property on a
+   * TurboModule when it is a non-null EventEmitter; anything else has to be
+   * spelled as a method, sync or not. The answer only changes when the app's
+   * binary does, which is a relaunch, so nothing here is cached on the native side.
    */
-  readonly mathAvailable: boolean;
+  mathAvailable(): boolean;
   readonly onSnapshotReady: CodegenTypes.EventEmitter<SnapshotReadyEvent>;
   readonly onSessionError: CodegenTypes.EventEmitter<SessionErrorEvent>;
   readonly onTrace: CodegenTypes.EventEmitter<NativeTraceEvent>;

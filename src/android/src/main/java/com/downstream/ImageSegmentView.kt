@@ -2,10 +2,13 @@ package com.downstream
 
 import android.content.Context
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.view.Gravity
+import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
+import com.facebook.drawee.view.SimpleDraweeView
 import com.facebook.react.bridge.ReactContext
 
 /**
@@ -29,7 +32,19 @@ import com.facebook.react.bridge.ReactContext
  */
 internal class ImageSegmentView(context: Context) : FrameLayout(context) {
   private val placeholder = View(context)
-  private val photo = ImageView(context).apply {
+  /**
+   * The picture itself, as a Drawee view.
+   *
+   * Drawee rather than an `ImageView` because Drawee *is* the app's pipeline: it
+   * fetches through the pipeline Fresco was initialized with, hands frames to the
+   * GPU as they arrive, and cancels and retries on its own. An `ImageView` would
+   * need a bitmap decoded here and would bypass all of it, which is the one thing
+   * this library must not do to a picture a model wrote.
+   */
+  private val photo = SimpleDraweeView(context).apply {
+    // Drawee draws into an ImageView, so `scaleType` is the scale type here too,
+    // and FIT_CENTER is the one that matches `imageBox`: a picture is fitted to its
+    // box and never cropped or stretched out of it.
     scaleType = ImageView.ScaleType.FIT_CENTER
   }
   private val altText = TextView(context).apply {
@@ -43,10 +58,10 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
   private var columnWidth = 0
 
   /** Set by the view group: reports the answer so the shadow node can record it. */
-  var onImageAnswer: ((ordinal: Int, state: ImageState) -> Unit)? = null
+  internal var onImageAnswer: ((ordinal: Int, state: ImageState) -> Unit)? = null
 
   /** Set by the view group: reports a press. */
-  var onImagePress: ((url: String, alt: String, title: String, ordinal: Int) -> Unit)? = null
+  internal var onImagePress: ((url: String, alt: String, title: String, ordinal: Int) -> Unit)? = null
 
   /**
    * The theme's metrics and its alt color.
@@ -109,6 +124,13 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
       state != ImageState.BLOCKED && state != ImageState.FAILED && state != ImageState.DISABLED
 
     photo.visibility = if (state == ImageState.LOADED) VISIBLE else GONE
+    // The same URI the request asked for. Set once per segment rather than per state
+    // change, because Drawee treats a second `setImageURI` for a URI it already has
+    // as a new request, and a state update is not a reason to fetch again.
+    if (state == ImageState.LOADED && photo.tag != current.url) {
+      photo.tag = current.url
+      photo.setImageURI(Uri.parse(current.url))
+    }
     placeholder.visibility = if (state == ImageState.LOADED || !mayLoad) GONE else VISIBLE
     // Alt text is what the reader gets, so it is shown rather than an empty box.
     // An image with no alt text shows nothing rather than a bare filename.
