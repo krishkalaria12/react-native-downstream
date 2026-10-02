@@ -4,6 +4,7 @@
 #include "Controls.h"
 #include "Document.h"
 #include "DocumentRegistry.h"
+#include "ImageLayout.h"
 #include "RenderPreparer.h"
 #include "theme/Theme.h"
 
@@ -36,12 +37,14 @@ public:
   DownstreamMarkdownState() = default;
 
   DownstreamMarkdownState(downstream::DocumentHandle document, Float fontSizeMultiplier, uint32_t chrome = 0,
-                          downstream::CodeLayout code = {}, downstream::Theme::Handle theme = nullptr)
+                          downstream::CodeLayout code = {}, downstream::Theme::Handle theme = nullptr,
+                          downstream::ImageStateLayout images = {})
       : document(std::move(document)),
         fontSizeMultiplier(fontSizeMultiplier),
         chrome(chrome),
         code(std::move(code)),
-        theme(std::move(theme)) {}
+        theme(std::move(theme)),
+        images(std::move(images)) {}
 
   downstream::DocumentHandle document;
   Float fontSizeMultiplier{1.0};
@@ -60,6 +63,14 @@ public:
   /// frame cannot mix sizes from one theme with drawing from another, the same
   /// way `chrome` does. Null means the default theme.
   downstream::Theme::Handle theme;
+  /// What this view knows about each image: whether images are on, and each
+  /// one's state and pixel size.
+  ///
+  /// It lives in the state rather than in the document because it is a property
+  /// of a view and of a moment, not of the Markdown. A load finishing changes an
+  /// entry, the shadow node notices, and the frame is re-measured and re-mounted
+  /// with no React render — which is the same path a code block's expand takes.
+  downstream::ImageStateLayout images;
 
   /// The theme to draw with, resolving null to the default so a platform never
   /// has to check.
@@ -102,6 +113,13 @@ public:
     return next;
   }
 
+  /// A copy with new image answers, which is what a finished load produces.
+  DownstreamMarkdownState withImages(downstream::ImageStateLayout answers) const {
+    DownstreamMarkdownState next(*this);
+    next.images = std::move(answers);
+    return next;
+  }
+
 #ifdef RN_SERIALIZABLE_STATE
   /// The view hands a new state back through StateWrapper, so the choices the
   /// reader just made have to survive the round trip through JNI. The arrays are
@@ -111,7 +129,8 @@ public:
         fontSizeMultiplier(previous.fontSizeMultiplier),
         chrome(previous.chrome),
         code(previous.code),
-        theme(previous.theme) {
+        theme(previous.theme),
+        images(previous.images) {
     if (!data.isObject()) {
       return;
     }
@@ -133,6 +152,14 @@ public:
     if (auto value = data.get_ptr("expanded")) {
       code.choices.expanded = readOrdinals(*value);
     }
+    // The image answers cross as one flat array: the enabled flag, then four
+    // numbers per image. One array rather than an array of arrays, because a JNI
+    // array of arrays allocates one object per image on a state update, and a
+    // message with six charts would pay six allocations for six numbers. Read
+    // back sorted by ordinal, which is what `find` binary-searches for.
+    if (auto value = data.get_ptr("images")) {
+      readImages(*value, &images);
+    }
   }
 
   /// Java resolves the document through the native registry by id rather than
@@ -150,10 +177,53 @@ public:
         "wrapToggles", writeOrdinals(code.choices.wrapToggles))("expanded", writeOrdinals(code.choices.expanded))(
         // By id, as the document is: Java resolves the theme through the
         // registry rather than copying its values across JNI on every update.
-        "themeId", static_cast<double>(themeId()));
+        "themeId", static_cast<double>(themeId()))(
+        // Flat, so the whole answer is one array: the enabled flag, then five
+        // numbers per image — ordinal, state, width, height, and a trailing zero
+        // that keeps every entry the same size, which is what lets the reader
+        // index it without knowing how many images there are.
+        "images", writeImages(images));
   }
 
 private:
+  /// The image answers, flattened. The stride is `kImageEntryStride` and both
+  /// halves of the round trip use it, so a field added to `ImageEntry` is one
+  /// line in each rather than a format that can drift.
+  static constexpr size_t kImageEntryStride = 4;
+
+  static folly::dynamic writeImages(const downstream::ImageStateLayout &images) {
+    auto array = folly::dynamic::array();
+    array.push_back(images.enabled ? 1.0 : 0.0);
+    for (const downstream::ImageEntry &entry : images.entries) {
+      array.push_back(static_cast<double>(entry.ordinal));
+      array.push_back(static_cast<double>(entry.state));
+      array.push_back(static_cast<double>(entry.pixelWidth));
+      array.push_back(static_cast<double>(entry.pixelHeight));
+    }
+    return array;
+  }
+
+  static void readImages(const folly::dynamic &array, downstream::ImageStateLayout *out) {
+    out->entries.clear();
+    if (!array.isArray() || array.empty()) {
+      return;
+    }
+    out->enabled = array[0].asDouble() != 0;
+    out->entries.reserve((array.size() - 1) / kImageEntryStride);
+    for (size_t at = 1; at + kImageEntryStride <= array.size(); at += kImageEntryStride) {
+      downstream::ImageEntry entry;
+      entry.ordinal = static_cast<uint32_t>(array[at].asDouble());
+      entry.state = static_cast<downstream::ImageState>(static_cast<uint8_t>(array[at + 1].asDouble()));
+      entry.pixelWidth = static_cast<float>(array[at + 2].asDouble());
+      entry.pixelHeight = static_cast<float>(array[at + 3].asDouble());
+      out->entries.push_back(entry);
+    }
+    std::sort(out->entries.begin(), out->entries.end(),
+              [](const downstream::ImageEntry &a, const downstream::ImageEntry &b) {
+                return a.ordinal < b.ordinal;
+              });
+  }
+
   static std::vector<uint32_t> readOrdinals(const folly::dynamic &array) {
     std::vector<uint32_t> ordinals;
     if (!array.isArray()) {

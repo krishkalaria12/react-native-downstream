@@ -8,6 +8,8 @@
 // those rules.
 //
 // argv[1] is the mode, `full` or `incremental`, as the TurboModule receives it.
+// argv[2] is the math parse flags, as the TurboModule's `create` receives them.
+// Absent means math is off, so the existing corpus is byte-identical.
 // stdin is a sequence of frames: a one-byte operation, a little-endian u32
 // payload length, and the payload.
 //
@@ -43,7 +45,8 @@ uint32_t readU32(std::string_view bytes) {
 
 int main(int argc, char **argv) {
   const std::string mode = argc > 1 ? argv[1] : "full";
-  IncrementalParser parser{mode == "incremental" ? ParseMode::IncrementalTail : ParseMode::FullParse};
+  IncrementalParser parser{mode == "incremental" ? ParseMode::IncrementalTail : ParseMode::FullParse,
+                           testdump::mathOptionsFromArg(argc, argv, 2)};
 
   const std::string input((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
   const std::string_view frames = input;

@@ -38,6 +38,23 @@ namespace {
 const Preview kPreview{PreviewOptions::all()};
 const Preview kDisabled{};
 
+/**
+ * The math options the ported corpus runs under: none.
+ *
+ * The corpus is remend's, and every case in it is about emphasis, links, images
+ * or structure. A formula is none of those, and with brackets on by default a
+ * case that happens to contain a paired `\[` would be testing the bracket
+ * pre-scan rather than the repair it was written for. So the corpus parses with
+ * math off, which is also the state the whole fixture corpus is byte-identical
+ * in, and `mathPreview` turns math on for the cases that are about it.
+ */
+const MathOptions kNoMath{MathParseFlags::Enabled & ~MathParseFlags::Enabled};
+
+/// `kPreview` with math off, so a case about a span is a case about a span.
+PreviewResult applyCorpus(std::string_view input, size_t origin = 0, size_t frozenBlocks = 0) {
+  return kPreview.apply(input, origin, frozenBlocks, kNoMath);
+}
+
 constexpr uint32_t kStrong = InlineStyle::Strong;
 constexpr uint32_t kEmphasis = InlineStyle::Emphasis;
 constexpr uint32_t kStrike = InlineStyle::Strikethrough;
@@ -50,8 +67,11 @@ constexpr const char *emphasis_mark = "**";
 std::string visible(const Document &document) {
   std::string out;
   for (const Block &block : document.blocks) {
+    // An image block counts: its text is its alt text, which is exactly what a
+    // repaired unfinished image shows, and a helper that skipped it would make
+    // every image repair look like it deleted the reader's text.
     if (block.kind != BlockKind::Paragraph && block.kind != BlockKind::Heading &&
-        block.kind != BlockKind::TableRow) {
+        block.kind != BlockKind::TableRow && block.kind != BlockKind::Image) {
       continue;
     }
     if (!out.empty()) {
@@ -83,7 +103,7 @@ std::string label(const char *name, std::string_view input) {
 /// markers are gone from the visible text.
 void openSpan(std::string_view input, std::string_view expectedVisible, uint32_t expectedStyles) {
   const std::string name = label("open span", input);
-  const PreviewResult result = kPreview.apply(input, 0);
+  const PreviewResult result = applyCorpus(input);
   CHECK(result.repaired, name.c_str());
   CHECK(visible(*result.parsed.document) == std::string(expectedVisible), name.c_str());
   CHECK((styles(*result.parsed.document) & expectedStyles) == expectedStyles, name.c_str());
@@ -93,7 +113,7 @@ void openSpan(std::string_view input, std::string_view expectedVisible, uint32_t
 /// the whole contract: an unproven repair is not made.
 void untouched(std::string_view input, const char *why) {
   const std::string name = label(why, input);
-  const PreviewResult result = kPreview.apply(input, 0);
+  const PreviewResult result = applyCorpus(input);
   CHECK(!result.repaired, name.c_str());
   CHECK(result.text == std::string(input), name.c_str());
 }
@@ -103,7 +123,7 @@ void untouched(std::string_view input, const char *why) {
 /// answer, and where doing so would have been wrong.
 void showsAs(std::string_view input, std::string_view expectedVisible, const char *why) {
   const std::string name = label(why, input);
-  const PreviewResult result = kPreview.apply(input, 0);
+  const PreviewResult result = applyCorpus(input);
   CHECK(!result.repaired, name.c_str());
   CHECK(visible(*result.parsed.document) == std::string(expectedVisible), name.c_str());
 }
@@ -317,7 +337,7 @@ bool unterminatedInlineCode() {
 /// the text reads exactly as the finished document will, minus the tap target.
 void showsLinkText(std::string_view input, std::string_view expectedVisible) {
   const std::string name = label("unfinished link", input);
-  const PreviewResult result = kPreview.apply(input, 0);
+  const PreviewResult result = applyCorpus(input);
   CHECK(result.repaired, name.c_str());
   CHECK(visible(*result.parsed.document) == std::string(expectedVisible), name.c_str());
   CHECK(result.parsed.document->links.empty(), name.c_str());
@@ -369,7 +389,7 @@ bool linksAndImages() {
   untouched("1. [ ", "a task marker is not a link");
   // A complete link keeps its target; only the unfinished one is touched.
   {
-    const PreviewResult beside = kPreview.apply("[a](https://example.com) and [more", 0);
+    const PreviewResult beside = applyCorpus("[a](https://example.com) and [more");
     CHECK(beside.repaired && visible(*beside.parsed.document) == "a and more",
           "an unfinished link beside a complete one previews");
     CHECK(beside.parsed.document->links.size() == 1 &&
@@ -383,12 +403,12 @@ bool linksAndImages() {
                             "See ![diagram](http://example.com/img",
                             "read [the docs](http://example.com/guide now"}) {
     const std::string name = label("an unfinished target is not actionable", input);
-    const ParseResult result = kPreview.apply(input, 0).parsed;
+    const ParseResult result = applyCorpus(input).parsed;
     CHECK(result.document->links.empty(), name.c_str());
   }
   // A complete link survives a neighbouring open span.
   const std::string beside = label("a complete link survives", "Text with [complete link](https://example.com/x) and **bold");
-  const PreviewResult result = kPreview.apply("Text with [complete link](https://example.com/x) and **bold", 0);
+  const PreviewResult result = applyCorpus("Text with [complete link](https://example.com/x) and **bold");
   CHECK(result.repaired, beside.c_str());
   CHECK(result.parsed.document->links.size() == 1, beside.c_str());
   CHECK(result.parsed.document->links[0].url == "https://example.com/x", beside.c_str());
@@ -404,7 +424,7 @@ bool structureStillArriving() {
   for (const char *input : {"- > 25: rich", "* > 25: rich", "+ > 25: rich", "1. > 25: rich",
                             "2) > 10: high", "  - > 25: rich"}) {
     const std::string name = label("a greater-than after a list marker is a quote", input);
-    const ParseResult parsed = kPreview.apply(input, 0).parsed;
+    const ParseResult parsed = applyCorpus(input).parsed;
     CHECK(parsed.document->blocks.size() == 1, name.c_str());
     CHECK(parsed.document->blocks[0].containers.size() == 2, name.c_str());
     CHECK(parsed.document->blocks[0].containers[0].kind == ContainerKind::ListItem, name.c_str());
@@ -412,7 +432,7 @@ bool structureStillArriving() {
   }
   // The contrast case. `<` is not a quote marker, so this is a plain list item,
   // which is what makes the case above structural rather than a blanket rule.
-  const ParseResult less = kPreview.apply("- < 5", 0).parsed;
+  const ParseResult less = applyCorpus("- < 5").parsed;
   CHECK(less.document->blocks[0].containers.size() == 1, "a less-than after a list marker is text");
 
   // Setext: remend injects a zero-width space after a partial underline because
@@ -421,7 +441,7 @@ bool structureStillArriving() {
   for (const char *input : {"Guide\n-", "Guide\n--", "Guide\n---", "Guide\n=", "This is a title\n=",
                             "Some text\n-", "here is a list\n-", "`code`\n-"}) {
     const std::string name = label("a setext underline completes on arrival", input);
-    const ParseResult parsed = kPreview.apply(input, 0).parsed;
+    const ParseResult parsed = applyCorpus(input).parsed;
     CHECK(!parsed.document->blocks.empty(), name.c_str());
     if (!parsed.document->blocks.empty()) {
       CHECK(parsed.document->blocks[0].kind == BlockKind::Heading, name.c_str());
@@ -435,7 +455,7 @@ bool structureStillArriving() {
   untouched("| a | b |\n| --- | --- |\n| **dat", "a partial table row is not repaired");
 
   // A fence needs a line break.
-  const ParseResult fence = kPreview.apply("```python\nconst x = 1", 0).parsed;
+  const ParseResult fence = applyCorpus("```python\nconst x = 1").parsed;
   CHECK(fence.document->blocks[0].kind == BlockKind::CodeBlock, "an open fence stays code");
   CHECK(fence.document->blocks[0].language == "python", "an open fence keeps its language");
   openSpan("```\ncode\n```\n**bold", "bold", kStrong);
@@ -498,13 +518,13 @@ bool listMarkers() {
                             "* Item 1\n* Item 2\n* Item 3",
                             "- Item 1\n- Item 2 with *italic*\n- Item 3",
                             "* Parent item\n  * Nested item 1\n  * Nested item 2"}) {
-    const PreviewResult result = kPreview.apply(input, 0);
+    const PreviewResult result = applyCorpus(input);
     const std::string name = label("a list marker is not an inline opener", input);
     CHECK(!result.repaired || result.text != std::string(input), name.c_str());
     // A repair is only ever allowed on the last block, and a list item's
     // content is what the reader is looking at, so the check is that the block
     // count and every earlier block are untouched.
-    const ParseResult baseline = parseMarkdown(input);
+    const ParseResult baseline = parseMarkdown(input, kNoMath);
     CHECK(result.parsed.document->blocks.size() >= baseline.document->blocks.size(), name.c_str());
   }
   // A list item whose content has an open span does repair, and only there.
@@ -538,7 +558,7 @@ bool nestedOpenSpans() {
 
   // Each candidate costs a parse of the tail, so a tail full of markers that
   // all fail is bounded rather than probed once per marker.
-  const PreviewResult capped = kPreview.apply("**a \\*b \\*c \\*d \\*e \\*f", 0);
+  const PreviewResult capped = applyCorpus("**a \\*b \\*c \\*d \\*e \\*f");
   CHECK(capped.stats.probes == 5, "a tail of failing candidates stops at the probe budget");
   CHECK(!capped.repaired && capped.stats.refused == 1, "and is refused once, as one tail");
   return true;
@@ -581,8 +601,8 @@ bool repairIsScopedToTheLastBlock() {
                             "text **bold and *ital", "**bold** then **more",
                             "paragraph1\n\n**bold", "line1\n\n*italic text"}) {
     const std::string name = label("a repair touches only the last block", input);
-    const PreviewResult result = kPreview.apply(input, 0);
-    const ParseResult baseline = parseMarkdown(input);
+    const PreviewResult result = applyCorpus(input);
+    const ParseResult baseline = parseMarkdown(input, kNoMath);
     CHECK(result.repaired, name.c_str());
     CHECK(result.parsed.document->blocks.size() == baseline.document->blocks.size(), name.c_str());
     for (size_t i = 0; i + 1 < baseline.document->blocks.size(); i++) {
@@ -593,7 +613,7 @@ bool repairIsScopedToTheLastBlock() {
   }
   // The second span closes while the first, already closed one stays styled.
   openSpan("**bold** then **more", "bold then more", kStrong);
-  const PreviewResult both = kPreview.apply("**bold** then **more", 0);
+  const PreviewResult both = applyCorpus("**bold** then **more");
   CHECK(both.parsed.document->blocks[0].runs.size() == 2, "both spans are styled");
   CHECK(both.parsed.document->blocks[0].runs[0].start == 0, "the first span keeps its range");
   CHECK(both.parsed.document->blocks[0].runs[1].start == 10, "the second span gets the new range");
@@ -636,9 +656,108 @@ bool featuresAreOptIn() {
   CHECK(images.apply("See ![diagram](https://exa", 0).repaired, "images alone settles an image");
   CHECK(!images.apply("See [the docs](https://exa", 0).repaired, "images alone leaves a link");
 
+  PreviewOptions mathOnly;
+  mathOnly.features = static_cast<uint32_t>(PreviewFeature::Math);
+  const Preview math{mathOnly};
+  CHECK(math.apply("See $$x + ", 0, 0, MathOptions{MathParseFlags::Default}).repaired,
+        "math alone closes a formula");
+  CHECK(!math.apply("**bold wor", 0, 0, kNoMath).repaired, "math alone does not close bold");
+  // With math off there is no formula to close, so the repair proves nothing and
+  // is not made. The candidate is still found — the scan reads bytes — and the
+  // proof is what refuses it, which is the whole safety argument.
+  CHECK(!math.apply("See $$x + ", 0, 0, kNoMath).repaired, "math off means no formula to close");
+
   PreviewOptions empty;
   CHECK(!empty.enabled(), "no features means disabled");
   CHECK(empty.features == 0, "the default feature set is empty");
+  return true;
+}
+
+/**
+ * The math repair, and the shapes it has to refuse.
+ *
+ * Its own group because it is the only repair that *adds* a run and a span
+ * rather than moving a marker, so the corpus's "nothing but the marker changed"
+ * rule does not describe it. What it does have to prove is narrower and is
+ * stated in `provesMathRepair`.
+ */
+bool mathPreview() {
+  const MathOptions on{MathParseFlags::Default};
+  const MathOptions bracketsOff{MathParseFlags::Enabled | MathParseFlags::SingleDollar};
+
+  // The plain case: a formula that has not closed yet, closed provisionally and
+  // typeset from then on.
+  {
+    const PreviewResult result = kPreview.apply("See $$x + ", 0, 0, on);
+    CHECK(result.repaired, "an open $$ closes");
+    CHECK(visible(*result.parsed.document) == "See $$x + $$", "the formula keeps its literal");
+    const Block &block = result.parsed.document->blocks.back();
+    CHECK(block.math.size() == 1, "one formula");
+    CHECK(block.math[0].tex == "x + ", "the TeX is what arrived");
+    CHECK(block.math[0].display, "a doubled pair is display style");
+  }
+
+  // A single `$` is not a formula with the default, because currency is the
+  // commoner thing a `$` is in an answer.
+  CHECK(!kPreview.apply("That costs $5 and ", 0, 0, on).repaired, "a single dollar is text");
+  // And it is one when the app asked, which is the name Streamdown uses. An
+  // opener has to be preceded by whitespace or punctuation, so `costs $5` can
+  // open while `$5 and $10` cannot close, which is why the default is off.
+  CHECK(kPreview.apply("That costs $5 and ", 0, 0, bracketsOff).repaired, "single dollar on request");
+  {
+    const PreviewResult result = kPreview.apply("That costs $5 and ", 0, 0, bracketsOff);
+    const MathSpan &span = result.parsed.document->blocks.back().math.front();
+    CHECK(span.delimiter == MathDelimiter::Dollar, "and the span knows which delimiter it was");
+    CHECK(!span.display, "a single dollar is text style, not a display formula");
+    CHECK(span.tex == "5 and ", "with the TeX that arrived");
+  }
+  CHECK(!kPreview.apply("That costs $5 and $10", 0, 0, bracketsOff).repaired,
+        "a dollar followed by a digit cannot close");
+
+  // `\(` pairs only when the closer arrives, so an unfinished one is the
+  // CommonMark escape it is in a finished document.
+  CHECK(!kPreview.apply("\\(x + ", 0, 0, on).repaired, "an open bracket delimiter is text");
+  // A complete one is math, and the pre-scan is what makes that true: md4c only
+  // ever sees `$$`, and the builder reads the original bytes to say which
+  // delimiter the writer used and to show the block as it was written.
+  {
+    const PreviewResult result = kPreview.apply("\\(x + \\)", 0, 0, on);
+    const Block &block = result.parsed.document->blocks.back();
+    CHECK(block.math.size() == 1, "a paired bracket is math");
+    CHECK(block.math[0].delimiter == MathDelimiter::Paren, "and it knows which delimiter it was");
+    CHECK(block.text == u"\\(x + \\)", "and it shows as written");
+  }
+
+  // A closed formula needs no repair at all, which is what stops a settled
+  // document from being rewritten.
+  CHECK(!kPreview.apply("See $$x^2$$ here", 0, 0, on).repaired, "a closed formula is left alone");
+  // Nor does a lone `$$` fence, which is a block rather than a span.
+  CHECK(!kPreview.apply("$$\nx\n", 0, 0, on).repaired, "a fence is not an inline formula");
+
+  // A formula that would swallow a table cell cannot be proven, so it is not
+  // repaired: a repair that ate a `|` would lose a column.
+  CHECK(!kPreview.apply("| a | b |\n| - | - |\n| $$x |", 0, 0, on).repaired, "a table cell is not closed");
+
+  // And the session path: the repair reaches a stream's tail and never a
+  // committed block.
+  {
+    IncrementalParser parser{ParseMode::IncrementalTail, on};
+    // The preview feature has to be asked for, exactly as it is in JavaScript:
+    // a stream that never enables it keeps every open span literal.
+    parser.setPreview([&] {
+      PreviewOptions only;
+      only.features = static_cast<uint32_t>(PreviewFeature::Math);
+      return only;
+    }());
+    parser.append("A first paragraph long enough to be worth committing on its own line.\n\n");
+    parser.parse(false);
+    parser.append("The identity $$e^{i\\pi} + ");
+    const ParseResult streamed = parser.parse(false);
+    CHECK(streamed.document->blocks.size() == 2, "a paragraph and a formula");
+    const Block &tail = streamed.document->blocks.back();
+    CHECK(tail.math.size() == 1, "the streamed formula previews");
+    CHECK(tail.text == u"The identity $$e^{i\\pi} + $$", "and keeps its literal");
+  }
   return true;
 }
 
@@ -667,10 +786,10 @@ bool corpusInvariants() {
   };
   for (const char *input : corpus) {
     const std::string name = label("corpus", input);
-    const PreviewResult result = kPreview.apply(input, 0);
+    const PreviewResult result = applyCorpus(input);
     CHECK(result.parsed.status == ParseStatus::Ok, name.c_str());
 
-    const ParseResult baseline = parseMarkdown(input);
+    const ParseResult baseline = parseMarkdown(input, kNoMath);
     if (result.repaired) {
       // A repair is only ever allowed to restyle the last block, and it never
       // adds or removes one.
@@ -808,7 +927,7 @@ bool sessionIntegration() {
   // Off by default. A session nobody asked to preview behaves exactly as it
   // did before this existed.
   {
-    IncrementalParser parser{ParseMode::IncrementalTail};
+    IncrementalParser parser{ParseMode::IncrementalTail, kNoMath};
     CHECK(!parser.previewEnabled(), "a session does not preview until asked");
     parser.append("**bold wor");
     parser.parse(false);
@@ -818,7 +937,7 @@ bool sessionIntegration() {
 
   // Opted in, the same stream styles the open span.
   {
-    IncrementalParser parser{ParseMode::IncrementalTail};
+    IncrementalParser parser{ParseMode::IncrementalTail, kNoMath};
     parser.setPreview(PreviewOptions::all());
     CHECK(parser.previewEnabled(), "an opted-in session previews");
     parser.append("**bold wor");
@@ -832,7 +951,7 @@ bool sessionIntegration() {
   // have to come through the repair untouched, because they are shared storage
   // and not a reparse.
   {
-    IncrementalParser parser{ParseMode::IncrementalTail};
+    IncrementalParser parser{ParseMode::IncrementalTail, kNoMath};
     parser.setPreview(PreviewOptions::all());
     std::string filler;
     for (int i = 0; i < 12; i++) {
@@ -867,7 +986,7 @@ bool sessionIntegration() {
   // createMarkdownStream uses, and it reaches the parser by a different branch,
   // so both modes have to be asked.
   for (const ParseMode mode : {ParseMode::FullParse, ParseMode::IncrementalTail}) {
-    IncrementalParser parser{mode};
+    IncrementalParser parser{mode, kNoMath};
     parser.setPreview(PreviewOptions::all());
     parser.append("**bold wor");
     parser.parse(false);
@@ -906,7 +1025,7 @@ bool sessionIntegration() {
   // span is literal for good, so the reader sees it go literal then rather than
   // when the next block happens to arrive.
   {
-    IncrementalParser parser{ParseMode::IncrementalTail};
+    IncrementalParser parser{ParseMode::IncrementalTail, kNoMath};
     parser.setPreview(PreviewOptions::all());
     parser.append("# **Tit");
     parser.parse(false);
@@ -939,7 +1058,7 @@ bool sessionIntegration() {
   // A reset mid-stream is still a stream the writer has not finished, so the
   // preview carries through it rather than dropping out for one frame.
   {
-    IncrementalParser parser{ParseMode::IncrementalTail};
+    IncrementalParser parser{ParseMode::IncrementalTail, kNoMath};
     parser.setPreview(PreviewOptions::all());
     parser.append("**bold wor");
     parser.parse(false);
@@ -953,7 +1072,7 @@ bool sessionIntegration() {
   // So does a tail too long to keep, which falls back to a full parse over the
   // committed prefix. The committed blocks come through untouched.
   {
-    IncrementalParser parser{ParseMode::IncrementalTail};
+    IncrementalParser parser{ParseMode::IncrementalTail, kNoMath};
     parser.setPreview(PreviewOptions::all());
     std::string filler;
     for (int i = 0; i < 12; i++) {
@@ -977,14 +1096,14 @@ bool sessionIntegration() {
   {
     const PreviewResult frozen = kPreview.apply("**bold wor", 0, 1);
     CHECK(!frozen.repaired && frozen.stats.probes == 0, "a frozen last block is not probed");
-    CHECK(kPreview.apply("settled\n\n**bold wor", 0, 1).repaired, "a block after the frozen ones previews");
+    CHECK(applyCorpus("settled\n\n**bold wor", 0, 1).repaired, "a block after the frozen ones previews");
   }
 
   // An unfinished link reads as its text, becomes a real link the moment its
   // `)` arrives, and is never a target before then. A stream that finishes
   // first settles to the literal syntax, like any other open span.
   for (const ParseMode mode : {ParseMode::FullParse, ParseMode::IncrementalTail}) {
-    IncrementalParser parser{mode};
+    IncrementalParser parser{mode, kNoMath};
     parser.setPreview(PreviewOptions::all());
     parser.append("See [the docs](https://exa");
     parser.parse(false);
@@ -1007,7 +1126,7 @@ bool sessionIntegration() {
   // An open fence is where the preview has least to say, and the fast path
   // that skips md4c entirely must not be confused by it.
   {
-    IncrementalParser parser{ParseMode::IncrementalTail};
+    IncrementalParser parser{ParseMode::IncrementalTail, kNoMath};
     parser.setPreview(PreviewOptions::all());
     parser.append("```js\nconst x = `template");
     parser.parse(false);
@@ -1036,6 +1155,7 @@ int main() {
   CHECK(trailingWhitespace(), "trailing whitespace");
   CHECK(repairIsScopedToTheLastBlock(),"repair is scoped to the last block");
   CHECK(featuresAreOptIn(), "features are opt in");
+  CHECK(mathPreview(), "math preview");
   CHECK(corpusInvariants(), "corpus invariants");
   CHECK(sessionIntegration(), "session integration");
   CHECK(sharedScanner(), "shared scanner");

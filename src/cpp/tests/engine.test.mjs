@@ -157,10 +157,14 @@ describe('vendored md4c', () => {
   // security or bugfix patch, which must be recorded here on purpose, or an
   // accident. The revision and version live in src/cpp/md4c/README.md.
   const PINS = {
+    // md4c.c and md4c.h carry two local patches, both recorded in
+    // src/cpp/md4c/README.md and both behind a flag that is off by default:
+    // MD_FLAG_LATEXMATHBLOCKS makes a `$$` line a fence, and
+    // MD_FLAG_LATEXMATHNOSINGLE makes a single `$` never math.
     'md4c.c':
-      'e111ee600033f11dfb31e732429741f3c1406f2a3faffc0395d5f7dbb875e086',
+      '20ae89c5abf48e65608ed1e279f682b07d62dea1b1498c096c41d625aa3100a4',
     'md4c.h':
-      'd0c14762f1eac3cd9d1c08c3a287b61d93ee2382e5a22ee48f5a6f3ad2c2349d',
+      '391b36c01aa734a67cc1c399c9c342913586a3112eecfb1a0f699ea2ef3b3a33',
     'entity.c':
       '7ea50d695d9210958e01b12b3e4d1db78d783d03d95b040fd7d2d9cfe1f1d39c',
     'entity.h':

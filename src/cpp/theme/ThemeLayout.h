@@ -2,6 +2,7 @@
 
 #include "Document.h"
 #include "Theme.h"
+#include "downstream/ImageLayout.h"
 
 namespace downstream {
 namespace theme_layout {
@@ -15,6 +16,11 @@ enum class BlockElement : uint8_t {
   Code = 2,
   Table = 3,
   Rule = 4,
+  /// A display formula, which is a box of its own rather than a paragraph that
+  /// happens to contain one.
+  Math = 5,
+  /// An image block, whose box comes from a load rather than from text.
+  Image = 6,
   Count,
 };
 
@@ -55,6 +61,16 @@ BlockFont codeFont(const Theme &theme);
 
 /// A list marker's typography, and the gap the marker sits in.
 BlockFont listMarkerFont(const Theme &theme);
+
+/// A display formula's typography. Its size defaults to the paragraph size times
+/// KaTeX's own 1.21, which is what makes a formula the same size a browser
+/// renders and a little larger than the prose around it.
+BlockFont mathFont(const Theme &theme);
+
+/// A formula in the middle of a sentence: the block's own size times KaTeX's
+/// 1.21, so a formula in a heading is a heading-sized formula. No slot of its
+/// own for the size, because a themed heading's formula follows the heading.
+BlockFont inlineMathFont(const Theme &theme, const BlockFont &block);
 
 /// The typography one run of inline text draws with, which is its block's own
 /// with the inline kind's slots layered on top where the theme set them.
@@ -129,6 +145,19 @@ double codeCardPadding(const Theme &theme);
 /// A code card's corner radius, and its border width, which is zero today.
 double codeCardRadius(const Theme &theme);
 double codeCardBorderWidth(const Theme &theme);
+
+/// A math block's vertical padding, its margins, and its text alignment.
+///
+/// `textAlign` is 0 for left, 1 for center, and 2 for right, which is what the
+/// slot holds; a platform reads it rather than mapping a name, because the
+/// segment that centres a formula is the same one that measures it.
+double mathPadding(const Theme &theme);
+double mathTextAlign(const Theme &theme);
+
+/// An image's box: the cap on a loaded image's height, the corner radius, and
+/// the margins above and below. These are the values `imageBox` takes, and they
+/// live here so a platform cannot reach its own defaults for them.
+ImageMetrics imageMetrics(const Theme &theme);
 
 /// A table cell's padding, and the bounds a column's width is clamped to.
 double tableCellPaddingHorizontal(const Theme &theme);

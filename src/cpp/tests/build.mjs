@@ -52,6 +52,7 @@ const CXXFLAGS = [
   `-I${join(CPP, 'remend')}`,
   `-I${join(CPP, 'highlight')}`,
   `-I${join(CPP, 'theme')}`,
+  `-I${join(CPP, 'math')}`,
   `-I${LEXILLA}`,
   `-I${join(LEXILLA, 'lexlib')}`,
 ];
@@ -67,7 +68,17 @@ export const ENGINE = [
     'ExportNames.cpp',
     'FenceMeta.cpp',
     'CodeLayout.cpp',
+    'ImageLayout.cpp',
+    'ImageSizeCache.cpp',
+    'MathScan.cpp',
   ].map((name) => join(CPP, 'downstream', name)),
+  ...[
+    'MathLayout.cpp',
+    'MathEngine.cpp',
+    'MathDisplayList.cpp',
+    'MathBlocks.cpp',
+    'MathSpeech.cpp',
+  ].map((name) => join(CPP, 'math', name)),
   join(CPP, 'remend', 'Preview.cpp'),
 ];
 

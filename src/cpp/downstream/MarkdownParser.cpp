@@ -1,6 +1,7 @@
 #include "MarkdownParser.h"
 
 #include "LinkPolicy.h"
+#include "MathScan.h"
 #include "Scan.h"
 #include "Unicode.h"
 
@@ -27,7 +28,26 @@ namespace {
 
 constexpr size_t kUnknownOffset = static_cast<size_t>(-1);
 
+/// "No offset in the block's text", for a span that has not seen text yet. A
+/// block's text is bounded by `kMaxSourceBytes`, so this cannot collide.
+constexpr uint32_t kNoBlockOffset = static_cast<uint32_t>(-1);
+
 std::atomic<uint64_t> nextDocumentId{1};
+
+/**
+ * Whether a fence's info string says its contents are a formula.
+ *
+ * `math` only, matched case-insensitively, and only as the first word so
+ * `mathematics` is not a formula. `latex` and `tex` deliberately stay code: a
+ * writer who fenced those was showing source, and rendering it would throw away
+ * what they wrote. GitHub renders ```` ```math ````, and so does Streamdown
+ * through rehype-katex's `language-math` handling, so this is parity.
+ */
+bool isMathFenceLanguage(std::string_view language) {
+  return language.size() == 4 && (language[0] == 'm' || language[0] == 'M') &&
+      (language[1] == 'a' || language[1] == 'A') && (language[2] == 't' || language[2] == 'T') &&
+      (language[3] == 'h' || language[3] == 'H');
+}
 
 std::u16string asciiToUtf16(std::string_view text) {
   return std::u16string(text.begin(), text.end());
@@ -81,9 +101,21 @@ std::string attributeToUtf8(const MD_ATTRIBUTE &attribute) {
 
 class DocumentBuilder {
 public:
-  explicit DocumentBuilder(std::string_view source)
-      : source_(source), offsets_(source), document_(std::make_shared<Document>()) {
+  DocumentBuilder(std::string_view source, MathOptions math)
+      : source_(source), parse_(source), brackets_(), math_(math), offsets_(source),
+        document_(std::make_shared<Document>()) {
     document_->id = allocateDocumentId();
+    if (math_.enabled()) {
+      // The rewrite is the same length as the source, so every offset md4c
+      // reports is also an offset into `source_`. That is the whole reason
+      // this is a rewrite rather than a translation table: `parse_` is what
+      // md4c sees, and `source_` is what a reader should see, and they are the
+      // same bytes at the same offsets.
+      brackets_ = scan::rewriteMathDelimiters(source, math_.brackets());
+      if (!brackets_.empty()) {
+        parse_ = brackets_.text;
+      }
+    }
   }
 
   int enterBlock(MD_BLOCKTYPE type, void *detail) {
@@ -175,12 +207,24 @@ public:
         break;
       case MD_BLOCK_CODE: {
         const auto *code = static_cast<MD_BLOCK_CODE_DETAIL *>(detail);
-        beginLeaf(BlockKind::CodeBlock);
-        current_->language = attributeToUtf8(code->lang);
+        const std::string language = attributeToUtf8(code->lang);
+        const bool mathFence = code->fence_char == '$' || isMathFenceLanguage(language);
+        beginLeaf(mathFence ? BlockKind::MathBlock : BlockKind::CodeBlock);
+        current_->language = language;
         current_->info = attributeToUtf8(code->info);
-        // Parsed once, here, so the open-fence fast path copies a parsed meta
-        // rather than re-parsing the string on every snapshot.
-        current_->meta = parseFenceMeta(current_->info);
+        if (mathFence) {
+          // A `$$` fence has no info string by construction, and a `math` fence
+          // is named `math` for the same reason a code fence is named after its
+          // language: it is how a writer says the block is a formula. The
+          // delimiter reaches the block's own MathSpan when the leaf is
+          // finished, because that is where the block's text is complete.
+          fenceMathDelimiter_ = code->fence_char == '$' ? MathDelimiter::Fence : MathDelimiter::MathFence;
+        } else {
+          fenceMathDelimiter_ = MathDelimiter::MathFence;
+          // Parsed once, here, so the open-fence fast path copies a parsed meta
+          // rather than re-parsing the string on every snapshot.
+          current_->meta = parseFenceMeta(current_->info);
+        }
         break;
       }
       case MD_BLOCK_HTML:
@@ -279,10 +323,34 @@ public:
         break;
       }
       case MD_SPAN_IMG: {
+        const auto *image = static_cast<MD_SPAN_IMG_DETAIL *>(detail);
         SpanFrame frame;
         frame.image = true;
         frame.cursorAtEnter = cursor_;
+        // Recorded whether or not the URL may be fetched, so a run's alt text
+        // can name its image and a failed or blocked one has a record to fall
+        // back from. `loadable` is a property of the URL alone; the app's prefix
+        // list is a view prop and is applied where the box is decided.
+        Image record;
+        record.url = attributeToUtf8(image->src);
+        record.title = attributeToUtf8(image->title);
+        record.loadable = isLoadableImageUrl(record.url);
+        // A linked image's press reaches `onLinkPress`, which is the enclosing
+        // link's own record, so the image names it rather than repeating it.
+        record.link = currentLink();
+        frame.imageIndex = static_cast<int32_t>(document_->images.size());
+        document_->images.push_back(std::move(record));
         spans_.push_back(frame);
+        break;
+      }
+      case MD_SPAN_LATEXMATH:
+      case MD_SPAN_LATEXMATH_DISPLAY: {
+        // md4c has already resolved the delimiters and reports the contents as a
+        // verbatim run, so the span contributes no text of its own: the
+        // delimiters are re-added from the original bytes, and the TeX is the
+        // run the text callback receives.
+        mathDisplay_ = type == MD_SPAN_LATEXMATH_DISPLAY;
+        mathDepth_++;
         break;
       }
       case MD_SPAN_FOOTNOTE_REF: {
@@ -312,6 +380,10 @@ public:
         break;
       case MD_SPAN_CODE:
         codeDepth_--;
+        break;
+      case MD_SPAN_LATEXMATH:
+      case MD_SPAN_LATEXMATH_DISPLAY:
+        mathDepth_--;
         break;
       case MD_SPAN_A:
       case MD_SPAN_IMG:
@@ -345,6 +417,8 @@ public:
     noteSourceText(text, size);
 
     std::u16string piece;
+    const bool verbatim = type == MD_TEXT_LATEXMATH;
+    const uint32_t before = static_cast<uint32_t>(current_ ? current_->text.size() : 0);
     switch (type) {
       case MD_TEXT_NULLCHAR:
         piece.push_back(kReplacementCharacter);
@@ -363,7 +437,38 @@ public:
         appendUtf8(piece, std::string_view(text, size));
         break;
     }
-    appendText(piece, currentStyles(), currentLink());
+    if (verbatim) {
+      // md4c hands over only the TeX, pointing just past the opening delimiter
+      // and stopping just short of the closing one. Those two positions are the
+      // only record of where the delimiters were, and reading the original
+      // bytes there is what distinguishes `\(x\)` from `$$x$$` after both were
+      // rewritten to the same span.
+      // The verbatim run begins just past the opening delimiter and ends just
+      // short of the closing one, so the delimiter's own length is read off the
+      // bytes before it rather than assumed: a run of one dollar is a formula
+      // when the app asked for one, and a constant two would read the character
+      // in front of it as part of the delimiter.
+      const size_t contentAt = static_cast<size_t>(text - parse_.data());
+      mathDelimLength_ = 0;
+      while (mathDelimLength_ < 2 && contentAt > mathDelimLength_ &&
+             parse_[contentAt - mathDelimLength_ - 1] == '$') {
+        mathDelimLength_++;
+      }
+      if (mathDelimLength_ == 0 || contentAt < mathDelimLength_) {
+        mathDelimLength_ = 2;
+        mathOpenOffset_ = kNoBlockOffset;
+      } else {
+        mathOpenOffset_ = static_cast<uint32_t>(contentAt - mathDelimLength_);
+      }
+      mathCloseOffset_ = static_cast<uint32_t>(contentAt + size);
+      // The delimiters and the TeX are appended together, so nothing appends
+      // the TeX on its own first: the literal a reader sees is one piece, and
+      // the span covers all of it.
+      appendMath(piece, mathDisplay_);
+    } else {
+      appendText(piece, currentStyles(), currentLink());
+    }
+    noteBlockText(before, static_cast<uint32_t>(current_->text.size()));
     return 0;
   }
 
@@ -375,6 +480,8 @@ public:
   uint32_t containerCount() const { return containerCount_; }
   uint32_t tableCount() const { return tableCount_; }
   std::vector<ByteRange> takeBlockSource() { return std::move(blockSource_); }
+  /// The bytes to hand to md4c: the source, or the same-length rewrite.
+  const std::string_view &parsedText() const { return parse_; }
 
 private:
   struct ListFrame {
@@ -401,9 +508,17 @@ private:
     /// or the destination of a link or image that never closed.
     std::string autolinkUrl;
     int32_t link{-1};
+    /// This frame's image's index into Document::images, or -1.
+    int32_t imageIndex{-1};
     size_t cursorAtEnter{kUnknownOffset};
     size_t firstText{kUnknownOffset};
     size_t lastTextEnd{kUnknownOffset};
+    /// The same span measured in the block's own text, which is what an image's
+    /// alt text is a slice of. A source offset is not one: the block's text
+    /// drops container markers and a code fence, so a source offset and a text
+    /// offset are different numbers.
+    uint32_t firstTextBlock{kNoBlockOffset};
+    uint32_t lastTextBlock{kNoBlockOffset};
     /// Range of a nested image that precedes any text in this span.
     size_t childStart{kUnknownOffset};
     size_t childEnd{kUnknownOffset};
@@ -471,13 +586,15 @@ private:
     if (!current_) {
       return;
     }
-    if ((current_->kind == BlockKind::CodeBlock || current_->kind == BlockKind::HtmlBlock) &&
+    if ((current_->kind == BlockKind::CodeBlock || current_->kind == BlockKind::HtmlBlock ||
+         current_->kind == BlockKind::MathBlock) &&
         !current_->text.empty() && current_->text.back() == u'\n') {
       current_->text.pop_back();
       for (auto &run : current_->runs) {
         run.end = std::min<uint32_t>(run.end, static_cast<uint32_t>(current_->text.size()));
       }
     }
+    promoteLeaf();
     document_->blocks.push_back(std::move(*current_));
     current_.reset();
     if (leafStart_ == kUnknownOffset) {
@@ -486,6 +603,129 @@ private:
     blockSource_.push_back({static_cast<uint32_t>(leafStart_), static_cast<uint32_t>(leafEnd_)});
     lastLeafEnd_ = leafEnd_;
     leafStart_ = kUnknownOffset;
+  }
+
+  /**
+   * Turns two kinds of paragraph into blocks of their own.
+   *
+   * A paragraph whose only content is one display formula, and a paragraph
+   * whose only content is images, are both things a reader sees as a block. The
+   * decisions are here rather than in a platform because a segment is the unit
+   * of layout, and a formula or a picture cannot be measured inside a text
+   * segment. Both are the same rule Streamdown applies to its own markup: a
+   * paragraph holding one such element drops its paragraph.
+   *
+   * Anything else keeps its kind, so a badge or a formula in the middle of a
+   * sentence is still prose, which is the case that is common in chat and the
+   * one that must not change.
+   */
+  void promoteLeaf() {
+    if (current_->kind == BlockKind::MathBlock) {
+      // The fence's contents are the whole text, so the block's one formula
+      // covers it. A span is made here rather than in the text callback because
+      // the delimiters are not part of the text: a fence's are the fence.
+      MathSpan span;
+      span.start = 0;
+      span.end = static_cast<uint32_t>(current_->text.size());
+      span.tex = utf16ToUtf8(current_->text);
+      span.display = true;
+      span.delimiter = fenceMathDelimiter_;
+      current_->math = {std::move(span)};
+      current_->language.clear();
+      current_->info.clear();
+      return;
+    }
+    if (current_->kind != BlockKind::Paragraph) {
+      return;
+    }
+    if (promoteLoneMath()) {
+      return;
+    }
+    promoteImageParagraph();
+  }
+
+  /**
+   * True when this paragraph is one display formula and nothing else, in which
+   * case it becomes a math block.
+   *
+   * `$$x$$` and `\[x\]` on one line, alone in their paragraph. Streamdown renders
+   * this inline, and a model that writes it means display: a formula on its own
+   * line, centred, is what the writer was asking for. `$$` on a line of its own
+   * never reaches here — that is a fence, and md4c reports it as a block.
+   */
+  bool promoteLoneMath() {
+    if (current_->math.size() != 1 || !current_->runs.empty() || !current_->cells.empty()) {
+      // A run means something other than the formula is styled, and a cell
+      // means the paragraph is a table row, so in both cases this is not a
+      // paragraph that is only its formula.
+      return false;
+    }
+    const MathSpan &span = current_->math.front();
+    if (!span.display || span.start != 0 || span.end != current_->text.size()) {
+      return false;
+    }
+    Block math = *current_;
+    math.kind = BlockKind::MathBlock;
+    math.runs.clear();
+    math.cells.clear();
+    // The block's own span is the paragraph's span, so the delimiter the writer
+    // used survives the promotion: a `\[x\]` paragraph is a `\[` block.
+    current_ = std::move(math);
+    return true;
+  }
+
+  /**
+   * True when this paragraph is images and only whitespace between them, in
+   * which case it becomes an image block.
+   *
+   * Anything else in the paragraph keeps it a paragraph with alt text, as
+   * before: `see ![the chart](x) above` is a sentence with a picture in it, and
+   * turning that into a block would delete the sentence. Several images in one
+   * paragraph stack vertically rather than sharing a row, which is the one
+   * layout decision the promotion implies.
+   */
+  void promoteImageParagraph() {
+    if (current_->images.empty() || !current_->cells.empty() || !current_->math.empty()) {
+      return;
+    }
+    // Every unit of the block's text has to be an image's alt text or the
+    // whitespace between two of them. Walking the text once is what keeps a
+    // word from being silently dropped by the promotion, which is the failure
+    // mode that would lose a reader's text.
+    uint32_t cursor = 0;
+    for (const uint32_t index : current_->images) {
+      if (index >= document_->images.size()) {
+        return;
+      }
+      const std::u16string &alt = document_->images[index].alt;
+      if (cursor + alt.size() > current_->text.size() ||
+          current_->text.compare(cursor, alt.size(), alt) != 0) {
+        return;
+      }
+      cursor += static_cast<uint32_t>(alt.size());
+      // Only a space or a soft break may separate two images, so a paragraph
+      // with a comma between them stays a paragraph.
+      while (cursor < current_->text.size() && (current_->text[cursor] == u'\n' || current_->text[cursor] == u' ')) {
+        cursor++;
+      }
+    }
+    if (cursor != current_->text.size()) {
+      return;
+    }
+    // A linked image is promoted the same way: the picture is the link's hit
+    // area, so it is the block, and the link's range is the image's own.
+    current_->kind = BlockKind::Image;
+    // The alt texts joined by newlines, so accessibility, export, and a
+    // fallback all read one string and none of them needs the images.
+    std::u16string alt;
+    for (size_t i = 0; i < current_->images.size(); i++) {
+      if (i > 0) {
+        alt.push_back(u'\n');
+      }
+      alt.append(document_->images[current_->images[i]].alt);
+    }
+    current_->text = std::move(alt);
+    current_->runs.clear();
   }
 
   void beginCell(bool header, MD_ALIGN align) {
@@ -556,11 +796,112 @@ private:
     block.runs.push_back({start, end, styles, link});
   }
 
-  void noteSourceText(const MD_CHAR *text, MD_SIZE size) {
-    if (text < source_.data() || text >= source_.data() + source_.size()) {
+  /// Records where in the block's own text each open span's text landed, so an
+  /// image's alt text is a slice of the text a reader sees rather than a
+  /// re-parse of the source.
+  void noteBlockText(uint32_t before, uint32_t after) {
+    for (auto &span : spans_) {
+      if (span.firstTextBlock == kNoBlockOffset) {
+        span.firstTextBlock = before;
+      }
+      span.lastTextBlock = after;
+    }
+  }
+
+  /**
+   * Records one inline formula, delimiters included.
+   *
+   * md4c reports only the TeX, so the delimiters are appended here from the
+   * original bytes. That is what makes `Block::text` the literal the writer
+   * sent: every offset, link range and table cell boundary downstream is
+   * unchanged, a fallback shows exactly what was written, and a copy of the
+   * text pastes as working Markdown into another editor.
+   *
+   * The delimiter is read from the original rather than inferred from the span
+   * type, because `\(…\)` was rewritten to `$$…$$` before the parse and only
+   * the original still says which one it was.
+   */
+  void appendMath(const std::u16string &piece, bool display) {
+    if (!current_) {
       return;
     }
-    const size_t begin = static_cast<size_t>(text - source_.data());
+    auto &block = *current_;
+    const uint32_t openAt = mathOpenOffset_;
+    const uint32_t closeAt = mathCloseOffset_;
+    // The styles of the run the formula sits in, plus the math bit. A formula
+    // inside `**…**` is a bold formula, which is what the surrounding emphasis
+    // means, and the bit is what lets a platform tell a typeset run from an
+    // unstyled one without consulting the span.
+    const uint32_t styles = currentStyles() | InlineStyle::Math;
+    const int32_t link = currentLink();
+    MathSpan span;
+    span.start = static_cast<uint32_t>(block.text.size());
+    span.tex = utf16ToUtf8(piece);
+    span.display = display;
+    span.delimiter = mathDelimiterAt(openAt, closeAt, display);
+    // The literal, delimiters included, is what a reader sees and what a copy
+    // yields, and it is the same string a document with math off produces for
+    // the same source. Three `appendText` calls, which merge into one run
+    // because they are contiguous and identically styled.
+    appendDelimiter(openAt);
+    appendText(piece, styles, link);
+    appendDelimiter(closeAt);
+    span.end = static_cast<uint32_t>(block.text.size());
+    block.math.push_back(std::move(span));
+  }
+
+  /**
+   * The delimiters, read from the original source.
+   *
+   * `mathDelimLength_` bytes, which is one for `$…$` and two for `$$…$$`. The
+   * length has to be the opener's rather than a constant, because a single `$`
+   * is a formula when the app asked for it and its closer is a single `$` too:
+   * reading two bytes at a one-dollar delimiter would swallow the character
+   * before it, which is how `That costs $x$` became `That costs  $x$$`.
+   */
+  void appendDelimiter(size_t at) {
+    if (at == kNoBlockOffset || at + mathDelimLength_ > source_.size()) {
+      current_->text.append(mathDelimLength_ == 1 ? u"$" : u"$$");
+      return;
+    }
+    std::u16string delimiter;
+    for (uint32_t i = 0; i < mathDelimLength_; i++) {
+      delimiter.push_back(static_cast<char16_t>(source_[at + i]));
+    }
+    // Goes through `appendText` so a formula's delimiters are covered by the
+    // same run as its TeX rather than sitting outside it.
+    appendText(delimiter, currentStyles() | InlineStyle::Math, currentLink());
+  }
+
+  /// Which delimiters the writer used, from the original bytes.
+  MathDelimiter mathDelimiterAt(size_t openAt, size_t closeAt, bool display) const {
+    (void)closeAt;
+    (void)display;
+    if (openAt == kNoBlockOffset || openAt + 1 >= source_.size()) {
+      return MathDelimiter::DoubleDollar;
+    }
+    const char first = source_[openAt];
+    const char second = source_[openAt + 1];
+    if (first == '\\' && second == '(') {
+      return MathDelimiter::Paren;
+    }
+    if (first == '\\' && second == '[') {
+      return MathDelimiter::Bracket;
+    }
+    if (first == '$' && second == '$') {
+      return MathDelimiter::DoubleDollar;
+    }
+    // A single dollar only reaches here when the app asked for
+    // `singleDollarTextMath`, because md4c never reports a one-dollar run
+    // otherwise.
+    return MathDelimiter::Dollar;
+  }
+
+  void noteSourceText(const MD_CHAR *text, MD_SIZE size) {
+    if (text < parse_.data() || text >= parse_.data() + parse_.size()) {
+      return;
+    }
+    const size_t begin = static_cast<size_t>(text - parse_.data());
     const size_t end = begin + size;
     if (leafStart_ == kUnknownOffset) {
       leafStart_ = begin;
@@ -705,10 +1046,38 @@ private:
         link.range.start = offsets_.toUtf16(span.firstText);
         link.range.end = offsets_.toUtf16(span.lastTextEnd);
       }
+      return;
+    }
+
+    if (span.image && span.imageIndex >= 0) {
+      auto &image = document_->images.tail()[static_cast<size_t>(span.imageIndex)];
+      if (range) {
+        image.range.start = offsets_.toUtf16(range->first);
+        image.range.end = offsets_.toUtf16(range->second);
+      }
+      // The alt text is the span's own slice of the block's text, so it is
+      // exactly what a reader sees and what a copy produces, and a nested link
+      // inside the alt contributes its text rather than its target.
+      if (span.firstTextBlock != kNoBlockOffset && span.lastTextBlock > span.firstTextBlock) {
+        image.alt = current_->text.substr(span.firstTextBlock, span.lastTextBlock - span.firstTextBlock);
+      }
+      if (current_) {
+        current_->images.push_back(static_cast<uint32_t>(span.imageIndex));
+      }
     }
   }
 
+  /// The canonical source, as the writer sent it. Every byte a reader should
+  /// see is read from here rather than from `parse_`, so a `\[` stays `\[`.
   std::string_view source_;
+  /// What md4c parsed. Equal to `source_` unless the bracket pre-scan rewrote
+  /// something, and the same length either way, so an offset into one is an
+  /// offset into the other.
+  std::string_view parse_;
+  /// The rewritten source and the pairs it came from. Held for the whole parse
+  /// because `parse_` is a view into it.
+  scan::MathSource brackets_;
+  MathOptions math_;
   Utf16OffsetMap offsets_;
   std::shared_ptr<Document> document_;
   std::optional<Block> current_;
@@ -727,6 +1096,17 @@ private:
   int emphasisDepth_{0};
   int strikeDepth_{0};
   int codeDepth_{0};
+  /// md4c does not nest math spans, so one flag is the whole display state.
+  int mathDepth_{0};
+  bool mathDisplay_{false};
+  /// Where the verbatim run currently being handled had its delimiters.
+  uint32_t mathOpenOffset_{kNoBlockOffset};
+  uint32_t mathCloseOffset_{kNoBlockOffset};
+  /// Dollars in the current span's delimiters: one or two, from the opener.
+  uint32_t mathDelimLength_{2};
+  /// Which fence a MathBlock came from, decided where the fence was reported and
+  /// read when the block's own span is made.
+  MathDelimiter fenceMathDelimiter_{MathDelimiter::Fence};
 };
 
 } // namespace
@@ -735,8 +1115,9 @@ uint64_t allocateDocumentId() {
   return nextDocumentId.fetch_add(1, std::memory_order_relaxed);
 }
 
-ParseResult parseMarkdown(std::string_view source) {
+ParseResult parseMarkdown(std::string_view source, MathOptions options) {
   ParseResult result;
+  result.math = options;
   if (source.size() > kMaxSourceBytes) {
     result.status = ParseStatus::InputLimit;
     result.message = "Markdown source exceeds 1 MiB of UTF-8.";
@@ -748,15 +1129,26 @@ ParseResult parseMarkdown(std::string_view source) {
     return result;
   }
 
-  DocumentBuilder builder(source);
-  if (source.empty()) {
+  DocumentBuilder builder(source, options);
+  const std::string_view &parsed = builder.parsedText();
+  if (parsed.empty()) {
     result.document = builder.finish();
     result.blockSource = builder.takeBlockSource();
     return result;
   }
   MD_PARSER parser{};
   parser.abi_version = 0;
+  // Math is the only extension the GitHub dialect does not include, and its
+  // flags are off unless a caller asked for math, so with math disabled these
+  // are exactly 0x6 and the parse is what it was before math existed.
   parser.flags = MD_DIALECT_GITHUB;
+  if (options.enabled()) {
+    parser.flags |= MD_FLAG_LATEXMATHSPANS;
+    parser.flags |= MD_FLAG_LATEXMATHBLOCKS;
+    if (!options.singleDollar()) {
+      parser.flags |= MD_FLAG_LATEXMATHNOSINGLE;
+    }
+  }
   parser.enter_block = [](MD_BLOCKTYPE type, void *detail, void *userdata) {
     return static_cast<DocumentBuilder *>(userdata)->enterBlock(type, detail);
   };
@@ -773,7 +1165,7 @@ ParseResult parseMarkdown(std::string_view source) {
     return static_cast<DocumentBuilder *>(userdata)->text(type, text, size);
   };
 
-  if (md_parse(source.data(), static_cast<MD_SIZE>(source.size()), &parser, &builder) != 0) {
+  if (md_parse(parsed.data(), static_cast<MD_SIZE>(parsed.size()), &parser, &builder) != 0) {
     result.status = ParseStatus::ParseFailed;
     result.message = "The Markdown parser could not complete.";
     return result;
@@ -785,14 +1177,14 @@ ParseResult parseMarkdown(std::string_view source) {
   return result;
 }
 
-ParseResult parseMarkdownAt(std::string_view region, size_t origin) {
+ParseResult parseMarkdownAt(std::string_view region, size_t origin, MathOptions options) {
   const uint32_t pad = static_cast<uint32_t>(origin % 256);
   if (pad == 0) {
-    return parseMarkdown(region);
+    return parseMarkdown(region, options);
   }
   std::string padded(pad, '\n');
   padded.append(region);
-  ParseResult result = parseMarkdown(padded);
+  ParseResult result = parseMarkdown(padded, options);
   if (result.status != ParseStatus::Ok) {
     return result;
   }
@@ -800,12 +1192,21 @@ ParseResult parseMarkdownAt(std::string_view region, size_t origin) {
     range.start = range.start > pad ? range.start - pad : 0;
     range.end = range.end > pad ? range.end - pad : 0;
   }
-  if (!result.document->links.empty()) {
+  // The pad shifts source offsets, and a link's and an image's range are both
+  // source offsets, so both lists move together. A range that was empty stays
+  // empty: it names no source, and subtracting from zero would invent one.
+  if (!result.document->links.empty() || !result.document->images.empty()) {
     auto shifted = std::make_shared<Document>(*result.document);
     for (Link &link : shifted->links.tail()) {
       if (link.range.end > link.range.start) {
         link.range.start -= pad;
         link.range.end -= pad;
+      }
+    }
+    for (Image &image : shifted->images.tail()) {
+      if (image.range.end > image.range.start) {
+        image.range.start -= pad;
+        image.range.end -= pad;
       }
     }
     result.document = shifted;

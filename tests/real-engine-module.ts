@@ -31,6 +31,8 @@ interface Session {
   model: RenderModel | undefined;
   /** Provisional-styling features, as the native bitmask. */
   preview: number;
+  /** Math parse options, as the native bitmask, fixed at creation. */
+  mathFlags: number;
   /**
    * Everything the worker has applied to this session's parser, in order.
    * Each pass replays it through the real `IncrementalParser`, so what the
@@ -62,6 +64,11 @@ export const nativeWork = { appends: 0, parses: 0 };
 /** The provisional-styling features a session is configured with. */
 export function previewFeaturesOf(sessionId: string): number {
   return sessions.get(sessionId)?.preview ?? 0;
+}
+
+/** The math parse options a session was created with. */
+export function mathFlagsOf(sessionId: string): number {
+  return sessions.get(sessionId)?.mathFlags ?? 0;
 }
 
 function nowNs(): string {
@@ -121,7 +128,9 @@ function publish(session: Session, sessionId: string): void {
 export const realEngineModule = {
   __esModule: true,
   default: {
-    create(sessionId: string, mode: string) {
+    mathAvailable: true,
+
+    create(sessionId: string, mode: string, mathFlags = 0) {
       sessions.set(sessionId, {
         // The TurboModule treats anything but `incremental` as full mode.
         mode: mode === 'incremental' ? 'incremental' : 'full',
@@ -131,6 +140,7 @@ export const realEngineModule = {
         finished: false,
         model: undefined,
         preview: 0,
+        mathFlags,
         steps: [],
       });
     },

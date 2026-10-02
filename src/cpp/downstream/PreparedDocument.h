@@ -21,8 +21,13 @@ namespace downstream {
 class PreparedDocument {
 public:
   /// Returns the preparation of `source`, starting it on the pool when it is
-  /// not already cached. Equal sources share one result, so a message that is
-  /// remounted or rendered twice keeps its document and platform layout.
+  /// not already cached. Equal sources parsed with equal options share one
+  /// result, so a message that is remounted or rendered twice keeps its document
+  /// and platform layout.
+  ///
+  /// `math` is part of the key rather than an argument to the parse: two views
+  /// showing one string with different math options are two different documents
+  /// and must not share a preparation.
   ///
   /// `hint` is the requesting node's own layout hint, which carries its theme.
   /// Its width is zero, because a node that has just been created has not been
@@ -30,14 +35,18 @@ public:
   /// recent widths and scales seed this source's own theme and controls. Other
   /// views' themes and controls are not prepared speculatively for this source.
   static std::shared_ptr<PreparedDocument> request(std::string_view source,
-                                                   const LayoutHint &hint = LayoutHint());
+                                                   const LayoutHint &hint = LayoutHint(),
+                                                   MathOptions math = MathOptions());
 
   /// Drops cached results. For tests.
   static void clearCache();
 
-  explicit PreparedDocument(std::string source);
+  explicit PreparedDocument(std::string source, MathOptions math = MathOptions());
 
   const std::string &source() const { return source_; }
+  /// The parse options this preparation was made under, so the cache can tell
+  /// two requests for one string apart.
+  const MathOptions &math() const { return math_; }
   /// Notes one more layout this source should be prepared for. Called by
   /// `request`, and by a node whose theme changed while source work is pending.
   /// A hint added after the worker collects layouts does not restart its task;
@@ -62,6 +71,7 @@ private:
   std::vector<LayoutHint> hintsForPrepare() const;
 
   const std::string source_;
+  MathOptions math_;
   ParseResult result_;
   std::shared_ptr<Task> task_;
   mutable std::mutex hintMutex_;

@@ -10,6 +10,7 @@
 #include "Unicode.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 
@@ -17,6 +18,20 @@ namespace downstream::testdump {
 
 /// The name a token class is reported under. A platform palette keys on the
 /// class, so the name is the contract the golden fixtures pin.
+/// The delimiter a formula was written with, which is what a test asserts on
+/// when it has to tell a promoted `$$…$$` paragraph from a real fence.
+inline const char *mathDelimiterName(MathDelimiter delimiter) {
+  switch (delimiter) {
+    case MathDelimiter::Dollar: return "dollar";
+    case MathDelimiter::DoubleDollar: return "doubleDollar";
+    case MathDelimiter::Paren: return "paren";
+    case MathDelimiter::Bracket: return "bracket";
+    case MathDelimiter::Fence: return "fence";
+    case MathDelimiter::MathFence: return "mathFence";
+  }
+  return "doubleDollar";
+}
+
 inline const char *tokenName(TokenClass token) {
   switch (token) {
     case TokenClass::Plain: return "plain";
@@ -138,6 +153,33 @@ inline bool write(const ParseResult &result) {
       const TableCell &cell = block.cells[c];
       std::printf("%s[%u,%u,%d]", c ? "," : "", cell.start, cell.end, static_cast<int>(cell.align));
     }
+    // The formulas, with their layouts reduced to a shape. A test asserts the
+    // offsets, the TeX, the delimiter, and whether a layout arrived; the
+    // layout's contents are the engine's business and belong to the engine's
+    // own goldens.
+    std::printf("],\"math\":[");
+    for (size_t m = 0; m < block.math.size(); m++) {
+      const MathSpan &span = block.math[m];
+      std::printf("%s{\"range\":[%u,%u],\"tex\":", m ? "," : "", span.start, span.end);
+      writeString(span.tex);
+      std::printf(",\"display\":%s,\"delimiter\":\"%s\",\"layout\":", span.display ? "true" : "false",
+                  mathDelimiterName(span.delimiter));
+      if (span.layout) {
+        std::printf("{\"width\":%.4f,\"height\":%.4f,\"depth\":%.4f,\"items\":%zu}", span.layout->width,
+                    span.layout->height, span.layout->depth, span.layout->itemCount());
+      } else {
+        std::printf("null");
+      }
+      std::printf(",\"error\":");
+      writeString(span.error);
+      std::printf("}");
+    }
+    // The images this block names, so a test can see that an image in prose is
+    // recorded but did not become a block.
+    std::printf("],\"images\":[");
+    for (size_t i = 0; i < block.images.size(); i++) {
+      std::printf("%s%u", i ? "," : "", block.images[i]);
+    }
     std::printf("]}");
   }
   std::printf("],\"links\":[");
@@ -147,8 +189,42 @@ inline bool write(const ParseResult &result) {
     writeString(link.url);
     std::printf(",\"range\":[%u,%u]}", link.range.start, link.range.end);
   }
+  // The images, whether or not any block was promoted to one. An image in
+  // prose is still recorded, so a run's alt text can name it and a blocked or
+  // failed one has something to fall back from.
+  std::printf("],\"images\":[");
+  for (size_t i = 0; i < document.images.size(); i++) {
+    const Image &image = document.images[i];
+    std::printf("%s{\"url\":", i ? "," : "");
+    writeString(image.url);
+    std::printf(",\"alt\":");
+    writeString(image.alt);
+    std::printf(",\"title\":");
+    writeString(image.title);
+    std::printf(",\"loadable\":%s,\"link\":%d,\"range\":[%u,%u]}", image.loadable ? "true" : "false", image.link,
+                image.range.start, image.range.end);
+  }
   std::printf("]");
   return true;
+}
+
+/**
+ * The math parse options from a driver's argument, if it was given one.
+ *
+ * `dump_document [mathFlags]`, `dump_session <mode> [mathFlags]`, and the rest
+ * all take the same number and mean the same thing, so there is one reader.
+ * Absent means off, which is what makes the whole existing corpus byte-identical
+ * to what it was before math existed; a case that is about a formula names its
+ * flags.
+ */
+inline MathOptions mathOptionsFromArg(int argc, char **argv, int at) {
+  MathOptions options;
+  options.flags = 0;
+  if (argc <= at) {
+    return options;
+  }
+  options.flags = static_cast<uint32_t>(std::strtoul(argv[at], nullptr, 10));
+  return options;
 }
 
 /// Closes what write left open and ends the line. A driver that has more to

@@ -3,6 +3,7 @@
 #include "CodeBlocks.h"
 #include "MarkdownParser.h"
 #include "Preview.h"
+#include "math/MathBlocks.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -43,6 +44,18 @@ struct IncrementalCounters {
   uint64_t highlightCount(HighlightStop reason) const {
     return highlight[static_cast<size_t>(reason)];
   }
+
+  /// What the math layout passes did, and the one number a budget test wants:
+  /// how many formulas reached the engine rather than the cache.
+  uint64_t formulasLaidOut{0};
+  /// Formulas that kept a previous snapshot's layout because they have not
+  /// finished arriving. A large value on a slow stream is a sign the cache is
+  /// not being hit, which is the thing that would make the pass expensive.
+  uint64_t mathLastGoodKept{0};
+  /// Formulas refused by the size caps before the engine was asked.
+  uint64_t mathSkippedTooLarge{0};
+  /// Formulas the engine or the decoder rejected.
+  uint64_t mathFailed{0};
   uint64_t fallback[static_cast<size_t>(ParseFallback::Count)]{};
 
   uint64_t fallbackCount(ParseFallback reason) const {
@@ -64,7 +77,19 @@ struct IncrementalCounters {
 /// reused, so an identity always names the same block content.
 class IncrementalParser {
 public:
-  explicit IncrementalParser(ParseMode mode = ParseMode::FullParse) : mode_(mode) {}
+  explicit IncrementalParser(ParseMode mode = ParseMode::FullParse,
+                             MathOptions math = MathOptions())
+      : mode_(mode), math_(math) {}
+
+  /// The math parse options this session was created with.
+  ///
+  /// Read once, like the mode, because parse options are part of a source's
+  /// identity: a session whose delimiters changed under it would parse the same
+  /// bytes two ways, and the reader would see a formula change shape without the
+  /// document changing. JavaScript takes the option at `createMarkdownStream` and
+  /// keeps it across `reset()` for the same reason.
+  const MathOptions &math() const { return math_; }
+  void setMath(MathOptions math) { math_ = math; }
 
   /// Appends accepted bytes to the canonical source.
   void append(std::string_view chunk);
@@ -120,6 +145,11 @@ private:
   /// Colors the tail code block, resuming from the last pass. A tail that is
   /// not code clears the state, which is what releases its lexer.
   void highlightTail(Document *document);
+  /// Lays out the tail's formulas in place, keeping the last good layout for
+  /// one that is still arriving.
+  void layoutTail(Document *document);
+  /// Adds one set of layout passes to the counters.
+  void noteMath(const MathLayoutStats &stats);
   void publish(DocumentHandle document);
   void tryCommit();
   bool commitRegion(size_t boundary);
@@ -130,6 +160,7 @@ private:
   void resetScan();
 
   ParseMode mode_;
+  MathOptions math_;
   std::string source_;
   DocumentHandle document_;
   // Source length that document_ reflects, and whether the source was
@@ -139,6 +170,9 @@ private:
 
   std::shared_ptr<const SharedList<Block>::Prefix> committedBlocks_;
   std::shared_ptr<const SharedList<Link>::Prefix> committedLinks_;
+  // Images are committed with the blocks that name them, so a spliced parse
+  // reads the same index either way.
+  std::shared_ptr<const SharedList<Image>::Prefix> committedImages_;
   size_t committedBytes_{0};
   uint32_t committedUtf16_{0};
   uint32_t committedContainers_{0};

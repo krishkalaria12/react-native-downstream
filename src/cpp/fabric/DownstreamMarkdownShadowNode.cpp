@@ -1,8 +1,12 @@
 #include "DownstreamMarkdownShadowNode.h"
 
+#include "ImageLayout.h"
+#include "ImageSizeCache.h"
 #include "MarkdownParser.h"
 #include "RenderPreparer.h"
 #include "SessionRegistry.h"
+
+#include <algorithm>
 
 #include <react/renderer/core/LayoutContext.h>
 #include <react/renderer/core/StateUpdate.h>
@@ -116,6 +120,7 @@ downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale,
                                 static_cast<float>(width),
                                 chromeFor(state),
                                 codeLayout(state),
+                                imageLayout(getDocument()),
                                 theme_};
 }
 
@@ -217,6 +222,120 @@ uint32_t DownstreamMarkdownShadowNode::chromeFor(const DownstreamMarkdownState &
   return chromeForProps(getConcreteProps().controls, codeLayout(state));
 }
 
+/// The `allowedImagePrefixes` prop, as the list `imageUrlAllowed` reads.
+///
+/// Normalized once per measurement rather than per image: the prop is almost
+/// always an inline literal from JavaScript, and lower-casing it here would mean
+/// allocating a copy of it for every node in every commit. The comparison is
+/// already case-insensitive.
+downstream::ImageLayout DownstreamMarkdownShadowNode::imageLayout(
+    const downstream::DocumentHandle &document) const {
+  const auto &props = getConcreteProps();
+  downstream::ImageLayout layout;
+  layout.state.enabled = props.images;
+  layout.allowedPrefixes.assign(props.allowedImagePrefixes.begin(), props.allowedImagePrefixes.end());
+  if (!document || document->images.empty()) {
+    return layout;
+  }
+  std::vector<uint32_t> ordinals;
+  std::vector<std::string> urls;
+  std::vector<bool> loadable;
+  ordinals.reserve(document->images.size());
+  urls.reserve(document->images.size());
+  loadable.reserve(document->images.size());
+  for (size_t index = 0; index < document->images.size(); index++) {
+    const downstream::Image &image = document->images[index];
+    ordinals.push_back(static_cast<uint32_t>(index));
+    urls.push_back(image.url);
+    loadable.push_back(image.loadable);
+  }
+  // The cache knows the size of anything this process has loaded, so a message
+  // scrolled back into view measures at its final height on its first frame.
+  layout.state = downstream::ImageSizeCache::stateLayoutFor(ordinals, urls, loadable, props.images);
+  // The prefix list is a view policy, applied here where the box is decided, so
+  // the document is the same whatever an app is willing to fetch. A blocked
+  // image answers `Blocked` without a request ever existing, and a failed one
+  // keeps its failure so a scrolled-back message does not refetch a 404.
+  for (auto &entry : layout.state.entries) {
+    if (!props.images) {
+      entry.state = downstream::ImageState::Disabled;
+      continue;
+    }
+    const bool urlLoadable = entry.ordinal < loadable.size() && loadable[entry.ordinal];
+    if (!urlLoadable) {
+      if (entry.state == downstream::ImageState::Loaded) {
+        continue;
+      }
+      // A destination that failed the engine's policy is blocked outright. One
+      // that is merely absent is pending while the writer is still typing and
+      // disabled once the document settles, which is the difference between
+      // "not finished" and "not loadable".
+      if (entry.ordinal < urls.size() && !urls[entry.ordinal].empty()) {
+        entry.state = downstream::ImageState::Blocked;
+      } else {
+        entry.state = document->isSettled(document->blocks.size()) ? downstream::ImageState::Disabled
+                                                                  : downstream::ImageState::Pending;
+      }
+      continue;
+    }
+    if (entry.state == downstream::ImageState::Loaded || entry.state == downstream::ImageState::Failed) {
+      continue;
+    }
+    const std::string &url = urls[entry.ordinal];
+    if (!downstream::imageUrlAllowed(url, layout.allowedPrefixes)) {
+      entry.state = downstream::ImageState::Blocked;
+    }
+  }
+  return layout;
+}
+
+/**
+ * Asks for a relayout once the view has new answers about its images.
+ *
+ * A state update clones this node in the current tree, which measures it again;
+ * the clone rebuilds the image layout from the cache and finds a different one,
+ * so it measures at the loaded height and commits a new state. No React render
+ * is involved, which is the whole point: a load finishing is not a change to the
+ * document, and treating it as one would re-render every message in a chat.
+ *
+ * Called by the platform after it records a finished load, exactly as
+ * `relayoutWhenPrepared` is called when a parse finishes.
+ */
+void DownstreamMarkdownShadowNode::relayoutWhenImagesChange(downstream::ImageStateLayout answers) const {
+  // Dispatched on the family rather than on `this`, because a state update
+  // clones the node in the current tree and the clone is what measures. The
+  // answers are captured by value because a load finishes long after the view
+  // that asked for it.
+  getFamilyShared()->dispatchRawState(
+      StateUpdate{getFamilyShared(),
+                  [answers = std::move(answers)](const StateData::Shared &data) -> StateData::Shared {
+                    const auto &previous = *std::static_pointer_cast<const DownstreamMarkdownState>(data);
+                    return std::make_shared<const DownstreamMarkdownState>(previous.withImages(answers));
+                  },
+                  EventQueue::UpdateMode::Asynchronous});
+}
+
+void DownstreamMarkdownShadowNode::imagesChanged(const ShadowNode::Shared &node) {
+  if (!node) {
+    return;
+  }
+  const auto *concrete = dynamic_cast<const DownstreamMarkdownShadowNode *>(node.get());
+  if (concrete == nullptr) {
+    return;
+  }
+  const auto &document = concrete->getDocument();
+  // A document with no image answers nothing, and dispatching a state update
+  // that changes nothing would clone every node in a chat for no reason.
+  if (!document || document->images.empty()) {
+    return;
+  }
+  const downstream::ImageStateLayout answers = concrete->imageState(concrete->imageLayout(document));
+  if (answers == concrete->getStateData().images) {
+    return;
+  }
+  concrete->relayoutWhenImagesChange(answers);
+}
+
 Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutContext,
                                                   const LayoutConstraints &layoutConstraints) const {
   const auto &props = getConcreteProps();
@@ -234,7 +353,7 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
     downstream::SessionRegistry::noteLayout(props.sessionId, hint);
   }
   return layoutManager_->measure(getDocument(), layoutContext.fontSizeMultiplier, layoutConstraints,
-                                 getSurfaceId(), chrome, codeLayout(state), theme_);
+                                 getSurfaceId(), chrome, codeLayout(state), imageLayout(getDocument()), theme_);
 }
 
 void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
@@ -250,13 +369,18 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   // The theme is compared by id rather than by pointer, so a view whose theme
   // resolved to an equal value it already had does not ask for a state update.
   const downstream::CodeLayout code = codeLayout(state);
+  // The image answers are part of this comparison for the same reason the code
+  // layout is: the node measured with one set and would otherwise mount with
+  // another, which is a picture that draws at a height it was not measured at.
+  const downstream::ImageStateLayout images = imageState(imageLayout(document));
   if (state.document != document || state.fontSizeMultiplier != layoutContext.fontSizeMultiplier ||
-      state.chrome != chrome || state.code != code || state.themeId() != themeId()) {
+      state.chrome != chrome || state.code != code || state.images != images || state.themeId() != themeId()) {
     DownstreamMarkdownState next{state};
     next.document = document;
     next.fontSizeMultiplier = layoutContext.fontSizeMultiplier;
     next.chrome = chrome;
     next.code = code;
+    next.images = images;
     next.theme = theme_;
     setStateData(std::move(next));
   }

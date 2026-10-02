@@ -2,6 +2,7 @@
 
 #include "DownstreamMarkdownState.h"
 #include "DownstreamTextLayoutManager.h"
+#include "ImageSizeCache.h"
 #include "PreparedDocument.h"
 #include "theme/Theme.h"
 
@@ -42,6 +43,21 @@ public:
   }
 
   void setLayoutManager(std::shared_ptr<const DownstreamTextLayoutManager> layoutManager);
+
+  /**
+   * Asks for a relayout after the view's image loads have reported.
+   *
+   * The platform has already recorded each result in `ImageSizeCache`; this
+   * reads the document's answers back out of it and dispatches the state update.
+   * Going through the cache is what makes a load that finished after its view
+   * was recycled still count, and what makes six loads in one frame produce one
+   * relayout rather than six.
+   *
+   * Static because a view holds a `ShadowNode::Shared` and not the concrete
+   * node, and because the node that has to be re-measured is whichever revision
+   * is mounted by the time the update lands.
+   */
+  static void imagesChanged(const ShadowNode::Shared &node);
 
   Size measureContent(const LayoutContext &layoutContext, const LayoutConstraints &layoutConstraints) const override;
 
@@ -92,6 +108,19 @@ private:
   /// props are read here rather than from the state, because a prop change
   /// lands in props a revision before the state that records it does.
   downstream::CodeLayout codeLayout(const DownstreamMarkdownState &state) const;
+  /// What each image in the document is, from the process-wide size cache and
+  /// the props. Rebuilt on every measurement, which is cheap: the cache is a
+  /// lookup per image and a document has as many images as it has pictures.
+  downstream::ImageLayout imageLayout(const downstream::DocumentHandle &document) const;
+  /// The same answers without the policy, for the state. A view draws from this
+  /// and never needs to know which prefixes the app allows.
+  downstream::ImageStateLayout imageState(const downstream::ImageLayout &layout) const {
+    return layout.state;
+  }
+  /// Asks for a relayout once images that have not answered do. The platform
+  /// records a finished load in the cache and calls in, exactly as
+  /// `relayoutWhenPrepared` is called when a parse finishes.
+  void relayoutWhenImagesChange(downstream::ImageStateLayout answers) const;
 
   std::shared_ptr<const DownstreamTextLayoutManager> layoutManager_;
   std::shared_ptr<ControlledSource> controlled_;

@@ -8,10 +8,16 @@ bool sameBlock(const Block &a, const Block &b) {
   // whose header would draw a different label, so a meta-only change has to
   // give it a new identity or the committed-segment cache would draw the old
   // title forever.
+  //
+  // `math` and `images` count for the same reason. A formula's own layout and
+  // an image's load state deliberately do not: a MathSpan's identity excludes
+  // its layout so a block keeps its identity while a pass fills it in, and
+  // `Image` records are the document's, compared in `sameDocument`.
   if (a.kind != b.kind || a.headingLevel != b.headingLevel || a.tableHeader != b.tableHeader ||
       a.table != b.table || a.spacingBefore != b.spacingBefore || a.text != b.text || a.language != b.language ||
       a.info != b.info || !(a.meta == b.meta) || a.runs.size() != b.runs.size() || a.cells.size() != b.cells.size() ||
-      a.tokens.size() != b.tokens.size() || a.containers.size() != b.containers.size()) {
+      a.tokens.size() != b.tokens.size() || a.containers.size() != b.containers.size() ||
+      a.math.size() != b.math.size() || a.images.size() != b.images.size()) {
     return false;
   }
   for (size_t i = 0; i < a.runs.size(); i++) {
@@ -43,11 +49,26 @@ bool sameBlock(const Block &a, const Block &b) {
       return false;
     }
   }
+  for (size_t i = 0; i < a.math.size(); i++) {
+    if (!(a.math[i] == b.math[i])) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < a.images.size(); i++) {
+    if (a.images[i] != b.images[i]) {
+      return false;
+    }
+  }
   return true;
 }
 
+bool sameImage(const Image &a, const Image &b) {
+  return a.url == b.url && a.alt == b.alt && a.title == b.title && a.loadable == b.loadable &&
+      a.link == b.link && (a.range == b.range);
+}
+
 bool sameDocument(const Document &a, const Document &b) {
-  if (a.blocks.size() != b.blocks.size() || a.links.size() != b.links.size()) {
+  if (a.blocks.size() != b.blocks.size() || a.links.size() != b.links.size() || a.images.size() != b.images.size()) {
     return false;
   }
   for (size_t i = 0; i < a.blocks.size(); i++) {
@@ -57,6 +78,11 @@ bool sameDocument(const Document &a, const Document &b) {
   }
   for (size_t i = 0; i < a.links.size(); i++) {
     if (a.links[i].url != b.links[i].url || !(a.links[i].range == b.links[i].range)) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < a.images.size(); i++) {
+    if (!sameImage(a.images[i], b.images[i])) {
       return false;
     }
   }

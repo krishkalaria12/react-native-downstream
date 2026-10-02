@@ -310,6 +310,7 @@ describe('changing the pass mid-stream', () => {
       inlineCode: true,
       links: true,
       images: true,
+      math: true,
     });
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
