@@ -235,6 +235,10 @@ double mathPadding(const Theme &theme) { return theme.number(kSlotMathPadding); 
 
 double mathTextAlign(const Theme &theme) { return theme.number(kSlotMathTextAlign); }
 
+double mathMarginTop(const Theme &theme) { return theme.number(kSlotMathMarginTop); }
+
+double mathMarginBottom(const Theme &theme) { return theme.number(kSlotMathMarginBottom); }
+
 ImageMetrics imageMetrics(const Theme &theme) {
   ImageMetrics metrics;
   metrics.maxHeight = static_cast<float>(theme.number(kSlotImageMaxHeight));

@@ -8,6 +8,7 @@
 #include "WorkerPool.h"
 #include "theme/Theme.h"
 #include "theme/ThemeLayout.h"
+#include "math/MathSpeech.h"
 #include "theme/ThemeSlots.h"
 
 #include <jni.h>
@@ -287,10 +288,11 @@ Java_com_downstream_DownstreamNative_nativeMathMetrics(JNIEnv *env, jclass /*cla
   if (theme == nullptr) {
     theme = Theme::defaultTheme();
   }
-  const jdouble values[] = {theme_layout::mathPadding(*theme), theme_layout::mathTextAlign(*theme)};
-  jdoubleArray array = env->NewDoubleArray(2);
+  const jdouble values[] = {theme_layout::mathPadding(*theme), theme_layout::mathTextAlign(*theme),
+                            theme_layout::mathMarginTop(*theme), theme_layout::mathMarginBottom(*theme)};
+  jdoubleArray array = env->NewDoubleArray(4);
   if (array != nullptr) {
-    env->SetDoubleArrayRegion(array, 0, 2, values);
+    env->SetDoubleArrayRegion(array, 0, 4, values);
   }
   return array;
 }
@@ -327,6 +329,11 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
   // the flattened text like the inline runs above. Layout must match
   // NativeDocument.kt.
   std::vector<jint> tokens;
+  // Each block's math layout, in a fixed order, for the blocks that have one.
+  // A separate table rather than more fields in `blocks` because these are
+  // fractional ems and `blocks` is all integers: the stride is the only place that
+  // order is written down, and it has to match NativeDocument.kt.
+  std::vector<double> maths;
   std::vector<std::u16string> strings;
   // Each block's resolved typography and margins, in the fixed order
   // `theme_layout::kBlockLayoutStride` writes. Resolved here rather than in
@@ -378,6 +385,32 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
                                     static_cast<jint>(block.meta.startLine),
                                     block.meta.noLineNumbers ? 1 : 0,
                                 });
+    if (!block.math.empty()) {
+      // A block's formula covers its whole text, so only the first span is ever
+      // read here; the parser promotes a lone display formula to its own block
+      // rather than leaving two in one.
+      const MathSpan &span = block.math.front();
+      const jint tex = intern(span.tex);
+      const jint error = span.error.empty() ? -1 : intern(span.error);
+      // Width, height and depth are the layout's own ems with the baseline at
+      // y = height, which is what `mathBlockHeight` on both platforms expects. A
+      // formula with no layout is all zeros with `resolved` false, so "not laid
+      // out yet" and "laid out and failed" stay distinguishable.
+      maths.insert(maths.end(), {
+                                  span.layout ? static_cast<double>(span.layout->width) : 0.0,
+                                  span.layout ? static_cast<double>(span.layout->height) : 0.0,
+                                  span.layout ? static_cast<double>(span.layout->depth) : 0.0,
+                                  span.layout ? 1.0 : 0.0,
+                                  span.display ? 1.0 : 0.0,
+                                  static_cast<double>(tex),
+                                  static_cast<double>(error),
+                              });
+    } else {
+      // Every block has an entry, so the maths table is indexed by block the same
+      // way `blocks` is. A block with no formula reads as unresolved, which is what
+      // a caller that did not check the kind would then have to handle anyway.
+      maths.insert(maths.end(), {0.0, 0.0, 0.0, 0.0, 0.0, -1.0, -1.0});
+    }
     theme_layout::writeBlockLayout(
       *theme, theme_layout::blockLayout(*theme, block), layouts,
       static_cast<size_t>(index - static_cast<size_t>(from)) * theme_layout::kBlockLayoutStride);
@@ -425,7 +458,7 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
     env->DeleteLocalRef(value);
   }
 
-  jobjectArray result = env->NewObjectArray(8, objectClass, nullptr);
+  jobjectArray result = env->NewObjectArray(9, objectClass, nullptr);
   env->SetObjectArrayElement(result, 0, toJavaString(env, text));
   env->SetObjectArrayElement(result, 1, toJavaArray(env, blocks));
   env->SetObjectArrayElement(result, 2, toJavaArray(env, containers));
@@ -438,6 +471,11 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
     env->SetDoubleArrayRegion(layoutArray, 0, static_cast<jsize>(layouts.size()), layouts.data());
   }
   env->SetObjectArrayElement(result, 7, layoutArray);
+  jdoubleArray mathArray = env->NewDoubleArray(static_cast<jsize>(maths.size()));
+  if (!maths.empty()) {
+    env->SetDoubleArrayRegion(mathArray, 0, static_cast<jsize>(maths.size()), maths.data());
+  }
+  env->SetObjectArrayElement(result, 8, mathArray);
   return result;
 }
 
@@ -519,11 +557,39 @@ Java_com_downstream_DownstreamNative_nativeSegmentPlan(JNIEnv *env, jclass /*cla
                                     static_cast<jlong>(document->blocks[segment.from].identity),
                                     static_cast<jlong>(document->settledBlocks),
                                     static_cast<jlong>(segment.codeOrdinal),
+                                    // The kind rather than a table and a code flag: the
+                                    // plan has five kinds and two more were added, and a
+                                    // boolean per kind is how the fifth one gets forgotten.
+                                    static_cast<jlong>(segment.kind),
+                                    // The image ordinal, counted by the plan so a view
+                                    // matches a picture to its state without walking the
+                                    // document. -1 for every other segment.
+                                    static_cast<jlong>(segment.imageOrdinal),
                                 });
   }
   jlongArray array = env->NewLongArray(static_cast<jsize>(values.size()));
   env->SetLongArrayRegion(array, 0, static_cast<jsize>(values.size()), values.data());
   return array;
+}
+
+/// A formula's spoken form, as the engine's own verbalizer produces it.
+///
+/// Exposed rather than reimplemented in Kotlin, because `MathSpeech.cpp` is the one
+/// definition of what `x^2 + y^2` reads as and a second copy would drift from it
+/// in exactly the case that matters: a formula neither reader can make sense of.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_downstream_DownstreamNative_nativeMathSpeech(JNIEnv *env, jclass /*clazz*/, jstring tex,
+                                                      jboolean display) {
+  if (tex == nullptr) {
+    return nullptr;
+  }
+  const char *utf8 = env->GetStringUTFChars(tex, nullptr);
+  if (utf8 == nullptr) {
+    return nullptr;
+  }
+  const std::string spoken = downstream::math::speak(utf8, display == JNI_TRUE);
+  env->ReleaseStringUTFChars(tex, utf8);
+  return toJavaString(env, utf8ToUtf16(spoken));
 }
 
 /// One link as [url, [rangeStart, rangeEnd]], or null.

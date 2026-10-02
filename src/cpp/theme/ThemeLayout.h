@@ -154,6 +154,15 @@ double codeCardBorderWidth(const Theme &theme);
 double mathPadding(const Theme &theme);
 double mathTextAlign(const Theme &theme);
 
+/// A formula block's vertical margins, above and below.
+///
+/// Its own function rather than two slot reads on each platform, because the
+/// alternative is the same number read in two places and the day they differ is
+/// the day a formula has its padding in one platform and its margin in the other,
+/// which looks like a layout bug in neither.
+double mathMarginTop(const Theme &theme);
+double mathMarginBottom(const Theme &theme);
+
 /// An image's box: the cap on a loaded image's height, the corner radius, and
 /// the margins above and below. These are the values `imageBox` takes, and they
 /// live here so a platform cannot reach its own defaults for them.

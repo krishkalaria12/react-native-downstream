@@ -766,11 +766,13 @@ internal class RenderedDocument(
       // cannot be laid out reads rather than vanishing.
       is MathSegment ->
         if (segment.resolved) {
-          mathBlockHeight(segment.height, segment.depth, style.mathFontSize, style.mathPadding).toInt()
+          (mathBlockHeight(segment.height, segment.depth, style.mathFontSize, style.mathPadding) +
+            style.mathMarginTop + style.mathMarginBottom).toInt()
         } else {
           // An unresolved formula takes one line, which is what its literal takes,
           // so a formula that cannot be laid out still occupies readable space.
-          (style.bodySize * LINE_HEIGHT + style.mathPadding * 2).toInt()
+          (style.bodySize * LINE_HEIGHT + style.mathPadding * 2 +
+            style.mathMarginTop + style.mathMarginBottom).toInt()
         }
       is CodeSegment -> {
         // The one definition: the props, the reader's choices, and this block's
@@ -949,6 +951,11 @@ internal class RenderedDocument(
       val key = "$documentId:$fontScale:$night:$syntaxHighlighting:$themeId"
       cache.get(key)?.let { return it }
       val plan = DownstreamNative.readSegmentPlan(documentId) ?: return null
+      // The document's pictures, read once. An image segment needs its destination,
+      // alt text and policy answer, and reading those one field at a time over JNI
+      // would be one crossing per field per picture; this is one for the document.
+      // A document with no pictures is ordinary, so an empty list is an answer.
+      val images = DownstreamNative.readImages(documentId) ?: NativeImages.EMPTY
       // A theme can cap the platform's font scale but cannot raise it, and the
       // cap is applied once here so every measurement below works with the
       // result. Resolved in C++ so both platforms read one rule.
@@ -977,8 +984,7 @@ internal class RenderedDocument(
           ?: DownstreamNative.readDocument(documentId, planned.from, planned.to, themeId)
             ?.let {
               buildSegment(
-                it, style, planned.from, planned.isCode, ordinal, planned.identity, syntaxHighlighting,
-                style.px(it.previousBottomMargin),
+                it, images, style, planned, ordinal, syntaxHighlighting, style.px(it.previousBottomMargin),
               )
             }
             ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
@@ -1064,8 +1070,10 @@ internal class RenderedDocument(
     /// A formula's own color, its fill, and its error color, resolved here so the
     /// view and the measurement read one value for each.
     val mathMetrics = DownstreamNative.mathMetrics(themeId)
-    val mathPadding = px(mathMetrics.first)
-    val mathTextAlign = mathMetrics.second
+    val mathPadding = px(mathMetrics.padding)
+    val mathTextAlign = mathMetrics.textAlign
+    val mathMarginTop = px(mathMetrics.marginTop)
+    val mathMarginBottom = px(mathMetrics.marginBottom)
     val mathFontSize = px(theme.number(ThemeSlots.SLOT_MATH_FONT_SIZE))
     val mathColor = colors.slotOrNull(ThemeSlots.SLOT_MATH_COLOR) ?: colors.text
     val mathBackground =
@@ -1165,20 +1173,38 @@ internal class RenderedDocument(
     /** Builds one planned segment from its flattened blocks. */
     private fun buildSegment(
       document: NativeDocument,
+      images: NativeImages,
       style: Style,
-      from: Int,
-      isCode: Boolean,
+      planned: PlannedSegment,
       codeOrdinal: Int,
-      identity: Long,
       syntaxHighlighting: Boolean,
       previousBottom: Float,
     ): Segment {
+      val from = planned.from
+      val isCode = planned.kind == SEGMENT_CODE
+      val identity = planned.identity
       val colors = style.colors
       val theme = style.theme
       val density = style.density
       val paint = style.paint
       val markerPaint = style.markerPaint
       fun px(dp: Float) = style.px(dp)
+
+      // A formula or a picture is one block that the plan kept to itself, so it is
+      // built here rather than falling through to the text path. Both keep their
+      // literal: a formula that could not be laid out and a picture that could not
+      // be fetched are both still readable as the writer's own source, which is the
+      // whole of what this branch decides.
+      if (planned.kind == SEGMENT_MATH) {
+        return buildMath(document, style, style.gapAbove(document, 0, previousBottom).toInt())
+      }
+      if (planned.kind == SEGMENT_IMAGE) {
+        // Null when the plan's ordinal is not in the document's picture list, in
+        // which case the block's own text is drawn instead: a plan and a document
+        // that disagree is worth reading, not worth crashing over.
+        buildImage(images, planned.imageOrdinal, style.gapAbove(document, 0, previousBottom).toInt())
+          ?.let { return it }
+      }
 
       val text = SpannableStringBuilder(document.text)
       val textLanguage = document.blockLanguage(0)
@@ -1559,6 +1585,72 @@ internal class RenderedDocument(
      * counts the code blocks as it is built, because a measurement needs it and
      * a measurement can run before any view has walked the segments.
      */
+    /**
+     * One display formula, as its own segment.
+     *
+     * The ems come from the document's own layout rather than from a text layout's
+     * line count, so `mathBlockHeight` — the same expression iOS uses — decides the
+     * height and a measured formula and a drawn one cannot differ.
+     *
+     * `resolved` false keeps the literal: a formula the engine could not lay out is
+     * not a formula that is missing, it is a formula the reader can still read, and
+     * it is drawn in the theme's error colour so they can see which it is.
+     */
+    private fun buildMath(document: NativeDocument, style: Style, gapBefore: Int): MathSegment {
+      // The literal with its delimiters, which is what `Block::text` holds and what a
+      // copy produces. It is the segment's text whether or not a layout exists, so
+      // the fallback needs nothing extra to be the same words.
+      val literal = document.text
+      val display = document.blockMathDisplay(0)
+      return MathSegment(
+        literal = literal,
+        width = document.blockMathWidthEm(0).toFloat(),
+        height = document.blockMathHeightEm(0).toFloat(),
+        depth = document.blockMathDepthEm(0).toFloat(),
+        resolved = document.blockMathResolved(0),
+        speech = document.blockMathSpeech(0).ifEmpty { literal },
+        display = display,
+        textAlign = style.mathTextAlign,
+        gapBefore = gapBefore,
+      )
+    }
+
+    /**
+     * One picture, as its own segment.
+     *
+     * The alt text comes from the document's image list rather than from the block's
+     * text, because the block's text is the whole `![…](…)` source: what a reader
+     * needs when the bytes do not arrive is the alt text alone.
+     *
+     * `loadable` is the engine's own policy answer, resolved once on the platform
+     * side by `isLoadableImageUrl` when the document was parsed. It is carried
+     * rather than re-checked here, so a destination the engine refused is one the
+     * view never asks for.
+     */
+    private fun buildImage(
+      images: NativeImages,
+      ordinal: Int,
+      gapBefore: Int,
+    ): ImageSegment? {
+      // The plan counted this block's first picture in `Document::images`, so an
+      // ordinal outside that list is a plan and a document that disagree. There is
+      // then no picture to build, and the caller falls back to the block's text,
+      // which is the writer's own source and always readable.
+      if (ordinal < 0 || ordinal >= images.count) {
+        return null
+      }
+      return ImageSegment(
+        ordinal = ordinal,
+        url = images.url(ordinal),
+        alt = images.alt(ordinal),
+        title = images.title(ordinal),
+        range = images.range(ordinal),
+        loadable = images.loadable(ordinal),
+        link = images.link(ordinal),
+        gapBefore = gapBefore,
+      )
+    }
+
     private fun buildCode(
       text: SpannableStringBuilder,
       language: String,

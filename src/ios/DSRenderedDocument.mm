@@ -663,8 +663,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   const BlockFont formula = mathFont(theme);
   segment.fontSize = static_cast<CGFloat>(formula.size * scale);
   segment.padding = static_cast<CGFloat>(mathPadding(theme) * scale);
-  segment.marginTop = static_cast<CGFloat>(theme.number(kSlotMathMarginTop) * scale);
-  segment.marginBottom = static_cast<CGFloat>(theme.number(kSlotMathMarginBottom) * scale);
+  segment.marginTop = static_cast<CGFloat>(theme_layout::mathMarginTop(theme) * scale);
+  segment.marginBottom = static_cast<CGFloat>(theme_layout::mathMarginBottom(theme) * scale);
   segment.textAlign = static_cast<CGFloat>(mathTextAlign(theme));
   // `inherit` is the default and means the block's own color shows through, so
   // these are nil unless a theme named them. A formula with no color of its own
