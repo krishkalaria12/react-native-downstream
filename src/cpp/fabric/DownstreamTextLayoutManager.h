@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Caret.h"
 #include "CodeLayout.h"
 #include "Document.h"
 #include "RenderPreparer.h"
@@ -47,12 +48,13 @@ public:
   /// objects are rebuilt, but no measurement is.
   Size measure(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
                const LayoutConstraints &layoutConstraints, SurfaceId surfaceId, uint32_t chrome,
-               const downstream::CodeLayout &code, const downstream::Theme::Handle &theme) const;
+               const downstream::CodeLayout &code, const downstream::PlacedCaret &caret,
+               const downstream::Theme::Handle &theme) const;
 
 private:
   Size measurePlatform(const downstream::DocumentHandle &document, Float fontSizeMultiplier, Float maximumWidth,
                        SurfaceId surfaceId, uint32_t chrome, const downstream::CodeLayout &code,
-                       const downstream::Theme::Handle &theme) const;
+                       const downstream::PlacedCaret &caret, const downstream::Theme::Handle &theme) const;
 
   struct CacheEntry {
     uint64_t documentId;
@@ -60,6 +62,9 @@ private:
     Float maximumWidth;
     uint32_t chrome;
     downstream::CodeLayout code;
+    /// The caret, resolved. A caret after the last block is in the measured
+    /// text, so two layouts that differ only in the caret are two layouts.
+    downstream::PlacedCaret caret;
     /// The theme's layout key, which is 0 for the default theme.
     uint64_t themeLayoutKey;
     Size size;

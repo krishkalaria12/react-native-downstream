@@ -16,6 +16,7 @@ constexpr size_t kMeasurementCacheCapacity = 64;
 Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
                                           const LayoutConstraints &layoutConstraints, SurfaceId surfaceId,
                                           uint32_t chrome, const downstream::CodeLayout &code,
+                                          const downstream::PlacedCaret &caret,
                                           const downstream::Theme::Handle &theme) const {
   const Float maximumWidth = layoutConstraints.maximumSize.width;
   // The theme can cap the platform's font scale, and the cap is applied before
@@ -35,7 +36,7 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
       for (const auto &entry : cache_) {
         if (entry.documentId == document->id && entry.fontSizeMultiplier == scale &&
             entry.maximumWidth == maximumWidth && entry.chrome == chrome && entry.code == code &&
-            entry.themeLayoutKey == themeLayoutKey) {
+            entry.caret == caret && entry.themeLayoutKey == themeLayoutKey) {
           size = entry.size;
           cached = true;
           break;
@@ -44,12 +45,12 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
     }
 
     if (!cached) {
-      size = measurePlatform(document, scale, maximumWidth, surfaceId, chrome, code, theme);
+      size = measurePlatform(document, scale, maximumWidth, surfaceId, chrome, code, caret, theme);
       std::lock_guard<std::mutex> lock(cacheMutex_);
       if (cache_.size() >= kMeasurementCacheCapacity) {
         cache_.erase(cache_.begin());
       }
-      cache_.push_back({document->id, scale, maximumWidth, chrome, code, themeLayoutKey, size});
+      cache_.push_back({document->id, scale, maximumWidth, chrome, code, caret, themeLayoutKey, size});
     } else {
       downstream::SessionTrace::recordDocument(document->id, "measure_cache_hit");
     }
