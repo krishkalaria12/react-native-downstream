@@ -67,6 +67,8 @@ export const ENGINE = [
     'ExportNames.cpp',
     'FenceMeta.cpp',
     'CodeLayout.cpp',
+    'Reveal.cpp',
+    'Caret.cpp',
   ].map((name) => join(CPP, 'downstream', name)),
   join(CPP, 'remend', 'Preview.cpp'),
 ];
