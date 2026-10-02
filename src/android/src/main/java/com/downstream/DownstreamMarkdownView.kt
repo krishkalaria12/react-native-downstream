@@ -72,6 +72,7 @@ internal const val CONTROL_TABLE_COPY = 4
 internal const val CONTROL_TABLE_DOWNLOAD = 8
 internal const val CONTROL_CODE_WRAP = 16
 internal const val CONTROL_CODE_EXPAND = 32
+internal const val CONTROL_IMAGE_DOWNLOAD = 64
 
 // How long a copy button shows its check before going back, as in Streamdown.
 private const val COPIED_DURATION_MS = 2_000L
@@ -100,6 +101,7 @@ private const val LABEL_FORMAT_MARKDOWN = 14
 private const val LABEL_FORMAT_CSV = 15
 private const val LABEL_FORMAT_TSV = 16
 private const val LABEL_IMAGE_NOT_AVAILABLE = 17
+private const val LABEL_IMAGE_DOWNLOAD = 18
 private const val LABEL_IMAGE_BLOCKED = 20
 
 /** How far a line number is dimmed below the code it numbers. Mirrors `kGutterAlpha` on iOS. */
@@ -130,7 +132,7 @@ private const val CONTROL_BUTTON_DP = 32f
 private const val CONTROL_GLYPH_DP = 18f
 
 /** One code header or table toolbar button, sized in dp and tinted later. */
-private fun newControlButton(context: Context, drawable: Int): ImageButton = ImageButton(context).apply {
+internal fun newControlButton(context: Context, drawable: Int): ImageButton = ImageButton(context).apply {
   val density = context.resources.displayMetrics.density
   val size = (CONTROL_BUTTON_DP * density).toInt()
   val inset = ((CONTROL_BUTTON_DP - CONTROL_GLYPH_DP) / 2 * density).toInt()
@@ -166,7 +168,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   internal var onLinkPress: ((view: DownstreamMarkdownView, url: String, start: Int, end: Int) -> Unit)? = null
   internal var onControl:
     ((view: DownstreamMarkdownView, block: String, action: String, format: String, language: String,
-      filename: String) -> Unit)? = null
+      filename: String, url: String) -> Unit)? = null
   internal var onControlFailure:
     ((view: DownstreamMarkdownView, block: String, action: String, message: String) -> Unit)? = null
   internal var onWrapToggle: ((view: DownstreamMarkdownView, ordinal: Int, wrapped: Boolean) -> Unit)? = null
@@ -191,7 +193,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   private var syntaxHighlighting = true
   // Every control on, which is the default and matches the codegen default.
   private var controls = CONTROL_CODE_COPY or CONTROL_CODE_DOWNLOAD or CONTROL_TABLE_COPY or
-    CONTROL_TABLE_DOWNLOAD or CONTROL_CODE_WRAP or CONTROL_CODE_EXPAND
+    CONTROL_TABLE_DOWNLOAD or CONTROL_CODE_WRAP or CONTROL_CODE_EXPAND or CONTROL_IMAGE_DOWNLOAD
   private var controlLabels: List<String> = DEFAULT_LABELS
   private var chrome = 0
   /**
@@ -318,8 +320,12 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       when (val child = getChildAt(index)) {
         is CodeSegmentView -> child.setControlLabels(controlLabels)
         is TableSegmentView -> child.setControlLabels(controlLabels)
+        is ImageSegmentView -> child.setStatusLabels(
+          controlLabels[LABEL_IMAGE_NOT_AVAILABLE], controlLabels[LABEL_IMAGE_BLOCKED],
+        )
       }
     }
+    applySettledState()
   }
 
   fun setCodeFilename(value: String) {
@@ -444,6 +450,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
           child.setControlsEnabled(settled)
           child.setToolbarVisible(chrome and RenderedDocument.CHROME_TABLE_TOOLBAR != 0)
         }
+        is ImageSegmentView -> child.setDownloadControl(controls, settled, controlLabels[LABEL_IMAGE_DOWNLOAD])
       }
     }
   }
@@ -547,7 +554,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
         )
         return
       }
-      onControl?.invoke(this, block, request.action, request.format, request.language, "")
+      onControl?.invoke(this, block, request.action, request.format, request.language, "", "")
       return
     }
     val weakView = WeakReference(this)
@@ -557,7 +564,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       if (failure != null) {
         view.onControlFailure?.invoke(view, block, "download", failure)
       } else if (url != null) {
-        view.onControl?.invoke(view, block, request.action, request.format, request.language, request.filename)
+        view.onControl?.invoke(view, block, request.action, request.format, request.language, request.filename, "")
       }
     }
   }
@@ -776,6 +783,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
             // one the same number.
             new.onImageAnswer = { url, answer -> reportImageAnswer(url, answer) }
             new.onImagePress = { url, alt, title, range -> pressImage(url, alt, title, range) }
+            new.onImageDownload = { image -> downloadImage(image) }
           }
           is MathSegment -> MathSegmentView(context)
         }
@@ -866,6 +874,36 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    */
   private fun pressImage(url: String, alt: String, title: String, range: IntRange) {
     onImagePress?.invoke(this, url, alt, title, range)
+  }
+
+  private fun downloadImage(image: ImageSegment) {
+    if (documentId == 0L || controls and CONTROL_IMAGE_DOWNLOAD == 0) return
+    val epoch = sourceEpoch
+    val requestGeneration = generation
+    val requestSession = sessionId
+    val configuredName = imageFilename
+    val weakView = WeakReference(this)
+    fun currentView(): DownstreamMarkdownView? = weakView.get()?.takeIf {
+      it.documentId != 0L && it.sourceEpoch == epoch && it.generation == requestGeneration &&
+        it.sessionId == requestSession
+    }
+    AndroidImages.download(image.url) { result ->
+      val view = currentView() ?: return@download
+      if (result == null) {
+        view.onControlFailure?.invoke(view, "image", "download", "The image could not be fetched.")
+        return@download
+      }
+      val name = DownstreamNative.imageName(image.url, image.alt, result.mimeType, configuredName)
+        ?: "$configuredName.png"
+      view.exporter.save(name, result.mimeType, result.bytes) { url, failure ->
+        val owner = currentView() ?: return@save
+        if (failure != null) {
+          owner.onControlFailure?.invoke(owner, "image", "download", failure)
+        } else if (url != null) {
+          owner.onControl?.invoke(owner, "image", "download", "", "", name, image.url)
+        }
+      }
+    }
   }
 
   // React Native does not relayout children that request it, so segments are

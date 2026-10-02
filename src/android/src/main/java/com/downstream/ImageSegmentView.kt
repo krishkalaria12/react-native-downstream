@@ -52,6 +52,13 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
     maxLines = 1
     ellipsize = android.text.TextUtils.TruncateAt.END
   }
+  private val download = newControlButton(context, R.drawable.ds_ic_download).apply {
+    visibility = GONE
+    setOnClickListener {
+      val current = segment ?: return@setOnClickListener
+      if (visibility == VISIBLE) onImageDownload?.invoke(current)
+    }
+  }
 
   private var segment: ImageSegment? = null
   private var metrics = ImageMetrics()
@@ -70,6 +77,16 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
 
   /** Set by the view group: reports a press. */
   internal var onImagePress: ((url: String, alt: String, title: String, range: IntRange) -> Unit)? = null
+  internal var onImageDownload: ((ImageSegment) -> Unit)? = null
+  private var controls = 0
+  private var controlsEnabled = false
+
+  fun setDownloadControl(controls: Int, enabled: Boolean, label: String) {
+    this.controls = controls
+    controlsEnabled = enabled
+    download.contentDescription = label
+    applyState()
+  }
 
   /**
    * The theme's metrics and its alt color.
@@ -149,6 +166,8 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
     }
     val loading = state == ImageState.PENDING || state == ImageState.LOADING
     photo.visibility = if (state == ImageState.LOADED) VISIBLE else GONE
+    download.visibility = if (state == ImageState.LOADED && controlsEnabled &&
+      controls and CONTROL_IMAGE_DOWNLOAD != 0) VISIBLE else GONE
     placeholder.visibility = if (loading) VISIBLE else GONE
     // The alt text, and under it what happened: a reader should be able to tell a
     // picture that failed from one this app chose not to load. A disabled picture
@@ -220,6 +239,11 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
         MeasureSpec.makeMeasureSpec(height - paddingTop - paddingBottom, MeasureSpec.EXACTLY),
       )
     }
+    val size = download.layoutParams.width
+    download.measure(
+      MeasureSpec.makeMeasureSpec(size, MeasureSpec.EXACTLY),
+      MeasureSpec.makeMeasureSpec(size, MeasureSpec.EXACTLY),
+    )
   }
 
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -228,6 +252,10 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
     for (child in listOf(placeholder, photo, altText)) {
       child.layout(paddingLeft, paddingTop, paddingLeft + width, paddingTop + height)
     }
+    val inset = (4 * context.resources.displayMetrics.density).toInt()
+    val x = paddingLeft + (width - download.measuredWidth - inset).coerceAtLeast(0)
+    val y = paddingTop + (height - download.measuredHeight - inset).coerceAtLeast(0)
+    download.layout(x, y, x + download.measuredWidth, y + download.measuredHeight)
   }
 
   override fun onDetachedFromWindow() {
@@ -250,6 +278,8 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
     addView(placeholder)
     addView(altText)
     addView(photo)
+    // A clickable child consumes its gesture, so a save never reports an image press.
+    addView(download)
     setOnClickListener {
       val current = segment ?: return@setOnClickListener
       onImagePress?.invoke(current.url, current.alt, current.title, current.range)

@@ -665,6 +665,11 @@ internal object DownstreamNative {
   @JvmStatic
   fun tableName(configured: String, extension: String): String? = nativeTableName(configured, extension)
 
+  /** The image download name, using the shared URL, caption and MIME rules. */
+  @JvmStatic
+  fun imageName(url: String, alt: String, mimeType: String, configured: String): String? =
+    nativeImageName(url, alt, mimeType, configured)
+
   @JvmStatic
   private external fun nativeExport(id: Long, from: Int, to: Int, format: Int, separator: Int): String?
 
@@ -679,6 +684,9 @@ internal object DownstreamNative {
 
   @JvmStatic
   private external fun nativeTableName(configured: String, extension: String): String?
+
+  @JvmStatic
+  private external fun nativeImageName(url: String, alt: String, mimeType: String, configured: String): String?
 
   /** The spoken form of a formula, from `math/MathSpeech.cpp`. */
   fun mathSpeech(tex: String, display: Boolean): String =

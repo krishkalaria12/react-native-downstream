@@ -550,6 +550,12 @@ void testCellPieces() {
 // --------------------------------------------------------------- file names
 
 void testNames() {
+  CHECK(imageDownloadName("https://example.com/photo?id=7", "A lake", "image/jpeg", "image") == "A lake.jpeg",
+        "an extensionless image keeps the MIME suffix while the caption is built");
+  CHECK(imageDownloadName("https://example.com/photo.webp?size=2", "chart.png", "image/jpeg", "image") == "chart.webp",
+        "an image URL suffix wins over MIME and replaces the caption suffix");
+  CHECK(imageDownloadName("https://example.com/photo", "", "", "saved") == "saved.png",
+        "an unnamed image uses the configured base and default suffix");
   checkName("a fence title wins", "app.ts", "ts title=\"app.ts\"", "ts");
   checkName("only the last path part is kept", "c.ts", "ts title='a/b/c.ts'", "ts");
   checkName("a title without an extension gets one", "app.ts", "ts title=app", "ts");

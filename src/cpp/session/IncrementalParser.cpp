@@ -322,9 +322,10 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   // storage and identity when md4c still produces them unchanged.
   const size_t committed = committedCount();
   const size_t committedLinks = committedLinks_ ? committedLinks_->size() : 0;
+  const size_t committedImages = committedImages_ ? committedImages_->size() : 0;
   const Document &parsed = *result.document;
   bool confirmed = committed > 0 && source.size() >= committedBytes_ && parsed.blocks.size() >= committed &&
-      parsed.links.size() >= committedLinks;
+      parsed.links.size() >= committedLinks && parsed.images.size() >= committedImages;
   for (size_t i = 0; confirmed && i < committed; i++) {
     confirmed = sameBlock((*committedBlocks_)[i], parsed.blocks[i]);
   }
@@ -332,13 +333,18 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
     const Link &link = (*committedLinks_)[i];
     confirmed = link.url == parsed.links[i].url && link.range == parsed.links[i].range;
   }
+  for (size_t i = 0; confirmed && i < committedImages; i++) {
+    confirmed = scan::sameImage((*committedImages_)[i], parsed.images[i]);
+  }
   if (confirmed) {
     const auto &blocks = parsed.blocks.tail();
     const auto &links = parsed.links.tail();
+    const auto &images = parsed.images.tail();
     auto shared = std::make_shared<Document>();
     shared->id = parsed.id;
     shared->blocks = SharedList<Block>(committedBlocks_, std::vector<Block>(blocks.begin() + committed, blocks.end()));
     shared->links = SharedList<Link>(committedLinks_, std::vector<Link>(links.begin() + committedLinks, links.end()));
+    shared->images = SharedList<Image>(committedImages_, std::vector<Image>(images.begin() + committedImages, images.end()));
     shared->settledBlocks = result.document->settledBlocks;
     result.document = shared;
     counters_.cacheHits += committed;

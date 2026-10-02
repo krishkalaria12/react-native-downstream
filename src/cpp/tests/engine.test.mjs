@@ -825,6 +825,33 @@ describe('themes', () => {
 });
 
 describe('images', () => {
+  test('finish preserves committed and tail image records', () => {
+    const prefix =
+      '[![Committed lake](https://example.com/lake.png "Lake")](https://example.com/page)\n\n' +
+      'A settled paragraph. '.repeat(12) +
+      '\n\n';
+    const tail = '![Tail chart](https://example.com/chart.png "Chart")';
+    const steps = [
+      { op: 'append', chunk: prefix },
+      { op: 'parse', finished: false },
+      { op: 'append', chunk: tail },
+      { op: 'parse', finished: false },
+    ];
+    const open = runSession('incremental', steps);
+    assert.ok(open.settled > 0, 'the stream has committed its prefix');
+    assert.equal(open.images.length, 2);
+    const done = runSession('incremental', [
+      ...steps,
+      { op: 'parse', finished: true },
+    ]);
+    assert.deepEqual(done.images, open.images);
+    assert.deepEqual(done.images, parse(prefix + tail).images);
+    assert.deepEqual(
+      done.blocks.map((block) => block.images),
+      open.blocks.map((block) => block.images)
+    );
+    assert.equal(done.settled, done.blocks.length);
+  });
   // The box rule, the state rule, and the URL policy. Both platforms are held to
   // this one table: `test_images` is the C++ side, and
   // `tests/android/ImageLayoutCheck.kt` runs the same cases against the Kotlin

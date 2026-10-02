@@ -607,12 +607,11 @@ std::string imageDownloadName(std::string_view url, std::string_view alt, std::s
   // type's, else `png`. Each is a guess about a file the reader cannot see, and
   // the base is the alt text because a writer who wrote alt text is the only
   // one who knows what the picture is.
-  std::string_view extension = extensionFromUrl(url);
+  std::string extension(extensionFromUrl(url));
   if (extension.empty() && mimeType.find('/') != std::string_view::npos) {
     const std::string_view subtype = mimeType.substr(mimeType.find('/') + 1);
     const size_t semicolon = subtype.find(';');
-    // Held in a string rather than a view because the sanitizer builds one, and
-    // a view into a temporary is the one way this name could name freed bytes.
+    // Copy the sanitized suffix into extension before this local goes away.
     const std::string sanitized = sanitizeBase(semicolon == std::string_view::npos ? subtype : subtype.substr(0, semicolon));
     if (!sanitized.empty() && sanitized.size() <= 4) {
       extension = sanitized;

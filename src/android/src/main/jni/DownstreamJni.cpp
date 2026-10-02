@@ -856,3 +856,19 @@ Java_com_downstream_DownstreamNative_nativeTableName(JNIEnv *env, jclass /*clazz
   }
   return toJavaString(env, utf8ToUtf16(name));
 }
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_downstream_DownstreamNative_nativeImageName(JNIEnv *env, jclass /*clazz*/, jstring url, jstring alt,
+                                                     jstring mimeType, jstring configured) {
+  const auto utf8 = [env](jstring value) -> std::string {
+    if (value == nullptr) return {};
+    const jchar *chars = env->GetStringChars(value, nullptr);
+    if (chars == nullptr) return {};
+    const std::string text = utf16ToUtf8(std::u16string_view(reinterpret_cast<const char16_t *>(chars),
+                                                          env->GetStringLength(value)));
+    env->ReleaseStringChars(value, chars);
+    return text;
+  };
+  const std::string name = imageDownloadName(utf8(url), utf8(alt), utf8(mimeType), utf8(configured));
+  return toJavaString(env, utf8ToUtf16(name));
+}

@@ -8,7 +8,9 @@ import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.TextView
+import kotlin.math.ceil
 
 /**
  * One display formula, as a view.
@@ -37,6 +39,12 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
     gravity = Gravity.CENTER_VERTICAL
   }
   private val glyphs = MathGlyphView(context)
+  private val scroll = HorizontalScrollView(context).apply {
+    isHorizontalScrollBarEnabled = true
+    isFillViewport = false
+    overScrollMode = OVER_SCROLL_NEVER
+    addView(glyphs, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
+  }
 
   private var segment: MathSegment? = null
   private val errorPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -81,6 +89,7 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
     ) {
       return
     }
+    if (segment?.literal != value.literal) scroll.scrollTo(0, 0)
     segment = value
     // The literal always stays as the text, even when a layout resolved: it is what
     // a copy produces and what a screen reader falls back to, and a formula is
@@ -92,7 +101,7 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
     contentDescription = value.speech.ifEmpty { value.literal }
     val drawable = value.resolved && value.displayList != null
     literal.visibility = if (drawable) GONE else VISIBLE
-    glyphs.visibility = if (drawable) VISIBLE else GONE
+    scroll.visibility = if (drawable) VISIBLE else GONE
     glyphs.segment = if (drawable) value else null
     // A failed formula is drawn in the theme's error color rather than the text
     // color: the reader should be able to see that this one is not rendered, without
@@ -125,10 +134,19 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
     }
     val total = (body + padding * 2f).toInt().coerceAtLeast(0)
     setMeasuredDimension(available, total)
-    for (child in listOf(background, literal, glyphs)) {
+    val width = (available - paddingLeft - paddingRight).coerceAtLeast(0)
+    val height = (total - paddingTop - paddingBottom).coerceAtLeast(0)
+    // Give the scroll view the complete formula at its themed size. A fitting
+    // formula keeps the column's width so the glyph view can apply textAlign.
+    val natural = current.displayList?.let { ceil(it.width * fontSize).toInt() } ?: 0
+    // HorizontalScrollView measures its child with an unspecified width, so the
+    // view's minimum width supplies the full drawing surface for that measure.
+    glyphs.minimumWidth = natural.coerceAtLeast(width)
+    glyphs.layoutParams.height = height
+    for (child in listOf(background, literal, scroll)) {
       child.measure(
-        MeasureSpec.makeMeasureSpec(available - paddingLeft - paddingRight, MeasureSpec.EXACTLY),
-        MeasureSpec.makeMeasureSpec(total - paddingTop - paddingBottom, MeasureSpec.EXACTLY),
+        MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+        MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY),
       )
     }
   }
@@ -136,7 +154,7 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
     val width = right - left - paddingLeft - paddingRight
     val height = bottom - top - paddingTop - paddingBottom
-    for (child in listOf(background, literal, glyphs)) {
+    for (child in listOf(background, literal, scroll)) {
       child.layout(paddingLeft, paddingTop, paddingLeft + width, paddingTop + height)
     }
   }
@@ -149,7 +167,7 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
   init {
     addView(background)
     addView(literal)
-    addView(glyphs)
+    addView(scroll)
   }
 }
 
@@ -187,12 +205,9 @@ internal class MathGlyphView(context: Context) : View(context) {
     if (textSize <= 0f || width <= 0) {
       return
     }
-    // A formula wider than the column is drawn smaller to fit rather than cut off,
-    // never below half its size; past that it is clipped at the edge, which is
-    // what an inline formula does too.
-    val natural = list.width * textSize
-    val fit = if (natural > width) (width / natural).coerceAtLeast(kMinInlineScale) else 1f
-    val size = textSize * fit
+    // Display math keeps its themed size. The parent gives this view its natural
+    // width and lets the reader scroll when it exceeds the column.
+    val size = textSize
     val drawn = list.width * size
     val x = when (current.textAlign) {
       0 -> 0f

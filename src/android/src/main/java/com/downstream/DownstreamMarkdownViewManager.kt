@@ -38,8 +38,8 @@ class DownstreamMarkdownViewManager :
     // emitter and a control that outlives its view reports nothing.
     view.onLinkPress = { target, url, start, end -> dispatchLinkPress(target, url, start, end) }
     view.onImagePress = { target, url, alt, title, range -> dispatchImagePress(target, url, alt, title, range) }
-    view.onControl = { target, block, action, format, language, filename ->
-      dispatchControl(target, block, action, format, language, filename)
+    view.onControl = { target, block, action, format, language, filename, url ->
+      dispatchControl(target, block, action, format, language, filename, url)
     }
     view.onControlFailure = { target, block, action, message ->
       dispatchControlFailure(target, block, action, message)
@@ -275,6 +275,7 @@ class DownstreamMarkdownViewManager :
     format: String,
     language: String,
     filename: String,
+    url: String,
   ) {
     val context = view.context as? ReactContext ?: return
     dispatch(
@@ -292,6 +293,7 @@ class DownstreamMarkdownViewManager :
         false,
         false,
         view.currentGeneration(),
+        url,
       ),
     )
   }
@@ -424,6 +426,7 @@ private class ControlActionEvent(
   private val wrapped: Boolean = false,
   private val expanded: Boolean = false,
   private val generation: Int,
+  private val url: String = "",
 ) : Event<ControlActionEvent>(surfaceId, viewTag) {
   override fun getEventName() = NAME
 
@@ -433,6 +436,7 @@ private class ControlActionEvent(
     putString("format", format)
     putString("language", language)
     putString("filename", filename)
+    putString("url", url)
     putBoolean("wrapped", wrapped)
     putBoolean("expanded", expanded)
     putInt("generation", generation)

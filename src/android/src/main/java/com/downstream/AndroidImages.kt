@@ -3,6 +3,8 @@ package com.downstream
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.webkit.MimeTypeMap
+import com.facebook.common.memory.PooledByteBuffer
 import com.facebook.common.executors.UiThreadImmediateExecutorService
 import com.facebook.common.references.CloseableReference
 import com.facebook.datasource.BaseDataSubscriber
@@ -12,6 +14,9 @@ import com.facebook.imagepipeline.common.ResizeOptions
 import com.facebook.imagepipeline.image.CloseableImage
 import com.facebook.imagepipeline.request.ImageRequest
 import com.facebook.imagepipeline.request.ImageRequestBuilder
+import com.facebook.imageformat.ImageFormatChecker
+import java.io.ByteArrayInputStream
+import java.util.concurrent.Executors
 
 /**
  * Loading a picture through the app's own pipeline.
@@ -61,6 +66,49 @@ internal object AndroidImages {
   private val live = HashMap<String, Request>()
   private val queued = ArrayDeque<String>()
   private var started = 0
+  private val downloads = Executors.newSingleThreadExecutor()
+
+  class Download(val bytes: ByteArray, val mimeType: String)
+
+  /** Saves the original encoded bytes through the host's pipeline, including its cache and URL handlers. */
+  fun download(url: String, onAnswer: (Download?) -> Unit) {
+    val source = try {
+      val request = ImageRequestBuilder.newBuilderWithSource(Uri.parse(url)).build()
+      Fresco.getImagePipeline().fetchEncodedImage(request, null)
+    } catch (error: RuntimeException) {
+      main.post { onAnswer(null) }
+      return
+    }
+    source.subscribe(
+      object : BaseDataSubscriber<CloseableReference<PooledByteBuffer>>() {
+        override fun onNewResultImpl(dataSource: DataSource<CloseableReference<PooledByteBuffer>>) {
+          if (!dataSource.isFinished) return
+          val reference = dataSource.result
+          val result = try {
+            reference?.get()?.let { buffer ->
+              if (buffer.size() == 0) return@let null
+              val bytes = ByteArray(buffer.size())
+              buffer.read(0, bytes, 0, bytes.size)
+              val extension = ImageFormatChecker.getImageFormat(ByteArrayInputStream(bytes)).fileExtension
+              val mime = extension?.let { MimeTypeMap.getSingleton().getMimeTypeFromExtension(it) }
+                ?: "application/octet-stream"
+              Download(bytes, mime)
+            }
+          } catch (error: Exception) {
+            null
+          } finally {
+            CloseableReference.closeSafely(reference)
+          }
+          main.post { onAnswer(result) }
+        }
+
+        override fun onFailureImpl(dataSource: DataSource<CloseableReference<PooledByteBuffer>>) {
+          main.post { onAnswer(null) }
+        }
+      },
+      downloads,
+    )
+  }
 
   /** The request a Drawee view should show once a load has finished, so it hits the same cache entry. */
   fun imageRequest(url: String, width: Int, height: Int): ImageRequest? {
