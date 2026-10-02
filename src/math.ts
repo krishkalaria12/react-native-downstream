@@ -92,10 +92,12 @@ export function resolveMath(
       : { flags: 0, enabled: false };
   }
   // An object form always turns math on: naming an option is asking for math.
+  // Each option keeps its own default: single dollars off, as in Streamdown, so
+  // `{ brackets: false }` does not quietly make `$5 and $10` a formula.
   const section = options(math)!;
   const flags =
     MATH_FLAG_ENABLED |
-    (section.singleDollarTextMath === false ? 0 : MATH_FLAG_SINGLE_DOLLAR) |
+    (section.singleDollarTextMath === true ? MATH_FLAG_SINGLE_DOLLAR : 0) |
     (section.brackets === false ? 0 : MATH_FLAG_BRACKETS);
   return { flags, enabled: true };
 }

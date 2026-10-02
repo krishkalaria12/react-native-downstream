@@ -7,6 +7,7 @@ import { BenchScreen } from './bench/BenchScreen';
 import { StressScreen } from './bench/StressScreen';
 import { ChatScreen } from './example/ChatScreen';
 import { ControlsScreen } from './controls/ControlsScreen';
+import { MathScreen } from './math/MathScreen';
 import { ROUTES, routeById, type RouteId } from './navigation';
 import { ThemeScreen } from './theme/ThemeScreen';
 import { CompareScreen } from './testing/CompareScreen';
@@ -122,6 +123,8 @@ function Navigation() {
               <ThemeScreen />
             ) : route.id === 'controls' ? (
               <ControlsScreen />
+            ) : route.id === 'math' ? (
+              <MathScreen />
             ) : route.id === 'testing' ? (
               <CompareScreen />
             ) : route.id === 'bench' ? (

@@ -5,6 +5,7 @@ export type RouteId =
   | 'example'
   | 'theme'
   | 'controls'
+  | 'math'
   | 'testing'
   | 'preview'
   | 'bench'
@@ -47,6 +48,13 @@ export const ROUTES: readonly Route[] = [
     title: 'Controls',
     summary: 'Copy, download, and wrap on code blocks and tables.',
     icon: 'clipboard-outline',
+  },
+  {
+    id: 'math',
+    label: 'Math & images',
+    title: 'Math & images',
+    summary: 'Formulas typeset by RaTeX, and pictures in every load state.',
+    icon: 'calculator-outline',
   },
   {
     id: 'testing',
