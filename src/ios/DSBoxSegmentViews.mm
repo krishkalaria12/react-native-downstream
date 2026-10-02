@@ -127,7 +127,13 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
                                                       weight:UIImageSymbolWeightRegular];
   [_download setImage:[UIImage systemImageNamed:kDownloadSymbol withConfiguration:configuration]
              forState:UIControlStateNormal];
-  _download.tintColor = UIColor.secondaryLabelColor;
+  _download.tintColor = UIColor.labelColor;
+  // A round backing, because the button sits on the picture and a bare glyph
+  // disappears on a dark or busy corner. The system background follows the
+  // appearance, so it is light on light and dark on dark.
+  _download.backgroundColor = [UIColor.systemBackgroundColor colorWithAlphaComponent:0.85];
+  _download.layer.cornerRadius = kControlGlyph / 2;
+  _download.clipsToBounds = YES;
   _download.accessibilityLabel = self.downloadLabel;
   _download.frame = CGRectMake(0, 0, kControlGlyph, kControlGlyph);
   [_download.widthAnchor constraintEqualToConstant:kControlGlyph].active = YES;
@@ -739,9 +745,9 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
   // A formula narrower than the column is centred by default, which is what a
   // display formula is. A wider one starts at the leading edge and scrolls,
   // which is what KaTeX does and what keeps a wide matrix readable.
-  const CGFloat x = segment.textAlign < 0.5
+  const CGFloat x = content > available || segment.textAlign < 0.5
       ? segment.contentLeading
-      : segment.textAlign > 1.5 ? std::max(segment.contentLeading, CGRectGetWidth(self.bounds) - content)
+      : segment.textAlign > 1.5 ? CGRectGetWidth(self.bounds) - content
                                  : segment.contentLeading + (available - content) / 2;
   self.scroll.frame = CGRectMake(x, 0, std::min(available, content), height);
   self.canvas.frame = CGRectMake(0, 0, content, height);
