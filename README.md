@@ -145,6 +145,37 @@ A download opens the platform's own save dialog and the user picks the location,
 
 `selectable` is on by default: a long press on settled text starts a text selection, and text that is still streaming is never selectable. An app that opens its own message menu on a long press — react, reply, delete — passes `selectable={false}`.
 
+### Streaming animation and the caret
+
+A message can fade its new words in as they arrive, with a caret at the writing point. Both are off by default and take Streamdown's names and defaults:
+
+```tsx
+// A stream works `isAnimating` out from its own controller.
+<DownstreamMarkdown stream={stream} animated caret="block" />;
+
+// A controlled view says whether text is still arriving, as Streamdown requires.
+<DownstreamMarkdown
+  markdown={message}
+  animated
+  isAnimating={isStreaming}
+  onAnimationEnd={() => hideSpinner()}
+/>;
+
+<DownstreamMarkdown
+  stream={stream}
+  animated={{ animation: 'slideUp', sep: 'char', stagger: 20, duration: 200 }}
+  caret="circle"
+/>
+```
+
+`animation` is `fadeIn` or `slideUp`; `blurIn` draws as `fadeIn` and warns once, because neither platform can blur one run of glyphs cheaply inside a text draw pass. `duration` is 150 ms, `stagger` 40 ms, `easing` `ease`, `sep` `word`, and `maxBacklogMs` 320. A burst is compressed into the backlog rather than queued, so forty words fade across about a third of a second instead of leaving a second and a half of invisible text. CJK is split per syllable in either mode, and a rule, a table row, and an empty fence are one unit each.
+
+What fades is decided by aligning the new document's visible text against the one the view last showed, in the engine, so a character already on screen never fades again when a `**` closes, a link resolves, or a list continues. A word split across two snapshots joins the fade already running and keeps its timing.
+
+`caret` is `'none'`, `'block'`, or `'circle'`. It is drawn rather than typed, so it looks the same in every font and cannot change a line's height, and it is never copied, selected, exported, or read aloud. It sits after the last character of prose, a heading, a list item, or a still-open fence, and takes a line of its own in an empty document or after a table, a closed fence, or a rule. While a fade runs it follows the last word that has *started*, so it never sits after a gap.
+
+A frame of animation costs a lookup and a redraw. There is no React render, no Fabric state update, no relayout, and no change to any cached text, which matters because a segment is shared and immutable and alpha can only be applied in a draw pass. Reduce Motion turns the fade off on both platforms, and Android's animator duration scale multiplies every duration and turns it off at zero. With `animated` and `caret` off the output is identical to a build without them. See [the plan](docs/streaming-animation-plan.html) for the comparison against Streamdown and the other native renderers, and [streaming animation](docs/api.md#streaming-animation-and-the-caret) for the contract.
+
 ## Contributing
 
 - [Development workflow](CONTRIBUTING.md#development-workflow)
@@ -180,7 +211,7 @@ value. The other four screens need no key.
 
 ## Markdown implementation plan
 
-Phase 0 defines the [API contract](docs/api.md) and [streaming behavior](docs/streaming-semantics.md). The native display path, stream controller, and conservative incremental-tail parser are implemented. Streams use incremental parsing by default: completed blocks share their parsed content and rendering, while new input updates the unstable tail. Unproven boundaries fall back to a full parse, and `finish()` always parses the complete canonical source. Copy and download controls, per-block wrap, and the exports behind them are implemented on both platforms; the plan is [copy and download controls](docs/copy-download-controls-plan.html).
+Phase 0 defines the [API contract](docs/api.md) and [streaming behavior](docs/streaming-semantics.md). The native display path, stream controller, and conservative incremental-tail parser are implemented. Streams use incremental parsing by default: completed blocks share their parsed content and rendering, while new input updates the unstable tail. Unproven boundaries fall back to a full parse, and `finish()` always parses the complete canonical source. Copy and download controls, per-block wrap, and the exports behind them are implemented on both platforms; the plan is [copy and download controls](docs/copy-download-controls-plan.html). The streaming fade-in and the caret are implemented on both platforms as well; the plan is [streaming caret and fade-in](docs/streaming-animation-plan.html).
 
 ## Tests and benchmarks
 
