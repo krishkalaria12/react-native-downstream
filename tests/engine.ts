@@ -163,8 +163,22 @@ export const PREVIEW_EMPHASIS = 1 << 0;
 export const PREVIEW_INLINE_CODE = 1 << 1;
 export const PREVIEW_LINKS = 1 << 2;
 export const PREVIEW_IMAGES = 1 << 3;
+export const PREVIEW_MATH = 1 << 4;
 export const PREVIEW_ALL =
-  PREVIEW_EMPHASIS | PREVIEW_INLINE_CODE | PREVIEW_LINKS | PREVIEW_IMAGES;
+  PREVIEW_EMPHASIS |
+  PREVIEW_INLINE_CODE |
+  PREVIEW_LINKS |
+  PREVIEW_IMAGES |
+  PREVIEW_MATH;
+
+/**
+ * Bits of the parse-level `mathFlags` prop, mirroring `src/math.ts` and
+ * `downstream::MathParseFlags`.
+ */
+export const MATH_ENABLED = 1 << 0;
+export const MATH_SINGLE_DOLLAR = 1 << 1;
+export const MATH_BRACKETS = 1 << 2;
+export const MATH_FLAGS_DEFAULT = MATH_ENABLED | MATH_BRACKETS;
 
 function sessionBinary(): string {
   return compile(TARGETS['downstream-session'], 'downstream-session');

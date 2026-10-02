@@ -90,7 +90,8 @@ NSString *nameForFormat(NSString *format) {
 
 } // namespace
 
-@interface DownstreamMarkdownView () <RCTDownstreamMarkdownViewViewProtocol, DSLinkDelegate, DSControlDelegate>
+@interface DownstreamMarkdownView () <RCTDownstreamMarkdownViewViewProtocol, DSLinkDelegate, DSControlDelegate,
+                                    DSImageDelegate>
 - (void)scheduleTraceFrame;
 - (void)applyRendering;
 @end
@@ -109,8 +110,17 @@ NSString *nameForFormat(NSString *format) {
   uint32_t _controls;
   uint32_t _chrome;
   downstream::CodeLayout _codeLayout;
+  /// What each image in the document is, which the views draw their boxes from
+  /// and the frames are stacked with. A load changes an entry, and that is the
+  /// whole path from a picture arriving to the document being taller.
+  downstream::ImageStateLayout _imageState;
   std::string _codeFilename;
   std::string _tableFilename;
+  std::string _imageFilename;
+  /// The image whose button was pressed, so the control event can name the
+  /// destination the way a press does. Held only between the two calls a save
+  /// makes, and cleared on a recycle.
+  NSString *_pressedImageURL;
   NSString *_csvSeparator;
   NSArray<NSString *> *_controlLabels;
   CADisplayLink *_traceDisplayLink;
@@ -141,12 +151,18 @@ NSString *nameForFormat(NSString *format) {
                          static_cast<float>(defaultProps->codeBlockMaxHeight)};
     _codeFilename = "file";
     _tableFilename = "table";
+    _imageFilename = "image";
     _csvSeparator = @",";
     _controlLabels = @[];
     _exporter = [DSFileExporter new];
     _documentView = [[DSDocumentView alloc] initWithFrame:self.bounds];
     _documentView.linkDelegate = self;
     _documentView.controlDelegate = self;
+    _documentView.imageDelegate = self;
+    // The screen scale, so a 4,000-pixel photo costs a phone-sized bitmap rather
+    // than a full-size one, and so a decoded picture is the size its box was
+    // measured at.
+    _documentView.screenScale = UIScreen.mainScreen.scale;
     _documentView.selectable = _selectable;
     _documentView.controls = _controls;
     self.contentView = _documentView;
@@ -169,14 +185,16 @@ NSString *nameForFormat(NSString *format) {
   // here rebuilds anything.
   const BOOL themeChanged = [self applyTheme];
   if (!themeChanged && data.document == _document && data.fontSizeMultiplier == _fontScale &&
-      data.chrome == _chrome && data.code == _codeLayout) {
+      data.chrome == _chrome && data.code == _codeLayout && data.images == _imageState) {
     return;
   }
   _document = data.document;
   _fontScale = data.fontSizeMultiplier;
   _chrome = data.chrome;
   _codeLayout = data.code;
+  _imageState = data.images;
   _documentView.codeLayout = _codeLayout;
+  _documentView.imageState = _imageState;
   const uint64_t documentId = _document ? _document->id : 0;
   const BOOL tracing = documentId && downstream::SessionTrace::enabledDocument(documentId);
   if (tracing) downstream::SessionTrace::recordDocument(documentId, "apply_start");
@@ -289,6 +307,19 @@ NSString *nameForFormat(NSString *format) {
   if (newProps.tableFilename != previous.tableFilename) {
     _tableFilename = newProps.tableFilename;
   }
+  if (newProps.imageFilename != previous.imageFilename) {
+    _imageFilename = newProps.imageFilename;
+  }
+  // The image and math props are read by the shadow node, which is what measures;
+  // this view reads them only to pick the loader and the image delegate's own
+  // policy, and neither changes a height, so nothing is rebuilt here. A change
+  // to either reaches the frames through the next state update.
+  if (newProps.mathFlags != previous.mathFlags) {
+    // A formula that has just become literal, or just become typeset, is a
+    // different rendering of the same document, and the shadow node's next
+    // layout will have a different height for it.
+    [self applyRendering];
+  }
   if (newProps.csvSeparator != previous.csvSeparator) {
     _csvSeparator = newProps.csvSeparator.empty() ? @"," : @(newProps.csvSeparator.c_str());
   }
@@ -369,11 +400,37 @@ NSString *nameForFormat(NSString *format) {
       : nullptr;
 }
 
+/// A press on a loaded image that is not inside a link.
+///
+/// The library opens nothing. An app that has a viewer wants its own, and one
+/// that does not should not have a picture that navigates somewhere surprising
+/// when tapped, so the press is reported and the decision is the app's.
+- (void)didPressImageWithURL:(NSString *)url
+                         alt:(NSString *)alt
+                       title:(NSString *)title
+                    ordinal:(uint32_t)ordinal {
+  const auto *emitter = [self emitter];
+  if (emitter == nullptr || !_document || _document->images.size() <= ordinal) {
+    return;
+  }
+  // The image's own source range, so a press maps back to the `![…](…)` the
+  // writer sent rather than to a position in a rendered view.
+  const auto &image = _document->images[ordinal];
+  emitter->onImagePress({
+      .url = std::string(url.UTF8String ?: ""),
+      .alt = std::string(alt.UTF8String ?: ""),
+      .title = std::string(title.UTF8String ?: ""),
+      .start = static_cast<int>(image.range.start),
+      .end = static_cast<int>(image.range.end),
+  });
+}
+
 - (void)emitControlWithBlock:(NSString *)block
                       action:(NSString *)action
                       format:(NSString *)format
                     language:(NSString *)language
                     filename:(NSString *)filename
+                        url:(NSString *)url
                      wrapped:(BOOL)wrapped
                     expanded:(BOOL)expanded {
   const auto *emitter = [self emitter];
@@ -391,6 +448,10 @@ NSString *nameForFormat(NSString *format) {
       .format = std::string(format.UTF8String),
       .language = std::string(language.UTF8String),
       .filename = std::string(filename.UTF8String),
+      // Only an image carries a destination: a code block and a table name a
+      // file rather than a place to fetch from, and an empty string here is what
+      // JavaScript reads as "no url" rather than as a failed request.
+      .url = std::string(url.UTF8String ?: ""),
       .wrapped = static_cast<bool>(wrapped),
       .expanded = static_cast<bool>(expanded),
       .generation = generation,
@@ -424,6 +485,32 @@ NSString *nameForFormat(NSString *format) {
                       action:(NSString *)action
                       format:(NSString *)format
                     filename:(NSString *)filename {
+  if (kind == DSBlockKindImage) {
+    // An image has no block range to read: the segment view fetched the bytes,
+    // named the file, and presented the dialog, so all that is left is to report
+    // what happened. The URL is what JavaScript needs to open its own viewer, and
+    // the file name is what it would have named the file itself.
+    if (filename.length == 0 || ![action isEqualToString:@"download"]) {
+      [self emitControlWithBlock:@"image"
+                          action:action
+                          format:@""
+                        language:@""
+                        filename:@""
+                            url:@""
+                         wrapped:NO
+                        expanded:NO];
+      return;
+    }
+    [self emitControlWithBlock:@"image"
+                        action:@"download"
+                        format:@""
+                      language:@""
+                      filename:filename
+                          url:_pressedImageURL ?: @""
+                       wrapped:NO
+                      expanded:NO];
+    return;
+  }
   if (!_document) {
     return;
   }
@@ -487,6 +574,7 @@ NSString *nameForFormat(NSString *format) {
                           format:format
                         language:language
                         filename:@""
+                             url:@""
                          wrapped:NO
                         expanded:NO];
       return;
@@ -512,6 +600,7 @@ NSString *nameForFormat(NSString *format) {
                                format:format
                              language:language
                              filename:name
+                                 url:@""
                               wrapped:NO
                              expanded:NO];
       }
@@ -574,6 +663,16 @@ NSString *nameForFormat(NSString *format) {
   }
 }
 
+- (void)imagesDidChange {
+  if (!_state) {
+    return;
+  }
+  // A clone with the same data is enough: Fabric measures every new revision,
+  // and the node's `layout` reads each picture's answer from the cache the load
+  // just wrote and commits the state the view then draws.
+  _state->updateState(DownstreamMarkdownState(_state->getData()));
+}
+
 - (void)didToggleWrapAtOrdinal:(uint32_t)ordinal language:(NSString *)language wrapped:(BOOL)wrapped {
   const auto *emitter = [self emitter];
   if (emitter == nullptr || !_state) {
@@ -592,6 +691,7 @@ NSString *nameForFormat(NSString *format) {
                       format:@""
                     language:language
                     filename:@""
+                        url:@""
                      wrapped:wrapped
                     expanded:NO];
 }
@@ -611,12 +711,15 @@ NSString *nameForFormat(NSString *format) {
                       format:@""
                     language:language
                     filename:@""
+                        url:@""
                      wrapped:NO
                     expanded:expanded];
 }
 
 - (void)didFailControlOfKind:(DSBlockKind)kind action:(NSString *)action message:(NSString *)message {
-  [self emitControlFailureFor:kind == DSBlockKindCode ? @"code" : @"table"
+  [self emitControlFailureFor:kind == DSBlockKindCode    ? @"code"
+                       : kind == DSBlockKindImage    ? @"image"
+                                                      : @"table"
                         action:action
                        message:message];
 }

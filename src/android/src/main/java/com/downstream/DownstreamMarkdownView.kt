@@ -72,6 +72,7 @@ internal const val CONTROL_TABLE_COPY = 4
 internal const val CONTROL_TABLE_DOWNLOAD = 8
 internal const val CONTROL_CODE_WRAP = 16
 internal const val CONTROL_CODE_EXPAND = 32
+internal const val CONTROL_IMAGE_DOWNLOAD = 64
 
 // How long a copy button shows its check before going back, as in Streamdown.
 private const val COPIED_DURATION_MS = 2_000L
@@ -85,6 +86,7 @@ private val DEFAULT_LABELS = listOf(
   "Copy table", "Copy table as Markdown", "Copy table as CSV", "Copy table as TSV",
   "Download table", "Download table as CSV", "Download table as Markdown",
   "Markdown", "CSV", "TSV",
+  "Image not available", "Download image", "Image", "Image blocked",
 )
 private const val LABEL_COPY_CODE = 0
 private const val LABEL_DOWNLOAD_FILE = 1
@@ -98,6 +100,9 @@ private const val LABEL_DOWNLOAD_TABLE = 11
 private const val LABEL_FORMAT_MARKDOWN = 14
 private const val LABEL_FORMAT_CSV = 15
 private const val LABEL_FORMAT_TSV = 16
+private const val LABEL_IMAGE_NOT_AVAILABLE = 17
+private const val LABEL_IMAGE_DOWNLOAD = 18
+private const val LABEL_IMAGE_BLOCKED = 20
 
 /** How far a line number is dimmed below the code it numbers. Mirrors `kGutterAlpha` on iOS. */
 private const val GUTTER_ALPHA = 0.5f
@@ -127,7 +132,7 @@ private const val CONTROL_BUTTON_DP = 32f
 private const val CONTROL_GLYPH_DP = 18f
 
 /** One code header or table toolbar button, sized in dp and tinted later. */
-private fun newControlButton(context: Context, drawable: Int): ImageButton = ImageButton(context).apply {
+internal fun newControlButton(context: Context, drawable: Int): ImageButton = ImageButton(context).apply {
   val density = context.resources.displayMetrics.density
   val size = (CONTROL_BUTTON_DP * density).toInt()
   val inset = ((CONTROL_BUTTON_DP - CONTROL_GLYPH_DP) / 2 * density).toInt()
@@ -163,7 +168,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   internal var onLinkPress: ((view: DownstreamMarkdownView, url: String, start: Int, end: Int) -> Unit)? = null
   internal var onControl:
     ((view: DownstreamMarkdownView, block: String, action: String, format: String, language: String,
-      filename: String) -> Unit)? = null
+      filename: String, url: String) -> Unit)? = null
   internal var onControlFailure:
     ((view: DownstreamMarkdownView, block: String, action: String, message: String) -> Unit)? = null
   internal var onWrapToggle: ((view: DownstreamMarkdownView, ordinal: Int, wrapped: Boolean) -> Unit)? = null
@@ -188,7 +193,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   private var syntaxHighlighting = true
   // Every control on, which is the default and matches the codegen default.
   private var controls = CONTROL_CODE_COPY or CONTROL_CODE_DOWNLOAD or CONTROL_TABLE_COPY or
-    CONTROL_TABLE_DOWNLOAD or CONTROL_CODE_WRAP or CONTROL_CODE_EXPAND
+    CONTROL_TABLE_DOWNLOAD or CONTROL_CODE_WRAP or CONTROL_CODE_EXPAND or CONTROL_IMAGE_DOWNLOAD
   private var controlLabels: List<String> = DEFAULT_LABELS
   private var chrome = 0
   /**
@@ -200,6 +205,9 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   private var csvSeparator = ","
   private var codeFilename = "file"
   private var tableFilename = "table"
+  private var imageFilename = "image"
+  private var mathFlags = 0
+  private var allowedImagePrefixes: List<String> = emptyList()
   private var exporter = DocumentExporter(context)
   private var generation = 0
   private var sessionId: String? = null
@@ -312,8 +320,12 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       when (val child = getChildAt(index)) {
         is CodeSegmentView -> child.setControlLabels(controlLabels)
         is TableSegmentView -> child.setControlLabels(controlLabels)
+        is ImageSegmentView -> child.setStatusLabels(
+          controlLabels[LABEL_IMAGE_NOT_AVAILABLE], controlLabels[LABEL_IMAGE_BLOCKED],
+        )
       }
     }
+    applySettledState()
   }
 
   fun setCodeFilename(value: String) {
@@ -323,6 +335,50 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   fun setTableFilename(value: String) {
     tableFilename = value
   }
+
+  /**
+   * The name a picture's save uses when the app named none.
+   *
+   * The engine's `imageDownloadName` turns this into a file name from the URL's
+   * extension, the destination's MIME subtype, or this as a last resort, so a
+   * picture called `?id=7` still saves as something rather than as nothing.
+   */
+  fun setImageFilename(value: String) {
+    imageFilename = value
+  }
+
+  /**
+   * The math flags, as the engine's bitmask.
+   *
+   * Held so an unresolved formula can be told apart from one that was never meant to
+   * be laid out: with the flag off the engine leaves the literal alone and this view
+   * has nothing to do, and with it on an unresolved formula draws in the theme's
+   * error color. Both answers are otherwise in the state.
+   */
+  fun setMathFlags(value: Int) {
+    mathFlags = value
+  }
+
+  /** Whether pictures are fetched at all. The state says so per picture as well. */
+  fun setImages(value: Boolean) {
+    imagesEnabled = value
+    imageLayout = if (value) imageLayout else imageLayout.copy(state = imageLayout.state.copy(enabled = false))
+    syncSegmentViews()
+  }
+
+  /**
+   * The prefixes a measurement resolved against.
+   *
+   * Kept so the value that produced the state is readable next to it: a view that
+   * shows a blocked picture's alt text should be able to say which prefix list said
+   * so. The list itself is not re-applied here.
+   */
+  fun setAllowedImagePrefixes(value: List<String>) {
+    allowedImagePrefixes = value
+  }
+
+  /** The image answers with this app's policy applied, which is what frames use. */
+  private var imagesEnabled = true
 
   fun setCsvSeparator(value: String) {
     csvSeparator = value
@@ -394,6 +450,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
           child.setControlsEnabled(settled)
           child.setToolbarVisible(chrome and RenderedDocument.CHROME_TABLE_TOOLBAR != 0)
         }
+        is ImageSegmentView -> child.setDownloadControl(controls, settled, controlLabels[LABEL_IMAGE_DOWNLOAD])
       }
     }
   }
@@ -497,7 +554,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
         )
         return
       }
-      onControl?.invoke(this, block, request.action, request.format, request.language, "")
+      onControl?.invoke(this, block, request.action, request.format, request.language, "", "")
       return
     }
     val weakView = WeakReference(this)
@@ -507,7 +564,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       if (failure != null) {
         view.onControlFailure?.invoke(view, block, "download", failure)
       } else if (url != null) {
-        view.onControl?.invoke(view, block, request.action, request.format, request.language, request.filename)
+        view.onControl?.invoke(view, block, request.action, request.format, request.language, request.filename, "")
       }
     }
   }
@@ -624,11 +681,24 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   fun toggleExpand(ordinal: Int) = updateChoice { it.copyWithExpand(ordinal) }
 
   private fun updateChoice(toggle: (CodeChoices) -> CodeChoices) {
-    val wrapper = stateWrapper ?: return
+    if (stateWrapper == null) return
     val choices = toggle(codeLayout.choices)
     val layout = CodeLayout(codeLayout.props, choices)
     chrome = chromeFor(layout)
     codeLayout = layout
+    applySettledState()
+    requestLayout()
+    pushState(layout)
+  }
+
+  /**
+   * Hands the state back with [layout], which is a Fabric state update: the node is
+   * cloned, measured again, and reconciles its image answers from the engine's
+   * cache, all without a React render.
+   */
+  private fun pushState(layout: CodeLayout) {
+    val wrapper = stateWrapper ?: return
+    val choices = layout.choices
     val map = Arguments.createMap()
     map.putDouble("documentId", documentId.toDouble())
     map.putDouble("fontScale", fontScale.toDouble())
@@ -640,8 +710,6 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     map.putDouble("codeBlockMaxHeight", PixelUtil.toDIPFromPixel(layout.props.maxHeight).toDouble())
     map.putArray("wrapToggles", intArrayOf(choices.wrapToggles))
     map.putArray("expanded", intArrayOf(choices.expanded))
-    applySettledState()
-    requestLayout()
     wrapper.updateState(map)
   }
 
@@ -691,13 +759,16 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   // Reuse views of the same kind in place, so unchanged segments keep their
   // selection and scroll position across updates.
   private fun syncSegmentViews() {
-    val segments = rendered?.segments.orEmpty()
+    val document = rendered
+    val segments = document?.segments.orEmpty()
     segments.forEachIndexed { index, segment ->
       var view = if (index < childCount) getChildAt(index) else null
       val reusable = when (segment) {
         is TextSegment -> view is TextSegmentView
         is CodeSegment -> view is CodeSegmentView
         is TableSegment -> view is TableSegmentView
+        is ImageSegment -> view is ImageSegmentView
+        is MathSegment -> view is MathSegmentView
       }
       if (!reusable) {
         if (view != null) removeViewAt(index)
@@ -705,13 +776,46 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
           is TextSegment -> TextSegmentView(context)
           is CodeSegment -> CodeSegmentView(context).apply { setControlHost(this@DownstreamMarkdownView) }
           is TableSegment -> TableSegmentView(context).apply { setControlHost(this@DownstreamMarkdownView) }
+          is ImageSegment -> ImageSegmentView(context).also { new ->
+            // A picture's answer is the engine's, so a load that finishes is reported
+            // upward and not applied here: the view rebuilds from the state rather
+            // than resizing itself, which is what keeps a measured height and a drawn
+            // one the same number.
+            new.onImageAnswer = { url, answer -> reportImageAnswer(url, answer) }
+            new.onImagePress = { url, alt, title, range -> pressImage(url, alt, title, range) }
+            new.onImageDownload = { image -> downloadImage(image) }
+          }
+          is MathSegment -> MathSegmentView(context)
         }
         addView(view, index)
       }
       when (segment) {
-        is TextSegment -> (view as TextSegmentView).setSegment(segment, rendered!!)
-        is CodeSegment -> (view as CodeSegmentView).setSegment(segment, rendered!!)
-        is TableSegment -> (view as TableSegmentView).setSegment(segment, sourceEpoch, rendered!!.style.chromeRowHeight)
+        is TextSegment -> (view as TextSegmentView).setSegment(segment, document!!)
+        is CodeSegment -> (view as CodeSegmentView).setSegment(segment, document!!)
+        is TableSegment -> (view as TableSegmentView).setSegment(segment, sourceEpoch, document!!.style.chromeRowHeight)
+        // Read once into the local rather than off `rendered` per field: it is a
+        // mutable property, so the compiler will not smart-cast it, and five reads
+        // of a field another thread can replace is five chances to mix one
+        // snapshot's metrics with another's.
+        is ImageSegment -> (view as ImageSegmentView).apply {
+          val style = document!!.style
+          setStyle(style.imageMetrics, style.imageAltColor)
+          setStatusLabels(controlLabels[LABEL_IMAGE_NOT_AVAILABLE], controlLabels[LABEL_IMAGE_BLOCKED])
+          setImageLayout(imageLayout)
+          setSegment(segment)
+        }
+        is MathSegment -> (view as MathSegmentView).apply {
+          val style = document!!.style
+          setStyle(
+            style.mathFontSize,
+            style.mathColor,
+            style.mathBackground,
+            style.mathErrorColor,
+            style.mathPadding,
+            style.mathRadius,
+          )
+          setSegment(segment)
+        }
       }
     }
     while (childCount > segments.size) {
@@ -719,6 +823,87 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     }
     applySettledState()
     layoutSegments()
+  }
+
+  /**
+   * The engine's answers about pictures, from the state the shadow node resolved.
+   *
+   * Held here rather than per segment because a state update replaces the whole
+   * layout map at once, and a per-segment answer would have to be matched back to a
+   * view that may already have been recycled. The view group is the one thing that
+   * outlives every segment.
+   */
+  private var imageLayout = ImageLayout()
+
+  /** Set by the view manager: a press on a picture that is not inside a link. */
+  internal var onImagePress: ((view: DownstreamMarkdownView, url: String, alt: String, title: String, range: IntRange) -> Unit)? = null
+
+  /**
+   * Sets the answers and restacks, because a picture's height is its state.
+   *
+   * The frames are keyed on the answers as well as the width, so a load that
+   * finishes collapses the placeholder and moves the text under it in one pass.
+   */
+  internal fun setImageLayout(value: ImageLayout) {
+    if (imageLayout == value) {
+      return
+    }
+    imageLayout = value
+    syncSegmentViews()
+  }
+
+  /**
+   * Records a picture's answer with the engine and asks the shadow node to measure
+   * again.
+   *
+   * The size goes into the engine's process-wide cache, keyed by URL, which is what
+   * the shadow node reads when it resolves the image layout; the state update is
+   * only the nudge that makes it measure. So a message scrolled back into view
+   * measures at its loaded height on its first frame, without loading again.
+   */
+  private fun reportImageAnswer(url: String, answer: AndroidImages.Answer?) {
+    DownstreamNative.recordImage(url, answer?.width ?: 0, answer?.height ?: 0)
+    pushState(codeLayout)
+  }
+
+  /**
+   * A press on a picture that is not inside a link.
+   *
+   * The library opens nothing: an app that has a viewer wants its own, and one that
+   * does not should not have a picture that navigates somewhere surprising.
+   */
+  private fun pressImage(url: String, alt: String, title: String, range: IntRange) {
+    onImagePress?.invoke(this, url, alt, title, range)
+  }
+
+  private fun downloadImage(image: ImageSegment) {
+    if (documentId == 0L || controls and CONTROL_IMAGE_DOWNLOAD == 0) return
+    val epoch = sourceEpoch
+    val requestGeneration = generation
+    val requestSession = sessionId
+    val configuredName = imageFilename
+    val weakView = WeakReference(this)
+    fun currentView(): DownstreamMarkdownView? = weakView.get()?.takeIf {
+      it.documentId != 0L && it.sourceEpoch == epoch && it.generation == requestGeneration &&
+        it.sessionId == requestSession
+    }
+    AndroidImages.download(image.url) { result ->
+      val view = currentView() ?: return@download
+      if (result == null) {
+        view.onControlFailure?.invoke(view, "image", "download", "The image could not be fetched.")
+        return@download
+      }
+      val name = DownstreamNative.imageName(image.url, image.alt, result.mimeType, configuredName)
+        ?: "$configuredName.png"
+      view.exporter.save(name, result.mimeType, result.bytes) { url, failure ->
+        val owner = currentView() ?: return@save
+        if (failure != null) {
+          owner.onControlFailure?.invoke(owner, "image", "download", failure)
+        } else if (url != null) {
+          owner.onControl?.invoke(owner, "image", "download", "", "", name, image.url)
+        }
+      }
+    }
   }
 
   // React Native does not relayout children that request it, so segments are
@@ -729,7 +914,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     if (width <= 0) {
       return
     }
-    val frames = document.frames(width, chrome, codeLayout)
+    val frames = document.frames(width, chrome, codeLayout, imageLayout)
     for (index in 0 until minOf(childCount, frames.size / 2)) {
       val child = getChildAt(index)
       val top = paddingTop + frames[index * 2]

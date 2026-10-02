@@ -4,6 +4,7 @@ import NativeDownstreamSession, {
   type SnapshotReadyEvent,
 } from './NativeDownstreamSession';
 import { checkedUtf8Bytes, MAX_SOURCE_BYTES } from './controlledSource';
+import { mathAvailable, resolveMath } from './math';
 import { emitJsStreamTrace } from './streamTrace';
 import type {
   MarkdownErrorCode,
@@ -27,8 +28,13 @@ const PREVIEW_EMPHASIS = 1 << 0;
 const PREVIEW_INLINE_CODE = 1 << 1;
 const PREVIEW_LINKS = 1 << 2;
 const PREVIEW_IMAGES = 1 << 3;
+const PREVIEW_MATH = 1 << 4;
 const PREVIEW_ALL =
-  PREVIEW_EMPHASIS | PREVIEW_INLINE_CODE | PREVIEW_LINKS | PREVIEW_IMAGES;
+  PREVIEW_EMPHASIS |
+  PREVIEW_INLINE_CODE |
+  PREVIEW_LINKS |
+  PREVIEW_IMAGES |
+  PREVIEW_MATH;
 
 /**
  * Resolves the public `preview` option to a bitmask.
@@ -53,6 +59,7 @@ function previewFeatures(options: boolean | MarkdownPreviewOptions): number {
   if (options.inlineCode) features |= PREVIEW_INLINE_CODE;
   if (options.links) features |= PREVIEW_LINKS;
   if (options.images) features |= PREVIEW_IMAGES;
+  if (options.math) features |= PREVIEW_MATH;
   return features;
 }
 const controllers = new Map<string, StreamState>();
@@ -77,6 +84,15 @@ type InFlight = { bytes: number; sequence: number };
 class StreamState implements MarkdownStreamController {
   readonly sessionId: string;
   readonly mode: ParseMode;
+  /**
+   * The math parse options, kept for the life of the session.
+   *
+   * A stream's parse options are part of its sources' identity, so `reset()`
+   * keeps them rather than asking again: a stream whose delimiters changed
+   * mid-life would parse the same string two ways, and the reader would see a
+   * formula change shape without the document changing.
+   */
+  private readonly mathFlags: number;
   private onError?: (error: MarkdownErrorEvent) => void;
   private source = '';
   private sourceBytes = 0;
@@ -100,7 +116,8 @@ class StreamState implements MarkdownStreamController {
     this.sessionId = `downstream-${Date.now()}-${++nextSession}`;
     this.mode = mode;
     this.onError = options.onError;
-    NativeDownstreamSession.create(this.sessionId, mode);
+    this.mathFlags = resolveMath(options.math, mathAvailable()).flags;
+    NativeDownstreamSession.create(this.sessionId, mode, this.mathFlags);
     // Set after create, so a session always exists before it is configured.
     if (options.preview !== undefined) {
       this.setPreview(options.preview);

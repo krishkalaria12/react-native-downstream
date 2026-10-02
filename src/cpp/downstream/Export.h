@@ -58,4 +58,15 @@ std::string downloadName(const FenceMeta &meta, std::string_view language, const
 /// same sanitizing as a code name.
 std::string tableDownloadName(const std::string &configuredBase, std::string_view extension);
 
+/// The file name an image download saves as, extension included.
+///
+/// Streamdown's three rules in order: an extension the URL names, if its last
+/// path segment ends in one of at most four lower-case letters; else the MIME
+/// type's subtype, if the caller knows it; else `png`. The base is the alt text
+/// without an extension it already carries, else the caller's configured base,
+/// else `image`. Sanitized exactly as a code name, so a caption full of
+/// characters a filesystem rejects produces a usable name rather than a failure.
+std::string imageDownloadName(std::string_view url, std::string_view alt, std::string_view mimeType,
+                              const std::string &configuredBase);
+
 } // namespace downstream

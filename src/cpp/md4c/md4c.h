@@ -406,6 +406,8 @@ typedef struct MD_BLOCK_BLANK_DETAIL {
 #define MD_FLAG_HIGHLIGHT                   0x200000 /* Enable ==highlight== spans. */
 #define MD_FLAG_PRESERVEBLANKLINES          0x400000 /* Report blank line runs as MD_BLOCK_BLANK. */
 #define MD_FLAG_INSERT                      0x800000 /* Enable insert extension. */
+#define MD_FLAG_LATEXMATHBLOCKS             0x1000000 /* LOCAL PATCH (see README.md): treat a line that is exactly $$ as a fence. */
+#define MD_FLAG_LATEXMATHNOSINGLE           0x2000000 /* LOCAL PATCH (see README.md): never treat a single $ as math. */
 
 #define MD_FLAG_PERMISSIVEAUTOLINKS         (MD_FLAG_PERMISSIVEEMAILAUTOLINKS | MD_FLAG_PERMISSIVEURLAUTOLINKS | MD_FLAG_PERMISSIVEWWWAUTOLINKS)
 #define MD_FLAG_NOHTML                      (MD_FLAG_NOHTMLBLOCKS | MD_FLAG_NOHTMLSPANS)

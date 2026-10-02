@@ -2,6 +2,7 @@
 
 #include "CodeLayout.h"
 #include "Document.h"
+#include "ImageLayout.h"
 #include "RenderPreparer.h"
 #include "theme/Theme.h"
 
@@ -24,7 +25,15 @@ public:
   explicit DownstreamTextLayoutManager(std::shared_ptr<const ContextContainer> contextContainer)
       : contextContainer_(std::move(contextContainer)) {
     downstream::RenderPreparer::install(&DownstreamTextLayoutManager::prepare);
+    // The container is the only place the platform's own image loader lives, and
+    // this is the first code of ours that runs with it in hand, so the install
+    // happens here rather than in a view that may not exist yet.
+    installPlatformServices(*contextContainer_);
   }
+
+  /// Hands the engine the platform services that need the context container.
+  /// Implemented per platform next to `measurePlatform`.
+  static void installPlatformServices(const ContextContainer &contextContainer);
 
   /// Builds a document's platform rendering and measures it at each hint on
   /// the calling worker thread, filling the caches measurePlatform and the
@@ -42,17 +51,24 @@ public:
   /// depends on which. The platform decides each block through
   /// `downstream::resolveCodeBlock`, the same function the view draws with.
   ///
+  /// The image layout is in the key for the same reason and the same shape: a
+  /// document can hold a loaded picture and a placeholder at once, and one
+  /// image's height changes when its load finishes. The platform decides each
+  /// image through `downstream::imageBox`, so a measured picture and a drawn
+  /// one cannot disagree about how tall it is.
+  ///
   /// The theme keys on `themeLayoutKey` and not on `id`, so a color-only change
   /// reuses every measured size and Yoga sees nothing at all: the drawing
   /// objects are rebuilt, but no measurement is.
   Size measure(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
                const LayoutConstraints &layoutConstraints, SurfaceId surfaceId, uint32_t chrome,
-               const downstream::CodeLayout &code, const downstream::Theme::Handle &theme) const;
+               const downstream::CodeLayout &code, const downstream::ImageLayout &images,
+               const downstream::Theme::Handle &theme) const;
 
 private:
   Size measurePlatform(const downstream::DocumentHandle &document, Float fontSizeMultiplier, Float maximumWidth,
                        SurfaceId surfaceId, uint32_t chrome, const downstream::CodeLayout &code,
-                       const downstream::Theme::Handle &theme) const;
+                       const downstream::ImageLayout &images, const downstream::Theme::Handle &theme) const;
 
   struct CacheEntry {
     uint64_t documentId;
@@ -60,6 +76,7 @@ private:
     Float maximumWidth;
     uint32_t chrome;
     downstream::CodeLayout code;
+    downstream::ImageLayout images;
     /// The theme's layout key, which is 0 for the default theme.
     uint64_t themeLayoutKey;
     Size size;

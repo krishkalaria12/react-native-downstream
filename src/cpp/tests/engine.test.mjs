@@ -34,6 +34,14 @@ const [STRONG, EMPHASIS, STRIKE, CODE, LINK, IMAGE_ALT, FOOTNOTE] = [
   0, 1, 2, 3, 4, 5, 6,
 ].map((bit) => 1 << bit);
 
+/**
+ * RaTeX's macOS slice, which `node math/scripts/vendor-ratex.mjs` writes. The
+ * math engine test links it, and is skipped where it is not vendored: there is
+ * no Linux slice in RaTeX's release.
+ */
+const RATEX_HOST = resolve(CPP, '..', '..', 'math', 'vendor', 'host', 'libratex_ffi.a');
+const ratexVendored = process.platform === 'darwin' && existsSync(RATEX_HOST);
+
 const targets = {};
 const binary = (name) => compile(targets[name], name);
 
@@ -72,7 +80,27 @@ before(async () => {
     ['test_highlight', engine],
     ['dump_tokens', [downstream('Unicode.cpp')]],
     ['test_theme', theme],
+    ['test_images', [downstream('ImageLayout.cpp')]],
+    ['test_math', []],
+    [
+      'test_math_scan',
+      ['MathScan.cpp', 'Scan.cpp', 'Compare.cpp'].map(downstream),
+    ],
+    [
+      'test_math_cache',
+      ['MathEngine.cpp', 'MathDisplayList.cpp', 'MathLayout.cpp'].map((name) =>
+        join(CPP, 'math', name)
+      ),
+    ],
   ];
+  if (ratexVendored) {
+    executables.push([
+      'test_math_engine',
+      ['MathEngine.cpp', 'MathDisplayList.cpp', 'MathLayout.cpp']
+        .map((name) => join(CPP, 'math', name))
+        .concat(RATEX_HOST),
+    ]);
+  }
   for (const [name, dependencies] of executables) {
     targets[name] = [
       testSource(`${name}.cpp`),
@@ -157,10 +185,14 @@ describe('vendored md4c', () => {
   // security or bugfix patch, which must be recorded here on purpose, or an
   // accident. The revision and version live in src/cpp/md4c/README.md.
   const PINS = {
+    // md4c.c and md4c.h carry two local patches, both recorded in
+    // src/cpp/md4c/README.md and both behind a flag that is off by default:
+    // MD_FLAG_LATEXMATHBLOCKS makes a `$$` line a fence, and
+    // MD_FLAG_LATEXMATHNOSINGLE makes a single `$` never math.
     'md4c.c':
-      'e111ee600033f11dfb31e732429741f3c1406f2a3faffc0395d5f7dbb875e086',
+      '20ae89c5abf48e65608ed1e279f682b07d62dea1b1498c096c41d625aa3100a4',
     'md4c.h':
-      'd0c14762f1eac3cd9d1c08c3a287b61d93ee2382e5a22ee48f5a6f3ad2c2349d',
+      '391b36c01aa734a67cc1c399c9c342913586a3112eecfb1a0f699ea2ef3b3a33',
     'entity.c':
       '7ea50d695d9210958e01b12b3e4d1db78d783d03d95b040fd7d2d9cfe1f1d39c',
     'entity.h':
@@ -800,6 +832,77 @@ describe('themes', () => {
   test('theme invariants', () => {
     execFileSync(binary('test_theme'), { timeout: 15_000, stdio: 'inherit' });
   });
+});
+
+describe('images', () => {
+  test('finish preserves committed and tail image records', () => {
+    const prefix =
+      '[![Committed lake](https://example.com/lake.png "Lake")](https://example.com/page)\n\n' +
+      'A settled paragraph. '.repeat(12) +
+      '\n\n';
+    const tail = '![Tail chart](https://example.com/chart.png "Chart")';
+    const steps = [
+      { op: 'append', chunk: prefix },
+      { op: 'parse', finished: false },
+      { op: 'append', chunk: tail },
+      { op: 'parse', finished: false },
+    ];
+    const open = runSession('incremental', steps);
+    assert.ok(open.settled > 0, 'the stream has committed its prefix');
+    assert.equal(open.images.length, 2);
+    const done = runSession('incremental', [
+      ...steps,
+      { op: 'parse', finished: true },
+    ]);
+    assert.deepEqual(done.images, open.images);
+    assert.deepEqual(done.images, parse(prefix + tail).images);
+    assert.deepEqual(
+      done.blocks.map((block) => block.images),
+      open.blocks.map((block) => block.images)
+    );
+    assert.equal(done.settled, done.blocks.length);
+  });
+  // The box rule, the state rule, and the URL policy. Both platforms are held to
+  // this one table: `test_images` is the C++ side, and
+  // `tests/android/ImageLayoutCheck.kt` runs the same cases against the Kotlin
+  // mirror, so an image cannot be a different height on one platform.
+  test('image box, state, and URL policy', () => {
+    execFileSync(binary('test_images'), { timeout: 15_000, stdio: 'inherit' });
+  });
+});
+
+describe('math', () => {
+  test('bracket scanning preserves code and source offsets', () => {
+    execFileSync(binary('test_math_scan'), { timeout: 15_000, stdio: 'inherit' });
+  });
+
+  test('math cache reuses successes and failures with bounded eviction', () => {
+    execFileSync(binary('test_math_cache'), { timeout: 15_000, stdio: 'inherit' });
+  });
+
+  // The sizing both platforms apply once a layout exists. `test_math` is the C++
+  // side, and `tests/android/MathLayoutCheck.kt` runs the same cases against the
+  // Kotlin mirror, so a formula cannot be a different height on one platform.
+  test('block and inline sizing', () => {
+    execFileSync(binary('test_math'), { timeout: 15_000, stdio: 'inherit' });
+  });
+
+  // RaTeX itself, installed the way the math package installs it, read by the
+  // decoder both platforms draw from.
+  test(
+    'RaTeX display lists decode',
+    {
+      skip: ratexVendored
+        ? false
+        : 'run node math/scripts/vendor-ratex.mjs on macOS',
+    },
+    () => {
+      execFileSync(binary('test_math_engine'), {
+        timeout: 30_000,
+        stdio: 'inherit',
+      });
+    }
+  );
 });
 
 describe('input', () => {

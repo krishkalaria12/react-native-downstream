@@ -801,6 +801,107 @@ describe('DownstreamMarkdown controls', () => {
   });
 });
 
+describe('DownstreamMarkdown math and image callbacks', () => {
+  for (const mode of ['controlled', 'stream'] as const) {
+    it(`keeps ${mode} native callbacks stable and calls the newest handlers`, () => {
+      const source =
+        mode === 'controlled' ? { markdown: 'x' } : { stream: stream() };
+      const oldMath = vi.fn();
+      const oldImage = vi.fn();
+      const newMath = vi.fn();
+      const newImage = vi.fn();
+      mount(
+        <DownstreamMarkdown
+          {...source}
+          onMathError={oldMath}
+          onImagePress={oldImage}
+        />
+      );
+      const first = nativeView.last() as Record<string, unknown>;
+      rerender(
+        <DownstreamMarkdown
+          {...source}
+          onMathError={newMath}
+          onImagePress={newImage}
+        />
+      );
+      const next = nativeView.last() as Record<string, unknown>;
+      expect(next.onMathError).toBe(first.onMathError);
+      expect(next.onImagePress).toBe(first.onImagePress);
+      const mathError = next.onMathError as (event: object) => void;
+      const imagePress = next.onImagePress as (event: object) => void;
+      mathError({
+        nativeEvent: {
+          source: '\\bad',
+          message: 'Invalid formula',
+          display: false,
+          generation: next.generation,
+        },
+      });
+      imagePress({
+        nativeEvent: {
+          url: 'https://example.com/image.png',
+          alt: 'Image',
+          title: '',
+          start: 0,
+          end: 5,
+        },
+      });
+      expect(oldMath).not.toHaveBeenCalled();
+      expect(oldImage).not.toHaveBeenCalled();
+      expect(newMath).toHaveBeenCalledTimes(1);
+      expect(newImage).toHaveBeenCalledWith({
+        url: 'https://example.com/image.png',
+        alt: 'Image',
+        range: { start: 0, end: 5 },
+      });
+      mathError({
+        nativeEvent: {
+          source: '\\stale',
+          message: 'Old formula',
+          display: true,
+          generation: Number(next.generation) + 1,
+        },
+      });
+      expect(newMath).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  it('keeps stream math callbacks stable across snapshots and rejects pre-reset errors', () => {
+    const session = stream();
+    const onMathError = vi.fn();
+    mount(<DownstreamMarkdown stream={session} onMathError={onMathError} />);
+    const first = nativeView.last() as Record<string, unknown>;
+    session.append('Next');
+    getStreamState(session).flush();
+    runFrames();
+    expect(nativeView.last()?.onMathError).toBe(first.onMathError);
+    act(() => session.reset('Reset'));
+    const mathError = first.onMathError as (event: object) => void;
+    mathError({
+      nativeEvent: {
+        source: '\\bad',
+        message: 'Invalid formula',
+        display: true,
+        generation: first.generation,
+      },
+    });
+    expect(onMathError).not.toHaveBeenCalled();
+    runFrames();
+    const next = nativeView.last() as Record<string, unknown>;
+    expect(next.onMathError).toBe(first.onMathError);
+    mathError({
+      nativeEvent: {
+        source: '\\bad',
+        message: 'Invalid formula',
+        display: true,
+        generation: next.generation,
+      },
+    });
+    expect(onMathError).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('DownstreamMarkdown theme', () => {
   /**
    * The theme props are usually inline literals, so their identity changes on

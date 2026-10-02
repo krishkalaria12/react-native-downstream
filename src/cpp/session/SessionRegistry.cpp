@@ -112,6 +112,24 @@ public:
     }
   }
 
+  /// Replaces the delimiters the parse recognizes, and queues a pass so it takes
+  /// effect even when no new input has arrived.
+  ///
+  /// Applied to the parser on the worker rather than here, because the parser is
+  /// the only thing that reads the flags and the worker is the only thread that
+  /// touches it. Set once, right after `create`, so there is at most one queued
+  /// pass between a session existing and its flags being right.
+  void setMath(MathOptions math) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopped_) {
+      return;
+    }
+    math_ = math;
+    if (!finished_) {
+      markDirty();
+    }
+  }
+
   void noteLayout(LayoutHint hint) {
     std::lock_guard<std::mutex> lock(mutex_);
     layout_ = hint;
@@ -140,6 +158,10 @@ private:
     bool finished;
     std::vector<LayoutHint> hints;
     std::optional<remend::PreviewOptions> preview;
+    // The flags travel the same way the preview options do, and for the same
+    // reason: only the worker may set them on the parser, and both have to be in
+    // place before the parse they change rather than after it.
+    std::optional<MathOptions> math;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (stopped_ || !dirty_) {
@@ -149,6 +171,7 @@ private:
       replacement.swap(replacement_);
       pending.swap(pending_);
       preview.swap(preview_);
+      math.swap(math_);
       generation = generation_;
       sequence = sequence_;
       finished = finished_;
@@ -160,6 +183,9 @@ private:
 
     if (preview) {
       parser_.setPreview(*preview);
+    }
+    if (math) {
+      parser_.setMath(*math);
     }
     SessionTrace::record(id_, generation, sequence, "parse_start");
     if (replacement) {
@@ -223,6 +249,7 @@ private:
   DocumentHandle snapshot_;
   std::optional<LayoutHint> layout_;
   std::optional<remend::PreviewOptions> preview_;
+  std::optional<MathOptions> math_;
   bool dirty_{false};
   bool scheduled_{false};
   bool finished_{false};
@@ -301,6 +328,15 @@ bool SessionRegistry::setPreview(const std::string &id, remend::PreviewOptions o
     return false;
   }
   session->setPreview(options);
+  return true;
+}
+
+bool SessionRegistry::setMath(const std::string &id, MathOptions math) {
+  const auto session = findSession(id);
+  if (!session) {
+    return false;
+  }
+  session->setMath(math);
   return true;
 }
 

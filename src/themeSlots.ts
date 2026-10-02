@@ -204,6 +204,20 @@ const SLOTS = {
   'syntax.inserted': { id: 227, kind: 'color', layout: false, darkId: 228 },
   'syntax.deleted': { id: 229, kind: 'color', layout: false, darkId: 230 },
   'syntax.heading': { id: 231, kind: 'color', layout: false, darkId: 232 },
+  'math.fontSize': { id: 233, kind: 'metric', layout: true },
+  'math.color': { id: 234, kind: 'color', layout: false, darkId: 235 },
+  'math.backgroundColor': { id: 236, kind: 'color', layout: false, darkId: 237 },
+  'math.padding': { id: 238, kind: 'metric', layout: true },
+  'math.marginTop': { id: 239, kind: 'metric', layout: true },
+  'math.marginBottom': { id: 240, kind: 'metric', layout: true },
+  'math.textAlign': { id: 241, kind: 'metric', layout: true },
+  'math.errorColor': { id: 242, kind: 'color', layout: false, darkId: 243 },
+  'inlineMath.color': { id: 244, kind: 'color', layout: false, darkId: 245 },
+  'image.maxHeight': { id: 246, kind: 'metric', layout: true },
+  'image.borderRadius': { id: 247, kind: 'metric', layout: true },
+  'image.marginTop': { id: 248, kind: 'metric', layout: true },
+  'image.marginBottom': { id: 249, kind: 'metric', layout: true },
+  'image.placeholderColor': { id: 250, kind: 'color', layout: false, darkId: 251 },
 } as const satisfies Readonly<Record<string, ThemeSlot>>;
 
 export const THEME_SLOTS: Readonly<Record<string, ThemeSlot>> = SLOTS;
@@ -384,10 +398,24 @@ export const THEME_SLOT_NAMES = [
   'syntax.inserted',
   'syntax.deleted',
   'syntax.heading',
+  'math.fontSize',
+  'math.color',
+  'math.backgroundColor',
+  'math.padding',
+  'math.marginTop',
+  'math.marginBottom',
+  'math.textAlign',
+  'math.errorColor',
+  'inlineMath.color',
+  'image.maxHeight',
+  'image.borderRadius',
+  'image.marginTop',
+  'image.marginBottom',
+  'image.placeholderColor',
 ] as const satisfies readonly ThemeSlotName[];
 
 /** One past the highest id in use. */
-export const THEME_SLOT_COUNT = 233;
+export const THEME_SLOT_COUNT = 252;
 
 const BY_NAME: ReadonlyMap<string, ThemeSlot> = new Map<string, ThemeSlot>(
   (Object.keys(SLOTS) as ThemeSlotName[]).map((name) => [name, SLOTS[name]])

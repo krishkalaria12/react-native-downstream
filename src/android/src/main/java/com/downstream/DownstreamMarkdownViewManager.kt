@@ -37,8 +37,9 @@ class DownstreamMarkdownViewManager :
     // The view reports through the view that owns it, so a recycled view has no
     // emitter and a control that outlives its view reports nothing.
     view.onLinkPress = { target, url, start, end -> dispatchLinkPress(target, url, start, end) }
-    view.onControl = { target, block, action, format, language, filename ->
-      dispatchControl(target, block, action, format, language, filename)
+    view.onImagePress = { target, url, alt, title, range -> dispatchImagePress(target, url, alt, title, range) }
+    view.onControl = { target, block, action, format, language, filename, url ->
+      dispatchControl(target, block, action, format, language, filename, url)
     }
     view.onControlFailure = { target, block, action, message ->
       dispatchControlFailure(target, block, action, message)
@@ -114,6 +115,37 @@ class DownstreamMarkdownViewManager :
     view.setTableFilename(value ?: "table")
   }
 
+  override fun setImageFilename(view: DownstreamMarkdownView, value: String?) {
+    view.setImageFilename(value ?: "image")
+  }
+
+  /**
+   * The math flags, and the `images` switch, are props the shadow node parses: it
+   * decides whether a formula resolves and whether a URL may be fetched at all, and
+   * it writes both answers into the state this view draws from. The view keeps the
+   * flags for the one decision the state does not carry — what a picture's save is
+   * named — and nothing else.
+   */
+  override fun setMathFlags(view: DownstreamMarkdownView, value: Int) {
+    view.setMathFlags(value)
+  }
+
+  override fun setImages(view: DownstreamMarkdownView, value: Boolean) {
+    view.setImages(value)
+  }
+
+  /**
+   * The prefix list, which only a measurement reads: the state already says which
+   * destinations were blocked. The view does not re-check it, because a view that
+   * fetched a URL the measurement refused would draw a picture inside a box that was
+   * reserved for a line of alt text.
+   */
+  override fun setAllowedImagePrefixes(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.setAllowedImagePrefixes(value?.let { array ->
+      List(array.size()) { index -> array.getString(index).orEmpty() }
+    } ?: emptyList())
+  }
+
   override fun setCsvSeparator(view: DownstreamMarkdownView, value: String?) {
     view.setCsvSeparator(value ?: ",")
   }
@@ -140,29 +172,27 @@ class DownstreamMarkdownViewManager :
     // per-block choices together, because between them they decide each card's
     // height and neither half can be inferred from `chrome`.
     view.setCodeProps(
-      (state.getDouble("codeBlockWrap") ?: 0.0) != 0.0,
-      (state.getDouble("lineNumbers") ?: 1.0) != 0.0,
-      state.getDouble("codeBlockMaxHeight") ?: 400.0,
+      state.numberAt("codeBlockWrap", 0.0) != 0.0,
+      state.numberAt("lineNumbers", 1.0) != 0.0,
+      state.numberAt("codeBlockMaxHeight", 400.0),
     )
     view.setCodeChoices(
-      state.getOrdinals("wrapToggles"),
-      state.getOrdinals("expanded"),
+      state.ordinalsAt("wrapToggles"),
+      state.ordinalsAt("expanded"),
     )
-    view.setChrome(state.getDouble("chrome").toInt())
+    // Images resolve the same way code does: the state carries each picture's
+    // answer and the prefix list that produced it, so a reload draws the box the
+    // measurement reserved for it rather than a placeholder under a loaded image.
+    view.setImageLayout(state.toImageLayout())
+    view.setChrome(state.numberAt("chrome", 0.0).toInt())
     // The theme travels as its id, the way the document does, so a state update
     // carries one number rather than every slot the theme sets.
     view.setDocument(
-      state.getDouble("documentId").toLong(),
-      state.getDouble("fontScale").toFloat(),
-      state.getDouble("themeId")?.toLong() ?: 0L,
+      state.numberAt("documentId", 0.0).toLong(),
+      state.numberAt("fontScale", 1.0).toFloat(),
+      state.numberAt("themeId", 0.0).toLong(),
     )
     return null
-  }
-
-  /** One sorted choice set from the state, as `renderedDocument` reads it. */
-  private fun ReadableMap.getOrdinals(key: String): IntArray {
-    val array = getArray(key) ?: return IntArray(0)
-    return IntArray(array.size()) { array.getDouble(it).toInt() }.also { it.sort() }
   }
 
   override fun prepareToRecycleView(reactContext: ThemedReactContext, view: DownstreamMarkdownView): DownstreamMarkdownView {
@@ -182,46 +212,41 @@ class DownstreamMarkdownViewManager :
     heightMode: YogaMeasureMode?,
     attachmentsPositions: FloatArray?,
   ): Long {
-    val documentId = localData?.getDouble("documentId")?.toLong() ?: 0L
-    val fontScale = localData?.getDouble("fontScale")?.toFloat() ?: 1f
-    val chrome = localData?.getDouble("chrome")?.toInt() ?: 0
+    val documentId = localData?.numberAt("documentId", 0.0)?.toLong() ?: 0L
+    val fontScale = localData?.numberAt("fontScale", 1.0)?.toFloat() ?: 1f
+    val chrome = localData?.numberAt("chrome", 0.0)?.toInt() ?: 0
     // The theme id the view mounts with, so this measures the same rendering the
     // view draws rather than an unthemed one it would measure again.
-    val themeId = localData?.getDouble("themeId")?.toLong() ?: 0L
+    val themeId = localData?.numberAt("themeId", 0.0)?.toLong() ?: 0L
     // The whole code layout travels in the state beside the document, because a
     // code block's height depends on whether it wraps, whether its cap applies, and
     // whether it has a gutter, and one document can hold every combination at once.
     // Measuring without them would measure a different layout from the one the view
     // draws.
     val code = localData?.toCodeLayout() ?: CodeLayout()
+    // The image answers travel in the same map, for the same reason: an image's
+    // height is its state and its size, and measuring without them would measure
+    // a placeholder from a layout the view is not drawing.
+    val images = localData?.toImageLayout() ?: ImageLayout()
     if (DownstreamNative.preparationContext?.get() !== context) {
       DownstreamNative.preparationContext = WeakReference(context)
     }
     val rendered = RenderedDocument.obtain(context, documentId, fontScale, themeId = themeId)
       ?: return YogaMeasureOutput.make(0f, 0f)
     val layoutWidth = if (widthMode == YogaMeasureMode.UNDEFINED || !width.isFinite()) {
-      rendered.desiredWidth(code)
+      rendered.desiredWidth(code, images)
     } else {
       width.toInt()
     }
     return YogaMeasureOutput.make(
       PixelUtil.toDIPFromPixel(layoutWidth.toFloat()),
-      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth, chrome, code).toFloat()),
+      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth, chrome, code, images).toFloat()),
     )
   }
 
-  /** The map the shadow node hands measure, read as the one code layout. */
-  private fun ReadableMap.toCodeLayout(): CodeLayout = CodeLayout(
-    CodeLayoutProps(
-      (getDouble("codeBlockWrap") ?: 0.0) != 0.0,
-      (getDouble("lineNumbers") ?: 1.0) != 0.0,
-      PixelUtil.toPixelFromDIP(getDouble("codeBlockMaxHeight") ?: 400.0).toFloat(),
-    ),
-    CodeChoices(getOrdinals("wrapToggles"), getOrdinals("expanded")),
-  )
-
   override fun getExportedCustomDirectEventTypeConstants(): MutableMap<String, Any> = mutableMapOf(
     LinkPressEvent.NAME to mapOf("registrationName" to "onLinkPress"),
+    ImagePressEvent.NAME to mapOf("registrationName" to "onImagePress"),
     "topMarkdownError" to mapOf("registrationName" to "onMarkdownError"),
     "topControlAction" to mapOf("registrationName" to "onControlAction"),
   )
@@ -237,6 +262,12 @@ class DownstreamMarkdownViewManager :
     dispatch(view, LinkPressEvent(surfaceId, view.id, url, start, end))
   }
 
+  private fun dispatchImagePress(view: DownstreamMarkdownView, url: String, alt: String, title: String, range: IntRange) {
+    val context = view.context as? ReactContext ?: return
+    val surfaceId = UIManagerHelper.getSurfaceId(context)
+    dispatch(view, ImagePressEvent(surfaceId, view.id, url, alt, title, range.first, range.last))
+  }
+
   private fun dispatchControl(
     view: DownstreamMarkdownView,
     block: String,
@@ -244,6 +275,7 @@ class DownstreamMarkdownViewManager :
     format: String,
     language: String,
     filename: String,
+    url: String,
   ) {
     val context = view.context as? ReactContext ?: return
     dispatch(
@@ -261,6 +293,7 @@ class DownstreamMarkdownViewManager :
         false,
         false,
         view.currentGeneration(),
+        url,
       ),
     )
   }
@@ -357,6 +390,31 @@ private class LinkPressEvent(
   }
 }
 
+/** A press on a loaded picture that is not inside a link, as iOS reports it. */
+private class ImagePressEvent(
+  surfaceId: Int,
+  viewTag: Int,
+  private val url: String,
+  private val alt: String,
+  private val title: String,
+  private val start: Int,
+  private val end: Int,
+) : Event<ImagePressEvent>(surfaceId, viewTag) {
+  override fun getEventName() = NAME
+
+  override fun getEventData(): WritableMap = Arguments.createMap().apply {
+    putString("url", url)
+    putString("alt", alt)
+    putString("title", title)
+    putInt("start", start)
+    putInt("end", end)
+  }
+
+  companion object {
+    const val NAME = "topImagePress"
+  }
+}
+
 private class ControlActionEvent(
   surfaceId: Int,
   viewTag: Int,
@@ -368,6 +426,7 @@ private class ControlActionEvent(
   private val wrapped: Boolean = false,
   private val expanded: Boolean = false,
   private val generation: Int,
+  private val url: String = "",
 ) : Event<ControlActionEvent>(surfaceId, viewTag) {
   override fun getEventName() = NAME
 
@@ -377,6 +436,7 @@ private class ControlActionEvent(
     putString("format", format)
     putString("language", language)
     putString("filename", filename)
+    putString("url", url)
     putBoolean("wrapped", wrapped)
     putBoolean("expanded", expanded)
     putInt("generation", generation)

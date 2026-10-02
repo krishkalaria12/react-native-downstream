@@ -423,6 +423,79 @@ internal class Palette(private val theme: NativeTheme, val night: Boolean) {
 internal sealed class Segment(val gapBefore: Int)
 
 /**
+ * A picture, as its own segment.
+ *
+ * A picture is a View rather than a span because the bytes come from the app's own
+ * image pipeline, which resolves on a background thread and then needs a
+ * surface of its own to draw into. A span would have to be redrawn every frame
+ * from whichever canvas TextView handed it, and it would have no way to answer
+ * "how big is this" before the bytes arrive, which is the whole of the box rule.
+ *
+ * The alt text is kept because it is what the view shows for a destination that
+ * failed, was blocked, or was never requested, and what a screen reader reads.
+ */
+internal class ImageSegment(
+  /** The image's index in the document's image list. */
+  val ordinal: Int,
+  val url: String,
+  val alt: String,
+  val title: String,
+  /** Where the `![…](…)` sits in the source, for an event that reports a press. */
+  val range: IntRange,
+  /** Whether the engine's own policy allows this destination. */
+  val loadable: Boolean,
+  /** The enclosing link's index, or -1, so a press knows whether it is a link. */
+  val link: Int,
+  gapBefore: Int,
+) : Segment(gapBefore) {
+  /** The box, which is [imageBox] under whatever state this view holds. */
+  fun box(columnWidth: Int, entry: ImageEntry?, metrics: ImageMetrics): ImageBox =
+    imageBox(entry, columnWidth.toFloat(), metrics)
+}
+
+/**
+ * A formula on a line of its own.
+ *
+ * Its own segment rather than a text span because the engine lays a display
+ * formula out once per block and the result is a whole box with its own padding,
+ * background, and alignment. The literal stays in [literal] so a copy and a screen
+ * reader both produce the writer's source rather than a picture of it.
+ */
+internal class MathSegment(
+  /** The formula's literal, delimiters included, exactly as written. */
+  val literal: String,
+  /**
+   * The layout's advance, height, and depth in em, from `MathLayout.h`. Zero when
+   * the layout did not resolve.
+   *
+   * The metrics rather than the glyphs, because a height is what the frame stack
+   * needs and the glyphs are what the drawing package supplies; carrying the whole
+   * display list across the bridge to measure it would move a lot of numbers to
+   * answer three questions.
+   */
+  val width: Float,
+  val height: Float,
+  val depth: Float,
+  /** Whether the layout resolved, which is what decides the literal or an error. */
+  val resolved: Boolean,
+  /** The glyphs, rules and paths to draw, when the layout resolved. */
+  val displayList: MathDisplayList?,
+  /** True once the engine has given up on the formula, which is when it turns the error color. */
+  val failed: Boolean,
+  /** The spoken form from `MathSpeech.h`, or the literal when there is none. */
+  val speech: String,
+  /** Whether the source was a `$$` line fence, which centers by default. */
+  val display: Boolean,
+  /**
+   * The theme's own alignment, as `math.textAlign` holds it: 0 left, 1 center, 2
+   * right. Read rather than mapped so the view that centres a formula is the same
+   * one that measures it.
+   */
+  val textAlign: Int,
+  gapBefore: Int,
+) : Segment(gapBefore)
+
+/**
  * A run of non-table blocks laid out as one text layout. On Android 9 and
  * later [text] is a PrecomputedText, built off the UI thread, so a TextView
  * showing it only breaks lines instead of measuring every glyph again.
@@ -666,6 +739,7 @@ internal class RenderedDocument(
   private var cachedWidth = -1
   private var cachedChrome = -1
   private var cachedCode: CodeLayout? = null
+  private var cachedImages: ImageLayout? = null
   private var cachedFrames = IntArray(0)
 
   fun createTextLayout(segment: TextSegment, width: Int): StaticLayout =
@@ -678,9 +752,32 @@ internal class RenderedDocument(
    * `chrome`, because a document can hold wrapped and unwrapped code at once and
    * `chrome` says only whether every block wraps.
    */
-  private fun heightOf(segment: Segment, width: Int, chrome: Int, code: CodeLayout): Int =
+  private fun heightOf(segment: Segment, width: Int, chrome: Int, code: CodeLayout, images: ImageLayout): Int =
     when (segment) {
       is TextSegment -> segment.height(width, paint)
+      // A picture's box is the state and the theme, and nothing else: there is no
+      // text to lay out and the bytes are not here. The same `imageBox` the
+      // shadow node measured with, or the two disagree by the height of a
+      // placeholder and the whole list jumps on the first frame.
+      is ImageSegment -> {
+        val metrics = style.imageMetrics
+        val box = segment.box(width, images.state.find(segment.ordinal), metrics)
+        ceil(box.height.toDouble()).toInt() +
+          ceil(metrics.marginTop.toDouble()).toInt() + ceil(metrics.marginBottom.toDouble()).toInt()
+      }
+      // The engine's own `mathBlockHeight`, mirrored. An unresolved formula takes
+      // one line of text, which is what its literal takes, so a formula that
+      // cannot be laid out reads rather than vanishing.
+      is MathSegment ->
+        if (segment.resolved) {
+          (mathBlockHeight(segment.height, segment.depth, style.mathFontSize, style.mathPadding) +
+            style.mathMarginTop + style.mathMarginBottom).toInt()
+        } else {
+          // An unresolved formula takes one line, which is what its literal takes,
+          // so a formula that cannot be laid out still occupies readable space.
+          (style.bodySize * LINE_HEIGHT + style.mathPadding * 2 +
+            style.mathMarginTop + style.mathMarginBottom).toInt()
+        }
       is CodeSegment -> {
         // The one definition: the props, the reader's choices, and this block's
         // own fence meta all meet in `resolveCodeBlock`, and `codeCardHeight` is
@@ -712,10 +809,12 @@ internal class RenderedDocument(
    * spans. A measurement only holds for the choices it was made under.
    */
   @Synchronized
-  fun frames(width: Int, chrome: Int = 0, code: CodeLayout = CodeLayout()): IntArray {
-    // A measurement only holds for the layout it was made under, so the whole
-    // code layout is part of the key rather than the rendering.
-    if (width == cachedWidth && chrome == cachedChrome && code == cachedCode) {
+  fun frames(width: Int, chrome: Int = 0, code: CodeLayout = CodeLayout(), images: ImageLayout = ImageLayout()): IntArray {
+    // A measurement only holds for the layout it was made under, so the whole code
+    // layout and the whole image layout are part of the key rather than the
+    // rendering. An image's height is its state, so a picture that loads has to
+    // restack the frames or the text under it stays where the placeholder was.
+    if (width == cachedWidth && chrome == cachedChrome && code == cachedCode && images == cachedImages) {
       return cachedFrames
     }
     val frames = IntArray(segments.size * 2)
@@ -723,18 +822,19 @@ internal class RenderedDocument(
     segments.forEachIndexed { index, segment ->
       y += segment.gapBefore
       frames[index * 2] = y
-      frames[index * 2 + 1] = heightOf(segment, width, chrome, code)
+      frames[index * 2 + 1] = heightOf(segment, width, chrome, code, images)
       y += frames[index * 2 + 1]
     }
     cachedWidth = width
     cachedChrome = chrome
     cachedCode = code
+    cachedImages = images
     cachedFrames = frames
     return frames
   }
 
-  fun height(width: Int, chrome: Int = 0, code: CodeLayout = CodeLayout()): Int {
-    val frames = frames(width, chrome, code)
+  fun height(width: Int, chrome: Int = 0, code: CodeLayout = CodeLayout(), images: ImageLayout = ImageLayout()): Int {
+    val frames = frames(width, chrome, code, images)
     return if (frames.isEmpty()) 0 else frames[frames.size - 2] + frames[frames.size - 1]
   }
 
@@ -742,11 +842,16 @@ internal class RenderedDocument(
    * Width for an unconstrained measure: the widest thing that does not fit a
    * view, which is a table's columns or a code line that scrolls sideways.
    */
-  fun desiredWidth(code: CodeLayout = CodeLayout()): Int {
+  fun desiredWidth(code: CodeLayout = CodeLayout(), images: ImageLayout = ImageLayout()): Int {
     var width = 0f
     for (segment in segments) {
       val candidate = when (segment) {
         is TextSegment -> Layout.getDesiredWidth(segment.text, paint)
+        // An image is never wider than its column and never asks for one: a
+        // picture that wanted 4,000 pixels of width would make every other
+        // segment in the message measure against it.
+        is ImageSegment -> style.imageMetrics.placeholderWidth
+        is MathSegment -> segment.width * style.mathFontSize
         is CodeSegment -> {
           val layout = resolveCodeBlock(code, segment.codeOrdinal, segment.fenceMeta)
           val gutter = segment.gutterWidth(layout)
@@ -768,6 +873,16 @@ internal class RenderedDocument(
     private const val MAX_WIDTH = 100_000f
     /** The card width an unconstrained measure passes to a code segment. */
     private const val UNCONSTRAINED_WIDTH = 100_000
+    /**
+     * The line height a one-line fallback takes, as a multiple of the font size.
+     *
+     * Android's own default for a body text view, which is what an unresolved
+     * formula's literal is measured against so it occupies the room a line of prose
+     * would. Not read from a slot: the formula's literal is body text, so it takes
+     * the body's line height rather than a math-specific one.
+     */
+    const val LINE_HEIGHT = 1.2f
+
     /// Which control rows a document lays out with. See `Controls.h`.
     const val CHROME_CODE_HEADER = 1
     const val CHROME_TABLE_TOOLBAR = 2
@@ -788,6 +903,11 @@ internal class RenderedDocument(
         is TextSegment -> value.text.length * 24 + 256
         is CodeSegment -> value.text.length * 24 + 512
         is TableSegment -> value.accessibilityText.length * 32 + 1024
+        // A picture and a formula hold no text at all, so their weight is what the
+        // view holds: the bitmap belongs to the pipeline's cache and is counted
+        // there, and a formula's glyphs belong to whatever drew them.
+        is ImageSegment -> 512
+        is MathSegment -> 512
       }
     }
 
@@ -834,7 +954,14 @@ internal class RenderedDocument(
         Configuration.UI_MODE_NIGHT_YES
       val key = "$documentId:$fontScale:$night:$syntaxHighlighting:$themeId"
       cache.get(key)?.let { return it }
+      // Inline formulas draw from text spans, which have no context of their own.
+      MathFonts.attach(context)
       val plan = DownstreamNative.readSegmentPlan(documentId) ?: return null
+      // The document's pictures, read once. An image segment needs its destination,
+      // alt text and policy answer, and reading those one field at a time over JNI
+      // would be one crossing per field per picture; this is one for the document.
+      // A document with no pictures is ordinary, so an empty list is an answer.
+      val images = DownstreamNative.readImages(documentId) ?: NativeImages.EMPTY
       // A theme can cap the platform's font scale but cannot raise it, and the
       // cap is applied once here so every measurement below works with the
       // result. Resolved in C++ so both platforms read one rule.
@@ -843,7 +970,7 @@ internal class RenderedDocument(
       // One style for the shared scale and the paints, which is what a
       // measurement reads; a segment builds its own for the per-block work that
       // needs the document.
-      val style = Style(scaled, Palette(theme, night), theme)
+      val style = Style(scaled, Palette(theme, night), theme, themeId)
       val segments = ArrayList<Segment>(plan.size)
       // Each code segment's ordinal is a property of the plan, so a measurement
       // and the view that draws it read the same number: the ordinal is not
@@ -863,8 +990,7 @@ internal class RenderedDocument(
           ?: DownstreamNative.readDocument(documentId, planned.from, planned.to, themeId)
             ?.let {
               buildSegment(
-                it, style, planned.from, planned.isCode, ordinal, planned.identity, syntaxHighlighting,
-                style.px(it.previousBottomMargin),
+                it, images, style, planned, ordinal, syntaxHighlighting, style.px(it.previousBottomMargin),
               )
             }
             ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
@@ -881,7 +1007,7 @@ internal class RenderedDocument(
    * renderers cannot disagree about what a theme means: the values come from the
    * engine's own table over one JNI crossing, and this file only scales them.
    */
-  internal class Style(fontScale: Float, val colors: Palette, val theme: NativeTheme) {
+  internal class Style(fontScale: Float, val colors: Palette, val theme: NativeTheme, themeId: Long = 0L) {
     val scale = if (fontScale > 0) fontScale else 1f
     val density = PixelUtil.toPixelFromDIP(1f)
 
@@ -889,6 +1015,31 @@ internal class RenderedDocument(
     /// rather than a theme setting, so it is fixed in both directions and a block
     /// does not move when a button appears.
     val chromeRowHeight = px(32f).toInt()
+
+    /**
+     * The theme's image metrics, in pixels.
+     *
+     * Resolved in C++ by `theme_layout::imageMetrics`, which is the same call the
+     * shadow node measures with, and read here once per snapshot rather than per
+     * measurement: the theme does not change under a snapshot, and a second reader
+     * is how a measured image and a drawn one disagree about a margin.
+     *
+     * The placeholder keeps its default size rather than taking a slot: it is
+     * Streamdown's `h-24 w-48` box, which is a reading affordance rather than a
+     * themed style, and a theme that named no slot should not silently restyle it.
+     */
+    val imageMetrics = run {
+      val resolved = DownstreamNative.imageMetrics(themeId)
+      resolved.copy(
+        maxHeight = px(resolved.maxHeight),
+        borderRadius = px(resolved.borderRadius),
+        marginTop = px(resolved.marginTop),
+        marginBottom = px(resolved.marginBottom),
+        fallbackTextHeight = px(resolved.fallbackTextHeight),
+        placeholderWidth = px(kImagePlaceholderWidth),
+        placeholderHeight = px(kImagePlaceholderHeight),
+      )
+    }
 
     val bodySize = px(theme.number(ThemeSlots.SLOT_PARAGRAPH_FONT_SIZE))
     val bodyWeight = theme.number(ThemeSlots.SLOT_PARAGRAPH_FONT_WEIGHT)
@@ -922,6 +1073,26 @@ internal class RenderedDocument(
     val codePadding = px(theme.number(ThemeSlots.SLOT_CODE_BLOCK_PADDING)).toInt()
     /** The header row's size, which the theme sets for the language label. */
     val codeHeaderSize = px(theme.number(ThemeSlots.SLOT_CODE_BLOCK_HEADER_FONT_SIZE))
+    /// A formula's own color, its fill, and its error color, resolved here so the
+    /// view and the measurement read one value for each.
+    val mathMetrics = DownstreamNative.mathMetrics(themeId)
+    val mathPadding = px(mathMetrics.padding)
+    val mathTextAlign = mathMetrics.textAlign
+    val mathMarginTop = px(mathMetrics.marginTop)
+    val mathMarginBottom = px(mathMetrics.marginBottom)
+    val mathFontSize = px(theme.number(ThemeSlots.SLOT_MATH_FONT_SIZE))
+    val mathColor = colors.slotOrNull(ThemeSlots.SLOT_MATH_COLOR) ?: colors.text
+    val mathBackground =
+      colors.slotOrNull(ThemeSlots.SLOT_MATH_BACKGROUND_COLOR)
+    val mathErrorColor = colors.slot(ThemeSlots.SLOT_MATH_ERROR_COLOR, colors.secondary, colors.secondary)
+    /// The radius a formula's fill is drawn at. The code card's own, because a
+    /// formula in a message should look like the message's other boxes.
+    val mathRadius = px(theme.number(ThemeSlots.SLOT_CODE_BLOCK_BORDER_RADIUS))
+
+    /// The alt text a picture shows and the label a screen reader reads, from the
+    /// theme's own slot so a fallback image follows the rest of the page.
+    val imageAltColor = colors.slotOrNull(ThemeSlots.SLOT_IMAGE_ALT_COLOR) ?: colors.secondary
+
     val codeBlockRadius = px(theme.number(ThemeSlots.SLOT_CODE_BLOCK_BORDER_RADIUS))
     val codeBlockBorder = px(theme.number(ThemeSlots.SLOT_CODE_BLOCK_BORDER_WIDTH))
     val minColumnWidth = px(theme.number(ThemeSlots.SLOT_TABLE_MIN_COLUMN_WIDTH))
@@ -1008,20 +1179,38 @@ internal class RenderedDocument(
     /** Builds one planned segment from its flattened blocks. */
     private fun buildSegment(
       document: NativeDocument,
+      images: NativeImages,
       style: Style,
-      from: Int,
-      isCode: Boolean,
+      planned: PlannedSegment,
       codeOrdinal: Int,
-      identity: Long,
       syntaxHighlighting: Boolean,
       previousBottom: Float,
     ): Segment {
+      val from = planned.from
+      val isCode = planned.kind == SEGMENT_CODE
+      val identity = planned.identity
       val colors = style.colors
       val theme = style.theme
       val density = style.density
       val paint = style.paint
       val markerPaint = style.markerPaint
       fun px(dp: Float) = style.px(dp)
+
+      // A formula or a picture is one block that the plan kept to itself, so it is
+      // built here rather than falling through to the text path. Both keep their
+      // literal: a formula that could not be laid out and a picture that could not
+      // be fetched are both still readable as the writer's own source, which is the
+      // whole of what this branch decides.
+      if (planned.kind == SEGMENT_MATH) {
+        return buildMath(document, style, style.gapAbove(document, 0, previousBottom).toInt())
+      }
+      if (planned.kind == SEGMENT_IMAGE) {
+        // Null when the plan's ordinal is not in the document's picture list, in
+        // which case the block's own text is drawn instead: a plan and a document
+        // that disagree is worth reading, not worth crashing over.
+        buildImage(images, planned.imageOrdinal, style.gapAbove(document, 0, previousBottom).toInt())
+          ?.let { return it }
+      }
 
       val text = SpannableStringBuilder(document.text)
       val textLanguage = document.blockLanguage(0)
@@ -1345,6 +1534,22 @@ internal class RenderedDocument(
         }
       }
 
+      // Each laid-out inline formula draws its glyphs over its own literal. A
+      // formula with no layout keeps the literal, which is what a reader sees
+      // while it is still arriving and when it failed.
+      if (!isCode) {
+        val minimumRule = density * 0.5f
+        for (formula in document.formulas) {
+          val list = formula.list ?: continue
+          if (document.blockKind(formula.block) == NativeDocument.KIND_MATH_BLOCK) continue
+          val blockStart = document.blockStart(formula.block)
+          val start = blockStart + formula.start
+          val end = blockStart + formula.end
+          if (start < blockStart || end > text.length || end <= start) continue
+          text.setSpan(MathInlineSpan(list, minimumRule), start, end, flags)
+        }
+      }
+
       // A text segment that a committed chunk split off gets the gap it would
       // have inside one segment, so both stack to the same height.
       // The block above the segment is not in this slice, so the caller passes
@@ -1402,6 +1607,74 @@ internal class RenderedDocument(
      * counts the code blocks as it is built, because a measurement needs it and
      * a measurement can run before any view has walked the segments.
      */
+    /**
+     * One display formula, as its own segment.
+     *
+     * The ems come from the document's own layout rather than from a text layout's
+     * line count, so `mathBlockHeight` — the same expression iOS uses — decides the
+     * height and a measured formula and a drawn one cannot differ.
+     *
+     * `resolved` false keeps the literal: a formula the engine could not lay out is
+     * not a formula that is missing, it is a formula the reader can still read, and
+     * it is drawn in the theme's error colour so they can see which it is.
+     */
+    private fun buildMath(document: NativeDocument, style: Style, gapBefore: Int): MathSegment {
+      // The literal with its delimiters, which is what `Block::text` holds and what a
+      // copy produces. It is the segment's text whether or not a layout exists, so
+      // the fallback needs nothing extra to be the same words.
+      val literal = document.text
+      val display = document.blockMathDisplay(0)
+      return MathSegment(
+        literal = literal,
+        width = document.blockMathWidthEm(0).toFloat(),
+        height = document.blockMathHeightEm(0).toFloat(),
+        depth = document.blockMathDepthEm(0).toFloat(),
+        resolved = document.blockMathResolved(0),
+        displayList = document.formulas.firstOrNull { it.block == 0 }?.list,
+        failed = document.blockMathError(0).isNotEmpty(),
+        speech = document.blockMathSpeech(0).ifEmpty { literal },
+        display = display,
+        textAlign = style.mathTextAlign,
+        gapBefore = gapBefore,
+      )
+    }
+
+    /**
+     * One picture, as its own segment.
+     *
+     * The alt text comes from the document's image list rather than from the block's
+     * text, because the block's text is the whole `![…](…)` source: what a reader
+     * needs when the bytes do not arrive is the alt text alone.
+     *
+     * `loadable` is the engine's own policy answer, resolved once on the platform
+     * side by `isLoadableImageUrl` when the document was parsed. It is carried
+     * rather than re-checked here, so a destination the engine refused is one the
+     * view never asks for.
+     */
+    private fun buildImage(
+      images: NativeImages,
+      ordinal: Int,
+      gapBefore: Int,
+    ): ImageSegment? {
+      // The plan counted this block's first picture in `Document::images`, so an
+      // ordinal outside that list is a plan and a document that disagree. There is
+      // then no picture to build, and the caller falls back to the block's text,
+      // which is the writer's own source and always readable.
+      if (ordinal < 0 || ordinal >= images.count) {
+        return null
+      }
+      return ImageSegment(
+        ordinal = ordinal,
+        url = images.url(ordinal),
+        alt = images.alt(ordinal),
+        title = images.title(ordinal),
+        range = images.range(ordinal),
+        loadable = images.loadable(ordinal),
+        link = images.link(ordinal),
+        gapBefore = gapBefore,
+      )
+    }
+
     private fun buildCode(
       text: SpannableStringBuilder,
       language: String,

@@ -30,11 +30,17 @@ struct OpenSpan {
   size_t length{0};
 };
 
-/// Only these blocks carry inline spans a repair could act on. A code block or
-/// an HTML block is verbatim, and a rule has no content to style.
+/// Only these blocks carry inline text a repair could act on. A code block, a
+/// math block and an HTML block are verbatim, and a rule has no content to
+/// style.
+///
+/// An image block counts because its text *is* its alt text, which is what an
+/// unfinished link or image is repaired into. Without it, closing an unfinished
+/// image would produce an image block and then be refused for producing one,
+/// which is the repair that stops `![a](https://exa` from ever settling.
 bool carriesInlineSpans(const Block &block) {
   return block.kind == BlockKind::Paragraph || block.kind == BlockKind::Heading ||
-      block.kind == BlockKind::TableRow;
+      block.kind == BlockKind::TableRow || block.kind == BlockKind::Image;
 }
 
 bool inCodeSpan(const Block &block, size_t index) {
@@ -181,6 +187,45 @@ bool sameLinks(const Document &a, const Document &b) {
 /// block before the last identical, the last block the same kind in the same
 /// containers and cells, and the same actionable links. What remains for a
 /// proof is the last block's text.
+/**
+ * Everything two parses must share for a repair to be allowed: the block count,
+ * every block but the last byte-identical, the containers, the cells, and the
+ * links.
+ *
+ * `sameShape` is this plus the last block's kind and its level, header, table and
+ * spacing. The link and math proofs each re-check the parts of the last block
+ * they are allowed to change, so they start here rather than from `sameShape` and
+ * subtract — a proof that has to un-do a check is a proof whose exemptions are
+ * easy to get wrong.
+ *
+ * The image count is *not* checked here, because one repair legitimately adds an
+ * image and the others may not. Each proof makes its own claim about it, which is
+ * one line in each place rather than an exemption here that all three would have
+ * to remember.
+ */
+bool sameBlocksAndText(const ParseResult &before, const ParseResult &after) {
+  if (before.status != ParseStatus::Ok || after.status != ParseStatus::Ok) {
+    return false;
+  }
+  const auto &was = before.document->blocks;
+  const auto &now = after.document->blocks;
+  if (was.empty() || was.size() != now.size()) {
+    return false;
+  }
+  for (size_t i = 0; i + 1 < was.size(); i++) {
+    if (!sameBlock(was[i], now[i])) {
+      return false;
+    }
+  }
+  if (!carriesInlineSpans(was.back()) || !carriesInlineSpans(now.back())) {
+    return false;
+  }
+  if (!sameContainers(was.back(), now.back()) || !sameCells(was.back(), now.back())) {
+    return false;
+  }
+  return sameLinks(*before.document, *after.document);
+}
+
 bool sameShape(const ParseResult &before, const ParseResult &after) {
   if (before.status != ParseStatus::Ok || after.status != ParseStatus::Ok) {
     return false;
@@ -220,6 +265,9 @@ bool sameShape(const ParseResult &before, const ParseResult &after) {
 /// guessed at.
 bool provesRepair(const ParseResult &before, const ParseResult &after, const OpenSpan &span) {
   if (!sameShape(before, after)) {
+    return false;
+  }
+  if (after.document->images.size() != before.document->images.size()) {
     return false;
   }
   const Block &last = before.document->blocks.back();
@@ -381,11 +429,30 @@ std::vector<InlineRun> runsBefore(const Block &block, size_t end) {
 /// nothing at all, and the text before the link kept its styles. `textStart`
 /// receives where the link text begins in `after`.
 bool provesLinkRepair(const ParseResult &before, const ParseResult &after, bool image, size_t &textStart) {
-  if (!sameShape(before, after)) {
+  // `sameShape` is the whole proof except for one thing: closing an unfinished
+  // image promotes the paragraph to an image block, because an image-only
+  // paragraph becomes one. That is the repair working, so the kind check is
+  // re-made here with the single transition this repair is allowed to cause.
+  // Everything else `sameShape` compares — the earlier blocks, the containers,
+  // the cells, the links, the styles — still has to hold.
+  if (!sameBlocksAndText(before, after)) {
     return false;
   }
-  const std::u16string &was = before.document->blocks.back().text;
-  const std::u16string &now = after.document->blocks.back().text;
+  // An unfinished image becomes a real image record; an unfinished link does not
+  // become an image, and neither may change how many images there are otherwise.
+  if (image ? after.document->images.size() != before.document->images.size() + 1
+            : after.document->images.size() != before.document->images.size()) {
+    return false;
+  }
+  const Block &last = before.document->blocks.back();
+  const Block &repaired = after.document->blocks.back();
+  const bool promoted = image && last.kind == BlockKind::Paragraph && repaired.kind == BlockKind::Image;
+  if (!promoted && repaired.kind != last.kind) {
+    return false;
+  }
+
+  const std::u16string &was = last.text;
+  const std::u16string &now = repaired.text;
   const std::u16string_view opener = image ? u"![" : u"[";
 
   size_t prefix = 0;
@@ -402,8 +469,6 @@ bool provesLinkRepair(const ParseResult &before, const ParseResult &after, bool 
   if (!dropped.empty() && dropped.substr(0, 2) != u"](") {
     return false;
   }
-  const Block &last = before.document->blocks.back();
-  const Block &repaired = after.document->blocks.back();
   const std::vector<InlineRun> wasRuns = runsBefore(last, prefix);
   const std::vector<InlineRun> nowRuns = runsBefore(repaired, prefix);
   if (wasRuns.size() != nowRuns.size()) {
@@ -419,12 +484,125 @@ bool provesLinkRepair(const ParseResult &before, const ParseResult &after, bool 
   return true;
 }
 
+/**
+ * An unclosed inline `$$` on the region's last line, if there is one.
+ *
+ * Only the double-dollar form, and only on one line, because both are facts
+ * about the syntax rather than limits of the pass. A single `$` is a currency
+ * symbol more often than it is a formula. And md4c resolves a dollar run within
+ * one line, so a `$$` on an earlier line can never pair with a closer appended
+ * here — offering that repair would probe a candidate that cannot succeed.
+ *
+ * `\(` never reaches this at all: the pre-scan only rewrites a *complete* pair,
+ * so an unfinished `\(` is still the CommonMark escape it would be in a
+ * finished document, which is the correct answer for both.
+ */
+size_t openMathRun(std::string_view content, const MathOptions &math) {
+  // The last line, because that is the only one a closer appended at the end of
+  // the region can reach.
+  const size_t lastBreak = content.rfind('\n');
+  const std::string_view line =
+      lastBreak == std::string_view::npos ? content : content.substr(lastBreak + 1);
+  int depth = 0;
+  size_t open = 0;
+  for (size_t i = 0; i < line.size(); i++) {
+    if (line[i] != '$' || scan::isEscaped(line, i)) {
+      continue;
+    }
+    size_t end = i;
+    while (end < line.size() && line[end] == '$') {
+      end++;
+    }
+    // A run of three or more is neither math nor a fence. A run of one is only
+    // math when the app asked for it, so whether it counts is read from the same
+    // options the parse was: guessing here would cost a probe per snapshot on
+    // every answer that mentions a price.
+    if (end - i == 2 || (end - i == 1 && math.singleDollar())) {
+      // md4c pairs a run only with a run of the same length, so the length is
+      // what the closer has to be. Returning it rather than a bool is what lets
+      // the repair append a single `$` to a single `$` and a `$$` to a `$$`.
+      if (depth == 0) {
+        open = end - i;
+      }
+      depth = depth == 0 ? 1 : 0;
+    }
+    i = end - 1;
+  }
+  return depth == 0 ? 0 : open;
+}
+
+/**
+ * Whether closing the open `$$` changed nothing but that formula.
+ *
+ * Stronger than the span proofs, and deliberately: this repair *adds* a run and
+ * a span, so the rule that the other repairs use — nothing but the marker
+ * changed — would reject it. What is checked instead is the whole claim: the
+ * block count is unchanged, every earlier block is byte-identical, the last
+ * block's text is the old text plus exactly the two delimiter characters, and
+ * that block now carries one display formula covering all of it. A `$$` that
+ * pairs with an earlier one, or that swallows a table cell, fails every clause.
+ */
+bool provesMathRepair(const ParseResult &before, const ParseResult &after) {
+  if (!sameBlocksAndText(before, after)) {
+    return false;
+  }
+  if (after.document->images.size() != before.document->images.size()) {
+    return false;
+  }
+  const Block &last = before.document->blocks.back();
+  const Block &repaired = after.document->blocks.back();
+  // A formula alone in its paragraph is promoted to a math block, which is a
+  // different repair from this one, so the block has to stay a paragraph: this
+  // claim is about a formula that arrived inside a sentence.
+  if (last.kind != BlockKind::Paragraph || repaired.kind != BlockKind::Paragraph) {
+    return false;
+  }
+  // The claim, in the order it is checked.
+  //
+  // The old text is a prefix of the new one, and everything the repair added
+  // after it is whitespace followed by the closing `$$`. Whitespace, because
+  // md4c drops a line's trailing spaces from a paragraph: `$$x + ` has a
+  // baseline text of `$$x +` and a repaired text of `$$x + $$`, so the two
+  // differ by the space as well as by the delimiter and a strict size check
+  // would refuse the one repair this pass exists for.
+  //
+  // The span has to reach the end of the block, or the repair put the closer
+  // somewhere other than where it claims. Its style has to follow from the
+  // delimiter it was written with, which is the one fact about a formula this
+  // can check without knowing what the writer meant: a doubled pair is display
+  // and a single one is text style, and a span that claims otherwise did not
+  // come from this source.
+  if (repaired.text.size() < last.text.size() + 2 ||
+      repaired.text.compare(0, last.text.size(), last.text) != 0) {
+    return false;
+  }
+  for (size_t i = last.text.size(); i + 2 < repaired.text.size(); i++) {
+    const char16_t unit = repaired.text[i];
+    if (unit != u' ' && unit != u'\t' && unit != u'\n' && unit != u'\r') {
+      return false;
+    }
+  }
+  if (repaired.text[repaired.text.size() - 1] != u'$') {
+    return false;
+  }
+  if (repaired.math.size() != 1) {
+    return false;
+  }
+  const MathSpan &span = repaired.math.front();
+  if (span.end != repaired.text.size() || span.tex.empty()) {
+    return false;
+  }
+  const bool doubled = span.delimiter == MathDelimiter::DoubleDollar;
+  return span.display == doubled && repaired.text[span.start] == '$' &&
+      repaired.text[span.start + (doubled ? 1 : 0)] == '$';
+}
+
 } // namespace
 
-PreviewResult Preview::apply(std::string_view region, size_t origin, size_t frozenBlocks) const {
+PreviewResult Preview::apply(std::string_view region, size_t origin, size_t frozenBlocks, MathOptions math) const {
   PreviewResult result;
   result.text.assign(region);
-  const ParseResult baseline = parseMarkdownAt(region, origin);
+  const ParseResult baseline = parseMarkdownAt(region, origin, math);
   result.parsed = baseline;
   result.bytesParsed = region.size();
   if (!options_.enabled() || baseline.status != ParseStatus::Ok ||
@@ -440,12 +618,41 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
   // A closer after whitespace is not right-flanking, so the closer goes before
   // the trailing run. A chunk boundary often lands on a space, and without this
   // the span would flicker literal between two styled frames.
-  const TrailingWhitespace trailing = trailingWhitespace(region);
+  TrailingWhitespace trailing = trailingWhitespace(region);
   if (closedBy(trailing, last)) {
     return result;
   }
   ParseResult current = baseline;
   std::string text(region);
+
+  // An unfinished formula before the spans, because its contents are verbatim:
+  // a `*` or a `[` inside `$$x + ` is TeX and must not be styled by a later
+  // repair. One probe, and only when the math feature is on.
+  const size_t openRun =
+      math.enabled() && options_.has(PreviewFeature::Math) ? openMathRun(std::string_view(text), math) : 0;
+  if (openRun != 0) {
+    // The closer goes at the very end of the region, not next to the opener: it
+    // is the end of the last line that is the only place md4c can pair it from,
+    // and the trailing whitespace that a chunk boundary often lands on belongs
+    // inside the formula, where TeX ignores it. Its length is the opener's,
+    // because md4c pairs a run only with a run of the same length.
+    std::string probe = text;
+    probe.append(openRun, '$');
+    result.stats.probes++;
+    result.bytesParsed += probe.size();
+    ParseResult probed = parseMarkdownAt(probe, origin, math);
+    if (provesMathRepair(current, probed)) {
+      result.stats.applied++;
+      text = std::move(probe);
+      current = std::move(probed);
+      // A formula now exists, and its contents are verbatim, so a link or a
+      // span repair after it would act on TeX. The pass is done.
+      result.repaired = true;
+      result.text = std::move(text);
+      result.parsed = std::move(current);
+      return result;
+    }
+  }
 
   // Closers for spans outside any repaired link go after the content; closers
   // for spans inside the link text go before its `]`. Until a link is repaired
@@ -465,7 +672,7 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
       probe.append(text, trailing.start, std::string::npos);
       result.stats.probes++;
       result.bytesParsed += probe.size();
-      ParseResult probed = parseMarkdownAt(probe, origin);
+      ParseResult probed = parseMarkdownAt(probe, origin, math);
       size_t textStart = 0;
       if (provesLinkRepair(current, probed, link->image, textStart)) {
         result.stats.applied++;
@@ -496,7 +703,7 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
     probe.insert(inside ? innerAt : outerAt, span.length, static_cast<char>(span.marker));
     result.stats.probes++;
     result.bytesParsed += probe.size();
-    ParseResult probed = parseMarkdownAt(probe, origin);
+    ParseResult probed = parseMarkdownAt(probe, origin, math);
     if (!provesRepair(current, probed, span)) {
       continue;
     }

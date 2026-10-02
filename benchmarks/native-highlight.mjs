@@ -9,7 +9,11 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const cpp = join(root, 'src', 'cpp');
+const cpp = join(
+  process.env.DOWNSTREAM_BENCH_SOURCE_ROOT ?? root,
+  'src',
+  'cpp'
+);
 const build = await mkdtemp(join(tmpdir(), 'downstream-native-bench-'));
 const cc = process.env.CC ?? 'cc';
 const cxx = process.env.CXX ?? 'c++';
@@ -32,6 +36,7 @@ const flags = [
     'session',
     'remend',
     'highlight',
+    'math',
     'md4c',
     'lexilla',
     'lexilla/lexlib',
@@ -98,7 +103,15 @@ try {
       'Export.cpp',
       'ExportNames.cpp',
       'FenceMeta.cpp',
+      'MathScan.cpp',
     ].map((name) => join(cpp, 'downstream', name)),
+    ...[
+      'MathBlocks.cpp',
+      'MathEngine.cpp',
+      'MathDisplayList.cpp',
+      'MathLayout.cpp',
+      'MathSpeech.cpp',
+    ].map((name) => join(cpp, 'math', name)),
     join(cpp, 'remend', 'Preview.cpp'),
     join(cpp, 'session', 'IncrementalParser.cpp'),
     join(cpp, 'md4c', 'md4c.c'),

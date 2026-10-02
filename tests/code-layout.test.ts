@@ -86,18 +86,25 @@ describe('the label keys', () => {
   it('appends the expand pair without moving the existing ones', () => {
     // The platforms read this array positionally, so a new key goes at the end
     // rather than shifting every later label by one.
-    expect(CONTROL_LABEL_KEYS.length).toBe(17);
+    expect(CONTROL_LABEL_KEYS.length).toBe(21);
     expect(CONTROL_LABEL_KEYS[5]).toBe('expandCode');
     expect(CONTROL_LABEL_KEYS[6]).toBe('collapseCode');
     // Every key before the new pair must still hold what it did.
     expect(CONTROL_LABEL_KEYS[3]).toBe('wrapCode');
     expect(CONTROL_LABEL_KEYS[4]).toBe('unwrapCode');
     expect(CONTROL_LABEL_KEYS[7]).toBe('copyTable');
-    expect(CONTROL_LABEL_KEYS[17 - 1]).toBe('tableFormatTsv');
+    // The image keys were appended the same way, after every existing one.
+    expect(CONTROL_LABEL_KEYS[16]).toBe('tableFormatTsv');
+    expect(CONTROL_LABEL_KEYS[17]).toBe('imageNotAvailable');
+    expect(CONTROL_LABEL_KEYS[20]).toBe('imageBlocked');
   });
 
   it('has a default for each new key', () => {
     expect(defaultTranslations.expandCode).toBe('Show all lines');
     expect(defaultTranslations.collapseCode).toBe('Show fewer lines');
+    expect(defaultTranslations.imageNotAvailable).toBe('Image not available');
+    expect(defaultTranslations.downloadImage).toBe('Download image');
+    expect(defaultTranslations.image).toBe('Image');
+    expect(defaultTranslations.imageBlocked).toBe('Image blocked');
   });
 });

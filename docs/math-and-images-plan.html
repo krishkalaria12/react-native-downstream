@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Downstream · math and images plan</title>
+    <style>
+      :root {
+        --paper: #f5f8f8;
+        --surface: #ffffff;
+        --surface-soft: #edf3f2;
+        --ink: #17272d;
+        --ink-soft: #486167;
+        --muted: #667c80;
+        --line: #cddcda;
+        --line-strong: #94aeaa;
+        --accent: #146e69;
+        --accent-soft: #d9efeb;
+        --tail: #aa681b;
+        --tail-soft: #f8eddb;
+        --risk: #a64242;
+        --risk-soft: #faeaea;
+        --code: #e8f0ef;
+        --sans: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --paper: #0f1b1e;
+          --surface: #152528;
+          --surface-soft: #1c3334;
+          --ink: #e8f2ef;
+          --ink-soft: #b6cac5;
+          --muted: #92aca7;
+          --line: #34504e;
+          --line-strong: #537872;
+          --accent: #84d4c6;
+          --accent-soft: #1b4643;
+          --tail: #efbb72;
+          --tail-soft: #46351f;
+          --risk: #ef9993;
+          --risk-soft: #462d30;
+          --code: #223a3b;
+        }
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.58 var(--sans); }
+      a { color: var(--accent); text-underline-offset: 0.18em; }
+      :focus-visible { outline: 3px solid var(--tail); outline-offset: 3px; border-radius: 3px; }
+      .shell { display: grid; grid-template-columns: 15rem minmax(0, 1fr); min-height: 100vh; }
+      .rail { position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 2.1rem 1.2rem 2rem 1.5rem; border-right: 1px solid var(--line); background: var(--surface); }
+      .rail-title { font-weight: 800; letter-spacing: -0.035em; line-height: 1.18; font-size: 1.12rem; margin: 0 0 0.35rem; }
+      .rail-subtitle { margin: 0; color: var(--muted); font-size: 0.8rem; line-height: 1.4; }
+      .rail nav { margin-top: 2rem; display: grid; gap: 0.06rem; }
+      .rail nav a { display: block; padding: 0.46rem 0.6rem; color: var(--ink-soft); text-decoration: none; font-size: 0.86rem; line-height: 1.3; border-left: 2px solid transparent; }
+      .rail nav a:hover { color: var(--ink); background: var(--surface-soft); border-left-color: var(--accent); }
+      main { min-width: 0; }
+      .wrap { max-width: 74rem; padding: 3.2rem clamp(1rem, 4.8vw, 4.5rem) 6rem; margin: 0 auto; }
+      .mast { border-bottom: 2px solid var(--ink); padding-bottom: 2.2rem; margin-bottom: 0.6rem; }
+      .kicker { font: 700 0.77rem/1.3 var(--mono); color: var(--accent); letter-spacing: 0.02em; margin: 0 0 0.9rem; }
+      h1 { font-size: clamp(2.3rem, 5vw, 4.3rem); letter-spacing: -0.06em; line-height: 1; margin: 0 0 1.3rem; max-width: 15ch; font-weight: 760; }
+      .lede { font-size: clamp(1.05rem, 1.5vw, 1.22rem); line-height: 1.5; max-width: 52rem; margin: 0; color: var(--ink-soft); }
+      .decision { margin-top: 2rem; padding: 1.2rem 1.4rem; background: var(--accent-soft); border-left: 5px solid var(--accent); max-width: 62rem; }
+      .decision strong { display: block; margin-bottom: 0.3rem; }
+      .decision p { margin: 0; }
+      section { scroll-margin-top: 1.5rem; padding: 2.4rem 0 1.6rem; border-top: 1px solid var(--line); }
+      .section-head { display: grid; grid-template-columns: minmax(0, 2fr) minmax(12rem, 1fr); align-items: end; gap: 2rem; margin-bottom: 1.2rem; }
+      .section-head h2 { font-size: clamp(1.6rem, 2.6vw, 2.3rem); letter-spacing: -0.05em; line-height: 1.13; margin: 0; }
+      .section-head p { margin: 0; color: var(--ink-soft); font-size: 0.94rem; line-height: 1.45; }
+      h3 { font-size: 1.18rem; letter-spacing: -0.025em; line-height: 1.25; margin: 1.8rem 0 0.6rem; }
+      p { max-width: 72ch; margin: 0.5rem 0 1rem; }
+      ul, ol { padding-left: 1.35rem; max-width: 80ch; }
+      li { margin: 0.38rem 0; }
+      code, pre { font-family: var(--mono); }
+      code { background: var(--code); border-radius: 3px; padding: 0.08rem 0.25rem; font-size: 0.86em; overflow-wrap: anywhere; }
+      pre { background: var(--surface); border: 1px solid var(--line); padding: 1rem 1.2rem; overflow-x: auto; font-size: 0.8rem; line-height: 1.6; max-width: 100%; }
+      pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+      .table-wrap { max-width: 100%; overflow-x: auto; border: 1px solid var(--line); background: var(--surface); margin: 1rem 0 1.5rem; }
+      table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 0.86rem; line-height: 1.45; }
+      th, td { padding: 0.72rem 0.85rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+      th { background: var(--surface-soft); font-size: 0.77rem; font-weight: 750; }
+      tr:last-child td { border-bottom: 0; }
+      td.num { font-family: var(--mono); white-space: nowrap; }
+      tr.pick td { background: var(--accent-soft); }
+      .tag { display: inline-block; font: 700 0.7rem/1 var(--mono); padding: 0.28rem 0.42rem; border-radius: 3px; margin: 0.1rem 0.25rem 0.1rem 0; white-space: nowrap; }
+      .tag.go { background: var(--accent-soft); color: var(--accent); }
+      .tag.later { background: var(--tail-soft); color: var(--tail); }
+      .tag.no { background: var(--risk-soft); color: var(--risk); }
+      .meta-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 1.2rem; }
+      .meta-grid > div { background: var(--surface); padding: 1rem 1.1rem; }
+      .meta-grid b { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; }
+      .meta-grid span { color: var(--ink-soft); font-size: 0.9rem; }
+      .big { display: block; font: 800 1.7rem/1.1 var(--mono); color: var(--accent); margin-bottom: 0.3rem; letter-spacing: -0.03em; }
+      .callout { padding: 1rem 1.25rem; background: var(--surface-soft); border-left: 4px solid var(--line-strong); margin: 1.3rem 0; }
+      .callout.risk { background: var(--risk-soft); border-left-color: var(--risk); }
+      .callout p:last-child { margin-bottom: 0; }
+      .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.9rem; margin: 1.2rem 0 1.4rem; }
+      .flow-node { position: relative; background: var(--surface); border: 1px solid var(--line); padding: 0.8rem 0.85rem; font-size: 0.84rem; line-height: 1.4; }
+      .flow-node b { display: block; font-size: 0.86rem; margin-bottom: 0.2rem; }
+      .flow-node span { color: var(--ink-soft); }
+      .flow-node.new { border-color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
+      .flow-node:not(:last-child)::after { content: "→"; position: absolute; top: 0.8rem; right: -0.78rem; color: var(--accent); font-weight: bold; }
+      .phase { border: 1px solid var(--line); background: var(--surface); padding: 1.1rem 1.3rem 0.6rem; margin: 1rem 0; }
+      .phase h3 { margin-top: 0; }
+      .phase .exit { border-top: 1px dashed var(--line); padding-top: 0.6rem; margin-top: 0.6rem; font-size: 0.9rem; color: var(--ink-soft); }
+      .phase .exit b { color: var(--ink); }
+      .swatch { display: inline-block; width: 0.8rem; height: 0.8rem; border-radius: 2px; margin-right: 0.4rem; vertical-align: -0.1rem; border: 1px solid rgba(127, 127, 127, 0.35); }
+      .sources li { font-size: 0.9rem; overflow-wrap: anywhere; }
+      @media (max-width: 1000px) {
+        .shell { grid-template-columns: 1fr; }
+        .rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+        .rail nav { grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); margin-top: 1rem; }
+        .flow { grid-template-columns: 1fr; }
+        .flow-node:not(:last-child)::after { content: "↓"; top: auto; bottom: -1.05rem; right: 50%; }
+      }
+      @media (max-width: 760px) {
+        .meta-grid, .section-head { grid-template-columns: 1fr; gap: 0.6rem; }
+      }
+      .mock { max-width: 34rem; margin: 1rem 0 0.4rem; font-family: var(--mono); font-size: 0.78rem; line-height: 1.55; }
+      .mock-head { display: flex; align-items: center; justify-content: space-between; height: 2rem; padding: 0 0.3rem 0 0.75rem; color: var(--muted); }
+      .mock-head .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .mock-head .btns { display: flex; gap: 0.7rem; color: var(--ink-soft); letter-spacing: 0.02em; }
+      .mock-card { position: relative; background: var(--surface-soft); border-radius: 6px; padding: 0.62rem; overflow: hidden; }
+      .mock-card.capped { max-height: 9.6rem; }
+      .mock-row { display: flex; white-space: pre; }
+      .mock-row .n { flex: none; width: 2.2ch; margin-right: 1.2ch; text-align: right; color: var(--muted); opacity: 0.6; user-select: none; }
+      .mock-row .c { overflow: hidden; }
+      .mock-row.cont .n { visibility: hidden; }
+      .mock-fade { position: absolute; left: 0; right: 0; bottom: 0; height: 2.4rem; background: linear-gradient(to bottom, transparent, var(--surface-soft)); }
+      .mock-note { font: 0.8rem/1.4 var(--sans); color: var(--ink-soft); margin: 0.35rem 0 1.4rem; max-width: 34rem; }
+      .mocks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.6rem; }
+      .k { color: var(--risk); } .s { color: var(--accent); } .f { color: var(--tail); }
+      @media (max-width: 760px) { .mocks { grid-template-columns: 1fr; } }
+      .mock-math { display: flex; justify-content: center; align-items: center; background: var(--surface-soft); border-radius: 6px; padding: 0.9rem; font: italic 1.15rem/1.4 "Times New Roman", Georgia, serif; overflow-x: auto; white-space: nowrap; }
+      .mock-math .frac { display: inline-flex; flex-direction: column; vertical-align: middle; text-align: center; margin: 0 0.2em; font-size: 0.92em; }
+      .mock-math .frac span:first-child { border-bottom: 1px solid currentColor; padding: 0 0.15em; }
+      .mock-img { position: relative; height: 6rem; width: 12rem; border-radius: 8px; background: var(--surface-soft); border: 1px solid var(--line); }
+      .mock-img.loaded { width: 100%; max-width: 26rem; height: 9rem; background: linear-gradient(135deg, var(--accent-soft), var(--tail-soft)); }
+      .mock-img .dl { position: absolute; right: 0.5rem; bottom: 0.5rem; width: 1.8rem; height: 1.8rem; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); display: grid; place-items: center; font: 0.8rem var(--mono); color: var(--ink-soft); }
+      .mock-img .alt { position: absolute; left: 0.75rem; bottom: 0.6rem; font: italic 0.78rem/1.3 var(--sans); color: var(--muted); }
+      .mock-text { font-size: 0.92rem; line-height: 1.7; max-width: 34rem; }
+      .mock-text .im { font-family: "Times New Roman", Georgia, serif; font-style: italic; }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="rail">
+        <p class="rail-title">Math and images</p>
+        <p class="rail-subtitle">Implementation plan · the "Math" and "Images" rows of the Streamdown gap analysis</p>
+        <nav aria-label="Sections">
+          <a href="#scope">Scope</a>
+          <a href="#streamdown">What Streamdown does</a>
+          <a href="#engines">Choosing a math engine</a>
+          <a href="#constraints">Constraints</a>
+          <a href="#math-design">Math design</a>
+          <a href="#grammar">Delimiter grammar</a>
+          <a href="#image-design">Image design</a>
+          <a href="#api">Public API</a>
+          <a href="#streaming">Streaming</a>
+          <a href="#platforms">Platforms</a>
+          <a href="#packaging">Packaging</a>
+          <a href="#phases">Phases</a>
+          <a href="#testing">Testing</a>
+          <a href="#risks">Risks and open questions</a>
+          <a href="#followups">Follow-ups</a>
+          <a href="#sources">Sources</a>
+        </nav>
+      </aside>
+      <main>
+        <div class="wrap">
+          <header class="mast">
+            <p class="kicker">docs / math-and-images-plan</p>
+            <h1>Typeset math and loaded images, natively</h1>
+            <p class="lede">
+              Today a formula shows its literal <code>$$</code> source and an image shows only its alt text, which is what the
+              <a href="api.md#feature-scope">first-release contract</a> promised. This plan closes both rows of the
+              <a href="streamdown-gap-analysis.html">Streamdown gap analysis</a>. Math is parsed by the engine, laid out once in C++ by RaTeX (a
+              KaTeX-compatible engine) on the worker pool, and drawn as vectors by both platforms. Images become their own segment, loaded through
+              React Native's own image pipeline with a placeholder, a fallback and a download control, with the loaded size fed back into measurement
+              through Fabric state.
+            </p>
+            <div class="meta-grid">
+              <div><b>Builds on</b><span>Syntax highlighting (#15), copy and download controls (#16), theme and style (#18) and code block chrome. All are treated as merged.</span></div>
+              <div><b>Compared against</b><span>Streamdown 2.7.0 with <code>@streamdown/math</code> 1.0.3 (<code>vercel/streamdown@976cf12</code>), <code>react-native-enriched-markdown@609971c</code>, and RaTeX 0.1.14 (<code>erweixin/RaTeX@776c1d3</code>)</span></div>
+              <div><b>New dependencies</b><span>Images: none, because React Native's <code>RCTImageLoader</code> and Fresco are already linked. Math: RaTeX's prebuilt C ABI (MIT) and the KaTeX fonts (OFL), shipped in an opt-in package.</span></div>
+            </div>
+            <div class="decision">
+              <strong>Decision: math is a parse feature plus a laid-out display list; images are a segment whose size arrives through state</strong>
+              <p>
+                The parser recognizes math and turns it into a <code>MathBlock</code> block or a <code>Math</code> inline run. A post-parse pass, shaped like
+                the highlighting pass, sends each formula through RaTeX's C ABI and stores the result on the document as an <code>em</code>-unit display
+                list (glyphs, rules and paths). The layout does not depend on theme, font scale or width, so it is computed once, shared by measurement and
+                drawing, and reused across snapshots. Both platforms draw the same list with the KaTeX fonts, so a formula is the same on iOS and Android
+                and as close to Streamdown's KaTeX output as RaTeX's support table allows.
+              </p>
+              <p style="margin-top: 0.7rem">
+                An image-only paragraph becomes an <code>Image</code> block in its own segment. Its box is decided by one C++ function from its state:
+                pending, loading, loaded with a known size, failed, or blocked. A load that finishes records the size in a process-wide size cache and
+                sends a Fabric state update, so the shadow node measures again with no React render. A recycled message is laid out at its final size on
+                the first frame.
+              </p>
+            </div>
+          </header>
+
+          <section id="scope">
+            <div class="section-head">
+              <h2>Scope</h2>
+              <p>What ships, what is already in place, and what stays out.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Piece</th><th>Status</th><th>Notes</th></tr></thead>
+                <tbody>
+                  <tr><td>Display math <code>$$…$$</code> on its own lines</td><td><span class="tag go">in</span></td><td>A block, parsed like a fence: blank lines, <code>-</code>, <code>|</code> and <code>\\</code> at a line end inside it are math, not Markdown. md4c 0.6 cannot do this (issue #270), so it needs a small, recorded md4c patch.</td></tr>
+                  <tr><td>Inline math <code>$$…$$</code> in a sentence</td><td><span class="tag go">in</span></td><td>md4c's <code>MD_FLAG_LATEXMATHSPANS</code> already recognizes it. Streamdown's syntax, Streamdown's default.</td></tr>
+                  <tr><td>Single-dollar <code>$…$</code></td><td><span class="tag go">in, opt-in</span></td><td>Off by default, as Streamdown's <code>singleDollarTextMath</code> is, so currency stays text.</td></tr>
+                  <tr><td><code>\(…\)</code> and <code>\[…\]</code></td><td><span class="tag go">in</span></td><td>Not in Streamdown, where it is the most requested math issue (#194, #200, #323). OpenAI-family models emit these by default. On by default, and can be turned off.</td></tr>
+                  <tr><td><code>```math</code> fences</td><td><span class="tag go">in</span></td><td>GitHub renders them, and so does Streamdown through rehype-katex's <code>language-math</code> handling.</td></tr>
+                  <tr><td>Math error fallback</td><td><span class="tag go">in</span></td><td>The literal source in <code>math.errorColor</code>, as KaTeX's <code>throwOnError: false</code> plus <code>errorColor</code> does, and <code>onMathError</code> once per distinct expression.</td></tr>
+                  <tr><td>Spoken math</td><td><span class="tag go">in</span></td><td>A small engine-side verbalizer for screen readers. KaTeX relies on hidden MathML, which no native API has.</td></tr>
+                  <tr><td>Block images</td><td><span class="tag go">in</span></td><td>An image-only paragraph, HTTPS only, at most four requests at once, cancelled when no view needs them. These are the contract's existing rules.</td></tr>
+                  <tr><td>Placeholder, fallback, download</td><td><span class="tag go">in</span></td><td>Streamdown's three states: a pulsing box while the URL streams, "Image not available" on error, and a download button once loaded.</td></tr>
+                  <tr><td>Image prefixes</td><td><span class="tag go">in</span></td><td><code>allowedImagePrefixes</code>, rehype-harden's name. A blocked image shows its alt text and a "blocked" note, never a request.</td></tr>
+                  <tr><td>Linked images <code>[![a](img)](href)</code></td><td><span class="tag go">in</span></td><td>The image is the link's hit area, so a press reaches <code>onLinkPress</code>.</td></tr>
+                  <tr><td>Images inside text, table cells, headings</td><td><span class="tag later">later</span></td><td>Alt text, as today. Badges and inline icons are rare in chat; the attachment path math adds is the route when they are needed.</td></tr>
+                  <tr><td><code>data:</code>, <code>file:</code>, relative URLs, SVG</td><td><span class="tag no">out</span></td><td>The contract rules out the schemes. SVG is not decoded by either platform's image pipeline, so it falls back like a failed load.</td></tr>
+                  <tr><td>Macros, <code>\href</code>, <code>\includegraphics</code></td><td><span class="tag no">out</span></td><td>The contract rules out "executing macros or loading remote math content". RaTeX has no <code>\includegraphics</code>, and <code>\href</code> draws as text.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>The two tracks share only the new segment kinds and the contract edits. Images can ship first as its own pull request: it adds no dependency and is the item the contract already specifies.</p>
+          </section>
+
+          <section id="streamdown">
+            <div class="section-head">
+              <h2>What Streamdown does, and what we take</h2>
+              <p>Read from <code>packages/streamdown-math</code>, <code>lib/image.tsx</code>, <code>lib/components.tsx</code>, <code>index.tsx</code>, remend's <code>katex-handler.ts</code> and <code>link-image-handler.ts</code>, and the math docs page.</p>
+            </div>
+            <h3>Math</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Behavior</th><th>Streamdown 2.7 + @streamdown/math</th><th>Downstream plan</th></tr></thead>
+                <tbody>
+                  <tr><td>Opt-in</td><td><code>plugins={{ math }}</code>; nothing renders math without it.</td><td><span class="tag go">copy</span> Installing <code>react-native-downstream-math</code> is the opt-in. Without it, math stays literal and one development warning names the package the first time a document contains math.</td></tr>
+                  <tr><td>Parser</td><td>remark-math 6 (micromark math): <code>$$</code> on its own line is "math flow", like a fence; <code>$$x$$</code> in text is inline.</td><td><span class="tag go">copy</span> The same two shapes, from md4c spans plus a patched fence.</td></tr>
+                  <tr><td>Single dollar</td><td><code>singleDollarTextMath</code>, default <code>false</code>.</td><td><span class="tag go">copy</span> Same name, same default.</td></tr>
+                  <tr><td><code>\(…\)</code>, <code>\[…\]</code></td><td>Not parsed. Users preprocess with a regex or alias <code>micromark-extension-llm-math</code> (#194). remend learned to skip them when closing emphasis (#522).</td><td><span class="tag later">improve</span> Parsed, on by default; <code>math={{ brackets: false }}</code> turns them off.</td></tr>
+                  <tr><td>Renderer</td><td>rehype-katex: KaTeX HTML plus hidden MathML; the app imports <code>katex.min.css</code>.</td><td><span class="tag later">adapt</span> RaTeX, which follows KaTeX's syntax and metrics and uses KaTeX's own fonts, drawn natively.</td></tr>
+                  <tr><td>Errors</td><td><code>errorColor</code>, default <code>var(--color-muted-foreground)</code>; the raw TeX in that color. No callback.</td><td><span class="tag go">copy</span> A theme slot with the same default role. <span class="tag later">improve</span> <code>onMathError</code>, as enriched-markdown's <code>onLatexError</code> does.</td></tr>
+                  <tr><td>Streaming</td><td>remend's <code>katex</code> handler appends a closing <code>$$</code> (block math on by default); <code>inlineKatex</code> is opt-in. KaTeX then renders, or shows red source, every token.</td><td><span class="tag later">improve</span> An open <code>$$</code> fence is already a block, like an open code fence. A formula that does not parse yet keeps its last good layout instead of flickering to source.</td></tr>
+                  <tr><td>Lone <code>$$x$$</code> line</td><td>Inline math in a paragraph of its own: text style, left-aligned.</td><td><span class="tag later">improve</span> Display style, centered: a paragraph whose only content is one <code>$$…$$</code> span is promoted to a math block. Models write it that way meaning display.</td></tr>
+                  <tr><td>Accessibility</td><td>KaTeX's hidden MathML; VoiceOver's support for it on the web is uneven (KaTeX #820).</td><td><span class="tag later">adapt</span> A spoken string from the engine's verbalizer, with the source as the fallback.</td></tr>
+                  <tr><td>Lazy loading</td><td>KaTeX CSS loads only when math syntax is present (<code>katex-lazy-load.test.tsx</code>).</td><td><span class="tag go">copy</span> RaTeX is not loaded and the fonts are not read until a document has a formula.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <h3>Images</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Behavior</th><th>Streamdown 2.7</th><th>Downstream plan</th></tr></thead>
+                <tbody>
+                  <tr><td>Placement</td><td><code>ImageComponent</code> is an <code>inline-block</code> wrapper with <code>my-4</code>; a paragraph holding only an image drops its <code>&lt;p&gt;</code>.</td><td><span class="tag go">copy</span> The same rule promotes an image-only paragraph to an <code>Image</code> block. Several images in one paragraph stack vertically.</td></tr>
+                  <tr><td>Size</td><td>Natural size, <code>max-w-full rounded-lg</code>.</td><td><span class="tag go">copy</span> One image pixel is one point, as a CSS pixel is, capped at the column width. The radius is the theme's <code>image.borderRadius</code>.</td></tr>
+                  <tr><td>Incomplete URL</td><td>remend rewrites <code>![alt](https://exa</code> to the <code>streamdown:incomplete-image</code> sentinel, rendered as a pulsing <code>h-24 w-48</code> box.</td><td><span class="tag go">copy</span> With <code>preview.images</code>, the existing repair produces <code>![alt]()</code>. In an unsettled image-only paragraph that is the pending state: the same 192×96 box, no request.</td></tr>
+                  <tr><td>Error</td><td>"Image not available" in muted italic (<code>imageNotAvailable</code>); hidden image.</td><td><span class="tag go">copy</span> Same key and text, with the alt text above it when there is one.</td></tr>
+                  <tr><td>Download</td><td><code>controls.image.download</code>, shown once loaded. The file name comes from the URL if its extension is at most four characters, else from the MIME type, else <code>png</code>, with the alt text as the base. A CORS failure falls back to opening a tab.</td><td><span class="tag go">copy</span> The same naming rules in C++ next to <code>downloadName</code>, and the platform save dialog the code download already uses. Bytes come from the loader's cache, so there is no second request and no CORS case.</td></tr>
+                  <tr><td>URL policy</td><td>rehype-harden with <code>allowedImagePrefixes: ["*"]</code> and <code>allowDataImages: true</code>.</td><td><span class="tag later">adapt</span> Same prop name and default prefix list, but HTTPS only and no <code>data:</code>, as the contract fixed.</td></tr>
+                  <tr><td>Hover overlay</td><td>Darkens on hover.</td><td><span class="tag no">not needed</span> No hover on touch. A press reaches <code>onImagePress</code> instead.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>Streamdown's tests to port: <code>image.test.tsx</code> (placeholder, download naming and every extension rule, controls on and off), <code>image-hydration.test.tsx</code> (image-only paragraphs, mixed paragraphs, several images), <code>incomplete-image-sanitize.test.tsx</code>, <code>katex-lazy-load.test.tsx</code> (no math loads nothing, single dollar is not math by default, currency is not math), and remend's <code>katex.test.ts</code> and <code>images.test.ts</code> inputs into the preview corpus. The DOM assertions become assertions on the engine's document and on the segment plan.</p>
+          </section>
+
+          <section id="engines">
+            <div class="section-head">
+              <h2>Choosing a math engine</h2>
+              <p>The contract asked for "native math layout after separate review". This is that review.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Option</th><th>Shape</th><th>Assessment</th></tr></thead>
+                <tbody>
+                  <tr class="pick"><td>RaTeX 0.1.14</td><td>Rust core with a C ABI: <code>ratex_parse_and_layout(tex, opts)</code> returns a JSON display list in em units. Prebuilt static XCFramework; Android AAR on Maven Central (<code>io.github.erweixin:ratex-android</code>). MIT; fonts OFL.</td><td><span class="tag go">pick</span> KaTeX syntax and KaTeX fonts, which is Streamdown parity. One layout for both platforms. Thread-safe (thread-local error slot). Active (pushed 2026-09). Already shipped by enriched-markdown on both platforms. Costs a prebuilt binary and <code>panic = "abort"</code>; see risks.</td></tr>
+                  <tr><td>MicroTeX</td><td>C++ port of JLaTeXMath, MIT, pluggable <code>Graphics2D</code>.</td><td><span class="tag no">no</span> Would build from source in our podspec and CMake, which is attractive, but it was last pushed in August 2024, its syntax is JLaTeXMath's rather than KaTeX's, and its new OpenType path is unfinished.</td></tr>
+                  <tr><td>iosMath + AndroidMath</td><td>Two separate engines (Objective-C and a Java port).</td><td><span class="tag no">no</span> Two layouts can never agree, which breaks the rule that both platforms draw one engine result. Both are unmaintained, with a small command set.</td></tr>
+                  <tr><td>KaTeX in a WebView</td><td>One hidden web view per formula, or one shared.</td><td><span class="tag no">no</span> Asynchronous height, 50–150 MB per web view, no measurement on the worker, and nothing native about selection or accessibility.</td></tr>
+                  <tr><td>Our own TeX layout</td><td>Parse plus KaTeX's box model in C++.</td><td><span class="tag no">no</span> Months of work to reach what RaTeX already passes in its KaTeX support table.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>What makes RaTeX fit this engine in particular: its output is data, not a view. The engine calls it on a worker thread, decodes the list into a compact C++ struct, and keeps that struct on the document like code tokens. Neither platform calls RaTeX, and neither needs RaTeX's Swift or Kotlin wrappers. Units are em and the baseline is at <code>y = height</code>, so one layout serves every font size and font scale.</p>
+<pre><code>// What ratex_parse_and_layout("\\frac{1}{2}", {display: 1}) returns, abridged (DISPLAYLIST_JSON_PROTOCOL.md)
+{ "version": 1, "width": 0.84, "height": 1.32, "depth": 0.69,
+  "items": [ { "type": "GlyphPath", "x": 0.12, "y": 0.68, "scale": 1, "font": "Main-Regular", "char_code": 49, "color": {…} },
+             { "type": "Line", "x": 0.12, "y": 1.07, "width": 0.6, "thickness": 0.04, "color": {…} },
+             { "type": "GlyphPath", … "char_code": 50 } ] }</code></pre>
+          </section>
+
+          <section id="constraints">
+            <div class="section-head">
+              <h2>Constraints from the contract and the code</h2>
+              <p>Rules from <code>api.md</code>, the feature matrix and earlier items that both tracks must keep.</p>
+            </div>
+            <ul>
+              <li><b>Plain prose does not pay.</b> A document without math or images loads no RaTeX, reads no font, creates no image view, and allocates nothing in the new passes. The math pass returns the same handle when there is nothing to lay out, as <code>highlightCodeBlocks</code> does.</li>
+              <li><b>Unsupported syntax is literal, never executed.</b> A formula that fails, or any formula when the math package is absent, shows its source exactly as written, delimiters included. That is today's display, so turning math off is a no-op for existing users.</li>
+              <li><b>Measured height equals drawn height.</b> Math sizes are in the document. Image sizes and states travel in <code>LayoutHint</code> and the Fabric state, as <code>CodeLayout</code> does, and one function decides an image box.</li>
+              <li><b>No React render for content work.</b> An image finishing loading updates Fabric state, as expand does.</li>
+              <li><b>Copy is what the reader sees, as text.</b> Copying a typeset formula yields its source with its delimiters, as KaTeX's copy-tex extension does, so a paste into another Markdown editor reproduces it.</li>
+              <li><b>The settled document is a parse of the canonical source.</b> No math repair survives <code>finish()</code>, and source ranges are never touched.</li>
+              <li><b>Identities name content.</b> <code>sameBlock</code> (<code>Compare.cpp:5</code>) must compare the new math and image fields, or the committed-segment cache draws stale content, the same trap the chrome plan found with <code>info</code>.</li>
+              <li><b>md4c is pinned unmodified.</b> <code>engine.test.mjs</code> checks SHA-256 digests, and the vendored README says a local edit must be "a deliberate patch, recorded on purpose". The fence patch is recorded that way.</li>
+              <li><b>Untrusted input.</b> Formulas and URLs come from model output. Size caps, URL validation and the prefix list apply before anything reaches RaTeX or the network.</li>
+            </ul>
+          </section>
+
+          <section id="math-design">
+            <div class="section-head">
+              <h2>Math design</h2>
+              <p>One recognizer in the parser, one layout pass on the worker, one display list drawn by both platforms.</p>
+            </div>
+            <div class="flow" aria-label="Math pipeline">
+              <div class="flow-node new"><b>Bracket pre-scan</b><span><code>\(</code> <code>\[</code> rewritten in place to <code>$$</code>, same length</span></div>
+              <div class="flow-node new"><b>md4c + fence patch</b><span><code>$$</code> lines are a fence; spans as today</span></div>
+              <div class="flow-node new"><b>DocumentBuilder</b><span><code>MathBlock</code> blocks, <code>Math</code> runs, <code>MathSpan</code> records</span></div>
+              <div class="flow-node new"><b>Math pass</b><span>RaTeX on the pool, cached, last good layout kept</span></div>
+              <div class="flow-node new"><b>Draw</b><span>KaTeX fonts, CoreText and Canvas, inherited color</span></div>
+            </div>
+            <div class="mocks">
+              <div>
+                <div class="mock-text">The roots are <span class="im">x = </span><span class="mock-math" style="display:inline-flex;padding:0 0.2rem;background:none;font-size:1rem"><span class="frac"><span>−b ± √Δ</span><span>2a</span></span></span> whenever <span class="im">a ≠ 0</span>, and the line grows to fit the fraction.</div>
+                <p class="mock-note"><code>\(x = \frac{-b \pm \sqrt{\Delta}}{2a}\)</code> inline: one attachment on iOS and one replacement span on Android, sized from the display list at 1.21 times the surrounding text, as KaTeX's stylesheet sizes it.</p>
+              </div>
+              <div>
+                <div class="mock-math">∫<sub style="font-size:0.6em">0</sub><sup style="font-size:0.6em">∞</sup> e<sup style="font-size:0.6em">−x²</sup> dx = <span class="frac"><span>√π</span><span>2</span></span></div>
+                <p class="mock-note">A <code>$$</code> block: its own segment, centered, scrolling sideways when wider than the column, with the theme's <code>math</code> padding and background.</p>
+              </div>
+            </div>
+
+            <h3>1. Recognizing math in the parser</h3>
+            <p>md4c 0.6 already reports <code>MD_SPAN_LATEXMATH</code> and <code>MD_SPAN_LATEXMATH_DISPLAY</code> when <code>MD_FLAG_LATEXMATHSPANS</code> is set (<code>md4c.c:3632</code> collects runs of one or two <code>$</code>; an opener must follow whitespace, punctuation or a line start, and a closer must precede one). That covers inline math. Three things are missing, and each is solved at the narrowest layer:</p>
+            <ul>
+              <li><b>Block math across lines (md4c patch).</b> <code>$$</code> alone on a line is recognized only as a span, so a blank line, a line starting <code>- </code>, a <code>|</code> or four spaces of indentation inside an <code>aligned</code> environment breaks the formula into Markdown. The patch adds <code>MD_FLAG_LATEXMATHBLOCKS</code>: in <code>md_is_opening_code_fence</code> and <code>md_is_closing_code_fence</code> (<code>md4c.c:6045</code>, <code>:6075</code>), a line that is exactly <code>$$</code> after up to three spaces, with only whitespace after it, opens or closes a fence, reported as <code>MD_BLOCK_CODE</code> with <code>fence_char = '$'</code>. Containers, lazy continuation and an unclosed fence running to the end all come from md4c's existing fence machinery. This is the change upstream issue #270 asks for, so the patch is offered upstream.</li>
+              <li><b>Single dollars off (same patch).</b> md4c has no switch between <code>$</code> and <code>$$</code>. <code>MD_FLAG_LATEXMATHNOSINGLE</code> skips a one-dollar run in the same collector, two lines. Without it, <code>$5 – $10</code>-shaped text could pair, and a literal fallback would then lose the emphasis md4c skipped inside the span.</li>
+              <li><b>Brackets (no md4c change).</b> A pre-scan in <code>MathScan.{h,cpp}</code>, beside <code>Scan.h</code>, finds paired, unescaped <code>\(</code>…<code>\)</code> and <code>\[</code>…<code>\]</code> outside code fences and rewrites each two-byte delimiter to <code>$$</code> in a copy of the source. The copy has the same length, so every md4c offset still points at the same byte of the canonical source. The builder reads text bytes from the original at the same offset, so code, link text and an unpaired delimiter show exactly what was written. A <code>\[</code> alone on a line becomes a <code>$$</code> line and so a fence. The builder knows which delimiter it saw from the original bytes, which is how <code>\(</code> stays inline although md4c reports a two-dollar span.</li>
+            </ul>
+            <p>The parser turns all of this on only when a math option asks for it (see <a href="#api">Public API</a>). With math off, the flags are off and parsing is byte-for-byte today's.</p>
+
+            <h3>2. The document model</h3>
+<pre><code>// Document.h
+enum class BlockKind : uint8_t { …, TableRow = 5, MathBlock = 6, Image = 7 };
+namespace InlineStyle { …; constexpr uint32_t Math = 1u &lt;&lt; 7; }
+
+enum class MathDelimiter : uint8_t { Dollar, DoubleDollar, Paren, Bracket, Fence, MathFence };
+
+/// One formula. Inline math covers its literal text in Block::text, delimiters
+/// included, so a fallback, a copy and today's rendering are the same string.
+struct MathSpan {
+  uint32_t start{0}, end{0};        // UTF-16 into Block::text, the literal with delimiters
+  std::string tex;                  // between the delimiters, UTF-8, newlines as written
+  bool display{false};              // display style: blocks, \[…\], and a promoted lone $$…$$
+  MathDelimiter delimiter{MathDelimiter::DoubleDollar};
+  MathLayout::Handle layout;        // null until laid out, or when it failed
+  std::string error;                // RaTeX's message when it failed; empty otherwise
+  bool operator==(const MathSpan &amp;) const;   // compares start, end, tex, display, delimiter
+};
+
+struct Block {
+  …
+  /// Paragraph, heading, table row: the inline formulas, sorted by start.
+  /// MathBlock: exactly one, display, covering the whole text.
+  std::vector&lt;MathSpan&gt; math;
+};</code></pre>
+            <ul>
+              <li><b>A <code>MathBlock</code>'s text is the TeX</b> between its fences, as a code block's is its code, so selection and copy return the formula. A <code>```math</code> fence becomes a <code>MathBlock</code> with <code>MathDelimiter::MathFence</code>.</li>
+              <li><b>A paragraph that is one display span</b> (<code>$$…$$</code> or <code>\[…\]</code> on one line, with nothing else but whitespace) is promoted in <code>finishLeaf</code> to a <code>MathBlock</code>, the way Streamdown unwraps an image-only paragraph.</li>
+              <li><b>Inline math is a run, not a placeholder.</b> <code>Block::text</code> keeps the literal, so every offset, link range and table cell boundary is unchanged, and the platform decides at draw time whether the run is typeset or literal.</li>
+              <li><b>Size caps.</b> A formula over 4 KiB of TeX, or a document with more than 512 formulas, keeps the rest literal and never calls RaTeX. RaTeX already stops at 1,000 macro expansions and has its own recursion guard. The caps bound the cost of hostile input before it reaches a library that aborts on panic.</li>
+              <li><b><code>sameBlock</code></b> compares <code>math</code> without its <code>layout</code>, so a block keeps its identity while its layout is filled in.</li>
+            </ul>
+
+            <h3>3. The math engine seam</h3>
+<pre><code>// src/cpp/math/MathEngine.h
+/// A display list in em units, decoded once from RaTeX's JSON. Immutable and shared.
+struct MathLayout {
+  using Handle = std::shared_ptr&lt;const MathLayout&gt;;
+  float width{0}, height{0}, depth{0};          // em; the baseline is at y = height
+  struct Glyph { float x, y, scale; MathFont font; char32_t codePoint; uint32_t color; };
+  struct Rule  { float x, y, width, height; uint32_t color; bool dashed; };   // Line and Rect
+  struct Path  { float x, y; std::vector&lt;PathOp&gt; ops; bool fill; uint32_t color; };
+  std::vector&lt;Glyph&gt; glyphs; std::vector&lt;Rule&gt; rules; std::vector&lt;Path&gt; paths;
+};
+/// 0 means "the surrounding text color", so dark mode, a theme and increased
+/// contrast reach a formula without laying it out again. \color{…} keeps its own.
+inline constexpr uint32_t kInheritColor = 0;
+
+enum class MathFont : uint8_t { MainRegular, MainBold, MainItalic, MainBoldItalic, MathItalic, MathBoldItalic,
+  AMSRegular, CaligraphicRegular, CaligraphicBold, FrakturRegular, FrakturBold, SansSerifRegular, SansSerifBold,
+  SansSerifItalic, ScriptRegular, TypewriterRegular, Size1, Size2, Size3, Size4, System /* "CJK-Regular" */ };
+
+struct MathEngineFunctions {        // RaTeX's C ABI, as function pointers
+  RatexResult (*parseAndLayout)(const char *, const RatexOptions *);
+  void (*free)(char *);
+  const char *(*lastError)(void);
+};
+namespace MathEngine {
+  void install(const MathEngineFunctions &amp;);   // iOS: from the math pod; Android: dlopen
+  bool available();
+  /// Lays out one formula through the shared cache. Never throws.
+  MathLayout::Handle layout(std::string_view tex, bool display, std::string *error);
+}</code></pre>
+            <ul>
+              <li><b>Inherited color.</b> RaTeX colors every item it does not override with the default color in <code>RatexOptions</code>. The engine passes a sentinel (<code>{0, 0, 0, 0}</code>) and the decoder maps exactly that value to <code>kInheritColor</code>, so the layout does not depend on the theme and the platform draws in the run's own dynamic color.</li>
+              <li><b>The decoder</b> (<code>MathDisplayList.cpp</code>) is a small JSON reader for this one schema. It ignores unknown fields and item types, as the protocol requires, treats a missing <code>version</code> as 0, limits nesting and item counts, and rejects a list with non-finite numbers or a width over 2,000 em. A rejected list is a failed formula, never a crash.</li>
+              <li><b>The cache</b> keys on the TeX and the display flag, holds about 2,000 entries (an LRU bounded by item count), and is shared by sessions and controlled documents, so a full-mode reparse or a recycled message never calls RaTeX again for a formula it has seen.</li>
+              <li><b>Not installed.</b> <code>available()</code> is false and every formula keeps its literal. A development warning fires once per process, and only when a document actually contains math.</li>
+            </ul>
+
+            <h3>4. The math pass</h3>
+            <p><code>src/cpp/math/MathBlocks.{h,cpp}</code> mirrors <code>CodeBlocks.h</code>: <code>layoutMath(DocumentHandle, previous)</code> runs after the parse wherever highlighting runs (<code>PreparedDocument.cpp</code> and <code>IncrementalParser.cpp</code>), fills <code>MathSpan::layout</code> for the tail's blocks, and returns the same handle when the tail has no <code>MathSpan</code>. Committed blocks keep their layouts in the shared prefix. Layout cannot depend on the theme, font scale or width, so this pass never re-runs for a theme change, a rotation or Dynamic Type.</p>
+            <p><b>Last good layout.</b> A formula whose block is not settled and that fails to lay out keeps the layout of the same span in the previous snapshot, when that span's TeX is a prefix of the new TeX. While <code>\frac{a}{</code> streams in, the reader keeps seeing the last prefix that laid out rather than a formula that flickers to red source on every token. Before anything has laid out, the span shows its literal in the run's normal color. Error color and <code>onMathError</code> apply only once the block is settled.</p>
+
+            <h3>5. Sizing and drawing</h3>
+            <ul>
+              <li><b>Font size.</b> Inline math is the surrounding run's size times 1.21, KaTeX's own <code>.katex { font-size: 1.21em }</code>, so a formula in a heading is a heading-sized formula. Block math uses <code>math.fontSize</code>, which defaults to the paragraph size times 1.21. Both are multiplied by the font scale like text.</li>
+              <li><b>One height rule.</b> <code>mathBlockHeight(layout, fontSize, padding) = (height + depth) · fontSize + 2 · padding</code> in <code>MathLayout.h</code>, called by both platforms' segment height functions.</li>
+              <li><b>Fonts.</b> The 20 KaTeX TTFs (about 540 KB) ship in the math package. Each is loaded on first use from its own file: <code>CGFontCreateWithDataProvider</code> plus <code>CTFontCreateWithGraphicsFont</code> on iOS, so nothing is registered process-wide, and <code>Typeface.createFromAsset</code> on Android. <code>System</code> glyphs (CJK, emoji) use the platform font.</li>
+              <li><b>Drawing.</b> A glyph draws at <code>(x, y) · size</code> scaled by <code>scale</code>; a rule is a filled rect, dashed when asked; a path is a <code>CGPath</code> or <code>android.graphics.Path</code>. Vectors at draw time, so a formula is sharp at any zoom and in any appearance.</li>
+              <li><b>Direction.</b> A formula is always laid out left to right, as KaTeX does, inside text of either direction. A block is centered by default (<code>math.textAlign</code>).</li>
+              <li><b>Too wide.</b> A block wider than the column scrolls sideways inside its segment, reusing the code card's horizontal scroll and drag rules. An inline formula wider than the line is scaled down to the line, but never below 0.5; past that it overflows and is clipped at the segment edge.</li>
+            </ul>
+
+            <h3>6. Speech, copy and export</h3>
+            <ul>
+              <li><b>Spoken math.</b> <code>MathSpeech.cpp</code> turns TeX into a sentence from a table, not a TeX engine: Greek letters, operators and relations, <code>\frac{a}{b}</code> as "a over b", <code>^2</code> and <code>^3</code> as "squared" and "cubed", other superscripts as "to the power", subscripts, <code>\sqrt</code>, <code>\sum</code>, <code>\int</code> and <code>\lim</code> with their limits, and a matrix as its size. An unknown command is spoken as its name without the backslash. VoiceOver reads "math, x equals negative b plus or minus …"; TalkBack the same through <code>contentDescription</code>. The source is the fallback, and it stays reachable with the rotor's character navigation in the inline case.</li>
+              <li><b>Copy.</b> A selection copies <code>Block::text</code>, which is the literal with delimiters for inline math and the TeX for a block. iOS swaps each attachment back for its literal in the existing <code>copy:</code> override (<code>DSSegmentViews.mm:209</code>). Android keeps the literal characters under a <code>ReplacementSpan</code>, so the platform copies it unchanged.</li>
+              <li><b>Export.</b> A table copied as Markdown, CSV or HTML writes a cell's math as its literal source. No math copy button: Streamdown has none, and selection covers it.</li>
+            </ul>
+          </section>
+
+          <section id="grammar">
+            <div class="section-head">
+              <h2>Delimiter grammar</h2>
+              <p>What each form becomes, and the shapes that must stay text.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Source</th><th>Becomes</th><th>Notes</th></tr></thead>
+                <tbody>
+                  <tr><td><code>$$</code> line, TeX lines, <code>$$</code> line</td><td>Math block</td><td>The patched fence. Up to three spaces of indentation, nothing but whitespace after the <code>$$</code>. Works inside lists and quotes. An unclosed fence runs to the end of its container, as remark-math's math flow and a code fence do.</td></tr>
+                  <tr><td><code>\[</code> line, TeX lines, <code>\]</code> line</td><td>Math block</td><td>The same fence after the pre-scan. A <code>\[</code> fence closes only on <code>\]</code>, which the builder checks against the original bytes.</td></tr>
+                  <tr><td><code>```math</code> fence</td><td>Math block</td><td>The info string's first word, matched case-insensitively. <code>```latex</code> and <code>```tex</code> stay code, since they usually show source.</td></tr>
+                  <tr><td>A paragraph that is only <code>$$x$$</code> or <code>\[x\]</code></td><td>Math block</td><td>Promoted in <code>finishLeaf</code>. Streamdown renders this inline; models mean display.</td></tr>
+                  <tr><td><code>$$x$$</code> inside text</td><td>Inline, text style</td><td>md4c's existing span, as in Streamdown.</td></tr>
+                  <tr><td><code>\(x\)</code></td><td>Inline, text style</td><td>Paired within one paragraph, unescaped, outside code. An unpaired <code>\(</code> stays the CommonMark escape it is today, so it shows <code>(</code>.</td></tr>
+                  <tr><td><code>$x$</code></td><td>Inline, only with <code>singleDollarTextMath</code></td><td>md4c's flanking rules: <code>$5 and $10</code> never pairs, because neither <code>$</code> is followed by whitespace or punctuation.</td></tr>
+                  <tr><td><code>\$</code>, <code>\\(</code>, <code>`$$x$$`</code>, fenced code</td><td>Text</td><td>An escaped dollar, an escaped backslash before a paren, a code span and a code block are never math. Code spans win because md4c resolves them first among verbatim spans.</td></tr>
+                  <tr><td><code>$$$</code> or longer runs</td><td>Text</td><td>md4c ignores runs longer than two.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p><b>Prefix property.</b> As with fence meta, every prefix of every math fixture must parse without failing. A fence opener with no newline yet is unsettled (<code>watchOpenFence</code>, <code>IncrementalParser.cpp:577</code>), and the settled document equals a one-shot parse whether or not its prefixes were parsed first. <code>Scan.h</code>'s <code>fenceOpener</code> and <code>closesFence</code> learn the <code>$$</code> fence (marker <code>$</code>, length exactly 2, no info string) under the same option, so the incremental parser never commits a boundary inside a math block. Without that, a blank line inside an <code>aligned</code> environment would split it.</p>
+          </section>
+
+          <section id="image-design">
+            <div class="section-head">
+              <h2>Image design</h2>
+              <p>An image block, one box rule, one size path back into measurement, and React Native's own loaders.</p>
+            </div>
+            <div class="mocks">
+              <div>
+                <div class="mock-img" aria-hidden="true"></div>
+                <p class="mock-note">Pending: <code>![chart](https://exa</code> with <code>preview.images</code>, or loading with no cached size. A 192×96 box that pulses, and holds still under Reduce Motion,, in <code>image.placeholderColor</code>.</p>
+              </div>
+              <div>
+                <div class="mock-img loaded" aria-hidden="true"><span class="dl">⤓</span></div>
+                <p class="mock-note">Loaded: natural size in points, capped at the column width and <code>image.maxHeight</code>, with the theme's radius. The download button appears once loaded, as in Streamdown.</p>
+              </div>
+            </div>
+
+            <h3>1. Images in the document</h3>
+<pre><code>// Document.h
+struct Image {
+  std::string url;          // the destination, entity-decoded, UTF-8
+  std::u16string alt;       // plain alt text
+  std::string title;        // the optional "title"
+  SourceRange range;        // the ![…](…) occurrence, like a link's
+  bool loadable{false};     // isLoadableImageUrl(url): https:, complete, ≤ 8 KiB, no control or space
+  int32_t link{-1};         // the enclosing link for [![a](img)](href), or -1
+};
+struct Document { …; SharedList&lt;Image&gt; images; };
+struct Block    { …; std::vector&lt;uint32_t&gt; images; };   // Image blocks: indexes into Document::images</code></pre>
+            <ul>
+              <li><b>Recording.</b> <code>enterSpan(MD_SPAN_IMG)</code> (<code>MarkdownParser.cpp:281</code>) reads <code>MD_SPAN_IMG_DETAIL::src</code> and <code>title</code>, which the builder ignores today, and <code>closeLinkOrImage</code> fills the range it already computes. Every image is recorded, loadable or not, so a run's alt text can name its image.</li>
+              <li><b>Promotion.</b> In <code>finishLeaf</code>, a paragraph whose runs are all <code>ImageAlt</code> (or a link wrapping one image), separated only by whitespace and soft breaks, becomes a <code>BlockKind::Image</code> block listing its images. Its text is the alt texts joined by newlines, so accessibility, export and a fallback read the same string. Anything else in the paragraph keeps it a paragraph with alt text, as today.</li>
+              <li><b>URL policy.</b> <code>isLoadableImageUrl</code> sits beside <code>isActionableUrl</code> in <code>LinkPolicy.cpp</code>: HTTPS only, case-insensitive scheme, a host, no control characters or spaces. The prefix list is a view prop, so it is applied in the box rule below rather than in the parse, and the document stays the same whatever the prop says.</li>
+              <li><b>Download name.</b> <code>imageDownloadName(url, alt, mime, configuredBase)</code> in <code>Export.cpp</code> ports Streamdown's rules (URL extension up to four characters, else the MIME type's, else <code>png</code>; the alt text without its extension as the base, else <code>image</code>) through the same sanitizer as code names.</li>
+              <li><b>Identity.</b> <code>sameBlock</code> compares <code>images</code> and the image records they name, by URL and alt text.</li>
+              <li><b>Segments.</b> <code>planSegments</code> gives an <code>Image</code> block its own <code>SegmentKind::Image</code> segment, with an <code>imageOrdinal</code> counted like <code>codeOrdinal</code>, and a <code>MathBlock</code> its own <code>SegmentKind::Math</code>. A committed chunk ends before either, as it does before code.</li>
+            </ul>
+
+            <h3>2. One box rule</h3>
+<pre><code>// src/cpp/downstream/ImageLayout.h
+enum class ImageState : uint8_t { Pending, Loading, Loaded, Failed, Blocked, Disabled };
+struct ImageEntry {               // one per image the view has an answer for
+  uint32_t ordinal;               // the image's index among the document's images
+  ImageState state;
+  float pixelWidth{0}, pixelHeight{0};   // Loaded only
+  bool operator==(const ImageEntry &amp;) const = default;
+};
+struct ImageLayout {              // travels in LayoutHint and DownstreamMarkdownState, like CodeLayout
+  bool enabled{true};             // the `images` prop
+  std::vector&lt;ImageEntry&gt; entries;       // sorted by ordinal
+  bool operator==(const ImageLayout &amp;) const = default;
+};
+/// The box one image takes in a column, from its state and the theme's image metrics.
+/// The only place an image's height is decided; both platforms and the shadow node call it.
+Size imageBox(const ImageEntry *, float columnWidth, const ImageMetrics &amp;, float fontScale, float fallbackTextHeight);</code></pre>
+            <ul>
+              <li><b>Pending and Loading</b> with no known size: the placeholder's 192×96 points, clamped to the column. <b>Loaded</b>: <code>pixelWidth × pixelHeight</code> in points, scaled down to the column width and to <code>image.maxHeight</code> (0, the default, means no cap), never scaled up. <b>Failed, Blocked, Disabled</b>: one line of fallback text, so a broken image takes the room of its alt text and not of a placeholder.</li>
+              <li><b>Sizes outlive views.</b> <code>ImageSizeCache</code>, a process-wide LRU of 1,024 URLs, keeps each URL's pixel size or its failure. The shadow node builds <code>ImageLayout</code> from it at measurement, so a message scrolled back into view, or a second message showing the same chart, lays out at its final size on the first frame and never jumps.</li>
+              <li><b>The size comes back through state.</b> When a load finishes, the platform records the result in <code>ImageSizeCache</code> and dispatches a state update on the view's family, the way <code>relayoutWhenPrepared</code> does (<code>DownstreamMarkdownShadowNode.cpp</code>). The clone's <code>layout()</code> finds a different <code>ImageLayout</code>, measures again and commits a new state, with no React render. The measure cache (<code>DownstreamTextLayoutManager.h</code>) keys on <code>ImageLayout</code> as it does on <code>CodeLayout</code>.</li>
+              <li><b>Load events are batched.</b> Loads that finish within one frame produce one state update per view, so a message with six images relays out once rather than six times.</li>
+            </ul>
+
+            <h3>3. Loading</h3>
+            <ul>
+              <li><b>React Native's own pipeline.</b> On iOS, <code>RCTImageLoader</code> from the context container under the <code>"RCTImageLoader"</code> key. Bridgeless mode inserts it there (<code>RCTInstance.mm:414</code>), and React Native's own <code>ImageManager.mm</code> reads it the same way. On Android, Fresco's <code>ImagePipeline</code>; React Native 0.83 ships Fresco 3.6.0. Apps keep their own HTTP stack, cookies, disk cache and custom URL handlers, and no image library is added.</li>
+              <li><b>The contract's four requests.</b> One <code>DSImageLoader</code> on iOS and one <code>ImageLoader</code> on Android per process: at most four requests in flight, requests for the same URL deduplicated, and each request reference-counted by the image views that want it. It is cancelled when the last one is recycled, its generation is reset, or its URL leaves the document.</li>
+              <li><b>Decoded to the size drawn.</b> A request asks for the column width times the screen scale (<code>RCTImageLoader</code>'s size-aware load; Fresco's <code>ResizeOptions</code>), so a 4,000-pixel photo costs a phone-sized bitmap. GIFs show their first frame. SVG is not decoded by either pipeline and falls back.</li>
+              <li><b>When a request starts.</b> As soon as a snapshot holds a complete, loadable URL that the prefix list allows, settled or not, as Streamdown loads as soon as an <code>&lt;img&gt;</code> renders. A partial destination is never requested: it is either literal text or, with preview, an empty one.</li>
+              <li><b>Privacy.</b> Every request is to a URL a model wrote. <code>allowedImagePrefixes</code> is the switch for apps whose models read untrusted content; see the open question on its default.</li>
+            </ul>
+
+            <h3>4. The image view</h3>
+            <ul>
+              <li>One view per image block (<code>DSImageSegmentView</code>, <code>ImageSegmentView</code>), holding an image view per image, the placeholder, the fallback label and the download button. Container bars and markers are drawn from the block's containers, as the table segment does.</li>
+              <li><b>Press.</b> A linked image reaches <code>onLinkPress</code> with the link's range. Any other loaded image reaches <code>onImagePress</code>, so an app can open its own viewer. The library opens nothing.</li>
+              <li><b>Download.</b> A bottom-trailing button once the image is loaded, as in Streamdown. It writes the loader's cached bytes to a file and presents the save dialog the code download already uses (<code>DSFileExporter</code>, <code>DocumentExporter.kt</code>). Saving to Photos would need a permission, so it is not offered.</li>
+              <li><b>Accessibility.</b> One element per image: the image trait (iOS) or role (Android), the alt text as the label, or <code>translations.image</code> ("Image") when there is none, and the state when it is not loaded ("loading", "not available", "blocked"). A linked image is a link element.</li>
+            </ul>
+          </section>
+
+          <section id="api">
+            <div class="section-head">
+              <h2>Public API</h2>
+              <p>Streamdown's names where Streamdown has the feature, enriched-markdown's style keys where it has the element.</p>
+            </div>
+<pre><code>// src/types.ts
+type MarkdownMathOptions = Readonly&lt;{
+  /** `$…$` as inline math. Off by default, as in Streamdown, so currency stays text. */
+  singleDollarTextMath?: boolean;
+  /** `\(…\)` and `\[…\]`. On by default; Streamdown does not parse them. */
+  brackets?: boolean;
+}&gt;;
+
+type MarkdownViewBaseProps = Readonly&lt;{
+  // …existing props
+  /**
+   * Typeset math. Defaults to on when `react-native-downstream-math` is installed and off
+   * otherwise; off is exactly today's parse and display. `false` keeps formulas literal.
+   * For a `stream`, parsing options come from `createMarkdownStream` and this only
+   * decides whether parsed formulas are typeset.
+   */
+  math?: boolean | MarkdownMathOptions;
+  /** A formula that could not be typeset, once per distinct source per view, after it settles. */
+  onMathError?: (event: MarkdownMathErrorEvent) =&gt; void;
+  /** Load images. On by default, as in Streamdown. `false` shows alt text and makes no request. */
+  images?: boolean;
+  /** rehype-harden's option: URL prefixes an image may load from. `['*']` by default. */
+  allowedImagePrefixes?: readonly string[];
+  /** A press on a loaded image that is not inside a link. */
+  onImagePress?: (event: MarkdownImageEvent) =&gt; void;
+}&gt;;
+
+type MarkdownMathErrorEvent = { source: string; message: string; display: boolean; generation: number };
+type MarkdownImageEvent = { url: string; alt: string; title?: string; range: { start: number; end: number } };
+
+// createMarkdownStream(options) gains, with the same default rule as the view prop:
+math?: boolean | MarkdownMathOptions;
+
+// MarkdownControls gains Streamdown's key:
+image?: boolean | { download?: boolean | { filename?: string; onDownload?: (e) =&gt; void; onError?: (e) =&gt; void } };
+// MarkdownControlEvent: block gains 'image'; `url` is set for images.
+// MarkdownTranslations gains Streamdown's imageNotAvailable ("Image not available") and
+// downloadImage ("Download image"), plus image ("Image") and imageBlocked ("Image blocked").
+// PreviewOptions gains `math`: provisional closing of an inline $$ span, proven like emphasis.
+
+// markdownStyle gains enriched-markdown's keys, as theme slots (append-only ids):
+math?:       { fontSize?; color?; backgroundColor?; padding?; marginTop?; marginBottom?;
+               textAlign?: 'left' | 'center' | 'right'; errorColor? /* Downstream only */ };
+inlineMath?: { color? };
+image?:      { maxHeight?; borderRadius?; marginTop?; marginBottom?; placeholderColor? /* Downstream only */ };</code></pre>
+            <ul>
+              <li><b>Native props.</b> <code>mathFlags</code> (a bitmask: enabled, single dollar, brackets), <code>images</code>, and <code>allowedImagePrefixes</code> as a string array. JavaScript resolves the math default from <code>mathAvailable()</code>, a synchronous method on the existing session TurboModule.</li>
+              <li><b>Parse options are part of a source's identity.</b> <code>PreparedDocument::request</code> keys its cache on the source and the parse flags, so two views showing one string with different math options never share a parse. A stream session takes its flags at creation; <code>reset()</code> keeps them.</li>
+              <li><b>Controls.</b> <code>ControlBits::ImageDownload = 1u &lt;&lt; 6</code>; the default controls value becomes 127. The image button does not change any height, so it adds no chrome bit.</li>
+              <li><b>Not drawn yet.</b> enriched-markdown's <code>image.height</code>, <code>aspectRatio</code> and <code>resizeMode</code>, and <code>inlineImage</code>, are reported once in development, by the theme plan's rule for keys the renderer does not draw.</li>
+              <li><b>Contract edits.</b> <code>docs/api.md</code>: the Images row moves its later-release cell into the release ("HTTPS images, placeholders, cancellation, download"); the Math row becomes "Display and inline math typeset by RaTeX when the math package is installed; literal otherwise"; new sections for both, the delimiter grammar and the image box rule. <code>docs/feature-matrix.md</code>: Math and Images rows, device checks for both. The gap analysis rows move to shipped.</li>
+            </ul>
+          </section>
+
+          <section id="streaming">
+            <div class="section-head">
+              <h2>Streaming</h2>
+              <p>What each snapshot does with a formula or an image that is still arriving.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Situation</th><th>What the reader sees</th><th>Why</th></tr></thead>
+                <tbody>
+                  <tr><td>An open <code>$$</code> fence</td><td>A math block that grows. Each snapshot lays out the TeX so far; one that does not parse keeps the last good layout.</td><td>The fence is a block, so the open-fence fast path (<code>appendOpenFence</code>) applies as it does to code, and the math pass lays out only that block.</td></tr>
+                  <tr><td><code>$$x + </code> in a sentence</td><td>Literal text by default. With <code>preview.math</code>, the span is closed provisionally and typeset when the prefix lays out.</td><td>The preview pass proves a closer by reparsing, as for emphasis. The proof's coverage measure counts the <code>Math</code> style.</td></tr>
+                  <tr><td><code>\(x + </code></td><td>Literal <code>(x +</code> until <code>\)</code> arrives, then inline math.</td><td>The pre-scan pairs only complete delimiters, so an unfinished one is the CommonMark escape it would be in a finished document.</td></tr>
+                  <tr><td>A math block settles</td><td>Its final layout; red source only if the whole formula fails; <code>onMathError</code> fires once.</td><td>Errors wait for settling so the error state does not flicker.</td></tr>
+                  <tr><td><code>![chart](https://exa</code></td><td>Literal by default. With <code>preview.images</code>, the pending placeholder.</td><td>The existing image repair yields <code>![chart]()</code>; an unsettled image block with an empty destination is pending, not failed.</td></tr>
+                  <tr><td><code>![chart](https://example.com/c.png)</code></td><td>The placeholder, then the image. A cached size skips the placeholder.</td><td>A complete destination cannot change, so the request starts at once.</td></tr>
+                  <tr><td>A finished stream, <code>![a]()</code></td><td>Alt text.</td><td>Pending exists only while the block is unsettled; a settled empty URL is simply not loadable.</td></tr>
+                  <tr><td><code>reset()</code></td><td>Everything starts over.</td><td>Requests for URLs the new source does not use are cancelled; layouts stay in the cache.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>A full-mode reparse lays out no formula twice, thanks to the cache. A formula's layout is the same whether its block arrived in one piece or a thousand, because it is a function of its final TeX alone. That is the math version of the streaming equality test the engine already runs for every fixture.</p>
+          </section>
+
+          <section id="platforms">
+            <div class="section-head">
+              <h2>Platforms</h2>
+              <p>System views and drawing only, at the example app's minimums (iOS 15.1, Android API 24).</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Concern</th><th>iOS</th><th>Android</th></tr></thead>
+                <tbody>
+                  <tr><td>Inline math</td><td><code>DSMathAttachment</code>, an <code>NSTextAttachment</code> with no image and bounds from the layout (baseline at <code>-depth · size</code>). <code>DSLayoutManager</code> draws it in <code>drawGlyphsForGlyphRange:</code> with CoreText, so it is vector and takes the run's dynamic color. The literal run is replaced by one attachment character, and the literal is kept as an attribute for copy and speech.</td><td><code>MathSpan : ReplacementSpan</code> over the literal run. <code>getSize</code> sets the line's ascent and descent; <code>draw</code> walks the layout with <code>Canvas.drawText</code> per glyph (or <code>drawGlyphs</code> on API 31+). It is immutable, so <code>PrecomputedText</code> can measure it on the worker.</td></tr>
+                  <tr><td>Math block</td><td><code>DSMathSegmentView</code>: a horizontal <code>UIScrollView</code> around a drawing view; bounces off; the drag rules are the code card's.</td><td><code>MathSegmentView</code>: a <code>HorizontalScrollView</code> around a drawing view.</td></tr>
+                  <tr><td>Fonts</td><td><code>DSMathFonts</code> loads each KaTeX TTF from the math pod's bundle on first use, never registered globally.</td><td><code>MathFonts</code> reads <code>fonts/KaTeX_*.ttf</code> from the RaTeX AAR's assets with <code>Typeface.createFromAsset</code>.</td></tr>
+                  <tr><td>Engine install</td><td>The math pod's <code>+load</code> calls <code>downstream_install_math_engine</code> with RaTeX's three functions and the bundle path.</td><td>The core library <code>dlopen</code>s <code>libratex_ffi.so</code>, which exports the C ABI (checked: <code>ratex_parse_and_layout</code>, <code>ratex_free_display_list</code>, <code>ratex_get_last_error</code>), on first need. If it is absent, math is unavailable.</td></tr>
+                  <tr><td>Image loading</td><td><code>DSImageLoader</code> over <code>RCTImageLoader</code> (<code>loadImageWithURLRequest:size:scale:clipped:resizeMode:</code>). The component descriptor hands the loader over once from the context container.</td><td><code>ImageLoader</code> over <code>Fresco.getImagePipeline().fetchDecodedImage</code> with <code>ResizeOptions</code>; holds the <code>CloseableReference</code> while attached. Initializes Fresco with React Native's default config if nothing has yet.</td></tr>
+                  <tr><td>Image view</td><td><code>DSImageSegmentView</code>: <code>UIImageView</code>s, a placeholder layer whose opacity animates, a fallback label, and a <code>DSControlButton</code> for download.</td><td><code>ImageSegmentView</code>: <code>ImageView</code>s, a placeholder with a <code>ValueAnimator</code>, a fallback <code>TextView</code>, and an <code>ImageButton</code>.</td></tr>
+                  <tr><td>Size feedback</td><td><code>_state-&gt;updateState</code> after recording in <code>ImageSizeCache</code>.</td><td><code>StateWrapper.updateState</code>; <code>getDynamic()</code> carries <code>ImageLayout</code>'s entries.</td></tr>
+                  <tr><td>Copy</td><td>The <code>copy:</code> override swaps math attachments back to their literal.</td><td>The literal never left the text.</td></tr>
+                  <tr><td>Accessibility</td><td>Text segment elements read math from the speech attribute. The math block is a static-text element labeled "math, …"; images are image elements.</td><td><code>MarkdownAccessibility.kt</code> substitutes speech for <code>MathSpan</code> ranges; virtual nodes for math blocks and images.</td></tr>
+                  <tr><td>Recycling</td><td colspan="2">A recycled image view releases its requests. A recycled math view drops nothing, because layouts belong to the document.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="packaging">
+            <div class="section-head">
+              <h2>Packaging the math engine</h2>
+              <p>Installing a package is the opt-in, as <code>@streamdown/math</code> is, and the binary never reaches apps that do not want it.</p>
+            </div>
+            <ul>
+              <li><b><code>react-native-downstream-math</code></b>, a second workspace package in this repository (<code>math/</code>), autolinked. It has no JavaScript API beyond being installed.</li>
+              <li><b>iOS.</b> Its podspec depends on <code>Downstream</code> and vendors RaTeX's static XCFramework and the KaTeX fonts as a resource bundle. The XCFramework is fetched at <code>prepack</code> time from the pinned release (<code>v0.1.14</code>, sha256-verified, from a <code>ratex-version.json</code> like enriched-markdown's) and shipped inside the npm tarball. No <code>postinstall</code> download, so pnpm, <code>--ignore-scripts</code> and offline installs work. That was enriched-markdown's #745. Only the iOS device and simulator slices are kept.</li>
+              <li><b>Android.</b> Its <code>build.gradle</code> adds <code>implementation("io.github.erweixin:ratex-android:0.1.14")</code> from Maven Central. No binary in the tarball. The core library finds the library at runtime, so the core never links against it.</li>
+              <li><b>Size.</b> The Android library is 3.1 MB uncompressed on arm64 and 1.2 MB compressed, per ABI. enriched-markdown documents 3–5 MB on iOS. Fonts add 540 KB. Phase B5 measures the example app's release builds with and without the package and records the numbers in the README.</li>
+              <li><b>Licenses.</b> RaTeX is MIT; the KaTeX fonts are SIL OFL 1.1 and their notice ships with the package (<code>licenses/</code>), as RaTeX's own third-party notice asks.</li>
+              <li><b>Next to enriched-markdown.</b> An app with both libraries resolves one <code>ratex-android</code> through Gradle. On iOS both pods link the same static archive, and the linker loads each archive member once. The C ABI is the only surface, and the JSON carries a version, so a mismatch degrades to the decoder's tolerance. A Phase B5 check builds the example with both installed.</li>
+            </ul>
+          </section>
+
+          <section id="phases">
+            <div class="section-head">
+              <h2>Phases</h2>
+              <p>Two tracks after one shared contract phase. Each phase ends green and can be reviewed alone; each track is its own pull request.</p>
+            </div>
+            <div class="callout">
+              <p><b>Where things are verified.</b> Engine behavior by host tests (<code>pnpm test:native</code>), JavaScript by <code>pnpm test</code>, Kotlin mirrors by <code>pnpm test:kotlin</code>, and rendering in the example app on the iOS Simulator and an arm64 Android emulator with the headless recipes the earlier items used.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 0 · Contract</h3>
+              <ul>
+                <li>Add the props, events, control, translations, preview bit and style keys under <a href="#api">Public API</a> to <code>src/types.ts</code>, and export them.</li>
+                <li>Make the <code>docs/api.md</code> and <code>docs/feature-matrix.md</code> edits, and apply the three decided defaults: images on, <code>allowedImagePrefixes</code> of <code>['*']</code>, and bracket delimiters on.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm typecheck</code> passes; contract reviewed.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase A1 · Images in the engine</h3>
+              <ul>
+                <li>Record <code>Image</code>s in <code>MarkdownParser.cpp</code>; promote image-only paragraphs; <code>isLoadableImageUrl</code>; <code>imageDownloadName</code>; <code>sameBlock</code> compares images.</li>
+                <li><code>SegmentKind::Image</code> with <code>imageOrdinal</code>; <code>ImageLayout.h</code> with <code>imageBox</code> and prefix matching; <code>ImageSizeCache</code>.</li>
+                <li><code>LayoutHint</code>, <code>DownstreamMarkdownState</code> (including <code>getDynamic</code> and the folly constructor), and the measure cache carry <code>ImageLayout</code>. <code>nativeReadDocument</code> passes image records and image block indexes.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm test:native</code> passes the image goldens, promotion cases, URL policy table, download-name table (Streamdown's cases), box table, and the identity test. Every existing golden is unchanged.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase A2 · Images in JavaScript</h3>
+              <ul>
+                <li>Codegen props <code>images</code> and <code>allowedImagePrefixes</code>; <code>ControlBits::ImageDownload</code>; routing for <code>block: 'image'</code> and <code>onImagePress</code>; translation keys appended to <code>CONTROL_LABEL_KEYS</code>.</li>
+                <li><code>image.*</code> slots in <code>theme-slots.json</code>, the resolver and both generated tables.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm test</code> passes control resolution, prefix normalization, event routing (an event from an old generation is dropped), and the slot table check.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase A3 · iOS images</h3>
+              <ul>
+                <li><code>DSImageLoader</code> over <code>RCTImageLoader</code> with the four-request cap, dedupe and reference counts; <code>DSImageSegmentView</code>; heights through <code>imageBox</code> in <code>DSRenderedDocument</code>; the state update on load; download through <code>DSFileExporter</code>; accessibility.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> the image checklist under Testing passes on the Simulator in light, dark and the largest Dynamic Type size, with Reduce Motion on and off.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase A4 · Android images</h3>
+              <ul>
+                <li><code>ImageLoader</code> over Fresco; <code>ImageSegmentView</code>; heights in <code>RenderedDocument.kt</code> through a Kotlin mirror of <code>imageBox</code>, checked against the engine's table by <code>pnpm test:kotlin</code>; <code>StateWrapper.updateState</code>; download through <code>DocumentExporter</code>.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> the same checklist on an API 35 emulator, plus an app that never used <code>&lt;Image&gt;</code> before the first Markdown image, to prove Fresco initialization.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase B1 · Math in the parser</h3>
+              <ul>
+                <li>The md4c patch (<code>MD_FLAG_LATEXMATHBLOCKS</code>, <code>MD_FLAG_LATEXMATHNOSINGLE</code>) as a separate commit; update the SHA-256 pins in <code>engine.test.mjs</code> and record the patch in <code>src/cpp/md4c/README.md</code>; open the upstream pull request for #270.</li>
+                <li><code>MathScan.{h,cpp}</code> bracket pre-scan; the builder's <code>MathBlock</code>, <code>Math</code> runs, <code>MathSpan</code>, <code>```math</code>, and lone-span promotion; parse flags threaded through <code>parseMarkdown</code>, <code>parseMarkdownAt</code>, <code>PreparedDocument</code> and sessions.</li>
+                <li><code>Scan.h</code> fences for <code>$$</code>; <code>IncrementalParser</code>'s fence watch; <code>sameBlock</code>; <code>SegmentKind::Math</code>; <code>PreviewFeature::Math</code>; export of math as its literal.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm test:native</code> passes the delimiter goldens (every row of the grammar plus the negatives), the prefix property, and incremental-equals-full at every prefix for each math fixture. With math off, every existing golden and the fixture corpus are byte-identical.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase B2 · Math layout in the engine</h3>
+              <ul>
+                <li><code>src/cpp/math/</code>: <code>MathEngine</code> seam, <code>MathDisplayList</code> decoder, the layout cache, <code>MathBlocks</code> pass with last-good layouts, the size caps, and <code>MathSpeech</code>.</li>
+                <li>Host tests link RaTeX's macOS slice from the pinned XCFramework, so the pass runs against the real engine rather than a stub. CI on Linux runs the decoder against recorded display lists and skips the live cases by name.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> layout goldens (width, height, depth and item counts for a fixture set drawn from Streamdown's math docs), the decoder's tolerance table, last-good streaming cases, speech goldens, and a prose-only document that never calls the engine.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase B3 · The math package</h3>
+              <ul>
+                <li><code>math/</code> workspace package: podspec, <code>build.gradle</code>, the <code>+load</code> installer, the <code>prepack</code> vendoring script with its pin file, licenses, README.</li>
+                <li><code>mathAvailable()</code> on the session module; JavaScript's math default; the one-time development warning.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> the example builds and links on both platforms with and without the package, and <code>npm pack</code> produces a tarball that installs offline under pnpm.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase B4 · iOS math</h3>
+              <ul>
+                <li><code>DSMathFonts</code>, a CoreText display-list renderer, <code>DSMathAttachment</code> drawn by <code>DSLayoutManager</code>, <code>DSMathSegmentView</code>, the copy swap, the error color, and accessibility.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> the math checklist under Testing on the Simulator; a screenshot comparison of the fixture set against KaTeX's output for the same TeX, reviewed by eye.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase B5 · Android math, example, docs</h3>
+              <ul>
+                <li><code>dlopen</code> installer, <code>MathFonts</code>, <code>MathSpan</code>, <code>MathSegmentView</code>, accessibility substitution.</li>
+                <li>Example: a Math and Images section on the Controls screen (every grammar row, a streaming formula, an error, a wide matrix, a chart, a broken URL, a blocked prefix, a linked image) and a <code>math-streaming</code> sample in <code>benchmarks/samples.ts</code>. Bench: math pass time per snapshot, and image relayout count per message.</li>
+                <li>Measure binary size with and without the package; build with enriched-markdown installed too. README, <code>docs/api.md</code> implementation status, the gap analysis rows.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> the checklist on an API 35 emulator, budgets under Risks met, CI green, docs match the build.</p>
+            </div>
+          </section>
+
+          <section id="testing">
+            <div class="section-head">
+              <h2>Testing</h2>
+              <p>Engine rules against the real engine (no test double restates them); platform behavior on the Simulator and the emulator.</p>
+            </div>
+            <h3>Engine (<code>pnpm test:native</code>)</h3>
+            <ul>
+              <li><b>Delimiter goldens.</b> Every grammar row; currency (<code>$5 and $10</code>, <code>$5-$10</code>, <code>US$5</code>) with single dollars on and off; <code>\$</code>, <code>\\(</code>, math in a code span and a fence; <code>$$</code> fences in a list item, a quote and a table-adjacent paragraph; a blank line, <code>- </code>, <code>|</code> and a four-space line inside an <code>aligned</code> block; an unclosed fence; <code>\[</code> closed by <code>$$</code> (not a pair).</li>
+              <li><b>Streaming.</b> Replay each math fixture one byte at a time through <code>IncrementalParser</code> in both modes. The settled document equals a one-shot parse, no commit lands inside a math fence, and layouts are equal however the input was split.</li>
+              <li><b>Preview corpus.</b> remend's <code>katex.test.ts</code> and <code>images.test.ts</code> inputs join <code>remend-corpus.ts</code>. <code>corpusInvariants</code> still holds: a repair either styles the open span or does nothing.</li>
+              <li><b>Decoder.</b> Unknown fields and item types ignored, a missing version, non-finite numbers, truncated JSON, a 2,001-em width, ten thousand items, and the sentinel color mapped to inherit.</li>
+              <li><b>Hostile TeX.</b> A corpus of nesting, expansion and size attacks (<code>{{{{…}}}}</code> 10,000 deep, a recursive <code>\def</code>, <code>\rule{1e6em}{1e6em}</code>, 5 KiB of <code>\frac</code>) must fail cleanly or be capped before RaTeX. It runs on every RaTeX version bump.</li>
+              <li><b>Images.</b> Promotion (one image, three images, an image with a word, a linked image, an image in a list item and in a quote), URL policy, download names, <code>imageBox</code> for every state and for column, max height and font scale, and identity.</li>
+              <li><b>Unchanged output.</b> With math off and images off, the document, every export format and the accessibility dump are byte-identical to today's for the whole fixture corpus.</li>
+            </ul>
+            <h3>JavaScript (<code>pnpm test</code>)</h3>
+            <ul>
+              <li>Math option resolution (installed or not, <code>false</code>, the object form), stream parse options and <code>reset()</code> keeping them, <code>onMathError</code> deduplication, image control resolution, prefix normalization, <code>onImagePress</code> routing, and Streamdown's <code>katex-lazy-load</code> cases through <code>tests/real-engine-module.ts</code>.</li>
+            </ul>
+            <h3>Platforms (Simulator and emulator)</h3>
+            <ul>
+              <li><b>Math.</b> The fixture set matches KaTeX by eye. An inline fraction grows its line without overlapping the next. A long matrix scrolls sideways and the chat list still scrolls vertically over it. A streaming <code>aligned</code> block grows without flicker. A bad formula shows red source only after it settles. Dark mode recolors with no relayout. Copy returns the source with delimiters. VoiceOver and TalkBack read the spoken form. Turning off <code>math</code> gives today's rendering exactly.</li>
+              <li><b>Images.</b> Placeholder, then image, with one relayout. A scrolled-back message has no placeholder. A 404 and an SVG fall back. A blocked prefix makes no request (checked with a proxy). Six images make at most four concurrent requests. Scrolling a message off-screen cancels its requests. Download saves with the expected name. A linked image calls <code>onLinkPress</code>. <code>images={false}</code> shows alt text. Light, dark, largest text size, rotation.</li>
+            </ul>
+          </section>
+
+          <section id="risks">
+            <div class="section-head">
+              <h2>Risks and open questions</h2>
+              <p>The three defaults are decided; the rest are risks and open questions with their mitigation.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Question or risk</th><th>Recommendation</th></tr></thead>
+                <tbody>
+                  <tr><td>Default of <code>images</code><br /><span class="tag go">decided</span></td><td><b>On</b>, for Streamdown parity and because the contract already planned HTTPS images. The cost is that apps upgrading start making network requests from model output, and markdown-image exfiltration is a known prompt-injection channel (EchoLeak and others). Say so in the release notes and the README, and document <code>allowedImagePrefixes</code> as the defense.</td></tr>
+                  <tr><td>Default of <code>allowedImagePrefixes</code><br /><span class="tag go">decided</span></td><td><b><code>['*']</code></b>, rehype-harden's and Streamdown's default. An app that feeds tool output, web pages or email into its model should pass its own CDN prefixes. A stricter default would break every image the moment the feature ships.</td></tr>
+                  <tr><td>Brackets on by default<br /><span class="tag go">decided</span></td><td><b>On.</b> They are the most common math form from OpenAI-family models and Streamdown's most-filed math issue. <code>\(</code>…<code>\)</code> in prose meaning literal parentheses is rare, and <code>math={{ brackets: false }}</code> restores it.</td></tr>
+                  <tr><td>RaTeX aborts on panic</td><td>Its release profile sets <code>panic = "abort"</code>, so a parser bug kills the app. Mitigations: the size caps and nesting checks before the call, the hostile corpus on every version bump, and a pinned version. If a crash is ever seen, build our own artifact from RaTeX's source with <code>panic = "unwind"</code> and a <code>catch_unwind</code> wrapper. That puts Rust in our release pipeline, never in an app's build.</td></tr>
+                  <tr><td>Pre-1.0 display list</td><td>The JSON protocol may change before 1.0. The pin, the version field and a tolerant decoder cover it, and a bump is a deliberate pull request with the layout goldens.</td></tr>
+                  <tr><td>KaTeX gaps in RaTeX</td><td>RaTeX's support table scores some formulas below 1.0 on ink comparison, and it has no <code>\includegraphics</code> or HTML extensions. Anything it rejects shows its source, as KaTeX's <code>throwOnError: false</code> does.</td></tr>
+                  <tr><td>md4c patch upkeep</td><td>Small (the fence check and one flag), recorded in the README and pinned. It is the change upstream #270 asks for, so the goal is to drop it once upstream merges.</td></tr>
+                  <tr><td>A stray <code>$$</code> line</td><td>An unclosed fence runs to the end of its container, as remark-math's does, so a model that writes a lone <code>$$</code> in prose turns the rest into math. That is parity, and the literal fallback keeps it readable.</td></tr>
+                  <tr><td>Layout jump on image load</td><td>Unavoidable on first load, as on the web. The size cache removes it for every later view, and load batching keeps it to one relayout per message. Keeping a chat list anchored is the list's job (<code>maintainVisibleContentPosition</code>).</td></tr>
+                  <tr><td>Image memory</td><td>Decoding at display size, Fresco's and <code>RCTImageLoader</code>'s caches, and releasing references when recycled. Bench covers a 50-image history.</td></tr>
+                  <tr><td>Fresco not initialized</td><td>Initialize with React Native's default config when <code>Fresco.hasBeenInitialized()</code> is false, so an app that sets its own config keeps it.</td></tr>
+                  <tr><td>Inline math line height</td><td>A tall fraction grows its line, as KaTeX's does on the web. That is correct but changes rhythm. The scale-to-fit floor keeps a long formula from overflowing badly.</td></tr>
+                  <tr><td>Budgets</td><td>Proposed, measured in Bench: the math pass under 2 ms per streaming snapshot with a cached prefix; a 100-formula answer laid out under 50 ms on the worker on a mid-range Android; zero RaTeX calls for a prose-only document.</td></tr>
+                  <tr><td>Open: inline images</td><td>Alt text for now. Badges and emoji images are rare in chat. The math attachment path is reusable when they matter.</td></tr>
+                  <tr><td>Open: image long-press menu</td><td>A context menu (copy image, save, share) would be more native than a button. Ship Streamdown's button first; add the menu if adopters ask, because it competes with the app's own long-press menu.</td></tr>
+                  <tr><td>Open: request headers</td><td>enriched-markdown has <code>imageRequestHeaders</code>. React Native's loaders already apply the app's own interceptors and cookies, which covers most signed or authenticated URLs. Leave it out until someone needs per-view headers.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="followups">
+            <div class="section-head">
+              <h2>Follow-ups this unlocks</h2>
+              <p>Not part of this item.</p>
+            </div>
+            <ul>
+              <li>Inline images and badges as attachments, sharing the math attachment path.</li>
+              <li>Fence-language renderers can render <code>```math</code> themselves; the parse here still applies when they do not.</li>
+              <li>A math copy button, and copying a formula as MathML or an image.</li>
+              <li>Animated GIF and WebP, and an image viewer component an app can opt into.</li>
+              <li>mhchem (<code>\ce</code>, <code>\pu</code>), which RaTeX supports, behind its own option once the core ships.</li>
+              <li>Macros (<code>\newcommand</code>) supplied by the app, never by the model: Streamdown #609 asked for KaTeX's options, and RaTeX would need an option to take them.</li>
+              <li>A richer spoken form, from RaTeX's parse tree instead of the token table, if adopters who rely on screen readers need it.</li>
+            </ul>
+          </section>
+
+          <section id="sources">
+            <div class="section-head">
+              <h2>Sources</h2>
+              <p>Code and documents read for this plan.</p>
+            </div>
+            <ul class="sources">
+              <li>Streamdown at <code>976cf12</code> (2.7.0): <code>packages/streamdown-math/index.ts</code>, <code>packages/streamdown/lib/{image,components}.tsx</code>, <code>index.tsx</code> (sanitize schema, <code>harden</code> defaults, plugin wiring), <code>lib/translations-context.tsx</code>, <code>packages/remend/src/{katex-handler,link-image-handler,scan}.ts</code>, <code>apps/website/content/docs/plugins/math.mdx</code>, and the tests <code>image*.test.tsx</code>, <code>incomplete-image-sanitize.test.tsx</code> and <code>katex-*.test.tsx</code></li>
+              <li>Streamdown issues: #194, #200 and #323 (<code>\(…\)</code> and <code>\[…\]</code>), #522 (remend and bracket math), #609 (KaTeX options), #616 (math and remend's HTML handler)</li>
+              <li>md4c 0.6.0 as vendored: <code>md4c.c</code> (dollar runs at 3632, <code>md_analyze_dollar</code> at 4256, fences at 6045 and 6075), <code>md4c.h</code> (<code>MD_SPAN_IMG_DETAIL</code>, <code>fence_char</code>). Upstream issues #270 (<code>$$</code> on separate lines) and #279.</li>
+              <li>RaTeX at <code>776c1d3</code> (0.1.14): <code>README.md</code>, <code>crates/ratex-ffi/{src/lib.rs,include/ratex.h}</code>, <code>docs/DISPLAYLIST_JSON_PROTOCOL.md</code>, <code>crates/ratex-parser/src/macro_expander.rs</code> (<code>max_expand: 1000</code>), <code>Cargo.toml</code> (<code>panic = "abort"</code>), <code>platforms/android/README.md</code>, <code>THIRD_PARTY_NOTICES.txt</code>; release assets for v0.1.14 (<code>ratex-android-release.aar</code>: <code>libratex_ffi.so</code> per ABI and <code>assets/fonts/</code>; <code>RaTeX.xcframework.zip</code>, 13.8 MB)</li>
+              <li>react-native-enriched-markdown at <code>609971c</code>: <code>docs/{LATEX_MATH,IMAGE_CACHING,STYLES}.md</code>, <code>vendor/{vendor-ratex.mjs,ratex-version.json}</code>, <code>ios/math/ENRMRaTeXBridge.swift</code>, <code>android/build.gradle</code></li>
+              <li>React Native 0.83: <code>ReactCommon/react/runtime/platform/ios/ReactCommon/RCTInstance.mm</code> (context container <code>"RCTImageLoader"</code>), <code>ReactCommon/react/renderer/imagemanager/platform/ios/.../ImageManager.mm</code>, <code>gradle/libs.versions.toml</code> (Fresco 3.6.0)</li>
+              <li>rehype-katex 7.0.1 <code>lib/index.js</code> (<code>language-math</code> handling); MicroTeX repository activity; KaTeX #820 (VoiceOver and hidden MathML)</li>
+              <li>Markdown image exfiltration: <a href="https://arxiv.org/html/2509.10540v1">EchoLeak</a>, <a href="https://arxiv.org/pdf/2406.00199">Exfiltration of personal information from ChatGPT via prompt injection</a>, <a href="https://embracethered.com/blog/posts/2023/advanced-plugin-data-exfiltration-trickery/">Embrace The Red</a></li>
+              <li>This repository: <code>src/cpp/downstream/{Document.h,MarkdownParser.cpp,SegmentPlan.cpp,Compare.cpp,LinkPolicy.cpp,Scan.h,Export.h,Controls.h,CodeLayout.h,RenderPreparer.h,PreparedDocument.h}</code>, <code>src/cpp/session/IncrementalParser.cpp</code>, <code>src/cpp/remend/{Preview.h,README.md}</code>, <code>src/cpp/highlight/CodeBlocks.h</code>, <code>src/cpp/fabric/{DownstreamMarkdownState.h,DownstreamMarkdownShadowNode.cpp,DownstreamTextLayoutManager.h}</code>, <code>src/ios/{DSRenderedDocument,DSSegmentViews}.{h,mm}</code>, <code>src/android/.../{RenderedDocument,NativeDocument,MarkdownAccessibility}.kt</code>, <code>docs/{api.md,feature-matrix.md,streamdown-gap-analysis.html,code-block-chrome-plan.html,theme-style-plan.html}</code></li>
+            </ul>
+          </section>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

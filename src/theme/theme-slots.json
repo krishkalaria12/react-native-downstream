@@ -1235,6 +1235,104 @@
       "kind": "color",
       "layout": false,
       "default": "tokens:Heading"
+    },
+    {
+      "id": 233,
+      "name": "math.fontSize",
+      "kind": "metric",
+      "layout": true,
+      "default": 19
+    },
+    {
+      "id": 234,
+      "name": "math.color",
+      "kind": "color",
+      "layout": false,
+      "default": "inherit"
+    },
+    {
+      "id": 236,
+      "name": "math.backgroundColor",
+      "kind": "color",
+      "layout": false,
+      "default": "clear"
+    },
+    {
+      "id": 238,
+      "name": "math.padding",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 239,
+      "name": "math.marginTop",
+      "kind": "metric",
+      "layout": true,
+      "default": 12
+    },
+    {
+      "id": 240,
+      "name": "math.marginBottom",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 241,
+      "name": "math.textAlign",
+      "kind": "metric",
+      "layout": true,
+      "default": 1
+    },
+    {
+      "id": 242,
+      "name": "math.errorColor",
+      "kind": "color",
+      "layout": false,
+      "default": "secondaryLabel"
+    },
+    {
+      "id": 244,
+      "name": "inlineMath.color",
+      "kind": "color",
+      "layout": false,
+      "default": "inherit"
+    },
+    {
+      "id": 246,
+      "name": "image.maxHeight",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 247,
+      "name": "image.borderRadius",
+      "kind": "metric",
+      "layout": true,
+      "default": 8
+    },
+    {
+      "id": 248,
+      "name": "image.marginTop",
+      "kind": "metric",
+      "layout": true,
+      "default": 12
+    },
+    {
+      "id": 249,
+      "name": "image.marginBottom",
+      "kind": "metric",
+      "layout": true,
+      "default": 0
+    },
+    {
+      "id": 250,
+      "name": "image.placeholderColor",
+      "kind": "color",
+      "layout": false,
+      "default": "tertiaryFill"
     }
   ]
 }

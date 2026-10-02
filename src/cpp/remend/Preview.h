@@ -53,6 +53,14 @@ enum class PreviewFeature : uint32_t {
   /// An unfinished image, `![alt` or `![alt](partial`, shown as its alt text,
   /// which is how the engine renders a finished image too.
   Images = 1u << 3,
+  /// An unfinished inline `$$…$$` span, closed provisionally so the text after
+  /// it shows as math once the prefix lays out.
+  ///
+  /// Off by default, unlike Streamdown, which appends a closing `$$`
+  /// unconditionally. A formula shown as source is a correct fallback and a
+  /// formula shown as a half-laid-out expression is not, so the repair has to
+  /// be able to say no.
+  Math = 1u << 4,
 };
 
 struct PreviewOptions {
@@ -74,7 +82,8 @@ struct PreviewOptions {
   /// bits it meant, not a silently inert policy.
   static constexpr features_t allFeatures() {
     return static_cast<features_t>(PreviewFeature::Emphasis) | static_cast<features_t>(PreviewFeature::InlineCode) |
-        static_cast<features_t>(PreviewFeature::Links) | static_cast<features_t>(PreviewFeature::Images);
+        static_cast<features_t>(PreviewFeature::Links) | static_cast<features_t>(PreviewFeature::Images) |
+        static_cast<features_t>(PreviewFeature::Math);
   }
 };
 
@@ -120,7 +129,13 @@ public:
   ///
   /// Never throws and never mutates the caller's state, so it is safe to call
   /// from the worker pool and to construct once per session.
-  PreviewResult apply(std::string_view region, size_t origin, size_t frozenBlocks = 0) const;
+  ///
+  /// `math` is the session's parse options, not part of this policy: math
+  /// recognition is decided when the document is parsed and a repair cannot
+  /// change it. It is passed in so the probes parse the same way the baseline
+  /// did — a proof that reparsed with different flags would prove nothing.
+  PreviewResult apply(std::string_view region, size_t origin, size_t frozenBlocks = 0,
+                      MathOptions math = MathOptions()) const;
 
 private:
   PreviewOptions options_;

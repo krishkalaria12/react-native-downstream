@@ -24,6 +24,7 @@ export const CONTROL_TABLE_COPY = 1 << 2;
 export const CONTROL_TABLE_DOWNLOAD = 1 << 3;
 export const CONTROL_CODE_WRAP = 1 << 4;
 export const CONTROL_CODE_EXPAND = 1 << 5;
+export const CONTROL_IMAGE_DOWNLOAD = 1 << 6;
 
 /** Every control on, which is the default and the codegen default. */
 export const CONTROL_ALL =
@@ -32,7 +33,8 @@ export const CONTROL_ALL =
   CONTROL_TABLE_COPY |
   CONTROL_TABLE_DOWNLOAD |
   CONTROL_CODE_WRAP |
-  CONTROL_CODE_EXPAND;
+  CONTROL_CODE_EXPAND |
+  CONTROL_IMAGE_DOWNLOAD;
 
 export type CsvSeparator = ',' | ';' | '\t' | 'auto';
 
@@ -63,6 +65,10 @@ export const CONTROL_LABEL_KEYS = [
   'tableFormatMarkdown',
   'tableFormatCsv',
   'tableFormatTsv',
+  'imageNotAvailable',
+  'downloadImage',
+  'image',
+  'imageBlocked',
 ] as const satisfies readonly (keyof MarkdownTranslations)[];
 
 /** One handler per button, so routing an event is a table lookup. */
@@ -77,6 +83,8 @@ export type ControlHandlers = Readonly<{
   tableCopyError?: (error: MarkdownErrorEvent) => void;
   tableDownload?: (event: MarkdownControlEvent) => void;
   tableDownloadError?: (error: MarkdownErrorEvent) => void;
+  imageDownload?: (event: MarkdownControlEvent) => void;
+  imageDownloadError?: (error: MarkdownErrorEvent) => void;
 }>;
 
 export type ResolvedControls = Readonly<{
@@ -84,6 +92,7 @@ export type ResolvedControls = Readonly<{
   flags: number;
   codeFilename: string;
   tableFilename: string;
+  imageFilename: string;
   csvSeparator: CsvSeparator;
   /** Label strings in `CONTROL_LABEL_KEYS` order. */
   labels: readonly string[];
@@ -94,7 +103,7 @@ type Section = Readonly<Record<string, unknown>>;
 
 function section(
   controls: MarkdownControls,
-  key: 'code' | 'table'
+  key: 'code' | 'table' | 'image'
 ): Section | undefined {
   if (typeof controls !== 'object' || controls === null) return undefined;
   const value = (controls as Section)[key];
@@ -106,7 +115,7 @@ function section(
 /** True when a section is absent or not `false`, so `true` and `{}` both mean on. */
 function sectionEnabled(
   controls: MarkdownControls,
-  key: 'code' | 'table'
+  key: 'code' | 'table' | 'image'
 ): boolean {
   if (typeof controls === 'boolean') return controls;
   // `null` is not one of the shapes `MarkdownControls` allows, but a value from
@@ -123,7 +132,7 @@ function sectionEnabled(
  */
 function controlEnabled(
   controls: MarkdownControls,
-  key: 'code' | 'table',
+  key: 'code' | 'table' | 'image',
   control: 'copy' | 'download'
 ): boolean {
   if (typeof controls === 'boolean') return controls;
@@ -148,7 +157,7 @@ export function shouldShowCodeExpand(controls: MarkdownControls): boolean {
 /** A control's object form, or undefined when it is a boolean or absent. */
 function detail(
   controls: MarkdownControls,
-  key: 'code' | 'table',
+  key: 'code' | 'table' | 'image',
   control: 'copy' | 'download' | 'wrap' | 'expand'
 ): Section | undefined {
   return section(controls, key)?.[control] as Section | undefined;
@@ -161,7 +170,7 @@ function of<T>(settings: Section | undefined, key: string): T | undefined {
 /** Streamdown's `getDownloadFilename`, with `fallback` for "not configured". */
 export function getDownloadFilename(
   controls: MarkdownControls,
-  type: 'code' | 'table',
+  type: 'code' | 'table' | 'image',
   fallback: string
 ): string {
   return (
@@ -202,6 +211,9 @@ export function resolveControls(
   if (controlEnabled(controls, 'table', 'download')) {
     flags |= CONTROL_TABLE_DOWNLOAD;
   }
+  if (controlEnabled(controls, 'image', 'download')) {
+    flags |= CONTROL_IMAGE_DOWNLOAD;
+  }
   if (shouldShowCodeWrap(controls)) flags |= CONTROL_CODE_WRAP;
   if (shouldShowCodeExpand(controls)) flags |= CONTROL_CODE_EXPAND;
 
@@ -211,11 +223,13 @@ export function resolveControls(
   const codeExpand = detail(controls, 'code', 'expand');
   const tableCopy = detail(controls, 'table', 'copy');
   const tableDownload = detail(controls, 'table', 'download');
+  const imageDownload = detail(controls, 'image', 'download');
 
   return {
     flags,
     codeFilename: getDownloadFilename(controls, 'code', 'file'),
     tableFilename: getDownloadFilename(controls, 'table', 'table'),
+    imageFilename: getDownloadFilename(controls, 'image', 'image'),
     csvSeparator: getTableCsvSeparator(controls),
     labels,
     handlers: {
@@ -229,6 +243,8 @@ export function resolveControls(
       tableCopyError: of(tableCopy, 'onError'),
       tableDownload: of(tableDownload, 'onDownload'),
       tableDownloadError: of(tableDownload, 'onError'),
+      imageDownload: of(imageDownload, 'onDownload'),
+      imageDownloadError: of(imageDownload, 'onError'),
     },
   };
 }

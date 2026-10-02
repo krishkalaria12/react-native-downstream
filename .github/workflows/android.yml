@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths:
       - 'src/android/**'
+      - 'math/**'
       - 'src/cpp/**'
       - '!src/cpp/tests/**'
       - '!src/cpp/**/*.md'
@@ -24,6 +25,7 @@ on:
   pull_request:
     paths:
       - 'src/android/**'
+      - 'math/**'
       - 'src/cpp/**'
       - '!src/cpp/tests/**'
       - '!src/cpp/**/*.md'
@@ -77,4 +79,4 @@ jobs:
       # One ABI checks Kotlin, codegen, JNI and Fabric without an emulator or APK.
       - name: Compile native library
         working-directory: example/android
-        run: ./gradlew :react-native-downstream:compileDebugKotlin :app:externalNativeBuildDebug -PreactNativeArchitectures=x86_64 --build-cache --max-workers=2 --no-daemon
+        run: ./gradlew :react-native-downstream:compileDebugKotlin :react-native-downstream-math:compileDebugKotlin :app:externalNativeBuildDebug -PreactNativeArchitectures=x86_64 --build-cache --max-workers=2 --no-daemon

@@ -1,6 +1,7 @@
 // JNI access to parsed documents for com.downstream.DownstreamNative.
 
 #include "DocumentRegistry.h"
+#include "ImageSizeCache.h"
 #include "Export.h"
 #include "SegmentPlan.h"
 #include "SessionTrace.h"
@@ -8,8 +9,11 @@
 #include "WorkerPool.h"
 #include "theme/Theme.h"
 #include "theme/ThemeLayout.h"
+#include "math/MathEngine.h"
+#include "math/MathSpeech.h"
 #include "theme/ThemeSlots.h"
 
+#include <dlfcn.h>
 #include <jni.h>
 
 #include <string>
@@ -240,6 +244,99 @@ Java_com_downstream_DownstreamNative_nativeFontScaleCap(JNIEnv * /*env*/,
   return theme_layout::fontScale(*theme, platformScale);
 }
 
+/**
+ * The theme's image metrics as [maxHeight, borderRadius, marginTop, marginBottom,
+ * fallbackTextHeight].
+ *
+ * Resolved in C++ by `theme_layout::imageMetrics` rather than by reading five slots
+ * on this side, because that function is what the shadow node measures with and a
+ * second reader is how a measured image and a drawn image end up disagreeing about
+ * a margin. One call per rendered document, not one per measurement: the theme does
+ * not change under a snapshot.
+ *
+ * A missing theme is the default one rather than zeros, so a view that mounted
+ * before its theme resolved gets the platform defaults instead of a picture with no
+ * height.
+ */
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_com_downstream_DownstreamNative_nativeImageMetrics(JNIEnv *env, jclass /*clazz*/, jlong id) {
+  // The default theme rather than zeros, the same way `nativeReadDocument` answers
+  // a stale id: a view that mounted before its theme resolved gets the platform
+  // defaults instead of a picture with no height. Held in a handle because
+  // `defaultTheme` returns one, and dereferencing the temporary would dangle.
+  Theme::Handle theme = ThemeRegistry::find(static_cast<uint64_t>(id));
+  if (theme == nullptr) {
+    theme = Theme::defaultTheme();
+  }
+  const ImageMetrics metrics = theme_layout::imageMetrics(*theme);
+  const jdouble values[] = {metrics.maxHeight, metrics.borderRadius, metrics.marginTop, metrics.marginBottom,
+                            metrics.fallbackTextHeight};
+  jdoubleArray array = env->NewDoubleArray(5);
+  if (array != nullptr) {
+    env->SetDoubleArrayRegion(array, 0, 5, values);
+  }
+  return array;
+}
+
+/**
+ * The theme's math metrics as [padding, textAlign].
+ *
+ * `textAlign` is 0 for left, 1 for center, and 2 for right, which is what the slot
+ * holds; the platform reads the number rather than mapping a name, because the
+ * view that centres a formula is the same one that measures it.
+ */
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_com_downstream_DownstreamNative_nativeMathMetrics(JNIEnv *env, jclass /*clazz*/, jlong id) {
+  Theme::Handle theme = ThemeRegistry::find(static_cast<uint64_t>(id));
+  if (theme == nullptr) {
+    theme = Theme::defaultTheme();
+  }
+  const jdouble values[] = {theme_layout::mathPadding(*theme), theme_layout::mathTextAlign(*theme),
+                            theme_layout::mathMarginTop(*theme), theme_layout::mathMarginBottom(*theme)};
+  jdoubleArray array = env->NewDoubleArray(4);
+  if (array != nullptr) {
+    env->SetDoubleArrayRegion(array, 0, 4, values);
+  }
+  return array;
+}
+
+namespace {
+
+/// One display list, flattened for `MathDisplayList.kt`.
+///
+/// Doubles rather than floats because a color is a 32-bit word and a code point
+/// can be 21 bits, and both have to come back exact. The order is the format;
+/// `MathDisplayList.decode` reads it field for field:
+///
+///   width, height, depth,
+///   glyphs, then per glyph: x, y, scale, font, code point, color
+///   rules,  then per rule:  x, y, width, height, color, dashed
+///   paths,  then per path:  x, y, fill, stroke width, color, commands,
+///                           then per command: op, x, y, x1, y1, x2, y2
+void appendDisplayList(std::vector<double> &out, const MathLayout &layout) {
+  out.insert(out.end(), {layout.width, layout.height, layout.depth, static_cast<double>(layout.glyphs.size())});
+  for (const MathGlyph &glyph : layout.glyphs) {
+    out.insert(out.end(), {glyph.x, glyph.y, glyph.scale, static_cast<double>(glyph.font),
+                           static_cast<double>(glyph.codePoint), static_cast<double>(glyph.color)});
+  }
+  out.push_back(static_cast<double>(layout.rules.size()));
+  for (const MathRule &rule : layout.rules) {
+    out.insert(out.end(), {rule.x, rule.y, rule.width, rule.height, static_cast<double>(rule.color),
+                           rule.dashed ? 1.0 : 0.0});
+  }
+  out.push_back(static_cast<double>(layout.paths.size()));
+  for (const MathPath &path : layout.paths) {
+    out.insert(out.end(), {path.x, path.y, path.fill ? 1.0 : 0.0, path.strokeWidth, static_cast<double>(path.color),
+                           static_cast<double>(path.commands.size())});
+    for (const PathCommand &command : path.commands) {
+      out.insert(out.end(), {static_cast<double>(command.op), command.x, command.y, command.x1, command.y1,
+                             command.x2, command.y2});
+    }
+  }
+}
+
+} // namespace
+
 /// Flattens blocks [from, to) of a document into one text and integer
 /// tables, with block indices and text offsets relative to `from`. Layouts
 /// must match NativeDocument.kt. Empty blocks get a zero-width space so they
@@ -272,6 +369,16 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
   // the flattened text like the inline runs above. Layout must match
   // NativeDocument.kt.
   std::vector<jint> tokens;
+  // Each block's math layout, in a fixed order, for the blocks that have one.
+  // A separate table rather than more fields in `blocks` because these are
+  // fractional ems and `blocks` is all integers: the stride is the only place that
+  // order is written down, and it has to match NativeDocument.kt.
+  std::vector<double> maths;
+  // Every formula in the range, block and inline, as records of
+  // [block, start, end, length, then `length` doubles of display list]. A formula
+  // with no layout has length zero. Block indexes are relative to `from`, and
+  // start and end are UTF-16 offsets into that block's own text.
+  std::vector<double> formulas;
   std::vector<std::u16string> strings;
   // Each block's resolved typography and margins, in the fixed order
   // `theme_layout::kBlockLayoutStride` writes. Resolved here rather than in
@@ -323,6 +430,41 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
                                     static_cast<jint>(block.meta.startLine),
                                     block.meta.noLineNumbers ? 1 : 0,
                                 });
+    for (const MathSpan &span : block.math) {
+      formulas.insert(formulas.end(), {static_cast<double>(index - static_cast<size_t>(from)),
+                                       static_cast<double>(span.start), static_cast<double>(span.end), 0.0});
+      const size_t lengthAt = formulas.size() - 1;
+      if (span.layout) {
+        appendDisplayList(formulas, *span.layout);
+        formulas[lengthAt] = static_cast<double>(formulas.size() - lengthAt - 1);
+      }
+    }
+    if (!block.math.empty()) {
+      // A block's formula covers its whole text, so only the first span is ever
+      // read here; the parser promotes a lone display formula to its own block
+      // rather than leaving two in one.
+      const MathSpan &span = block.math.front();
+      const jint tex = intern(span.tex);
+      const jint error = span.error.empty() ? -1 : intern(span.error);
+      // Width, height and depth are the layout's own ems with the baseline at
+      // y = height, which is what `mathBlockHeight` on both platforms expects. A
+      // formula with no layout is all zeros with `resolved` false, so "not laid
+      // out yet" and "laid out and failed" stay distinguishable.
+      maths.insert(maths.end(), {
+                                  span.layout ? static_cast<double>(span.layout->width) : 0.0,
+                                  span.layout ? static_cast<double>(span.layout->height) : 0.0,
+                                  span.layout ? static_cast<double>(span.layout->depth) : 0.0,
+                                  span.layout ? 1.0 : 0.0,
+                                  span.display ? 1.0 : 0.0,
+                                  static_cast<double>(tex),
+                                  static_cast<double>(error),
+                              });
+    } else {
+      // Every block has an entry, so the maths table is indexed by block the same
+      // way `blocks` is. A block with no formula reads as unresolved, which is what
+      // a caller that did not check the kind would then have to handle anyway.
+      maths.insert(maths.end(), {0.0, 0.0, 0.0, 0.0, 0.0, -1.0, -1.0});
+    }
     theme_layout::writeBlockLayout(
       *theme, theme_layout::blockLayout(*theme, block), layouts,
       static_cast<size_t>(index - static_cast<size_t>(from)) * theme_layout::kBlockLayoutStride);
@@ -370,7 +512,7 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
     env->DeleteLocalRef(value);
   }
 
-  jobjectArray result = env->NewObjectArray(8, objectClass, nullptr);
+  jobjectArray result = env->NewObjectArray(10, objectClass, nullptr);
   env->SetObjectArrayElement(result, 0, toJavaString(env, text));
   env->SetObjectArrayElement(result, 1, toJavaArray(env, blocks));
   env->SetObjectArrayElement(result, 2, toJavaArray(env, containers));
@@ -383,6 +525,73 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
     env->SetDoubleArrayRegion(layoutArray, 0, static_cast<jsize>(layouts.size()), layouts.data());
   }
   env->SetObjectArrayElement(result, 7, layoutArray);
+  jdoubleArray mathArray = env->NewDoubleArray(static_cast<jsize>(maths.size()));
+  if (!maths.empty()) {
+    env->SetDoubleArrayRegion(mathArray, 0, static_cast<jsize>(maths.size()), maths.data());
+  }
+  env->SetObjectArrayElement(result, 8, mathArray);
+  jdoubleArray formulaArray = env->NewDoubleArray(static_cast<jsize>(formulas.size()));
+  if (!formulas.empty()) {
+    env->SetDoubleArrayRegion(formulaArray, 0, static_cast<jsize>(formulas.size()), formulas.data());
+  }
+  env->SetObjectArrayElement(result, 9, formulaArray);
+  return result;
+}
+
+/**
+ * The document's images as [urls, alts, titles, records], where records is
+ * [start, end, loadable, link] per image.
+ *
+ * Three string arrays and one number array rather than one array of objects,
+ * because this is read once per segment that holds a picture and the objects
+ * would be allocated on every read. Three parallel string arrays keep every
+ * value the same JNI type, which is what the document read above does for its own
+ * strings.
+ *
+ * What is not here is each image's state: that belongs to a view, not to the
+ * document, and it travels in the layout map instead. Reading a document's images
+ * is therefore the same for a view that has loaded them and one that has not,
+ * which is why it is a document read rather than a state read.
+ */
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_downstream_DownstreamNative_nativeReadImages(JNIEnv *env, jclass /*clazz*/, jlong id) {
+  const DocumentHandle document = DocumentRegistry::find(static_cast<uint64_t>(id));
+  if (!document) {
+    return nullptr;
+  }
+  jclass objectClass = env->FindClass("java/lang/Object");
+  jclass stringClass = env->FindClass("java/lang/String");
+  const auto count = static_cast<jsize>(document->images.size());
+  jobjectArray urls = env->NewObjectArray(count, stringClass, nullptr);
+  jobjectArray alts = env->NewObjectArray(count, stringClass, nullptr);
+  jobjectArray titles = env->NewObjectArray(count, stringClass, nullptr);
+  std::vector<jint> records;
+  records.reserve(document->images.size() * 4);
+  for (size_t index = 0; index < document->images.size(); index++) {
+    const Image &image = document->images[index];
+    jstring url = toJavaString(env, utf8ToUtf16(image.url));
+    jstring alt = toJavaString(env, image.alt);
+    jstring title = toJavaString(env, utf8ToUtf16(image.title));
+    env->SetObjectArrayElement(urls, static_cast<jsize>(index), url);
+    env->SetObjectArrayElement(alts, static_cast<jsize>(index), alt);
+    env->SetObjectArrayElement(titles, static_cast<jsize>(index), title);
+    env->DeleteLocalRef(url);
+    env->DeleteLocalRef(alt);
+    env->DeleteLocalRef(title);
+    records.push_back(static_cast<jint>(image.range.start));
+    records.push_back(static_cast<jint>(image.range.end));
+    // `loadable` is the engine's own policy answer, and the link is the enclosing
+    // one, which is -1 for a picture that is not inside a link. Both travel here
+    // rather than being decided again on this side: the alt text of a blocked
+    // destination is a reader's decision, not the view's.
+    records.push_back(image.loadable ? 1 : 0);
+    records.push_back(image.link);
+  }
+  jobjectArray result = env->NewObjectArray(4, objectClass, nullptr);
+  env->SetObjectArrayElement(result, 0, urls);
+  env->SetObjectArrayElement(result, 1, alts);
+  env->SetObjectArrayElement(result, 2, titles);
+  env->SetObjectArrayElement(result, 3, toJavaArray(env, records));
   return result;
 }
 
@@ -407,11 +616,109 @@ Java_com_downstream_DownstreamNative_nativeSegmentPlan(JNIEnv *env, jclass /*cla
                                     static_cast<jlong>(document->blocks[segment.from].identity),
                                     static_cast<jlong>(document->settledBlocks),
                                     static_cast<jlong>(segment.codeOrdinal),
+                                    // The kind rather than a table and a code flag: the
+                                    // plan has five kinds and two more were added, and a
+                                    // boolean per kind is how the fifth one gets forgotten.
+                                    static_cast<jlong>(segment.kind),
+                                    // The image ordinal, counted by the plan so a view
+                                    // matches a picture to its state without walking the
+                                    // document. -1 for every other segment.
+                                    static_cast<jlong>(segment.imageOrdinal),
                                 });
   }
   jlongArray array = env->NewLongArray(static_cast<jsize>(values.size()));
   env->SetLongArrayRegion(array, 0, static_cast<jsize>(values.size()), values.data());
   return array;
+}
+
+/// A formula's spoken form, as the engine's own verbalizer produces it.
+///
+/// Exposed rather than reimplemented in Kotlin, because `MathSpeech.cpp` is the one
+/// definition of what `x^2 + y^2` reads as and a second copy would drift from it
+/// in exactly the case that matters: a formula neither reader can make sense of.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_downstream_DownstreamNative_nativeMathSpeech(JNIEnv *env, jclass /*clazz*/, jstring tex,
+                                                      jboolean display) {
+  if (tex == nullptr) {
+    return nullptr;
+  }
+  const char *utf8 = env->GetStringUTFChars(tex, nullptr);
+  if (utf8 == nullptr) {
+    return nullptr;
+  }
+  const std::string spoken = downstream::math::speak(utf8, display == JNI_TRUE);
+  env->ReleaseStringUTFChars(tex, utf8);
+  return toJavaString(env, utf8ToUtf16(spoken));
+}
+
+namespace {
+
+/// The library `nativeRegisterMathEngine` named, opened on first use.
+std::string &mathLibraryName() {
+  static auto *name = new std::string();
+  return *name;
+}
+
+/// Opens RaTeX and finds its three functions. Runs once, under the engine's lock,
+/// the first time any document needs a formula laid out.
+bool resolveRatex(downstream::MathEngineFunctions *out) {
+  void *library = dlopen(mathLibraryName().c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (library == nullptr) {
+    return false;
+  }
+  // Never closed: the engine's function pointers point into it for the life of
+  // the process, the way a linked library's would.
+  return downstream::mathEngineFunctionsFromSymbols(dlsym(library, "ratex_parse_and_layout"),
+                                                    dlsym(library, "ratex_free_display_list"),
+                                                    dlsym(library, "ratex_get_last_error"), out);
+}
+
+} // namespace
+
+/// Registers the math package's engine without loading it. `fontDirectory` is the
+/// asset path the KaTeX fonts are under, which the Kotlin renderer reads.
+extern "C" JNIEXPORT void JNICALL
+Java_com_downstream_DownstreamNative_nativeRegisterMathEngine(JNIEnv *env, jclass /*clazz*/, jstring library,
+                                                              jstring fontDirectory) {
+  if (library == nullptr || fontDirectory == nullptr) {
+    return;
+  }
+  const char *name = env->GetStringUTFChars(library, nullptr);
+  const char *fonts = env->GetStringUTFChars(fontDirectory, nullptr);
+  if (name != nullptr && fonts != nullptr) {
+    mathLibraryName() = name;
+    downstream::MathEngine::installResolver(resolveRatex, fonts);
+  }
+  if (name != nullptr) {
+    env->ReleaseStringUTFChars(library, name);
+  }
+  if (fonts != nullptr) {
+    env->ReleaseStringUTFChars(fontDirectory, fonts);
+  }
+}
+
+/// A finished image load, recorded where the shadow node reads it.
+///
+/// The size is the decoded picture's, in pixels, which `imageBox` treats the way
+/// CSS treats an image's natural size; zero means the load failed. Keyed by URL, so
+/// every message showing the picture measures at its loaded height.
+extern "C" JNIEXPORT void JNICALL
+Java_com_downstream_DownstreamNative_nativeRecordImage(JNIEnv *env, jclass /*clazz*/, jstring url, jint width,
+                                                       jint height) {
+  if (url == nullptr) {
+    return;
+  }
+  const jsize length = env->GetStringLength(url);
+  const jchar *chars = env->GetStringChars(url, nullptr);
+  if (chars == nullptr) {
+    return;
+  }
+  const std::string key = utf16ToUtf8(std::u16string_view(reinterpret_cast<const char16_t *>(chars), length));
+  env->ReleaseStringChars(url, chars);
+  const bool loaded = width > 0 && height > 0;
+  downstream::ImageSizeCache::record(
+      key, {loaded ? downstream::ImageState::Loaded : downstream::ImageState::Failed,
+            loaded ? static_cast<float>(width) : 0.0f, loaded ? static_cast<float>(height) : 0.0f});
 }
 
 /// One link as [url, [rangeStart, rangeEnd]], or null.
@@ -547,5 +854,21 @@ Java_com_downstream_DownstreamNative_nativeTableName(JNIEnv *env, jclass /*clazz
   if (extensionText != nullptr) {
     env->ReleaseStringUTFChars(extension, extensionText);
   }
+  return toJavaString(env, utf8ToUtf16(name));
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_downstream_DownstreamNative_nativeImageName(JNIEnv *env, jclass /*clazz*/, jstring url, jstring alt,
+                                                     jstring mimeType, jstring configured) {
+  const auto utf8 = [env](jstring value) -> std::string {
+    if (value == nullptr) return {};
+    const jchar *chars = env->GetStringChars(value, nullptr);
+    if (chars == nullptr) return {};
+    const std::string text = utf16ToUtf8(std::u16string_view(reinterpret_cast<const char16_t *>(chars),
+                                                          env->GetStringLength(value)));
+    env->ReleaseStringChars(value, chars);
+    return text;
+  };
+  const std::string name = imageDownloadName(utf8(url), utf8(alt), utf8(mimeType), utf8(configured));
   return toJavaString(env, utf8ToUtf16(name));
 }

@@ -1,0 +1,4 @@
+$ bash tests/ios/run-math-harness.sh
+ios_inline_math repeated_200_requests_median_ms=0.141 raster_calls=0 glyphs=120 samples=7
+native math attachment checks passed
+com.downstream.MathAttachmentHarness: 36085

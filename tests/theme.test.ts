@@ -549,20 +549,39 @@ describe('markdownStyle', () => {
 
   it('reports a key it does not draw, once, rather than ignoring it silently', () => {
     // A whole enriched-markdown style for a feature this renderer has not built
-    // is one thing to say, not one per property.
-    resolveTheme(
+    // is one thing to say, not one per property. `spoiler` is the example: no
+    // renderer draws it.
+    resolveTheme({}, fromPeer({ spoiler: { color: '#6B7280' } }));
+    expect(console.warn).toHaveBeenCalledTimes(1);
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('markdownStyle.spoiler')
+    );
+    resolveTheme({}, fromPeer({ spoiler: { color: '#6B7280' } }));
+    expect(console.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('draws the math and image keys, and reports the rest of their peer keys', () => {
+    // `image` and `math` were the two keys this renderer did not draw. It draws
+    // both now, so enriched-markdown's values for them land — and the three
+    // properties of `image` it still does not draw are what gets reported, as
+    // the plan's own rule for keys a renderer ignores.
+    const resolved = resolveTheme(
       {},
-      fromPeer({ image: { height: 40 }, math: { fontSize: 20 } })
+      fromPeer({
+        image: { height: 40, aspectRatio: 1.5, resizeMode: 'cover' },
+        math: { fontSize: 20, color: '#1F2937', textAlign: 'center' },
+      })
     );
-    expect(console.warn).toHaveBeenCalledTimes(2);
+    expect(valueOf(resolved, 'math.fontSize')).toBe(20);
+    expect(valueOf(resolved, 'math.color')).toBe(0xff1f2937);
+    // `center` is the public name; one is what the slot holds.
+    expect(valueOf(resolved, 'math.textAlign')).toBe(1);
+    // And an alignment the renderer does not have is reported rather than
+    // guessed at, because a formula aligned nowhere is a silent failure.
+    resolveTheme({}, { math: { textAlign: 'justify' as never } });
     expect(console.warn).toHaveBeenCalledWith(
-      expect.stringContaining('markdownStyle.image')
+      expect.stringContaining('markdownStyle.math.textAlign')
     );
-    expect(console.warn).toHaveBeenCalledWith(
-      expect.stringContaining('markdownStyle.math')
-    );
-    resolveTheme({}, fromPeer({ image: { height: 40 } }));
-    expect(console.warn).toHaveBeenCalledTimes(2);
   });
 
   it('accepts a value written for enriched-markdown as it is', () => {
@@ -631,10 +650,16 @@ describe('markdownStyle', () => {
     expect(sets(resolved, 'strong.fontWeight')).toBe(false);
     expect(resolved.fonts).toContain('Montserrat-Bold');
     expect(resolved.fonts).toContain('CutiveMono-Regular');
-    expect(console.warn).toHaveBeenCalledWith(
+    // `image` and `math` are drawn, so nothing is reported for them; only
+    // `spoiler` is a key this renderer has no renderer for.
+    expect(valueOf(resolved, 'image.borderRadius')).toBe(8);
+    expect(valueOf(resolved, 'image.marginBottom')).toBe(12);
+    expect(valueOf(resolved, 'math.fontSize')).toBe(20);
+    expect(valueOf(resolved, 'math.color')).toBe(0xff1f2937);
+    expect(console.warn).not.toHaveBeenCalledWith(
       expect.stringContaining('markdownStyle.image')
     );
-    expect(console.warn).toHaveBeenCalledWith(
+    expect(console.warn).not.toHaveBeenCalledWith(
       expect.stringContaining('markdownStyle.math')
     );
     expect(console.warn).toHaveBeenCalledWith(

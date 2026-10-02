@@ -1,5 +1,7 @@
 #import "DSRenderedDocument.h"
 
+#import "DSMathFonts.h"
+
 #import "DSFonts.h"
 #import "DSThemeColors.h"
 
@@ -8,6 +10,7 @@
 #include "InlineRuns.h"
 #include "SegmentPlan.h"
 #include "TokenPalette.h"
+#include "Unicode.h"
 #include "theme/ThemeLayout.h"
 
 #include <algorithm>
@@ -175,6 +178,38 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
 /// Applies a code block's token colors. Tokens are offsets into the block's own
 /// text and only change color, never a character, so selection, copy, and the
 /// accessibility text are untouched.
+/// Swaps each laid-out inline formula's literal for one attachment character.
+///
+/// After the runs are applied, so the attachment inherits the run's font, color
+/// and link, and from the last formula back, so an earlier formula's offsets are
+/// still the block's own when it is reached. The literal rides along as an
+/// attribute, which is what a copy writes back. A formula with no layout keeps
+/// its literal, which is what a reader sees while it is still arriving and when
+/// it failed.
+void replaceInlineMath(NSMutableAttributedString *text, const Block &block, NSUInteger offset) {
+  if (block.math.empty() || block.kind == BlockKind::MathBlock || block.kind == BlockKind::CodeBlock) {
+    return;
+  }
+  for (auto span = block.math.rbegin(); span != block.math.rend(); ++span) {
+    if (!span->layout || span->end <= span->start) {
+      continue;
+    }
+    const NSRange range = NSMakeRange(offset + span->start, span->end - span->start);
+    if (NSMaxRange(range) > text.length) {
+      continue;
+    }
+    NSMutableDictionary *attributes = [[text attributesAtIndex:range.location effectiveRange:NULL] mutableCopy];
+    UIFont *font = attributes[NSFontAttributeName];
+    const CGFloat size = (font != nil ? font.pointSize : UIFont.systemFontSize) * kInlineMathScale;
+    attributes[NSAttachmentAttributeName] = [[DSMathAttachment alloc] initWithLayout:span->layout
+                                                                            fontSize:size
+                                                                               color:attributes[NSForegroundColorAttributeName]];
+    attributes[DSMathLiteralAttributeName] = [text.string substringWithRange:range];
+    [text replaceCharactersInRange:range
+              withAttributedString:[[NSAttributedString alloc] initWithString:@"\uFFFC" attributes:attributes]];
+  }
+}
+
 void applyTokens(NSMutableAttributedString *text, const Block &block, DSThemeColors *colors, NSUInteger offset,
                  uint32_t clampStart, uint32_t clampEnd) {
   for (const TokenRun &run : block.tokens) {
@@ -485,8 +520,9 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
     if (isCode && syntaxHighlighting) {
       applyTokens(text, block, colors, start, 0, static_cast<uint32_t>(block.text.size()));
     }
+    replaceInlineMath(text, block, start);
     [blocks addObject:info];
-    [blockRanges addObject:[NSValue valueWithRange:NSMakeRange(start, blockText.length)]];
+    [blockRanges addObject:[NSValue valueWithRange:NSMakeRange(start, text.length - start - (hasSeparator ? 1 : 0))]];
   }
 
   segment.attributedString = [text copy];
@@ -592,6 +628,212 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 @end
 
 #pragma mark - Code cards
+
+/// The container bars and markers a box segment draws, and the leading they
+/// take, through the same `buildContainers` a text segment uses.
+///
+/// A formula and an image are boxes rather than prose, but a formula inside a
+/// quote still needs the quote's bar beside it and a picture in a list item
+/// still needs the item's marker, so both go through the one function that
+/// builds them. `previous` is null because a box is always its own segment and
+/// therefore never continues a container from the segment above it.
+static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeColors *colors, const Theme &theme,
+                               CGFloat scale, NSMutableArray<DSContainerInfo *> *containers, CGFloat *leading) {
+  NSMutableArray<NSString *> *spoken = [NSMutableArray new];
+  bool inQuote = false;
+  *leading = buildContainers(block, nullptr, theme, colors, scale, markerFont,
+                            [colors colorForSlot:kSlotListMarkerColor fallback:UIColor.secondaryLabelColor],
+                            containers, spoken, &inQuote);
+}
+
+@interface DSMathSegment ()
+@property (nonatomic, nullable) MathLayout::Handle layout;
+@property (nonatomic) std::string tex;
+@property (nonatomic) std::string literal;
+@property (nonatomic) std::string error;
+@property (nonatomic) NSInteger blockIndex;
+@property (nonatomic, copy) NSArray<DSContainerInfo *> *containers;
+@property (nonatomic) CGFloat contentLeading;
+@property (nonatomic) CGFloat fontSize;
+@property (nonatomic) CGFloat padding;
+@property (nonatomic) CGFloat marginTop;
+@property (nonatomic) CGFloat marginBottom;
+@property (nonatomic) CGFloat textAlign;
+@property (nonatomic, nullable) UIColor *backgroundColor;
+@property (nonatomic, nullable) UIColor *color;
+@property (nonatomic, nullable) UIColor *errorColor;
+@end
+
+@implementation DSMathSegment
+
++ (instancetype)segmentWithDocument:(const Document &)document
+                               index:(size_t)index
+                              theme:(const Theme &)theme
+                               scale:(CGFloat)scale
+                         markerFont:(UIFont *)markerFont {
+  DSMathSegment *segment = [DSMathSegment new];
+  const Block &block = document.blocks[index];
+  segment.blockIndex = static_cast<NSInteger>(index);
+  DSThemeColors *colors = [DSThemeColors colorsFor:theme];
+  {
+    NSMutableArray<DSContainerInfo *> *containers = [NSMutableArray new];
+    CGFloat leading = 0;
+    buildBoxContainers(document.blocks[index], markerFont, colors, theme, scale, containers, &leading);
+    segment.containers = containers;
+    segment.contentLeading = leading;
+  }
+  // A block's formula covers its whole text, which is the TeX with no delimiters
+  // for a fence and the whole literal for a promoted `$$…$$` paragraph. Either
+  // way the span says which, and the display list is the only thing drawn.
+  if (!block.math.empty()) {
+    const MathSpan &span = block.math.front();
+    segment.layout = span.layout;
+    segment.tex = span.tex;
+    // The fallback is the literal a reader saw before math existed, delimiters
+    // included, because `Block::text` is exactly that and a formula that cannot
+    // be laid out is not a formula that is missing.
+    segment.literal = utf16ToUtf8(block.text);
+    segment.error = span.error;
+  }
+  const BlockFont formula = mathFont(theme);
+  segment.fontSize = static_cast<CGFloat>(formula.size * scale);
+  segment.padding = static_cast<CGFloat>(mathPadding(theme) * scale);
+  segment.marginTop = static_cast<CGFloat>(theme_layout::mathMarginTop(theme) * scale);
+  segment.marginBottom = static_cast<CGFloat>(theme_layout::mathMarginBottom(theme) * scale);
+  segment.textAlign = static_cast<CGFloat>(mathTextAlign(theme));
+  // `inherit` is the default and means the block's own color shows through, so
+  // these are nil unless a theme named them. A formula with no color of its own
+  // is what lets dark mode reach it without a relayout.
+  segment.backgroundColor = [colors colorForSlot:kSlotMathBackgroundColor];
+  segment.color = [colors colorForSlot:kSlotMathColor];
+  segment.errorColor = [colors colorForSlot:kSlotMathErrorColor];
+  return segment;
+}
+
+- (CGFloat)height {
+  if (self.layout == nil) {
+    // No layout: the source as a line of text, which is what the reader saw
+    // before math existed and what a formula the engine refused shows. A tall
+    // fraction is not available here, so the line is the body's own line height
+    // rather than a guess at the formula's.
+    return self.fontSize * 1.2;
+  }
+  return mathBlockHeight(*self.layout, self.fontSize, self.padding);
+}
+
+- (CGFloat)contentWidth {
+  return self.layout != nil ? self.layout->width * self.fontSize : 0;
+}
+
+@end
+
+@interface DSImageSegment ()
+@property (nonatomic) std::vector<uint32_t> images;
+@property (nonatomic) std::vector<std::string> altTexts;
+@property (nonatomic) std::vector<std::string> urls;
+@property (nonatomic) std::vector<std::string> titles;
+@property (nonatomic) std::vector<int32_t> links;
+@property (nonatomic) uint32_t imageOrdinal;
+@property (nonatomic) NSInteger blockIndex;
+@property (nonatomic, copy) NSArray<DSContainerInfo *> *containers;
+@property (nonatomic) CGFloat contentLeading;
+@property (nonatomic) downstream::ImageMetrics metrics;
+@property (nonatomic, nullable) UIColor *placeholderColor;
+@end
+
+@implementation DSImageSegment
+
++ (instancetype)segmentWithDocument:(const Document &)document
+                               index:(size_t)index
+                              theme:(const Theme &)theme
+                               scale:(CGFloat)scale
+                         markerFont:(UIFont *)markerFont {
+  DSImageSegment *segment = [DSImageSegment new];
+  const Block &block = document.blocks[index];
+  segment.blockIndex = static_cast<NSInteger>(index);
+  segment.images = block.images;
+  DSThemeColors *colors = [DSThemeColors colorsFor:theme];
+  {
+    NSMutableArray<DSContainerInfo *> *containers = [NSMutableArray new];
+    CGFloat leading = 0;
+    buildBoxContainers(block, markerFont, colors, theme, scale, containers, &leading);
+    segment.containers = containers;
+    segment.contentLeading = leading;
+  }
+  std::vector<std::string> altTexts;
+  std::vector<std::string> urls;
+  std::vector<std::string> titles;
+  std::vector<int32_t> links;
+  altTexts.reserve(block.images.size());
+  urls.reserve(block.images.size());
+  titles.reserve(block.images.size());
+  links.reserve(block.images.size());
+  for (const uint32_t ordinal : block.images) {
+    // The destination only when the engine's policy allows it, so a view cannot
+    // request what the engine refused; the state already says `Blocked` for it.
+    const bool known = ordinal < document.images.size();
+    urls.push_back(known && document.images[ordinal].loadable ? document.images[ordinal].url : std::string());
+    titles.push_back(known ? document.images[ordinal].title : std::string());
+    links.push_back(known ? document.images[ordinal].link : -1);
+    // The alt texts, which is the block's own text and what accessibility,
+    // export, and the fallback all read. Storing them per image is what lets a
+    // view show one image's label under that image rather than one label for
+    // the block.
+    altTexts.push_back(ordinal < document.images.size() ? utf16ToUtf8(document.images[ordinal].alt) : std::string());
+  }
+  segment.altTexts = std::move(altTexts);
+  segment.urls = std::move(urls);
+  segment.titles = std::move(titles);
+  segment.links = std::move(links);
+  segment.placeholderColor = [colors colorForSlot:kSlotImagePlaceholderColor];
+  // The metrics come from the shared rule rather than from a platform copy, and
+  // are scaled here once so `imageBox` is handed points rather than unscaled
+  // numbers every time it is called.
+  downstream::ImageMetrics metrics = imageMetrics(theme);
+  metrics.marginTop = static_cast<float>(metrics.marginTop * scale);
+  metrics.marginBottom = static_cast<float>(metrics.marginBottom * scale);
+  metrics.fallbackTextHeight = static_cast<float>(metrics.fallbackTextHeight * scale);
+  segment.metrics = metrics;
+  return segment;
+}
+
+- (std::vector<const downstream::ImageEntry *>)entriesFor:(const downstream::ImageStateLayout &)answers {
+  std::vector<const downstream::ImageEntry *> found;
+  found.reserve(self.images.size());
+  for (const uint32_t ordinal : self.images) {
+    // A view handed a document it has no answer for still draws, so a missing
+    // entry is a null the caller reads as a placeholder rather than a crash.
+    found.push_back(answers.find(ordinal));
+  }
+  return found;
+}
+
+- (downstream::ImageBox)boxAtIndex:(NSUInteger)index
+                            column:(CGFloat)column
+                           answers:(const downstream::ImageStateLayout &)answers {
+  if (index >= self.images.size()) {
+    return imageBox(nullptr, static_cast<float>(column), self.metrics);
+  }
+  return imageBox(answers.find(self.images[index]), static_cast<float>(column), self.metrics);
+}
+
+- (CGFloat)heightForColumn:(CGFloat)column answers:(const downstream::ImageStateLayout &)answers {
+  if (!answers.enabled) {
+    // Images off: one line of alt text for the whole block, which is what
+    // turning images off means to a reader.
+    return self.metrics.fallbackTextHeight * self.altTexts.size();
+  }
+  CGFloat height = 0;
+  for (NSUInteger index = 0; index < self.images.size(); index++) {
+    // Each image is its own box, stacked vertically. The gap between them is the
+    // theme's own margin, so a block of three charts is not three boxes but
+    // touching as one column.
+    height += [self boxAtIndex:index column:column answers:answers].height;
+  }
+  return height;
+}
+
+@end
 
 @interface DSCodeSegment ()
 @property (nonatomic) DSTextSegment *text;
@@ -949,6 +1191,10 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   /// The code layout the cached frames were measured under, so a measurement is
   /// only reused for the layout it was made with.
   downstream::CodeLayout _cachedCode;
+  /// The image answers the cached frames were stacked with. Part of the key
+  /// because a load changes a picture's height, so a frame cached for a
+  /// placeholder is wrong for a loaded image.
+  downstream::ImageStateLayout _cachedImages;
   bool _hasCachedFrames;
   NSArray<NSValue *> *_cachedFrames;
 }
@@ -977,17 +1223,18 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 }
 
 + (id)committedSegmentFor:(const Document &)document
+                     kind:(SegmentKind)kind
                      from:(size_t)from
                        to:(size_t)to
                     theme:(const Theme &)theme
                     scale:(CGFloat)scale
                markerFont:(UIFont *)markerFont
         syntaxHighlighting:(BOOL)syntaxHighlighting {
-  const BlockKind kind = document.blocks[from].kind;
   // The theme is in the key because a segment holds resolved colors and
   // measured sizes, and a second theme must not read the first one's.
-  NSString *key = [NSString stringWithFormat:@"%llu:%zu:%llu:%.4f:%d", (unsigned long long)document.blocks[from].identity,
-                                             to - from, (unsigned long long)theme.id(), scale, syntaxHighlighting];
+  NSString *key = [NSString stringWithFormat:@"%llu:%zu:%llu:%.4f:%d:%d", (unsigned long long)document.blocks[from].identity,
+                                             to - from, (unsigned long long)theme.id(), scale, syntaxHighlighting,
+                                             static_cast<int>(kind)];
   DSCommittedSegment *cached = [self.committedSegmentCache objectForKey:key];
   bool matches = cached != nil && cached->identities.size() == to - from;
   for (size_t index = from; matches && index < to; index++) {
@@ -1002,8 +1249,25 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
     cached->identities.push_back(document.blocks[index].identity);
     cost += document.blocks[index].text.size() * 16 + 256;
   }
+  // The plan's kind rather than the block's: a math block and an image-only
+  // paragraph are their own segments, and building them as text would show a
+  // committed formula as its source and a committed picture as its alt text.
   switch (kind) {
-    case BlockKind::TableRow:
+    case SegmentKind::Math:
+      cached->segment = (id)[DSMathSegment segmentWithDocument:document
+                                                         index:from
+                                                        theme:theme
+                                                        scale:scale
+                                                   markerFont:markerFont];
+      break;
+    case SegmentKind::Image:
+      cached->segment = (id)[DSImageSegment segmentWithDocument:document
+                                                          index:from
+                                                         theme:theme
+                                                          scale:scale
+                                                    markerFont:markerFont];
+      break;
+    case SegmentKind::Table:
       cached->segment = (id)[DSTableSegment segmentWithDocument:document
                                                             from:from
                                                               to:to
@@ -1011,7 +1275,7 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
                                                            scale:scale
                                                       markerFont:markerFont];
       break;
-    case BlockKind::CodeBlock:
+    case SegmentKind::Code:
       cached->segment = (id)[DSCodeSegment segmentWithDocument:document
                                                          index:from
                                                         theme:theme
@@ -1019,7 +1283,7 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
                                                    markerFont:markerFont
                                         syntaxHighlighting:syntaxHighlighting];
       break;
-    default:
+    case SegmentKind::Text:
       cached->segment = (id)[DSTextSegment segmentWithDocument:document
                                                            from:from
                                                              to:to
@@ -1099,6 +1363,7 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
     id built = nil;
     if (segment.committed) {
       built = [DSRenderedDocument committedSegmentFor:document
+                                                 kind:segment.kind
                                                  from:segment.from
                                                    to:segment.to
                                                 theme:theme
@@ -1112,6 +1377,18 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
                                           scale:scale
                                      markerFont:markerFont
                               syntaxHighlighting:syntaxHighlighting];
+    } else if (segment.isMath()) {
+      built = [DSMathSegment segmentWithDocument:document
+                                          index:segment.from
+                                         theme:theme
+                                          scale:scale
+                                    markerFont:markerFont];
+    } else if (segment.isImage()) {
+      built = [DSImageSegment segmentWithDocument:document
+                                            index:segment.from
+                                           theme:theme
+                                            scale:scale
+                                      markerFont:markerFont];
     } else if (segment.isTable()) {
       built = [DSTableSegment segmentWithDocument:document
                                              from:segment.from
@@ -1134,6 +1411,12 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
     // taken from the cache gets it too, and cannot carry a stale one.
     if ([built isKindOfClass:DSCodeSegment.class] && segment.codeOrdinal >= 0) {
       ((DSCodeSegment *)built).codeOrdinal = static_cast<uint32_t>(segment.codeOrdinal);
+    }
+    // The same for an image block, whose ordinal is the plan's count of the
+    // images it holds. Assigned here rather than at build time so a committed
+    // segment taken from the cache gets it too, and cannot carry a stale one.
+    if ([built isKindOfClass:DSImageSegment.class] && segment.imageOrdinal >= 0) {
+      ((DSImageSegment *)built).imageOrdinal = static_cast<uint32_t>(segment.imageOrdinal);
     }
     [segments addObject:built];
     [indexes addObject:@((NSInteger)segment.from)];
@@ -1169,9 +1452,24 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 - (CGFloat)heightOf:(id)segment
             atWidth:(CGFloat)width
              chrome:(uint32_t)chrome
-                code:(const downstream::CodeLayout &)code {
+                code:(const downstream::CodeLayout &)code
+              images:(const downstream::ImageStateLayout &)images {
   if ([segment isKindOfClass:DSTextSegment.class]) {
     return [(DSTextSegment *)segment heightForWidth:width];
+  }
+  if ([segment isKindOfClass:DSMathSegment.class]) {
+    DSMathSegment *formula = segment;
+    // `mathBlockHeight` is the engine's one definition, so a measured formula
+    // and a drawn one cannot be different sizes. The margins are the document
+    // stack's gap, not the segment's, so they are not added here.
+    return [formula height];
+  }
+  if ([segment isKindOfClass:DSImageSegment.class]) {
+    DSImageSegment *pictures = segment;
+    // One call into `imageBox` per image, which is the engine's one definition.
+    // A load that finishes changes an entry, this returns a different height, and
+    // the frame cache — which keys on the answers — rebuilds.
+    return [pictures heightForColumn:width - pictures.contentLeading answers:images];
   }
   if ([segment isKindOfClass:DSCodeSegment.class]) {
     DSCodeSegment *card = segment;
@@ -1195,6 +1493,12 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 - (CGFloat)unconstrainedWidthOf:(id)segment
                         atWidth:(CGFloat)width
                            code:(const downstream::CodeLayout &)code {
+  if ([segment isKindOfClass:DSMathSegment.class]) {
+    // A wide formula is what scrolls sideways, so its own em width at this size
+    // is the width an unconstrained measure has to report.
+    DSMathSegment *formula = segment;
+    return formula.contentLeading + [formula contentWidth] + 2 * formula.padding;
+  }
   if ([segment isKindOfClass:DSCodeSegment.class]) {
     DSCodeSegment *card = segment;
     const downstream::CodeBlockLayout layout = resolveCodeBlock(code, card.codeOrdinal, card.fenceMeta);
@@ -1213,12 +1517,16 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 
 - (NSArray<NSValue *> *)segmentFramesForWidth:(CGFloat)width
                                      chrome:(uint32_t)chrome
-                                        code:(const downstream::CodeLayout &)code {
+                                        code:(const downstream::CodeLayout &)code
+                                      images:(const downstream::ImageStateLayout &)images {
   // A measurement only holds for the layout it was made under, so the whole code
-  // layout is part of the key. The choice sets are empty in every document the
-  // reader has not toggled, so this is one comparison in practice.
+  // layout *and* the image answers are part of the key. The choice sets and the
+  // answers are empty in every document the reader has not changed, so this is
+  // one comparison in practice — and a load that finishes changes the answers,
+  // which is what makes the cache miss rather than serve a placeholder height.
   [_lock lock];
-  if (_hasCachedFrames && _cachedWidth == width && _cachedChrome == chrome && _cachedCode == code) {
+  if (_hasCachedFrames && _cachedWidth == width && _cachedChrome == chrome && _cachedCode == code &&
+      _cachedImages == images) {
     NSArray *frames = _cachedFrames;
     [_lock unlock];
     return frames;
@@ -1234,7 +1542,7 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   for (NSUInteger index = 0; index < _segments.count; index++) {
     y += _gaps[index];
     id segment = _segments[index];
-    const CGFloat height = [self heightOf:segment atWidth:width chrome:chrome code:code];
+    const CGFloat height = [self heightOf:segment atWidth:width chrome:chrome code:code images:images];
     if (!constrained) {
       unconstrainedWidth = std::max(unconstrainedWidth, [self unconstrainedWidthOf:segment
                                                                              atWidth:width
@@ -1263,14 +1571,18 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   _cachedWidth = width;
   _cachedChrome = chrome;
   _cachedCode = code;
+  _cachedImages = images;
   _hasCachedFrames = YES;
   _cachedFrames = frames;
   [_lock unlock];
   return frames;
 }
 
-- (CGSize)sizeForWidth:(CGFloat)width chrome:(uint32_t)chrome code:(const downstream::CodeLayout &)code {
-  NSArray<NSValue *> *frames = [self segmentFramesForWidth:width chrome:chrome code:code];
+- (CGSize)sizeForWidth:(CGFloat)width
+                chrome:(uint32_t)chrome
+                   code:(const downstream::CodeLayout &)code
+                 images:(const downstream::ImageStateLayout &)images {
+  NSArray<NSValue *> *frames = [self segmentFramesForWidth:width chrome:chrome code:code images:images];
   if (frames.count == 0) {
     return CGSizeZero;
   }

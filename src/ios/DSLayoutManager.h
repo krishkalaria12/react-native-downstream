@@ -23,4 +23,7 @@ typedef struct {
 
 @end
 
+@class DSLayoutManager;
+
+
 NS_ASSUME_NONNULL_END

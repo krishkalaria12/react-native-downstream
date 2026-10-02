@@ -354,6 +354,44 @@ const ELEMENT_SLOTS: Readonly<Record<string, ElementSlots>> = {
   },
   footnote: { color: 'footnote.color' },
   imageAlt: { color: 'imageAlt.color' },
+  // A display formula is a box of its own, not a paragraph, so it has its own
+  // keys rather than a `textAlign` the paragraph would have to understand.
+  math: {
+    fontSize: 'math.fontSize',
+    color: 'math.color',
+    backgroundColor: 'math.backgroundColor',
+    padding: 'math.padding',
+    marginTop: 'math.marginTop',
+    marginBottom: 'math.marginBottom',
+    // A name rather than a number, because that is what an app writes and what
+    // enriched-markdown writes. The name becomes the slot's number here, which
+    // is the only place that mapping exists.
+    textAlign: 'math.textAlign',
+    // Downstream only: a formula that could not be laid out, drawn as its
+    // source. Streamdown has the same key, and enriched-markdown does not.
+    errorColor: 'math.errorColor',
+  },
+  inlineMath: { color: 'inlineMath.color' },
+  image: {
+    maxHeight: 'image.maxHeight',
+    borderRadius: 'image.borderRadius',
+    marginTop: 'image.marginTop',
+    marginBottom: 'image.marginBottom',
+    placeholderColor: 'image.placeholderColor',
+  },
+};
+
+/**
+ * The three alignments a formula can take, as the numbers the slot holds.
+ *
+ * Zero for left, one for center, two for right. Centered by default, which is
+ * what a display formula is: KaTeX centers one, and a model that writes `$$` on
+ * its own line means a centered block.
+ */
+const TEXT_ALIGNMENTS: Readonly<Record<string, number>> = {
+  left: 0,
+  center: 1,
+  right: 2,
 };
 
 function applyProperty(
@@ -578,6 +616,23 @@ function applyElementStyle(slots: Slots, key: string, value: unknown): void {
   for (const [property, name] of Object.entries(properties)) {
     const raw = group[property];
     if (raw === undefined) continue;
+    if (property === 'textAlign') {
+      // The one property whose value is a name rather than a color or a number,
+      // handled here because the name is the public shape and the number is the
+      // slot's. An unknown name is ignored rather than guessed at: a formula
+      // that ended up aligned nowhere because of a typo is a silent failure.
+      const alignment =
+        typeof raw === 'string' ? TEXT_ALIGNMENTS[raw] : undefined;
+      if (alignment === undefined) {
+        warnOnce(
+          `${origin}.textAlign`,
+          `${origin}.textAlign is not left, center, or right, so it is ignored.`
+        );
+        continue;
+      }
+      slots.number(name, alignment);
+      continue;
+    }
     applyProperty(slots, `${origin}.${property}`, name, raw);
   }
 }

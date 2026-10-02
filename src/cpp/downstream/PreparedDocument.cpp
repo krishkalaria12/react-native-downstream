@@ -2,6 +2,7 @@
 
 #include "CodeBlocks.h"
 #include "CodeHighlighter.h"
+#include "MathBlocks.h"
 #include "RenderPreparer.h"
 
 #include <algorithm>
@@ -32,9 +33,22 @@ Cache &cache() {
   return *instance;
 }
 
+/**
+ * A prepared document's key.
+ *
+ * The parse options are part of it, not an afterthought: two views showing one
+ * string with different math options must not share a parse, because one of
+ * them has formulas in it and the other does not. Equal sources with equal
+ * options share a result, so the common case is unchanged.
+ */
+bool sameRequest(std::string_view source, const MathOptions &math, const PreparedDocument &prepared) {
+  return prepared.source() == source && prepared.math() == math;
+}
+
 } // namespace
 
-PreparedDocument::PreparedDocument(std::string source) : source_(std::move(source)) {}
+PreparedDocument::PreparedDocument(std::string source, MathOptions math)
+    : source_(std::move(source)), math_(math) {}
 
 void PreparedDocument::noteHint(const LayoutHint &hint) {
   std::lock_guard<std::mutex> lock(hintMutex_);
@@ -84,7 +98,7 @@ std::vector<LayoutHint> PreparedDocument::hintsForPrepare() const {
 }
 
 void PreparedDocument::prepare() {
-  result_ = parseMarkdown(source_);
+  result_ = parseMarkdown(source_, math_);
   if (result_.status == ParseStatus::Ok) {
     // Highlighting runs here, on the same worker job and so inside the
     // synchronous-layout budget, so the platform text work that follows sees
@@ -96,26 +110,33 @@ void PreparedDocument::prepare() {
     const auto count = static_cast<uint32_t>(
         std::min<size_t>(result_.document->blocks.size(), std::numeric_limits<uint32_t>::max()));
     result_.document = withSettledBlocks(result_.document, count);
+    // Math runs after settling, because a formula that fails in a settled block
+    // has failed for good: its error is recorded, it turns the error color, and
+    // the view reports it. Laid out before settling, every failure would read as
+    // a formula that is still arriving. It is cheap: a document with no formula
+    // returns the same handle and never calls the engine.
+    result_.document = layoutMath(result_.document);
     // The document itself carries no theme, so one parse serves every theme and
     // only the platform rendering is per theme.
     RenderPreparer::prepare(result_.document, hintsForPrepare());
   }
 }
 
-std::shared_ptr<PreparedDocument> PreparedDocument::request(std::string_view source, const LayoutHint &hint) {
+std::shared_ptr<PreparedDocument> PreparedDocument::request(std::string_view source, const LayoutHint &hint,
+                                                            MathOptions math) {
   Cache &shared = cache();
   std::shared_ptr<PreparedDocument> prepared;
   {
     std::lock_guard<std::mutex> lock(shared.mutex);
     for (auto it = shared.entries.begin(); it != shared.entries.end(); ++it) {
-      if ((*it)->source() == source) {
+      if (sameRequest(source, math, **it)) {
         prepared = *it;
         shared.entries.splice(shared.entries.begin(), shared.entries, it);
         break;
       }
     }
     if (prepared == nullptr) {
-      prepared = std::make_shared<PreparedDocument>(std::string(source));
+      prepared = std::make_shared<PreparedDocument>(std::string(source), math);
       // A preparation nobody holds any more is skipped rather than run.
       prepared->task_ = std::make_shared<Task>([weak = std::weak_ptr<PreparedDocument>(prepared)] {
         if (const auto self = weak.lock()) {

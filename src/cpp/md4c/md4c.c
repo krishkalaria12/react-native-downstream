@@ -3638,6 +3638,14 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
                 if(tmp - off <= 2) {
                     unsigned flags = MD_MARK_POTENTIAL_OPENER | MD_MARK_POTENTIAL_CLOSER;
 
+                    /* LOCAL PATCH (see README.md): a single $ is never math.
+                     * md4c has no switch between $ and $$, and without one
+                     * "$5 and $10"-shaped text can pair into a span — and a span
+                     * that then fails to parse is shown as source, having lost
+                     * the emphasis md4c skipped while resolving it. */
+                    if(tmp - off == 1  &&  (ctx->parser.flags & MD_FLAG_LATEXMATHNOSINGLE))
+                        flags = 0;
+
                     if(off > line->beg  &&  !ISUNICODEWHITESPACEBEFORE(off)  &&  !ISUNICODEPUNCTBEFORE(off))
                         flags &= ~MD_MARK_POTENTIAL_OPENER;
                     if(tmp < line->end  &&  !ISUNICODEWHITESPACE(tmp)  &&  !ISUNICODEPUNCT(tmp))
@@ -6041,10 +6049,50 @@ md_is_table_underline(MD_CTX* ctx, OFF beg, OFF* p_end, unsigned* p_col_count)
     return true;
 }
 
+/* LOCAL PATCH (see README.md): a line that is exactly `$$`, with up to three
+ * leading spaces and nothing but whitespace after it, is a fence for a display
+ * equation. Without this, `$$` on its own line is only a span opener, so a
+ * blank line, a line starting "- ", a "|" or four spaces of indentation inside
+ * an `aligned` environment breaks one formula into several Markdown blocks.
+ *
+ * Everything after this — container nesting, lazy continuation, and an unclosed
+ * fence running to the end of its container — comes from the fence machinery
+ * that is already here, which is the whole point of routing it through as one.
+ * Upstream issue #270 asks for this, so the patch is offered upstream. */
+static int
+md_is_opening_math_fence(MD_CTX* ctx, OFF beg, OFF* p_end)
+{
+    OFF off = beg;
+
+    /* Exactly two. A run of three or more is a code span, not a fence, and a
+     * single one is a currency symbol. */
+    if(off + 1 >= ctx->size  ||  CH(off) != _T('$')  ||  CH(off+1) != _T('$'))
+        return false;
+    off += 2;
+    if(off < ctx->size  &&  CH(off) == _T('$'))
+        return false;
+
+    /* The rest of the line must be blank: an info string after a `$$` is not
+     * part of any convention, and accepting one would let `$$ x` open a fence
+     * that the reader meant as prose. */
+    while(off < ctx->size  &&  !ISNEWLINE(off)) {
+        if(!ISWHITESPACE(off))
+            return false;
+        off++;
+    }
+
+    ctx->code_fence_length = 2;
+    *p_end = off;
+    return true;
+}
+
 static int
 md_is_opening_code_fence(MD_CTX* ctx, OFF beg, OFF* p_end)
 {
     OFF off = beg;
+
+    if((ctx->parser.flags & MD_FLAG_LATEXMATHBLOCKS)  &&  CH(beg) == _T('$'))
+        return md_is_opening_math_fence(ctx, beg, p_end);
 
     while(off < ctx->size && CH(off) == CH(beg))
         off++;
@@ -6809,7 +6857,9 @@ md_analyze_line(MD_CTX* ctx, OFF beg, OFF* p_end,
 
         /* Check whether we are starting code fence. */
         if(line->indent < ctx->code_indent_offset  &&
-                off < ctx->size  &&  ISANYOF2(off, _T('`'), _T('~')))
+                off < ctx->size  &&
+                (ISANYOF2(off, _T('`'), _T('~'))  ||
+                 ((ctx->parser.flags & MD_FLAG_LATEXMATHBLOCKS)  &&  CH(off) == _T('$'))))
         {
             if(md_is_opening_code_fence(ctx, off, &off)) {
                 line->type = MD_LINE_FENCEDCODE;

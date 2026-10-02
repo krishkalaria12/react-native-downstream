@@ -33,6 +33,7 @@ export const TurboModuleRegistry: {
 } = {
   get: vi.fn(() => null),
   getEnforcing: vi.fn(() => ({
+    mathAvailable: () => false,
     create: vi.fn(),
     append: vi.fn(),
     reset: vi.fn(),

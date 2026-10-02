@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "FenceMeta.h"
+#include "math/MathLayout.h"
 
 namespace downstream {
 
@@ -28,6 +29,8 @@ enum class BlockKind : uint8_t {
   HtmlBlock = 3,
   ThematicBreak = 4,
   TableRow = 5,
+  MathBlock = 6,
+  Image = 7,
 };
 
 enum class ContainerKind : uint8_t {
@@ -65,6 +68,7 @@ constexpr uint32_t Code = 1u << 3;
 constexpr uint32_t Link = 1u << 4;
 constexpr uint32_t ImageAlt = 1u << 5;
 constexpr uint32_t FootnoteRef = 1u << 6;
+constexpr uint32_t Math = 1u << 7;
 } // namespace InlineStyle
 
 /// A maximal run of block text sharing one style set. Offsets are UTF-16
@@ -130,6 +134,95 @@ struct TableCell {
   CellAlign align{CellAlign::Default};
 };
 
+/**
+ * Which delimiters a formula was written with.
+ *
+ * The builder needs this rather than the flag that produced it, because two
+ * forms the parser folds onto the same span are drawn differently: `$$x$$` in a
+ * sentence is text style, and `\(` was rewritten to `$$` only so md4c would
+ * recognize it, so the original bytes are what say which it was.
+ */
+enum class MathDelimiter : uint8_t {
+  /// `$…$`, which is only math when `singleDollarTextMath` is on.
+  Dollar = 0,
+  DoubleDollar,
+  /// `\(…\)`.
+  Paren,
+  /// `\[…\]`.
+  Bracket,
+  /// A `$$` line that opened a fence.
+  Fence,
+  /// A ```` ```math ```` fence.
+  MathFence,
+};
+
+/**
+ * One formula.
+ *
+ * Inline math covers its literal text in `Block::text`, delimiters included, so
+ * a fallback, a copy, and the display a reader had before math existed are all
+ * the same string and every offset, link range, and table cell boundary is
+ * unchanged. A platform decides at draw time whether the run is typeset or
+ * literal, so one document serves both without the parse knowing the answer.
+ */
+struct MathSpan {
+  /// UTF-16 into `Block::text`: the literal, delimiters included.
+  uint32_t start{0};
+  uint32_t end{0};
+  /// The TeX between the delimiters, UTF-8, with newlines as written.
+  std::string tex;
+  /// Display style: a math block, `\[…\]`, and a promoted lone `$$…$$`.
+  bool display{false};
+  MathDelimiter delimiter{MathDelimiter::DoubleDollar};
+  /// Null until a layout pass fills it in, and when the formula failed. An
+  /// inline span carries its layout through the document rather than through
+  /// props, so a formula that has been laid out once is not laid out again.
+  MathLayout::Handle layout;
+  /// The math engine's message when the formula failed. Empty otherwise, and
+  /// empty for a formula that has not been laid out yet, so "not laid out" and
+  /// "laid out and fine" are not confused with "failed".
+  std::string error;
+
+  /**
+   * Identity for a committed block.
+   *
+   * `layout` and `error` are excluded on purpose: they are filled in after the
+   * block is built, and a block whose formula is the same has the same identity
+   * whether or not a pass has run against it yet. The committed-segment cache
+   * keys on identity, so a layout that changed identity would rebuild every
+   * later snapshot's rendering.
+   */
+  bool operator==(const MathSpan &other) const {
+    return start == other.start && end == other.end && tex == other.tex && display == other.display &&
+        delimiter == other.delimiter;
+  }
+};
+
+/**
+ * An image.
+ *
+ * Recorded for every image, loadable or not, so a run's alt text can name the
+ * image it belongs to and a failed or blocked image has a record to fall back
+ * from. `loadable` is a property of the URL alone: the prefix list is a view
+ * prop, so the document is the same whatever an app is willing to fetch, and
+ * the policy is applied where the box is decided.
+ */
+struct Image {
+  /// The destination, entity-decoded, UTF-8.
+  std::string url;
+  /// Plain alt text, as written.
+  std::u16string alt;
+  /// The optional title, which is never drawn.
+  std::string title;
+  /// The `![…](…)` occurrence in the source, like a link's.
+  SourceRange range;
+  /// `isLoadableImageUrl(url)`: HTTPS, complete, with a host and no control
+  /// characters or spaces.
+  bool loadable{false};
+  /// The enclosing link for `[![a](img)](href)`, or -1.
+  int32_t link{-1};
+};
+
 /// A leaf block: the unit of text layout. Container blocks (quotes, lists)
 /// are flattened into each leaf's container path.
 struct Block {
@@ -169,6 +262,16 @@ struct Block {
   /// True when highlighting finished or deliberately skipped this exact text.
   /// A later full parse may reuse its tokens; a budget-cut pass must retry.
   bool highlightComplete{false};
+  /// Paragraph, heading, table row: the inline formulas, sorted by `start`.
+  /// A MathBlock holds exactly one, display style, covering the whole text.
+  ///
+  /// Sorted and non-overlapping, as runs are, so a draw pass walks the block's
+  /// text once and never has to test every formula against every character.
+  std::vector<MathSpan> math;
+  /// Image blocks only: indexes into `Document::images`, in source order.
+  /// Several images in one paragraph stack vertically rather than sharing a row,
+  /// which is what an image-only paragraph becomes.
+  std::vector<uint32_t> images;
 };
 
 /// An actionable link. Links that fail the URL policy are plain text and are
@@ -268,6 +371,11 @@ struct Document {
   uint64_t id{0};
   SharedList<Block> blocks;
   SharedList<Link> links;
+  /// Every image the document's blocks name, indexed by `Block::images`. A
+  /// separate list rather than a field on the block because an image belongs to
+  /// the document: two blocks cannot name the same image, and a linked image's
+  /// link is a document-level record like any other.
+  SharedList<Image> images;
   /// Number of leading blocks that no later input can change. A control, and
   /// text selection, turn on once the block they belong to is inside this
   /// prefix, so a finished block is usable while the rest still streams.
