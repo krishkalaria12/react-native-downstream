@@ -13,6 +13,14 @@
 #import <string>
 #import <vector>
 
+@interface DSImageLoadResult ()
+- (instancetype)initWithStatus:(DSImageLoadStatus)status
+                      response:(nullable NSURLResponse *)response
+                          data:(nullable NSData *)data
+                     pixelSize:(CGSize)pixelSize
+                      mimeType:(NSString *)mimeType;
+@end
+
 namespace {
 
 /// The contract's cap. Four, because a phone's radios and a reader's patience
@@ -44,6 +52,8 @@ std::string keyFor(NSString *url, CGSize size) {
 
 /// One request, shared by every view that wants this URL at this size.
 struct Request {
+  /// What the request is filed under in `live`, which is the URL and its size.
+  std::string key;
   std::string url;
   CGSize size{0, 0};
   CGFloat scale{1};
@@ -52,6 +62,10 @@ struct Request {
   /// views rather than a count of requests.
   std::vector<std::function<void(DSImageLoad *, DSImageLoadResult *)>> callbacks;
   RCTImageLoader *loader = nullptr;
+  /// Set once the platform request is started, which is what counts against
+  /// the cap; a request still waiting for a slot holds none.
+  bool started = false;
+  RCTImageLoaderCancellationBlock cancel = nil;
   /// Bumped when every view lets go, so a completion already queued for this
   /// request is not delivered to a view that has since stopped wanting it.
   size_t generation = 0;
@@ -67,6 +81,8 @@ struct Store {
   /// Requests waiting for a slot, oldest first, so the first view to ask is the
   /// first served.
   std::list<std::string> queued;
+  /// Platform requests in flight, which is what the cap limits.
+  size_t started = 0;
   size_t generation = 1;
 };
 
@@ -118,6 +134,17 @@ DSImageLoadResult *failureResult(void) {
                                            mimeType:@""];
 }
 
+/// Gives back a started request's slot, and returns the platform's cancel for it,
+/// or nil for a request that was never started. Called with the lock held.
+RCTImageLoaderCancellationBlock releaseSlot(Request &request) {
+  if (!request.started) {
+    return nil;
+  }
+  request.started = false;
+  --store().started;
+  return request.cancel;
+}
+
 /// Starts as many queued requests as the cap allows. Called with the lock NOT
 /// held, because starting a request can call back synchronously on a test double.
 void drainQueue(void);
@@ -126,7 +153,7 @@ void deliver(const std::shared_ptr<Request> &request, DSImageLoadResult *result)
   std::vector<std::function<void(DSImageLoad *, DSImageLoadResult *)>> callbacks;
   {
     std::lock_guard<std::mutex> lock(store().mutex);
-    const auto found = store().live.find(request->url);
+    const auto found = store().live.find(request->key);
     if (found == store().live.end() || found->second != request ||
         found->second->generation != request->generation) {
       // Every view let go while the result was in flight, which is a
@@ -135,8 +162,7 @@ void deliver(const std::shared_ptr<Request> &request, DSImageLoadResult *result)
     }
     callbacks = request->callbacks;
     store().live.erase(found);
-    const std::string key = request->url;
-    store().queued.remove(key);
+    releaseSlot(*request);
   }
   // The platform calls back on its own queue and a view draws on the main one,
   // so this hop is the one that has to be explicit.
@@ -154,7 +180,7 @@ void drainQueue(void) {
     RCTImageLoader *loader = nil;
     {
       std::lock_guard<std::mutex> lock(store().mutex);
-      if (store().live.size() >= kMaxConcurrentLoads || store().queued.empty()) {
+      if (store().started >= kMaxConcurrentLoads || store().queued.empty()) {
         return;
       }
       const std::string key = store().queued.front();
@@ -167,9 +193,11 @@ void drainQueue(void) {
       }
       request = found->second;
       loader = request->loader;
-    }
-    if (loader == nil || request->callbacks.empty()) {
-      continue;
+      if (loader == nil || request->callbacks.empty()) {
+        continue;
+      }
+      request->started = true;
+      ++store().started;
     }
     NSURL *url = [NSURL URLWithString:[NSString stringWithUTF8String:request->url.c_str()]];
     if (url == nil) {
@@ -180,8 +208,7 @@ void drainQueue(void) {
     // phone-sized bitmap. A GIF shows its first frame and an SVG fails, because
     // neither pipeline decodes one and a formula of failed frames is not a
     // picture.
-    RCTImageURISource *source =
-        [[RCTImageURISource alloc] initWithURL:url size:request->size scale:request->scale];
+    NSURLRequest *source = [NSURLRequest requestWithURL:url];
     const std::shared_ptr<Request> held = request;
     // The full overload, because there is no shorter one on the loader's protocol:
     // `size:scale:resizeMode:` alone is a `UIImageView` category method, not an
@@ -193,18 +220,25 @@ void drainQueue(void) {
     // `RCTResizeModeCenter` rather than `Cover`: the box was already fitted to the
     // image's own proportions by `imageBox`, so letting the loader cover this box
     // would crop a picture to a rectangle it was never measured against.
-    [loader loadImageWithURLRequest:source
-                               size:request->size
-                              scale:request->scale
-                            clipped:NO
-                          resizeMode:RCTResizeModeCenter
-                       progressBlock:nil
-                    partialLoadBlock:nil
-                     completionBlock:^(NSError *error, UIImage *image) {
-                       deliver(held, error != nil || image == nil
-                                            ? failureResult()
-                                            : resultFor(nil, image));
-                     }];
+    RCTImageLoaderCancellationBlock cancel =
+        [loader loadImageWithURLRequest:source
+                                   size:request->size
+                                  scale:request->scale
+                                clipped:NO
+                             resizeMode:RCTResizeModeCenter
+                          progressBlock:nil
+                       partialLoadBlock:nil
+                        completionBlock:^(NSError *error, UIImage *image) {
+                          deliver(held, error != nil || image == nil ? failureResult() : resultFor(nil, image));
+                        }];
+    // Held so a cancel can stop the platform's request too. A load that already
+    // finished released its slot, and has nothing left to cancel.
+    {
+      std::lock_guard<std::mutex> lock(store().mutex);
+      if (request->started) {
+        request->cancel = cancel;
+      }
+    }
   }
 }
 
@@ -291,8 +325,9 @@ void DSDownloadImageBytes(NSURL *url, void (^completion)(NSData *, NSString *)) 
     return nil;
   }
 
-  const NSString *absolute = url.absoluteString ?: @"";
+  NSString *absolute = url.absoluteString ?: @"";
   const std::string key = keyFor(absolute, size);
+  void (^callback)(DSImageLoad *, DSImageLoadResult *) = [completion copy];
   DSImageLoad *handle = [[DSImageLoad alloc] initWithURL:url size:size];
   {
     std::lock_guard<std::mutex> lock(store().mutex);
@@ -300,16 +335,17 @@ void DSDownloadImageBytes(NSURL *url, void (^completion)(NSData *, NSString *)) 
     if (found != store().live.end()) {
       // Deduplicated: a second message showing the same chart shares the first
       // request rather than starting a second one.
-      found->second->callbacks.push_back([completion copy]);
+      found->second->callbacks.push_back(callback);
       return handle;
     }
     auto request = std::make_shared<Request>();
-    request->url = key;
+    request->key = key;
+    request->url = absolute.UTF8String ?: "";
     request->size = size;
     request->scale = scale;
     request->loader = loader;
     request->generation = store().generation;
-    request->callbacks.push_back([completion copy]);
+    request->callbacks.push_back(callback);
     store().live[key] = request;
     store().queued.push_back(key);
   }
@@ -322,6 +358,7 @@ void DSDownloadImageBytes(NSURL *url, void (^completion)(NSData *, NSString *)) 
     return;
   }
   const std::string key = keyFor(load.url.absoluteString ?: @"", load.requestedSize);
+  RCTImageLoaderCancellationBlock cancel = nil;
   {
     std::lock_guard<std::mutex> lock(store().mutex);
     const auto found = store().live.find(key);
@@ -339,8 +376,12 @@ void DSDownloadImageBytes(NSURL *url, void (^completion)(NSData *, NSString *)) 
     // The last one let go, so the request is dropped and its generation bumped so
     // a completion already queued for it reaches nobody.
     found->second->generation = ++store().generation;
+    cancel = releaseSlot(*found->second);
     store().live.erase(found);
     store().queued.remove(key);
+  }
+  if (cancel != nil) {
+    cancel();
   }
   // A freed slot belongs to whoever has been waiting longest.
   drainQueue();
