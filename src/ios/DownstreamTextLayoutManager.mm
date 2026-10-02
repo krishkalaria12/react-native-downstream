@@ -63,10 +63,13 @@ static void *DSResolveReactImageLoader() {
   if (!loader.has_value() || !loader.value()) {
     return nullptr;
   }
-  // Cast to the registry's opaque handle: the engine never names an Objective-C
-  // class, and the value it hands back is only ever cast again by this platform's
-  // own loader, which is the only code that knows what it is.
-  return (void *)unwrapManagedObject(loader.value());
+  // A bridged cast to the registry's opaque handle. `__bridge` and not
+  // `__bridge_retained`: the context container owns this loader and keeps it alive,
+  // and the registry only borrows it for the duration of one load, so taking
+  // ownership here would either leak or over-release. The engine never names an
+  // Objective-C class, and the value comes back to this platform's own loader,
+  // which is the only code that knows what it is.
+  return (__bridge void *)unwrapManagedObject(loader.value());
 }
 
 void DownstreamTextLayoutManager::installPlatformServices(
