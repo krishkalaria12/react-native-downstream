@@ -21,6 +21,12 @@ file(GLOB LIB_HIGHLIGHT_SRCS CONFIGURE_DEPENDS
   ${LIB_CPP_DIR}/highlight/*.cpp)
 file(GLOB LIB_THEME_SRCS CONFIGURE_DEPENDS
   ${LIB_CPP_DIR}/theme/*.cpp)
+# Math is its own directory rather than a subdirectory of `downstream`, so it needs
+# its own glob. Omitting it does not fail the configure step: the library links and
+# then fails on the first undefined `downstream::math*` symbol, which reads like a
+# platform problem rather than a missing source.
+file(GLOB LIB_MATH_SRCS CONFIGURE_DEPENDS
+  ${LIB_CPP_DIR}/math/*.cpp)
 file(GLOB LIB_LEXILLA_SRCS CONFIGURE_DEPENDS
   ${LIB_CPP_DIR}/lexilla/lexers/*.cxx
   ${LIB_CPP_DIR}/lexilla/lexlib/*.cxx)
@@ -73,6 +79,7 @@ add_library(${LIB_TARGET_NAME} OBJECT
   ${LIB_CODEGEN_SRCS}
   ${LIB_ENGINE_SRCS}
   ${LIB_THEME_SRCS}
+  ${LIB_MATH_SRCS}
   ${LIB_JNI_SRCS})
 
 # The local ComponentDescriptors.h must shadow the generated one.
@@ -87,6 +94,7 @@ target_include_directories(${LIB_TARGET_NAME} PUBLIC
   ${LIB_CPP_DIR}/remend
   ${LIB_CPP_DIR}/highlight
   ${LIB_CPP_DIR}/theme
+  ${LIB_CPP_DIR}/math
   ${LIB_GENERATED_JNI_DIR}
   ${LIB_GENERATED_COMPONENTS_DIR})
 

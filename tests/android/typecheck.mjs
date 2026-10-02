@@ -344,6 +344,51 @@ import java.lang.annotation.*;
     '-DScintilla=downstream_scintilla',
     '-std=c++20',
   ];
+  // Every directory under `src/cpp` has to be one both native builds compile and
+  // can find headers in. A directory added to the engine and left out of the build
+  // files does not fail any configure step: the library links and then fails on the
+  // first undefined symbol, which reads like a platform problem rather than a
+  // missing source. Comparing the two lists is what makes that a one-line failure
+  // here instead.
+  //
+  // `lexilla`, `md4c` and `tests` are excluded: the first two are vendored and built
+  // by their own rules, and the third is not shipped at all.
+  const cmake = readFileSync(join(jniSources, 'CMakeLists.txt'), 'utf8');
+  const podspec = readFileSync(join(repo, 'Downstream.podspec'), 'utf8');
+  // The literal text CMake uses, written with concatenation so a template literal
+  // does not try to interpolate it.
+  const cmakeDir = '$' + '{LIB_CPP_DIR}';
+  const excluded = ['lexilla', 'md4c', 'tests'];
+  const engineDirs = readdirSync(cpp, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !excluded.includes(entry.name))
+    .map((entry) => entry.name);
+  const missing = [];
+  for (const dir of engineDirs) {
+    if (!cmake.includes(cmakeDir + '/' + dir + '/*.cpp')) {
+      missing.push('CMakeLists.txt does not compile src/cpp/' + dir);
+    }
+    if (!podspec.includes('src/cpp/' + dir + '/*')) {
+      missing.push('Downstream.podspec does not ship src/cpp/' + dir);
+    }
+    // A header spelled without its directory, the way
+    // `downstream/PreparedDocument.cpp` includes `MathBlocks.h`, needs that
+    // directory on the search path rather than only its parent.
+    if (!cmake.includes(cmakeDir + '/' + dir + '\n') && !cmake.includes(cmakeDir + '/' + dir + ' ')) {
+      missing.push('CMakeLists.txt does not put src/cpp/' + dir + ' on the include path');
+    }
+    if (!podspec.includes('src/cpp/' + dir + '\\"')) {
+      missing.push('Downstream.podspec does not put src/cpp/' + dir + ' on the include path');
+    }
+  }
+  if (missing.length > 0) {
+    console.log('FAIL engine directories are not all built');
+    for (const line of missing) {
+      console.log('  ' + line);
+    }
+    process.exit(1);
+  }
+  console.log('ok engine directories (' + engineDirs.length + ') are built on both platforms');
+
   for (const source of listFiles(jniSources, '.cpp')) {
     if (
       !run(
