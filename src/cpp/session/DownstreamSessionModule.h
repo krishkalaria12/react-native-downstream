@@ -31,7 +31,16 @@ public:
   explicit DownstreamSessionModule(std::shared_ptr<CallInvoker> jsInvoker);
   ~DownstreamSessionModule() override;
 
-  void create(jsi::Runtime &rt, std::string sessionId, std::string mode);
+  /**
+   * Starts a session.
+   *
+   * `mathFlags` is the `mathFlags` prop from `src/math.ts`, carried unchanged so
+   * one number crosses the bridge rather than a set of booleans that JavaScript
+   * would have to keep in step with the native bits. Applied by a separate
+   * `setMath` below rather than here, so this method has no reason to know what
+   * the bits mean.
+   */
+  void create(jsi::Runtime &rt, std::string sessionId, std::string mode, double mathFlags);
   void append(jsi::Runtime &rt, std::string sessionId, std::string chunk, double generation, double sequence);
   void reset(jsi::Runtime &rt, std::string sessionId, std::string source, double generation);
   void finish(jsi::Runtime &rt, std::string sessionId, double generation, double sequence);

@@ -45,6 +45,16 @@ public:
   /// the next pass, which this queues, so it applies even when no new input has
   /// arrived. Returns false when the session does not exist.
   static bool setPreview(const std::string &id, remend::PreviewOptions options);
+  /**
+   * Replaces the delimiters the session's parse recognizes. Takes effect on the
+   * next pass, which this queues.
+   *
+   * Set once, right after `create`, rather than as an argument to it: the session
+   * already exists by the time any input can arrive, so a separate call has the
+   * same guarantee and one less thing the create path has to get right. Returns
+   * false when the session does not exist.
+   */
+  static bool setMath(const std::string &id, MathOptions math);
 };
 
 } // namespace downstream
