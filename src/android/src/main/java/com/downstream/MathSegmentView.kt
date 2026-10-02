@@ -164,6 +164,17 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
     glyphs.segment = null
   }
 
+  override fun onAttachedToWindow() {
+    super.onAttachedToWindow()
+    // A view taken out of the window and put back, as a screen that is hidden and
+    // shown again does, keeps its segment; `setSegment` returns early for the same
+    // one, so the glyphs are handed back here.
+    val current = segment ?: return
+    if (current.resolved && current.displayList != null) {
+      glyphs.segment = current
+    }
+  }
+
   init {
     addView(background)
     addView(literal)
