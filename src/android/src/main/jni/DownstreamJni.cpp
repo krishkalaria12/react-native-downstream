@@ -2,7 +2,9 @@
 
 #include "DocumentRegistry.h"
 #include "Export.h"
+#include "Reveal.h"
 #include "SegmentPlan.h"
+#include "SessionRegistry.h"
 #include "SessionTrace.h"
 #include "Unicode.h"
 #include "WorkerPool.h"
@@ -12,6 +14,9 @@
 
 #include <jni.h>
 
+#include <algorithm>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -92,6 +97,217 @@ Java_com_downstream_DownstreamNative_nativeTraceDocument(JNIEnv *env, jclass /*c
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_downstream_DownstreamNative_nativeIsTracingDocument(JNIEnv * /*env*/, jclass /*clazz*/, jlong id) {
   return downstream::SessionTrace::enabledDocument(static_cast<uint64_t>(id)) ? JNI_TRUE : JNI_FALSE;
+}
+
+namespace {
+
+// The one live tracker, in a slot the JNI layer owns.
+//
+// Android holds documents and themes through the engine's own registries, and a
+// tracker is per view rather than per document or per session, so there is
+// nothing to intern it into. One slot with a compare-and-swap is what keeps two
+// views of the same controlled source from sharing each other's "already shown",
+// which is the one piece of state a reveal tracker must never share.
+std::mutex gRevealMutex;
+std::vector<std::unique_ptr<RevealTracker>> gReveals;
+
+RevealTracker *trackerFor(jlong handle) {
+  if (handle < 0 || static_cast<size_t>(handle) >= gReveals.size()) {
+    return nullptr;
+  }
+  return gReveals[static_cast<size_t>(handle)].get();
+}
+
+/// The options the platform's JavaScript layer resolved, read from the flat array
+/// the shadow node already sends. The array is `[effect, split, duration, stagger,
+/// maxBacklog, x1, y1, x2, y2, scale]`, so one field on the props carries the
+/// whole timeline and the animator scale travels beside it rather than needing
+/// its own prop.
+RevealOptions optionsFromArray(JNIEnv *env, jdoubleArray timing) {
+  RevealOptions options;
+  if (timing == nullptr) {
+    return options;
+  }
+  const jsize count = env->GetArrayLength(timing);
+  if (count < 9) {
+    return options;
+  }
+  std::vector<double> values(static_cast<size_t>(count));
+  env->GetDoubleArrayRegion(timing, 0, count, values.data());
+  options.effect = static_cast<RevealEffect>(static_cast<uint32_t>(values[0]));
+  options.split = static_cast<RevealSplit>(static_cast<uint32_t>(values[1]));
+  // A scale of 0 is the platform saying animations are off, which the plan turns
+  // into no fade at all rather than a fade with no duration.
+  const double scale = values[9];
+  if (scale <= 0) {
+    options.effect = RevealEffect::None;
+    return options;
+  }
+  const auto scaled = [scale](double value) { return static_cast<float>(value * scale); };
+  options.durationMs = scaled(values[2]);
+  options.staggerMs = scaled(values[3]);
+  options.maxBacklogMs = scaled(values[4]);
+  const auto clamp = [](double value) { return static_cast<float>(std::min(1.0, std::max(0.0, value))); };
+  options.easing = {clamp(values[5]), static_cast<float>(values[6]), clamp(values[7]),
+                    static_cast<float>(values[8])};
+  return options;
+}
+
+} // namespace
+
+/// A tracker for one view, as a handle into this layer's table.
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_downstream_DownstreamNative_nativeRevealCreate(JNIEnv * /*env*/, jclass /*clazz*/) {
+  std::lock_guard<std::mutex> lock(gRevealMutex);
+  for (size_t index = 0; index < gReveals.size(); index++) {
+    if (!gReveals[index]) {
+      gReveals[index] = std::make_unique<RevealTracker>();
+      return static_cast<jlong>(index);
+    }
+  }
+  gReveals.push_back(std::make_unique<RevealTracker>());
+  return static_cast<jlong>(gReveals.size() - 1);
+}
+
+/// Releases one view's tracker. A recycled view calls this rather than clearing
+/// it, so the slot can be handed to the next view without growing the table.
+extern "C" JNIEXPORT void JNICALL
+Java_com_downstream_DownstreamNative_nativeRevealDispose(JNIEnv * /*env*/, jclass /*clazz*/, jlong handle) {
+  std::lock_guard<std::mutex> lock(gRevealMutex);
+  RevealTracker *tracker = trackerFor(handle);
+  if (tracker) {
+    tracker->clear();
+    gReveals[static_cast<size_t>(handle)].reset();
+  }
+}
+
+/// Starts a view's "already shown" from the session's own record, so a message
+/// scrolled back into view does not fade all of itself again. An empty `sessionId`
+/// seeds nothing, which is the controlled case: a fresh view fades its first
+/// non-empty document in full.
+extern "C" JNIEXPORT void JNICALL
+Java_com_downstream_DownstreamNative_nativeRevealSeed(JNIEnv *env,
+                                                       jclass /*clazz*/,
+                                                       jlong handle,
+                                                       jstring sessionId) {
+  if (sessionId == nullptr) {
+    return;
+  }
+  const char *id = env->GetStringUTFChars(sessionId, nullptr);
+  if (id == nullptr) {
+    return;
+  }
+  const std::string session(id);
+  env->ReleaseStringUTFChars(sessionId, id);
+  std::lock_guard<std::mutex> lock(gRevealMutex);
+  if (RevealTracker *tracker = trackerFor(handle)) {
+    tracker->seed(SessionRegistry::shown(session));
+  }
+}
+
+/// Aligns a newly applied document against the one this view last showed, and
+/// returns the units still fading as two parallel arrays: `[block, start, end]`
+/// per unit in `ranges`, and its start time in `starts`, both in the order the
+/// engine scheduled them. A `null` result means nothing is fading and the
+/// platform's ticker should not be running.
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_downstream_DownstreamNative_nativeRevealApply(JNIEnv *env,
+                                                       jclass /*clazz*/,
+                                                       jlong handle,
+                                                       jlong documentId,
+                                                       jdouble now,
+                                                       jdoubleArray timing) {
+  const DocumentHandle document = DocumentRegistry::find(static_cast<uint64_t>(documentId));
+  if (!document) {
+    return nullptr;
+  }
+  const RevealOptions options = optionsFromArray(env, timing);
+  std::lock_guard<std::mutex> lock(gRevealMutex);
+  RevealTracker *tracker = trackerFor(handle);
+  if (tracker == nullptr) {
+    return nullptr;
+  }
+  const std::vector<RevealUnit> &units = tracker->apply(document, now, options);
+  if (units.empty()) {
+    return nullptr;
+  }
+  // The record of what is on screen is the session's, not the tracker's alone, so
+  // another view of the same stream picks the fade up where this one left it.
+  std::vector<jlong> ranges;
+  std::vector<jdouble> starts;
+  ranges.reserve(units.size() * 3);
+  starts.reserve(units.size());
+  for (const RevealUnit &unit : units) {
+    ranges.insert(ranges.end(), {static_cast<jlong>(unit.block), static_cast<jlong>(unit.start),
+                                 static_cast<jlong>(unit.end)});
+    starts.push_back(unit.startAt);
+  }
+  jobjectArray result = env->NewObjectArray(2, env->FindClass("java/lang/Object"), nullptr);
+  jlongArray rangeArray = env->NewLongArray(static_cast<jsize>(ranges.size()));
+  env->SetLongArrayRegion(rangeArray, 0, static_cast<jsize>(ranges.size()), ranges.data());
+  jdoubleArray startArray = env->NewDoubleArray(static_cast<jsize>(starts.size()));
+  env->SetDoubleArrayRegion(startArray, 0, static_cast<jsize>(starts.size()), starts.data());
+  env->SetObjectArrayElement(result, 0, rangeArray);
+  env->SetObjectArrayElement(result, 1, startArray);
+  return result;
+}
+
+/// Records the document as shown without scheduling anything, and tells the
+/// session, so a view that is not animating still seeds the next one correctly.
+extern "C" JNIEXPORT void JNICALL
+Java_com_downstream_DownstreamNative_nativeRevealNoteShown(JNIEnv *env,
+                                                           jclass /*clazz*/,
+                                                           jlong handle,
+                                                           jlong documentId,
+                                                           jstring sessionId) {
+  const DocumentHandle document = DocumentRegistry::find(static_cast<uint64_t>(documentId));
+  if (!document) {
+    return;
+  }
+  std::string session;
+  if (sessionId != nullptr) {
+    const char *id = env->GetStringUTFChars(sessionId, nullptr);
+    if (id != nullptr) {
+      session.assign(id);
+      env->ReleaseStringUTFChars(sessionId, id);
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(gRevealMutex);
+    if (RevealTracker *tracker = trackerFor(handle)) {
+      tracker->seed(document);
+    }
+  }
+  // The session's own lock is taken after this layer's rather than inside it, so
+  // the two can never be held in the other order.
+  if (!session.empty()) {
+    SessionRegistry::noteShown(session, document);
+  }
+}
+
+/// Drops the units that have finished, and answers whether any are left, which is
+/// what the platform's ticker asks each frame.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_downstream_DownstreamNative_nativeRevealPrune(JNIEnv *env,
+                                                       jclass /*clazz*/,
+                                                       jlong handle,
+                                                       jdouble now,
+                                                       jdoubleArray timing) {
+  std::lock_guard<std::mutex> lock(gRevealMutex);
+  RevealTracker *tracker = trackerFor(handle);
+  if (tracker == nullptr) {
+    return JNI_FALSE;
+  }
+  return tracker->prune(now, optionsFromArray(env, timing)) ? JNI_TRUE : JNI_FALSE;
+}
+
+/// Forgets what was shown, for a new generation, a rebind or a recycled view.
+extern "C" JNIEXPORT void JNICALL
+Java_com_downstream_DownstreamNative_nativeRevealClear(JNIEnv * /*env*/, jclass /*clazz*/, jlong handle) {
+  std::lock_guard<std::mutex> lock(gRevealMutex);
+  if (RevealTracker *tracker = trackerFor(handle)) {
+    tracker->clear();
+  }
 }
 
 // Interns a theme from the arrays the shadow node built, and returns its id.

@@ -1,6 +1,7 @@
 package com.downstream
 
 import android.content.Context
+import android.os.Build
 import com.facebook.proguard.annotations.DoNotStrip
 import com.facebook.react.uimanager.PixelUtil
 import java.lang.ref.WeakReference
@@ -370,6 +371,90 @@ internal object DownstreamNative {
   fun fontScaleCap(themeId: Long, platformScale: Float): Float =
     nativeFontScaleCap(themeId, platformScale.toDouble()).toFloat()
 
+  // ----------------------------------------------------------------- the fade
+
+  /**
+   * A tracker for one view, as a handle into the JNI layer's table.
+   *
+   * A tracker is per view rather than per document or per session, because what it
+   * holds is the document *this* view last showed. Two views of the same
+   * controlled source therefore each fade their own copy, which is what a
+   * controlled view has always done on both platforms.
+   */
+  fun revealCreate(): Long = nativeRevealCreate()
+
+  /** Releases one view's tracker, so a recycled view hands the slot on. */
+  fun revealDispose(handle: Long) = nativeRevealDispose(handle)
+
+  /**
+   * Starts the tracker from what a session has already put on screen, so a message
+   * scrolled back into view does not fade all of itself again. A null or empty
+   * [sessionId] seeds nothing, which is the controlled case.
+   */
+  fun revealSeed(handle: Long, sessionId: String?) =
+    nativeRevealSeed(handle, sessionId ?: "")
+
+  /**
+   * Aligns a newly applied document against the one this view last showed, and
+   * answers `[ranges, starts]`: `[block, start, end]` per unit and each unit's
+   * start time, in the order the engine scheduled them. Null means nothing is
+   * fading.
+   */
+  fun revealApply(
+    handle: Long,
+    documentId: Long,
+    now: Double,
+    timing: DoubleArray,
+  ): Array<Any>? {
+    val result = nativeRevealApply(handle, documentId, now, timing) ?: return null
+    return arrayOf(
+      result.getOrNull(0) as? LongArray ?: LongArray(0),
+      result.getOrNull(1) as? DoubleArray ?: DoubleArray(0),
+    )
+  }
+
+  /**
+   * Records a document as shown without scheduling anything.
+   *
+   * This is the not-animating case, and it is what stops a fade from being turned
+   * on later over a document that has been on screen all along.
+   */
+  fun revealNoteShown(handle: Long, documentId: Long, sessionId: String?) =
+    nativeRevealNoteShown(handle, documentId, sessionId ?: "")
+
+  /**
+   * Drops the units that have finished, and answers whether any are left, which is
+   * what the tick asks each frame.
+   */
+  fun revealPrune(handle: Long, now: Double, timing: DoubleArray): Boolean =
+    nativeRevealPrune(handle, now, timing)
+
+  /** Forgets what was shown, for a new generation, a rebind or a recycled view. */
+  fun revealClear(handle: Long) = nativeRevealClear(handle)
+
+  /**
+   * The platform's animator duration scale.
+   *
+   * Read on the UI thread once per apply rather than observed: it changes only
+   * from Settings, and a fade already running is finished when it does. Zero means
+   * the reader has turned animations off, which the plan turns into no fade at
+   * all rather than a fade with no duration.
+   */
+  fun animatorDurationScale(context: android.content.Context): Float {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !android.animation.ValueAnimator.areAnimatorsEnabled()) {
+      return 0f
+    }
+    return try {
+      android.provider.Settings.Global.getFloat(
+        context.contentResolver,
+        android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+        1f,
+      )
+    } catch (error: android.provider.Settings.SettingNotFoundException) {
+      1f
+    }
+  }
+
   private const val PLAN_STRIDE = 6
 
   // Implemented in DownstreamJni.cpp, which links into libappmodules.so.
@@ -442,6 +527,29 @@ internal object DownstreamNative {
 
   @JvmStatic
   private external fun nativeFontScaleCap(themeId: Long, platformScale: Double): Double
+
+  @JvmStatic
+  private external fun nativeRevealCreate(): Long
+
+  @JvmStatic
+  private external fun nativeRevealDispose(handle: Long)
+
+  @JvmStatic
+  private external fun nativeRevealSeed(handle: Long, sessionId: String)
+
+  @JvmStatic
+  private external fun nativeRevealApply(
+    handle: Long, documentId: Long, now: Double, timing: DoubleArray,
+  ): Array<Any>?
+
+  @JvmStatic
+  private external fun nativeRevealNoteShown(handle: Long, documentId: Long, sessionId: String)
+
+  @JvmStatic
+  private external fun nativeRevealPrune(handle: Long, now: Double, timing: DoubleArray): Boolean
+
+  @JvmStatic
+  private external fun nativeRevealClear(handle: Long)
 
   @JvmStatic
   private external fun nativeInstallPreparer()
