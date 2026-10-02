@@ -66,6 +66,8 @@ set_target_properties(downstream_lexilla PROPERTIES
 # engine to keep the namespace renames out of every other source.
 add_library(downstream_highlight STATIC ${LIB_HIGHLIGHT_SRCS})
 target_include_directories(downstream_highlight PUBLIC
+  # The engine's root, because `Document.h` spells `math/MathLayout.h`.
+  ${LIB_CPP_DIR}
   ${LIB_CPP_DIR}/downstream
   ${LIB_CPP_DIR}/highlight)
 target_compile_definitions(downstream_highlight PUBLIC ${LEXILLA_SYMBOL_PREFIXES})
