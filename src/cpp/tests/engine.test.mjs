@@ -72,6 +72,8 @@ before(async () => {
     ['test_highlight', engine],
     ['dump_tokens', [downstream('Unicode.cpp')]],
     ['test_theme', theme],
+    ['test_images', [downstream('ImageLayout.cpp')]],
+    ['test_math', []],
   ];
   for (const [name, dependencies] of executables) {
     targets[name] = [
@@ -803,6 +805,25 @@ describe('themes', () => {
   // through one platform's drawing.
   test('theme invariants', () => {
     execFileSync(binary('test_theme'), { timeout: 15_000, stdio: 'inherit' });
+  });
+});
+
+describe('images', () => {
+  // The box rule, the state rule, and the URL policy. Both platforms are held to
+  // this one table: `test_images` is the C++ side, and
+  // `tests/android/ImageLayoutCheck.kt` runs the same cases against the Kotlin
+  // mirror, so an image cannot be a different height on one platform.
+  test('image box, state, and URL policy', () => {
+    execFileSync(binary('test_images'), { timeout: 15_000, stdio: 'inherit' });
+  });
+});
+
+describe('math', () => {
+  // The sizing both platforms apply once a layout exists. `test_math` is the C++
+  // side, and `tests/android/MathLayoutCheck.kt` runs the same cases against the
+  // Kotlin mirror, so a formula cannot be a different height on one platform.
+  test('block and inline sizing', () => {
+    execFileSync(binary('test_math'), { timeout: 15_000, stdio: 'inherit' });
   });
 });
 
