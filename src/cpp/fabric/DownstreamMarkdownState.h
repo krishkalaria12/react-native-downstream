@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Caret.h"
 #include "CodeLayout.h"
 #include "Controls.h"
 #include "Document.h"
@@ -36,12 +37,14 @@ public:
   DownstreamMarkdownState() = default;
 
   DownstreamMarkdownState(downstream::DocumentHandle document, Float fontSizeMultiplier, uint32_t chrome = 0,
-                          downstream::CodeLayout code = {}, downstream::Theme::Handle theme = nullptr)
+                          downstream::CodeLayout code = {}, downstream::Theme::Handle theme = nullptr,
+                          downstream::PlacedCaret caret = {})
       : document(std::move(document)),
         fontSizeMultiplier(fontSizeMultiplier),
         chrome(chrome),
         code(std::move(code)),
-        theme(std::move(theme)) {}
+        theme(std::move(theme)),
+        caret(caret) {}
 
   downstream::DocumentHandle document;
   Float fontSizeMultiplier{1.0};
@@ -60,6 +63,11 @@ public:
   /// frame cannot mix sizes from one theme with drawing from another, the same
   /// way `chrome` does. Null means the default theme.
   downstream::Theme::Handle theme;
+  /// The caret the view draws, or that there is none. It is a height as much as
+  /// a mark: the placeholder sits in the measured text of the last segment, so
+  /// the shadow node measures with it and the view draws with it for the same
+  /// reason `chrome` does.
+  downstream::PlacedCaret caret;
 
   /// The theme to draw with, resolving null to the default so a platform never
   /// has to check.
@@ -111,7 +119,8 @@ public:
         fontSizeMultiplier(previous.fontSizeMultiplier),
         chrome(previous.chrome),
         code(previous.code),
-        theme(previous.theme) {
+        theme(previous.theme),
+        caret(previous.caret) {
     if (!data.isObject()) {
       return;
     }
@@ -133,6 +142,12 @@ public:
     if (auto value = data.get_ptr("expanded")) {
       code.choices.expanded = readOrdinals(*value);
     }
+    if (auto value = data.get_ptr("caretKind")) {
+      caret.kind = static_cast<downstream::CaretKind>(static_cast<int>(value->asDouble()));
+    }
+    if (auto value = data.get_ptr("caretPlace")) {
+      caret.place = static_cast<downstream::CaretPlace>(static_cast<int>(value->asDouble()));
+    }
   }
 
   /// Java resolves the document through the native registry by id rather than
@@ -148,6 +163,9 @@ public:
         "codeBlockWrap", code.props.wrap ? 1.0 : 0.0)("lineNumbers", code.props.lineNumbers ? 1.0 : 0.0)(
         "codeBlockMaxHeight", static_cast<double>(code.props.maxHeight))(
         "wrapToggles", writeOrdinals(code.choices.wrapToggles))("expanded", writeOrdinals(code.choices.expanded))(
+        // The caret's two small enums travel as numbers, so the whole state is
+        // still one type crossing JNI.
+        "caretKind", static_cast<double>(caret.kind))("caretPlace", static_cast<double>(caret.place))(
         // By id, as the document is: Java resolves the theme through the
         // registry rather than copying its values across JNI on every update.
         "themeId", static_cast<double>(themeId()));

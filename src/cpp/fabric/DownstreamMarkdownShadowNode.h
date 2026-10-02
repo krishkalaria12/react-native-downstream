@@ -93,6 +93,15 @@ private:
   /// lands in props a revision before the state that records it does.
   downstream::CodeLayout codeLayout(const DownstreamMarkdownState &state) const;
 
+  /// The caret this document draws, from the `caret` and `animating` props and
+  /// the document's own `streaming` flag.
+  ///
+  /// Resolved here rather than in each view because it is a height: the
+  /// placeholder is in the measured text of the last segment, so the node that
+  /// measures and the view that draws have to answer the same question, and an
+  /// own-line caret is a whole extra segment.
+  downstream::PlacedCaret caretFor(const downstream::DocumentHandle &document) const;
+
   std::shared_ptr<const DownstreamTextLayoutManager> layoutManager_;
   std::shared_ptr<ControlledSource> controlled_;
   /// Null for the default theme, which is what an app that passes neither prop
