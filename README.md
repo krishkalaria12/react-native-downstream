@@ -40,7 +40,7 @@ An open span renders as the literal text the writer sent, so a half-arrived `**b
 
 ```tsx
 const stream = createMarkdownStream({ preview: true });
-// Or one feature at a time: { preview: { emphasis: true, links: true } }
+// Or one feature at a time: { preview: { emphasis: true, links: true, math: true } }
 ```
 
 The pass only ever repairs the stream's unstable tail, and only when reparsing proves the repair changed nothing but the block it aimed at. It never touches `getSource()` or source ranges, and `finish()` drops it, so the settled document is always a parse of the bytes you appended; see [provisional styling](docs/streaming-semantics.md#provisional-styling).
@@ -52,6 +52,23 @@ Fenced code is colored by the language in its info string, on the same worker th
 ```
 
 `ts`, `tsx`, `js`, `java`, `c`, `cpp`, `cs`, `go`, `swift`, `kt`, `dart`, `scala`, `objc`, `py`, `sh`, `json`, `html`, `xml`, `css`, `sql`, `rs`, `yaml`, `toml`, `rb`, `lua`, `diff`, and `md` are colored; anything else renders plain, as it does in Streamdown. The palette follows GitHub's light and dark code themes and is the same on both platforms. A block with no language, an unknown language, and a block over 64 KiB of code stay plain, and a document with no fenced code never loads a lexer. Highlighting only sets colors, so selection, copy, and accessibility text are unchanged; see [the plan](docs/syntax-highlighting-plan.html) for how a streaming block stays cheap.
+
+### Images and math
+
+An image-only paragraph becomes a picture, fetched through the platform's own image pipeline so your HTTP stack, cache and URL handlers apply. A picture that has not arrived shows a placeholder, one that fails shows its alt text, and `allowedImagePrefixes` decides what may be fetched at all. A press on a picture reports `onImagePress`; the package opens nothing.
+
+```tsx
+<DownstreamMarkdown markdown={message} images allowedImagePrefixes={['https://cdn.example.com/']} />
+```
+
+Math is off by default, so a document without it parses exactly as it did before and every formula stays readable source. Turn it on for `$$…$$`, a `$$` line fence, a ` ```math ` fence, and — unlike Streamdown — `\(…\)` and `\[…\]`, which `math={{ brackets: false }}` turns back off:
+
+```tsx
+<DownstreamMarkdown markdown={message} math />
+<DownstreamMarkdown markdown={message} math={{ singleDollarTextMath: true }} />
+```
+
+Typesetting a formula needs an engine, which ships as the separate opt-in package. Without it a formula keeps its literal and delimiters — which is also what copy returns and what a screen reader reads — is drawn in the theme's error colour, and reports `onMathError`. A formula that is laid out keeps its last good layout while it streams, so it does not re-shape on every token. See [the plan](docs/math-and-images-plan.html) for the delimiter grammar and the engine's C ABI.
 
 ### Theming
 
@@ -221,6 +238,7 @@ pnpm lint && pnpm typecheck   # lint
 pnpm test                     # test
 pnpm test:native              # test-native: builds and tests the C++ engine
 pnpm test:kotlin              # test-kotlin: needs kotlinc (brew install kotlin)
+pnpm typecheck:android        # the Android source set and the JNI, without Gradle
 pnpm prepare                  # build-library
 pnpm example exec expo export --platform web   # build-web
 ```
@@ -257,6 +275,11 @@ pnpm example exec expo prebuild --platform android --no-install
 (cd example/android && ./gradlew :react-native-downstream:compileDebugKotlin \
   :app:externalNativeBuildDebug -PreactNativeArchitectures=x86_64)
 ```
+
+`typecheck:android` needs the Android SDK, an NDK, kotlinc, and a populated
+Gradle cache, and skips with a message when one is missing. It resolves
+`react-android` out of that cache and runs React Native's own codegen, so the view
+manager interface it checks against is the generated one.
 
 The Android build compiles C++ with `-Werror`, so a deprecation warning that iOS
 lets through fails here. `example/ios` and `example/android` are generated and
