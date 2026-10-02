@@ -83,6 +83,104 @@ bool isFenceLine(std::string_view line) {
       closesFence(line, line[start], 3);
 }
 
+/// Offset just past a line's blockquote markers and one list marker, or
+/// `afterIndent` when the line opens neither.
+///
+/// A fenced block nested in a quote or a list item is still a fenced block, so
+/// the fence scan has to see past the container that holds it. Only one marker is
+/// stripped per line, which is what the incremental parser's own fence scan does
+/// not need: it walks top-level fences only, and this rule is about the last
+/// block of a document, where nesting is shallow.
+size_t afterContainers(std::string_view line) {
+  size_t at = afterIndent(line);
+  if (at == kNoOffset) {
+    return kNoOffset;
+  }
+  // A quote marker may repeat, and each one may be followed by one space.
+  for (;;) {
+    if (at < line.size() && line[at] == '>') {
+      at++;
+      if (at < line.size() && line[at] == ' ') {
+        at++;
+      }
+      continue;
+    }
+    break;
+  }
+  // A bullet, or a number with a delimiter. Either needs a space after it, or it
+  // is ordinary text that happens to start with a dash.
+  size_t end = at;
+  if (end < line.size() && (line[end] == '-' || line[end] == '+' || line[end] == '*')) {
+    end++;
+  } else {
+    size_t digits = end;
+    while (digits < line.size() && digits - end < 9 && line[digits] >= '0' && line[digits] <= '9') {
+      digits++;
+    }
+    if (digits == end || digits >= line.size() || (line[digits] != '.' && line[digits] != ')')) {
+      return at;
+    }
+    end = digits + 1;
+  }
+  if (end >= line.size() || (line[end] != ' ' && line[end] != '\t')) {
+    return at;
+  }
+  while (end < line.size() && (line[end] == ' ' || line[end] == '\t')) {
+    end++;
+  }
+  return end;
+}
+
+/// True when this line closes a fence opened with `marker` repeated `length`
+/// times, looking past any container that holds it.
+bool closesNestedFence(std::string_view line, char marker, size_t length) {
+  const size_t start = afterContainers(line);
+  if (start == kNoOffset || start >= line.size() || line[start] != marker) {
+    return false;
+  }
+  size_t end = start;
+  while (end < line.size() && line[end] == marker) {
+    end++;
+  }
+  return end - start >= length && isBlankLine(line.substr(end));
+}
+
+bool endsInsideFence(std::string_view source) {
+  char marker = 0;
+  size_t length = 0;
+  for (size_t at = 0; at <= source.size();) {
+    const size_t newline = source.find('\n', at);
+    const size_t end = newline == kNoOffset ? source.size() : newline;
+    const std::string_view line = source.substr(at, end - at);
+    if (marker != 0) {
+      if (closesNestedFence(line, marker, length)) {
+        marker = 0;
+      }
+    } else {
+      const size_t start = afterContainers(line);
+      if (start != kNoOffset && start < line.size() && (line[start] == '`' || line[start] == '~')) {
+        size_t run = start;
+        while (run < line.size() && line[run] == line[start]) {
+          run++;
+        }
+        const std::string_view info = line.substr(run);
+        // Three markers at least, and a backtick fence takes no backtick in its
+        // info string, which is what keeps a fence line inside code from opening
+        // one.
+        if (run - start >= 3 && !(line[start] == '`' && info.find('`') != kNoOffset)) {
+          marker = line[start];
+          length = run - start;
+        }
+      }
+    }
+    if (newline == kNoOffset) {
+      break;
+    }
+    at = newline + 1;
+  }
+  return marker != 0;
+}
+
 size_t skipInlineDestination(std::string_view source, size_t open) {
   size_t depth = 0;
   char quote = 0;

@@ -142,6 +142,12 @@ struct Block {
   BlockKind kind{BlockKind::Paragraph};
   uint8_t headingLevel{0};
   bool tableHeader{false};
+  /// True when md4c ended this fenced block at the end of the input with no
+  /// closing fence after its last line. That is what makes it the block a
+  /// writer is still typing into, which is where a caret belongs and where a
+  /// further snapshot will append without reparsing. False for an indented code
+  /// block, which can also continue, and for a fence that closed.
+  bool fenceOpen{false};
   /// TableRow: unique per table, shared by all rows of one table.
   uint32_t table{0};
   BlockSpacing spacingBefore{BlockSpacing::Normal};
@@ -276,6 +282,16 @@ struct Document {
   /// "unchanged since the previous snapshot", and a controlled source has no
   /// identities at all even though every one of its blocks is final.
   uint32_t settledBlocks{0};
+
+  /// True while a stream is still arriving, which a session sets on every
+  /// snapshot it publishes before `finish()`.
+  ///
+  /// It is the only way an `isAnimating` prop reaches the native rendering: a
+  /// controlled document leaves it false, so a controlled view has to say so
+  /// itself, and a stream view works it out from the stream. Nothing about the
+  /// parse changes because of it, which is why a copy of the document is enough
+  /// and the block storage stays shared.
+  bool streaming{false};
 
   /// True when blocks [0, to) are all settled.
   bool isSettled(size_t to) const { return to <= settledBlocks; }
