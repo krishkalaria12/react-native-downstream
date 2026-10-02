@@ -11,6 +11,7 @@
 #include "theme/ThemeLayout.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 using namespace downstream;
@@ -362,14 +363,16 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
 @end
 
 @implementation DSTextSegment {
-  /// One lock and one cached layout per width, so asking for the height and the
-  /// used width of the same width costs one `NSLayoutManager` pass rather than
-  /// two. A code card asks for both.
+  /// Keep the unwrapped width and recent wrapped widths together, so toggling
+  /// wrap or measuring a second width does not discard the first layout.
+  struct Measurement {
+    CGFloat width;
+    CGFloat height;
+    CGFloat usedWidth;
+  };
   NSLock *_measurementLock;
-  CGFloat _measuredWidth;
-  CGFloat _measuredHeight;
-  CGFloat _measuredUsedWidth;
-  BOOL _hasMeasurement;
+  std::array<Measurement, 3> _measurements;
+  NSUInteger _measurementCount;
 }
 
 /// `inCard` is true for the one-block body of a code card: the card draws the
@@ -570,15 +573,23 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
     return;
   }
   [_measurementLock lock];
-  if (_hasMeasurement && _measuredWidth == width) {
-    if (height != nullptr) {
-      *height = _measuredHeight;
+  for (NSUInteger index = 0; index < _measurementCount; index++) {
+    if (_measurements[index].width == width) {
+      const Measurement cached = _measurements[index];
+      // Most recently used first. Three values bound both the memory and the
+      // lock-held work, even when a view is resized through many widths.
+      std::move_backward(_measurements.begin(), _measurements.begin() + index,
+                         _measurements.begin() + index + 1);
+      _measurements[0] = cached;
+      if (height != nullptr) {
+        *height = cached.height;
+      }
+      if (usedWidth != nullptr) {
+        *usedWidth = cached.usedWidth;
+      }
+      [_measurementLock unlock];
+      return;
     }
-    if (usedWidth != nullptr) {
-      *usedWidth = _measuredUsedWidth;
-    }
-    [_measurementLock unlock];
-    return;
   }
   [_measurementLock unlock];
 
@@ -590,10 +601,17 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   // the same, so both passes produce the same numbers, and the later write is
   // as good as the first; each caller answers from its own pass either way.
   [_measurementLock lock];
-  _measuredWidth = width;
-  _measuredHeight = measuredHeight;
-  _measuredUsedWidth = measuredUsedWidth;
-  _hasMeasurement = YES;
+  NSUInteger index = 0;
+  while (index < _measurementCount && _measurements[index].width != width) {
+    index++;
+  }
+  if (index == _measurementCount && _measurementCount < _measurements.size()) {
+    _measurementCount++;
+  }
+  index = std::min(index, _measurements.size() - 1);
+  std::move_backward(_measurements.begin(), _measurements.begin() + index,
+                     _measurements.begin() + index + 1);
+  _measurements[0] = {width, measuredHeight, measuredUsedWidth};
   [_measurementLock unlock];
 
   if (height != nullptr) {
@@ -650,7 +668,9 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 @property (nonatomic) std::vector<uint32_t> *ownedLineStarts;
 @end
 
-@implementation DSCodeSegment
+@implementation DSCodeSegment {
+  std::vector<uint32_t> _nonblankLineStarts;
+}
 
 + (instancetype)segmentWithDocument:(const Document &)document
                                index:(size_t)index
@@ -698,6 +718,12 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   segment.ownedLineStarts = new std::vector<uint32_t>(codeLineStarts(block.text));
   segment.lineStarts = segment.ownedLineStarts;
   segment.lineCount = static_cast<uint32_t>(segment.ownedLineStarts->size());
+  NSString *const codeText = segment.text.attributedString.string;
+  for (uint32_t offset : *segment.lineStarts) {
+    if (offset < codeText.length && [codeText characterAtIndex:offset] != '\n') {
+      segment->_nonblankLineStarts.push_back(offset);
+    }
+  }
   {
     // The code font at this scale, which is both the metric the gutter measures
     // its numbers with and the font it draws them in. Themed, so a theme that
@@ -734,6 +760,11 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
 
 - (CGFloat)headerHeight {
   return theme_layout::kChromeRowHeight;
+}
+
+- (NSUInteger)baselineCharacterOffsetAtOrAfter:(NSUInteger)offset {
+  const auto line = std::lower_bound(_nonblankLineStarts.begin(), _nonblankLineStarts.end(), offset);
+  return line == _nonblankLineStarts.end() ? NSNotFound : *line;
 }
 
 - (void)dealloc {

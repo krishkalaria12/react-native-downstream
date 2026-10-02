@@ -1428,7 +1428,7 @@ internal class TextSegmentView(context: Context) : TextView(context) {
    * alphas: the gutter draws beside the body rather than inside it, and it is the
    * body that knows where its blocks are.
    */
-  internal fun bandForReveal(): RevealBand? = findHost()?.revealFrame()?.let { bandFor(it) }
+  private fun bandForReveal(): RevealBand? = findHost()?.revealFrame()?.let { bandFor(it) }
 
   /**
    * The alpha at one character of this view's own text, 1 for anything that is not
@@ -1629,6 +1629,7 @@ internal class CodeGutterView(context: Context) : View(context) {
   private var segment: CodeSegment? = null
   private var body: TextSegmentView? = null
   private var layout: CodeBlockLayout? = null
+  private var bodyLayout: Layout? = null
   private var color = 0
   private val numberPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
 
@@ -1649,9 +1650,14 @@ internal class CodeGutterView(context: Context) : View(context) {
     codeFace: Typeface,
     color: Int,
   ) {
+    val bodyLayout = body.layout
+    if (this.segment === segment && this.body === body && this.layout == layout &&
+      this.bodyLayout === bodyLayout && this.color == color &&
+      numberPaint.textSize == codeTextSize.toFloat() && numberPaint.typeface == codeFace) return
     this.segment = segment
     this.body = body
     this.layout = layout
+    this.bodyLayout = bodyLayout
     this.color = color
     // The code's own size and face, so a number's digits line up with the code's
     // monospaced columns and a theme that names a mono family gets its numbers in
@@ -1673,20 +1679,17 @@ internal class CodeGutterView(context: Context) : View(context) {
     // its y in the body's own layout.
     val starts = segment.lineStarts
     val width = width.toFloat()
-    val height = height.toFloat()
 
-    // Only the numbers whose lines intersect the dirty rect are drawn, so a block
-    // with two thousand lines costs the same per frame as one with twenty.
+    // Locate the visible logical line in logarithmic time, then draw only the
+    // numbers inside the dirty rect. The hidden prefix is never walked.
     val dirty = canvas.clipBounds
-    val first = firstVisibleLine(textLayout, starts, dirty.top, height.toInt())
+    val visibleLine = textLayout.getLineForVertical(dirty.top)
+    val first = codeLineForOffset(starts, textLayout.getLineStart(visibleLine))
     // A number fades with its line's first characters, so a code block whose words
     // arrive one at a time has its numbers arrive with them rather than all at
-    // once beside text that is still invisible. The band is asked rather than
-    // pushed, because the draw already knows which line it is about to draw.
-    // Asked once rather than per line: the band is the same answer for every
-    // number, and a fence with two thousand lines must not walk it two thousand
-    // times.
-    val band = body.bandForReveal()
+    // once beside text that is still invisible. The band is asked once rather than
+    // per line: it is the same answer for every number, and a fence with two
+    // thousand lines must not walk it two thousand times.
     val baseAlpha = numberPaint.alpha
     for (index in first until starts.size) {
       val offset = starts[index].coerceAtMost(textLayout.text.length)
@@ -1707,23 +1710,6 @@ internal class CodeGutterView(context: Context) : View(context) {
       )
     }
     numberPaint.alpha = baseAlpha
-  }
-
-  /**
-   * The first logical line whose last visual line reaches below [top].
-   *
-   * Found from the line starts rather than by walking glyphs from the top of the
-   * block, so scrolling into the middle of a long fence does not cost a pass over
-   * every line above it.
-   */
-  private fun firstVisibleLine(textLayout: Layout, starts: IntArray, top: Int, height: Int): Int {
-    var index = 0
-    while (index + 1 < starts.size) {
-      val next = textLayout.getLineForOffset(starts[index + 1].coerceAtMost(textLayout.text.length))
-      if (textLayout.getLineTop(next) > top) break
-      index++
-    }
-    return index
   }
 }
 

@@ -149,6 +149,9 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
 @property (nonatomic, readonly) CGFloat lineHeight;
 
 - (CGFloat)headerHeight;
+/// The first nonblank logical line starting at or after this UTF-16 offset,
+/// or NSNotFound. Searches offsets cached during preparation, never the text.
+- (NSUInteger)baselineCharacterOffsetAtOrAfter:(NSUInteger)offset;
 /// The width the body lays out at, given the card's width, whether it wraps, and
 /// how much room the gutter takes. Unbounded when it does not wrap, which is what
 /// makes a long line scroll instead of wrapping.
