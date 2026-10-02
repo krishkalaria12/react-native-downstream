@@ -65,6 +65,20 @@ const HIGHLIGHTING: ChipOption<'on' | 'off'>[] = [
   { value: 'off', label: 'Off' },
 ];
 
+/**
+ * Both renderers animate, or neither does, so a comparison is of the renderers.
+ *
+ * The two features are not the same, and the labels say so. The native peer
+ * available here is `react-native-streamdown@0.2.0`, whose only animation prop is
+ * enriched-markdown's `streamingAnimation`: a whole-tail fade with no caret.
+ * Downstream's is a per-word cascade on one shared timeline, with a caret. Turning
+ * both on is how the difference is visible, which is the point of the toggle.
+ */
+const ANIMATION: ChipOption<'on' | 'off'>[] = [
+  { value: 'off', label: 'Off' },
+  { value: 'on', label: 'On' },
+];
+
 const SIZES: ChipOption<WorkloadSize>[] = [
   { value: 'fixture', label: 'Fixture' },
   { value: 10, label: '10 KiB' },
@@ -99,6 +113,7 @@ function Pane({
   liveStream,
   running,
   syntaxHighlighting,
+  animated,
 }: {
   candidate: ComparisonCandidate;
   run: ComparisonRun | null;
@@ -106,6 +121,8 @@ function Pane({
   liveStream: MarkdownStreamController | null;
   running: boolean;
   syntaxHighlighting: boolean;
+  /** Both panes animate together, so a comparison is of the renderers. */
+  animated: boolean;
 }) {
   const t = useTheme();
   const source = run ? run.metrics.source : liveSource;
@@ -126,16 +143,19 @@ function Pane({
       style={styles.pane}
     >
       {candidate === 'streamdown' ? (
-        <StreamdownMarkdown markdown={source} />
+        // The peer's whole-tail fade, which is the whole of its animation support.
+        <StreamdownMarkdown markdown={source} streamingAnimation={animated} />
       ) : stream ? (
         <DownstreamMarkdown
           stream={stream}
           syntaxHighlighting={syntaxHighlighting}
+          animated={animated}
+          caret={animated ? 'block' : undefined}
         />
       ) : (
         // An empty view keeps the Downstream pane mounted, and in the same
         // place in the tree, while Streamdown is the candidate under test.
-        <DownstreamMarkdown markdown="" />
+        <DownstreamMarkdown markdown="" animated={animated} />
       )}
       {run?.error != null && (
         <Text style={[t.s.caption, styles.paneError, { color: t.c.danger }]}>
@@ -219,6 +239,7 @@ export function CompareScreen() {
   const [schedule, setSchedule] = useState<ScheduleKind>('manifest');
   const [parseMode, setParseMode] = useState<ParseMode>('full');
   const [highlighting, setHighlighting] = useState<'on' | 'off'>('on');
+  const [animation, setAnimation] = useState<'on' | 'off'>('on');
   const scroll = useScreenScroll();
   const bottom = useBottomInset();
   const t = useTheme();
@@ -337,6 +358,19 @@ export function CompareScreen() {
             />
           </Group>
 
+          <Group title="Streaming animation, both panes">
+            <Text style={[t.s.caption, styles.groupNote]}>
+              The peer fades its whole tail and has no caret; Downstream fades
+              per word and draws one. Turn both on to see the difference.
+            </Text>
+            <ChipRow
+              inset
+              options={ANIMATION}
+              value={animation}
+              onChange={setAnimation}
+            />
+          </Group>
+
           <ButtonRow>
             <Button
               label={running ? 'Running' : 'Run comparison'}
@@ -401,6 +435,7 @@ export function CompareScreen() {
               liveStream={view.active === index ? view.liveStream : null}
               running={view.active === index}
               syntaxHighlighting={highlighting === 'on'}
+              animated={animation === 'on'}
             />
           ))}
 
@@ -450,6 +485,11 @@ export function CompareScreen() {
 }
 
 const styles = StyleSheet.create({
+  groupNote: {
+    paddingHorizontal: space.lg,
+    paddingBottom: space.sm,
+    opacity: 0.7,
+  },
   content: { paddingTop: space.sm },
   seed: { marginTop: space.md },
   controls: {
