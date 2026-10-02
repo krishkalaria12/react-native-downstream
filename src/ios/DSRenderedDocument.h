@@ -9,7 +9,9 @@
 
 #include "CodeLayout.h"
 #include "Document.h"
+#include "ImageLayout.h"
 #include "RenderPreparer.h"
+#include "math/MathLayout.h"
 #include "theme/Theme.h"
 #endif
 
@@ -149,6 +151,81 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 - (CGFloat)gutterWidthForLayout:(const downstream::CodeBlockLayout &)layout;
 @end
 
+/// One display formula: a box that draws vectors and scrolls sideways.
+///
+/// The layout came from the engine and is in em units, so this segment holds no
+/// size of its own — a measurement and a draw both ask `mathBlockHeight` at the
+/// size the theme and the font scale give, which is why a rotation or a theme
+/// change cannot change a formula's height without re-laying it out.
+@interface DSMathSegment : NSObject
+/// The formula's display list, or null when the engine has no layout for it: a
+/// formula that failed, or a document with no math package installed. Either way
+/// the segment draws the formula's source, which is what a reader sees today.
+@property (nonatomic, readonly, nullable) MathLayout::Handle layout;
+/// The TeX, for the fallback and for the spoken form.
+@property (nonatomic, readonly) std::string tex;
+/// The source the reader sees when there is no layout: the delimiters and the
+/// TeX as written, which is the whole literal.
+@property (nonatomic, readonly) std::string literal;
+/// Why the formula has no layout, for a development log. Empty when it does.
+@property (nonatomic, readonly) std::string error;
+@property (nonatomic, readonly) NSInteger blockIndex;
+@property (nonatomic, readonly) NSArray<DSContainerInfo *> *containers;
+@property (nonatomic, readonly) CGFloat contentLeading;
+/// The formula's font size in points at this rendering's font scale, and the
+/// padding and margins the theme gave it.
+@property (nonatomic, readonly) CGFloat fontSize;
+@property (nonatomic, readonly) CGFloat padding;
+@property (nonatomic, readonly) CGFloat marginTop;
+@property (nonatomic, readonly) CGFloat marginBottom;
+/// 0 for left, 1 for center, 2 for right. Centered by default, as a display
+/// formula is.
+@property (nonatomic, readonly) CGFloat textAlign;
+/// The theme's colors for this formula: the box behind it, the glyphs, and the
+/// source it falls back to.
+@property (nonatomic, readonly, nullable) UIColor *backgroundColor;
+@property (nonatomic, readonly, nullable) UIColor *color;
+@property (nonatomic, readonly, nullable) UIColor *errorColor;
+/// The size the box takes, from `mathBlockHeight`. The one definition, which is
+/// what keeps a measured formula and a drawn one the same height.
+- (CGFloat)height;
+/// The width the formula draws at, which is its own em width at this size.
+- (CGFloat)contentWidth;
+@end
+
+/// One image block: the images, their states, and the theme's box metrics.
+///
+/// The block holds no size. A load changes a state, the state changes a box, and
+/// `imageBox` is the only function that turns one into the other — so a message
+/// that is measured at a placeholder height and then loaded is re-measured
+/// through a state update rather than by any code here deciding a height.
+@interface DSImageSegment : NSObject
+/// The images this block holds, as indexes into `Document::images`, in order.
+@property (nonatomic, readonly) std::vector<uint32_t> images;
+/// Alt texts, one per image, which is the block's own text and what accessibility,
+/// export, and the fallback all read.
+@property (nonatomic, readonly) std::vector<std::string> altTexts;
+/// The block's ordinal among the document's image blocks, which is what a reader's
+/// per-image choice would be keyed by.
+@property (nonatomic, readonly) uint32_t imageOrdinal;
+@property (nonatomic, readonly) NSInteger blockIndex;
+@property (nonatomic, readonly) NSArray<DSContainerInfo *> *containers;
+@property (nonatomic, readonly) CGFloat contentLeading;
+@property (nonatomic, readonly) downstream::ImageMetrics metrics;
+/// The placeholder's own color, which pulses before a size is known.
+@property (nonatomic, readonly, nullable) UIColor *placeholderColor;
+/// What each image is in this view. One entry per image, in the same order as
+/// `images`, and a `Disabled` entry for an image the view has no answer for.
+- (std::vector<const downstream::ImageEntry *> *)entriesFor:(const downstream::ImageStateLayout &)answers;
+/// The box for one image at a column width, through the engine's own rule.
+- (downstream::ImageBox)boxAtIndex:(NSUInteger)index
+                            column:(CGFloat)column
+                           answers:(const downstream::ImageStateLayout &)answers;
+/// The whole block's height at a column width: every image's box plus the
+/// gaps between them, and the theme's margins.
+- (CGFloat)heightForColumn:(CGFloat)column answers:(const downstream::ImageStateLayout &)answers;
+@end
+
 @interface DSTableCell : NSObject
 @property (nonatomic, readonly) NSAttributedString *text;
 @end
@@ -187,7 +264,8 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 /// An immutable platform rendering of one Document at one font scale. The
 /// same object is used to measure and to lay out, so both agree.
 @interface DSRenderedDocument : NSObject
-/// DSTextSegment, DSCodeSegment, and DSTableSegment objects in document order.
+/// DSTextSegment, DSCodeSegment, DSMathSegment, DSImageSegment, and
+/// DSTableSegment objects in document order.
 @property (nonatomic, readonly) NSArray<id> *segments;
 /// The document's first block index per segment, so a control knows what to read.
 @property (nonatomic, readonly) NSArray<NSNumber *> *segmentBlockIndexes;
@@ -234,8 +312,12 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 /// which is what keeps a measurement and the frame the view draws from agreeing.
 - (NSArray<NSValue *> *)segmentFramesForWidth:(CGFloat)width
                                      chrome:(uint32_t)chrome
-                                        code:(const downstream::CodeLayout &)code;
-- (CGSize)sizeForWidth:(CGFloat)width chrome:(uint32_t)chrome code:(const downstream::CodeLayout &)code;
+                                        code:(const downstream::CodeLayout &)code
+                                      images:(const downstream::ImageStateLayout &)images;
+- (CGSize)sizeForWidth:(CGFloat)width
+                chrome:(uint32_t)chrome
+                   code:(const downstream::CodeLayout &)code
+                 images:(const downstream::ImageStateLayout &)images;
 
 @end
 
