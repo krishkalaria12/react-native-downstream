@@ -574,6 +574,7 @@ NSString *nameForFormat(NSString *format) {
                           format:format
                         language:language
                         filename:@""
+                             url:@""
                          wrapped:NO
                         expanded:NO];
       return;

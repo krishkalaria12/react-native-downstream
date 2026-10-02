@@ -177,12 +177,18 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 @interface DSDocumentView : UIView
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
 @property (nonatomic, weak, nullable) id<DSControlDelegate> controlDelegate;
+@property (nonatomic, weak, nullable) id<DSImageDelegate> imageDelegate;
 @property (nonatomic) BOOL selectable;
 @property (nonatomic) uint32_t controls;
 /// The whole code layout: the `lineNumbers`, `codeBlockWrap`, and
 /// `codeBlockMaxHeight` props, plus the reader's own per-block wrap and expand
 /// choices. One value, so a frame and the layout drawn inside it cannot disagree.
 @property (nonatomic) downstream::CodeLayout codeLayout;
+/// What each image is, which the image views draw from and the frames are
+/// stacked with.
+@property (nonatomic) downstream::ImageStateLayout imageState;
+/// The screen scale pictures are decoded at.
+@property (nonatomic) CGFloat screenScale;
 /// Label strings in the order `src/controls.ts` sends them.
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
 - (void)setRendered:(nullable DSRenderedDocument *)rendered;
