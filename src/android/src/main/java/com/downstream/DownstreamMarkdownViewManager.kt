@@ -99,18 +99,16 @@ class DownstreamMarkdownViewManager :
   override fun setCodeBlockWrap(view: DownstreamMarkdownView, value: Boolean) = Unit
 
   /**
-   * The effect and the split are already inside the flat timing array the shadow
-   * node reads, and resolved once in `src/animation.ts`, so the view never sees
-   * them as separate props. Both are accepted and dropped: the delegate requires
-   * them, and a prop that arrives twice would otherwise be resolved twice in two
-   * places.
+   * The effect, the split and the timing are resolved once in `src/animation.ts`
+   * and arrive as three props. The view joins them into the one array the engine
+   * reads, with the animator scale appended.
    */
-  override fun setAnimation(view: DownstreamMarkdownView, value: String?) = Unit
+  override fun setAnimation(view: DownstreamMarkdownView, value: String?) = view.setAnimationEffect(value)
 
-  override fun setAnimationSplit(view: DownstreamMarkdownView, value: String?) = Unit
+  override fun setAnimationSplit(view: DownstreamMarkdownView, value: String?) = view.setAnimationSplit(value)
 
   override fun setAnimationTiming(view: DownstreamMarkdownView, value: ReadableArray?) {
-    view.setAnimationTiming(value?.let { array ->
+    view.setAnimationValues(value?.let { array ->
       DoubleArray(array.size()) { array.getDouble(it) }
     })
   }

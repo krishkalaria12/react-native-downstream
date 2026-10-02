@@ -138,15 +138,21 @@ internal object RevealMath {
  */
 internal const val MAX_ALPHA_BUCKETS = 8
 
+/** The bucket of a unit that has not started, which no pass draws. */
+internal const val HIDDEN_BUCKET = -1
+
 /**
- * The bucket a unit's alpha falls into, as an index in `0 until MAX_ALPHA_BUCKETS`.
+ * The bucket a unit's alpha falls into: 0 for fully shown, `1..MAX_ALPHA_BUCKETS`
+ * while fading, and [HIDDEN_BUCKET] before it starts.
  *
  * The first bucket is the fully shown one, so a caller that skips its own opaque
- * text can skip bucket 0 rather than comparing against 1.
+ * text can skip bucket 0 rather than comparing against 1. An unstarted unit is
+ * clipped out of the opaque pass and drawn by no layer, so it stays invisible
+ * rather than sharing a layer with a unit that is almost shown.
  */
 internal fun alphaBucket(alpha: Float): Int {
   if (alpha >= 1f) return 0
-  if (alpha <= 0f) return MAX_ALPHA_BUCKETS
+  if (alpha <= 0f) return HIDDEN_BUCKET
   // Rounded rather than truncated, so the midpoint of the range lands in the
   // middle bucket and the ends are one bucket wide instead of two.
   val scaled = (alpha * MAX_ALPHA_BUCKETS).toInt() + 1

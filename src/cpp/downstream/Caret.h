@@ -78,9 +78,13 @@ struct PlacedCaret {
 };
 
 /// `spec` decided against `document`.
+///
+/// A caret with no place is no caret at all, shape included, so a cache key has
+/// one spelling for "none" and a platform that reads only the shape cannot draw a
+/// caret the engine did not place.
 inline PlacedCaret resolveCaret(const Document &document, const CaretSpec &spec) {
   const CaretPlace place = placeCaret(document, spec);
-  return PlacedCaret{spec.kind, place};
+  return place == CaretPlace::None ? PlacedCaret{} : PlacedCaret{spec.kind, place};
 }
 
 } // namespace downstream

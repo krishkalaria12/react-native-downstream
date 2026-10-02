@@ -31,15 +31,17 @@ NS_ASSUME_NONNULL_BEGIN
 /// answer means everything is opaque, which is the case a draw pass costs one nil
 /// check for.
 ///
-/// `blockOffset` is the layout's own `blockOffset`, so the provider maps a
+/// `blockOffset` and `blockRanges` are the layout's own, so the provider maps a
 /// document block's offsets into whichever layout asked rather than holding a
-/// reference to it.
+/// reference to it. `now` is `CACurrentMediaTime()`, in seconds, in every method.
 @protocol DSRevealProvider <NSObject>
 
 /// The runs of `range` whose alpha is below 1 at `now`, in text order, in this
-/// layout's own character coordinates.
+/// layout's own character coordinates. `blockRanges[i]` is where document block
+/// `blockOffset + i` sits in the layout's text.
 - (NSArray<DSRevealRun *> *)revealRunsForCharacterRange:(NSRange)range
                                             blockOffset:(NSInteger)blockOffset
+                                            blockRanges:(nullable NSArray<NSValue *> *)blockRanges
                                                      now:(double)now;
 
 /// The alpha at one character of a document block.
@@ -77,6 +79,9 @@ typedef struct {
 /// block-and-offset pair maps into this layout's own text.
 @property (nonatomic) NSInteger blockOffset;
 
+/// Where each of this layout's blocks sits in its text, starting at `blockOffset`.
+@property (nonatomic, copy, nullable) NSArray<NSValue *> *blockRanges;
+
 /// Draws the caret's shape at its placeholder.
 ///
 /// The placeholder is a text attachment that draws nothing, so the shape is drawn
@@ -84,9 +89,9 @@ typedef struct {
 /// than typesetting is what makes the caret look the same in every font and keeps
 /// it from changing a line's height.
 ///
-/// Returns the character's range when there is a caret in `characters`, and an
-/// empty range when there is not.
-- (NSRange)drawCaretInCharacters:(NSRange)characters atPoint:(CGPoint)origin;
+/// The placeholder is the text's last character when there is one. While a fade
+/// runs the shape is drawn at the reveal frontier instead.
+- (void)drawCaretAtPoint:(CGPoint)origin;
 
 @end
 

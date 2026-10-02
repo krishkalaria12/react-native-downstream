@@ -86,11 +86,13 @@ fun main() {
   }
 
   // The bucketing a draw pass reads: a unit at full alpha belongs to the first
-  // bucket, one that has not started to the last, and anything between to one of
-  // the six in between. A burst of forty alphas must fit in eight layers, or the
-  // cap is not a cap.
+  // bucket, one that has not started to none, and anything between to one of the
+  // eight fading layers. A burst of forty alphas must fit in eight layers, or the
+  // cap is not a cap, and an unstarted unit must not share a layer with one that
+  // is almost shown.
   check(alphaBucket(1f) == 0, "a fully shown unit is the first bucket")
-  check(alphaBucket(0f) == MAX_ALPHA_BUCKETS, "an unstarted unit is the last bucket")
+  check(alphaBucket(0f) == HIDDEN_BUCKET, "an unstarted unit is drawn by no layer")
+  check(alphaBucket(0f) !in 0..MAX_ALPHA_BUCKETS, "the hidden bucket is outside every layer a pass draws")
   check(alphaBucket(0.5f) > 0 && alphaBucket(0.5f) < MAX_ALPHA_BUCKETS, "a half-faded unit is in the middle")
   check(
     alphaBucket(0.999f) == MAX_ALPHA_BUCKETS,

@@ -42,7 +42,7 @@ done
 app="$build/NativeTextKitHarness.app"
 mkdir -p "$app"
 "$clang" -target "$target" -isysroot "$sdk" "${objects[@]}" \
-  -framework Foundation -framework UIKit -framework CoreGraphics -o "$app/NativeTextKitHarness"
+  -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore -o "$app/NativeTextKitHarness"
 cp "$ios_dir/NativeTextKitHarness-Info.plist" "$app/Info.plist"
 xcrun simctl boot "$device" >/dev/null 2>&1 || true
 xcrun simctl bootstatus "$device" -b >/dev/null

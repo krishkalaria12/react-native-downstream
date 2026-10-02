@@ -354,6 +354,10 @@ void testCaret() {
           "auto follows a streaming document");
     CHECK(placeCaret(*copy, spec(CaretKind::Circle, Animating::Off)) == CaretPlace::None,
           "off stays off on a streaming document");
+    // A finished stream keeps the prop's shape but has no place, and resolves to
+    // no caret at all, which is what both platforms read.
+    CHECK(resolveCaret(*parsed.document, spec(CaretKind::Circle, Animating::Auto)) == PlacedCaret{},
+          "a finished stream resolves to no caret, shape included");
   }
 
   const Document empty;

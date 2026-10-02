@@ -1163,12 +1163,11 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   NSMutableArray<NSNumber *> *indexes = [NSMutableArray new];
   _settledBlocks = document.settledBlocks;
 
-  bool isLastSegment = true;
   for (const SegmentPlan &segment : planSegments(document)) {
     // The caret belongs to the last segment, whichever kind it is, because that is
-    // where the document ends.
-    const PlacedCaret here =
-        (isLastSegment && segment.to == document.blocks.size()) ? caret : PlacedCaret{};
+    // where the document ends. The plan is in order, so that is the one segment
+    // that reaches the last block.
+    const PlacedCaret here = segment.to == document.blocks.size() ? caret : PlacedCaret{};
     id built = nil;
     if (segment.committed) {
       built = [DSRenderedDocument committedSegmentFor:document
@@ -1216,7 +1215,6 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
     _gaps.push_back(segment.from == 0 ? 0 : blockGap(theme, document.blocks[segment.from].spacingBefore,
                                                      &document.blocks[segment.from - 1],
                                                      document.blocks[segment.from]) * scale);
-    isLastSegment = false;
   }
   // A caret that takes a line of its own is a whole extra segment, because that is
   // what it is: room for the next block's first line. It replaces nothing, so when

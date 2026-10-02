@@ -174,6 +174,7 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
     return;
   }
   _segment = segment;
+  ((DSLayoutManager *)self.layoutManager).blockRanges = segment.blockRanges;
   [_stack.textStorage setAttributedString:segment.attributedString];
   self.selectedRange = NSMakeRange(0, 0);
   invalidateAccessibleLinks(_cachedAccessibilityElements);
@@ -185,6 +186,14 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 - (void)setBlockOffset:(NSInteger)blockOffset {
   _blockOffset = blockOffset;
   ((DSLayoutManager *)self.layoutManager).blockOffset = blockOffset;
+}
+
+/// The layout manager is what splits the glyph runs, so the provider is its as
+/// well as this view's.
+- (void)setRevealProvider:(id<DSRevealProvider>)revealProvider {
+  _revealProvider = revealProvider;
+  ((DSLayoutManager *)self.layoutManager).revealProvider = revealProvider;
+  [self setNeedsDisplay];
 }
 
 /// This view's own block ranges, which the reveal provider maps units through.
@@ -203,7 +212,9 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
                             blockOffset:(NSInteger)blockOffset
                                      now:(double)now {
   (void)now;
-  if (_blockOffset != blockOffset || _segment == nil || range.length == 0) {
+  // `blockOffset` is the unit's document block, which can be any block this view
+  // holds, not only its first.
+  if (blockOffset < _blockOffset || _segment == nil || range.length == 0) {
     return;
   }
   const NSUInteger index = (NSUInteger)(blockOffset - _blockOffset);
@@ -631,11 +642,17 @@ constexpr CGFloat kPinThreshold = 8;
         provider == nil
             ? 1
             : [provider revealAlphaAtBlock:self.blockOffset offset:offset now:CACurrentMediaTime()];
+    if (alpha <= 0) {
+      continue;
+    }
     // Right-aligned against the gap, so the numbers line up on their last digit
     // as they do in GitHub and VS Code.
     [number drawAtPoint:CGPointMake(std::max<CGFloat>(0, width - downstream::kGutterGap - size.width),
                                     baseline - font.ascender)
-          withAttributes:attributes];
+          withAttributes:alpha >= 1 ? attributes : @{
+            NSFontAttributeName : font,
+            NSForegroundColorAttributeName : [color colorWithAlphaComponent:CGColorGetAlpha(color.CGColor) * alpha]
+          }];
   }
 }
 
@@ -1438,17 +1455,16 @@ constexpr CGFloat kPinThreshold = 8;
   return elements;
 }
 
-/// A card's body fades through its own text and its chrome through the card's own
-/// alpha, both read from the provider on every draw, so a tick has nothing to
-/// invalidate here: redrawing the card is the whole frame.
+/// A card's chrome fades through the card's own alpha, its numbers through the
+/// gutter's, and its code through the body's text. Each is a view of its own
+/// that draws only when asked, so the card, the gutter and the body's fading
+/// lines are all invalidated.
 - (void)invalidateRevealCharacterRange:(NSRange)range
                             blockOffset:(NSInteger)blockOffset
                                      now:(double)now {
-  (void)range;
-  (void)blockOffset;
-  (void)now;
   [self setNeedsDisplay];
   [_gutter setNeedsDisplay];
+  [_body invalidateRevealCharacterRange:range blockOffset:blockOffset now:now];
 }
 
 /// The block is finished once its fence has closed. A card stops following its
@@ -2123,6 +2139,10 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
   for (UIView<DSSegmentView> *view in _segmentViews) {
     if ([view isKindOfClass:DSTextSegmentView.class]) {
       ((DSTextSegmentView *)view).revealProvider = provider;
+    } else if ([view isKindOfClass:DSCodeSegmentView.class]) {
+      ((DSCodeSegmentView *)view).revealProvider = provider;
+    } else if ([view isKindOfClass:DSTableSegmentView.class]) {
+      ((DSTableSegmentView *)view).revealProvider = provider;
     }
   }
 }
@@ -2187,8 +2207,9 @@ static Class segmentViewClass(BOOL isText, BOOL isCode) {
     // A reveal unit names a document block, so every view that draws text needs
     // to know which document block its own first character is. Set on every
     // render rather than once, because a view is reused across snapshots and the
-    // segment it holds is a different range each time.
-    if (_revealProvider != nil) {
+    // segment it holds is a different range each time. The offset is set even
+    // with no provider, because one can arrive after the segments do.
+    {
       NSNumber *from = index < _rendered.segmentBlockIndexes.count
           ? _rendered.segmentBlockIndexes[index]
           : nil;

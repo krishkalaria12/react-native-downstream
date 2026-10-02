@@ -464,6 +464,55 @@ describe('the animation callbacks', () => {
     rerender();
     expect(onStart).toHaveBeenCalledTimes(1);
   });
+
+  it('fires start on mount when a stream is already arriving', () => {
+    const onStart = vi.fn();
+    const onEnd = vi.fn();
+    const session = stream();
+    session.append('hello');
+    getStreamState(session).flush();
+    mount(
+      <DownstreamMarkdown
+        stream={session}
+        onAnimationStart={onStart}
+        onAnimationEnd={onEnd}
+      />
+    );
+    expect(onStart).toHaveBeenCalledTimes(1);
+    session.finish();
+    expect(onEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('follows an explicit isAnimating on a stream view rather than the controller', () => {
+    const onStart = vi.fn();
+    const onEnd = vi.fn();
+    const session = stream();
+    mount(
+      <DownstreamMarkdown
+        stream={session}
+        isAnimating={false}
+        onAnimationStart={onStart}
+        onAnimationEnd={onEnd}
+      />
+    );
+    session.append('hello');
+    getStreamState(session).flush();
+    runFrames();
+    session.finish();
+    expect(onStart).not.toHaveBeenCalled();
+    expect(onEnd).not.toHaveBeenCalled();
+
+    committed = (
+      <DownstreamMarkdown
+        stream={session}
+        isAnimating
+        onAnimationStart={onStart}
+        onAnimationEnd={onEnd}
+      />
+    );
+    rerender();
+    expect(onStart).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('animation frames cost no React render', () => {

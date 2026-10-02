@@ -53,6 +53,7 @@ using namespace downstream;
   }
   return [self.revealProvider revealRunsForCharacterRange:characters
                                               blockOffset:self.blockOffset
+                                              blockRanges:self.blockRanges
                                                        now:CACurrentMediaTime()];
 }
 
@@ -97,6 +98,13 @@ using namespace downstream;
 
 - (void)drawGlyphsForGlyphRange:(NSRange)glyphsToShow atPoint:(CGPoint)origin {
   const NSRange characters = [self characterRangeForGlyphRange:glyphsToShow actualGlyphRange:NULL];
+  [self drawFadingGlyphs:glyphsToShow characters:characters atPoint:origin];
+  // The caret is drawn rather than typeset, over the placeholder the measured text
+  // reserved for it, and after the text so nothing paints over it.
+  [self drawCaretAtPoint:origin];
+}
+
+- (void)drawFadingGlyphs:(NSRange)glyphsToShow characters:(NSRange)characters atPoint:(CGPoint)origin {
   NSArray<DSRevealRun *> *runs = [self fadingRunsFor:characters];
   if (runs.count == 0) {
     [super drawGlyphsForGlyphRange:glyphsToShow atPoint:origin];
@@ -242,36 +250,39 @@ using namespace downstream;
 
 #pragma mark - The caret
 
-- (NSRange)drawCaretInCharacters:(NSRange)characters atPoint:(CGPoint)origin {
+- (void)drawCaretAtPoint:(CGPoint)origin {
   NSTextStorage *storage = self.textStorage;
   if (storage.length == 0) {
-    return NSMakeRange(0, 0);
+    return;
   }
-  __block NSRange placeholder;
-  __block NSNumber *kind = nil;
-  [storage enumerateAttribute:DSCaretKindAttributeName
-                       inRange:characters
-                       options:0
-                    usingBlock:^(NSNumber *value, NSRange effectiveRange, BOOL *stop) {
-                      if (value != nil) {
-                        kind = value;
-                        placeholder = effectiveRange;
-                        *stop = YES;
-                      }
-                    }];
+  // The placeholder is always the text's last character. It is looked up there
+  // rather than in the range being drawn, because while a fade runs the caret is
+  // drawn at the frontier, which a partial redraw can reach without the
+  // placeholder's own line being part of it.
+  const NSRange placeholder = NSMakeRange(storage.length - 1, 1);
+  NSNumber *kind = [storage attribute:DSCaretKindAttributeName atIndex:placeholder.location effectiveRange:NULL];
   if (kind == nil) {
-    return NSMakeRange(0, 0);
+    return;
   }
-  const NSUInteger glyph = [self glyphIndexForCharacterAtIndex:placeholder.location];
+  // While a fade runs the caret sits at the reveal frontier, where the first unit
+  // that has not started begins, so it never trails a gap of invisible words.
+  NSUInteger frontier = placeholder.location;
+  for (DSRevealRun *run in [self fadingRunsFor:NSMakeRange(0, placeholder.location)]) {
+    if (run.alpha <= 0) {
+      frontier = run.range.location;
+      break;
+    }
+  }
+  const NSUInteger glyph = [self glyphIndexForCharacterAtIndex:frontier];
   if (glyph >= self.numberOfGlyphs) {
-    return NSMakeRange(0, 0);
+    return;
   }
-  // The placeholder is one attachment character, which lays out as one glyph, so
-  // the shape is drawn over exactly that glyph's own line fragment.
   const CGRect fragment = [self lineFragmentRectForGlyphAtIndex:glyph effectiveRange:NULL];
   if (CGRectIsEmpty(fragment)) {
-    return NSMakeRange(0, 0);
+    return;
   }
+  // The glyph's own position in its fragment: x along the line, y the baseline.
+  const CGPoint location = [self locationForGlyphAtIndex:glyph];
 
   NSTextAttachment *attachment = [storage attribute:NSAttachmentAttributeName
                                             atIndex:placeholder.location
@@ -280,19 +291,17 @@ using namespace downstream;
                                atIndex:placeholder.location
                         effectiveRange:NULL];
   if (attachment == nil || color == nil) {
-    return NSMakeRange(0, 0);
+    return;
   }
   const CGRect bounds = attachment.bounds;
-  // The shape is drawn where the placeholder sits, which is why the placeholder is
-  // in the measured text: the caret cannot move relative to the text it follows
-  // because it has no position of its own.
-  // `lineFragmentRectForGlyphAtIndex:` is in this layout's own coordinates, so
-  // the shape lands where the placeholder sits rather than where the attachment
-  // would put a glyph of its own.
-  const CGPoint at = CGPointMake(origin.x + CGRectGetMinX(fragment) + bounds.origin.x,
-                                 origin.y + CGRectGetMinY(fragment) + bounds.origin.y);
+  // The size is the placeholder's, which is why the placeholder is in the measured
+  // text: the caret never changes a line's height. Its bounds are measured up from
+  // the baseline and this context is flipped, so the shape's top is the baseline
+  // less its top edge.
+  const CGPoint at = CGPointMake(origin.x + CGRectGetMinX(fragment) + location.x + bounds.origin.x,
+                                 origin.y + CGRectGetMinY(fragment) + location.y -
+                                     (bounds.origin.y + bounds.size.height));
   [self drawCaretShape:kind.integerValue bounds:bounds at:at color:color];
-  return placeholder;
 }
 
 /// The two shapes, in the proportions of the characters Streamdown types.

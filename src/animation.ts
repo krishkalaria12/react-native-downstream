@@ -92,10 +92,7 @@ function warnOnce(message: string, onWarning?: Warn): void {
   }
   if (warned.has(message)) return;
   warned.add(message);
-  if (process.env.NODE_ENV === 'production') return;
-
-  // the app's own configuration.
-  console.warn(`Downstream: ${message}`);
+  console.warn(`[react-native-downstream] ${message}`);
 }
 
 /**

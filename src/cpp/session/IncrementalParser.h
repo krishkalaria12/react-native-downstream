@@ -123,7 +123,10 @@ private:
   /// Records the snapshot the view will show, with the two flags that are the
   /// document's rather than its blocks': how many leading blocks no later input
   /// can change, and whether a stream is still arriving.
-  void publish(DocumentHandle document, uint32_t settled);
+  ///
+  /// It answers the document it recorded, which is a copy when the flags had to
+  /// change, so a caller returns that rather than the one it passed in.
+  const DocumentHandle &publish(DocumentHandle document, uint32_t settled);
   void tryCommit();
   bool commitRegion(size_t boundary);
   bool appendOpenFence();

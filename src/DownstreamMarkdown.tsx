@@ -154,16 +154,6 @@ function toErrorEvent(nativeError: NativeMarkdownError): MarkdownErrorEvent {
 }
 
 /**
- * The values native reads, kept by value rather than by identity.
- *
- * `controls` and `translations` are usually written as inline object literals,
- * so their identity changes on every render of the parent. Memoizing on those
- * identities would hand native a fresh `controlLabels` array every time and
- * force a props update per render for a configuration that has not changed,
- * which is the opposite of what a native display path is for. Comparing the
- * resolved values instead means an unchanged configuration sends nothing.
- */
-/**
  * The resolved animation, kept by value rather than by identity.
  *
  * `animated` is usually written as an inline object literal, so its identity
@@ -217,23 +207,29 @@ function useAnimationCallbacks(
  *
  * There is no prop to watch, so the rule is the controller's: the first append of
  * a generation is a start, `finish()` is an end, and a `reset()` ends the current
- * cycle so the next append starts a new one.
+ * cycle so the next append starts a new one. A view that subscribes while text is
+ * already arriving reports a start, which is the controlled view's mount rule: a
+ * message mounted mid-answer is animating.
+ *
+ * An explicit `isAnimating` takes the callbacks over along with the flag, so
+ * `follows` is false then and the controller's transitions are ignored.
  */
 function useStreamAnimationCallbacks(
   state: StreamState,
+  follows: boolean,
   onStart: (() => void) | undefined,
   onEnd: (() => void) | undefined
 ): void {
   const handlers = useRef({ onStart, onEnd });
   handlers.current = { onStart, onEnd };
-  useEffect(
-    () =>
-      state.subscribeAnimation((animating) => {
-        if (animating) handlers.current.onStart?.();
-        else handlers.current.onEnd?.();
-      }),
-    [state]
-  );
+  useEffect(() => {
+    if (!follows) return undefined;
+    if (state.isStreaming()) handlers.current.onStart?.();
+    return state.subscribeAnimation((animating) => {
+      if (animating) handlers.current.onStart?.();
+      else handlers.current.onEnd?.();
+    });
+  }, [state, follows]);
 }
 
 /**
@@ -261,6 +257,16 @@ function useAnimationProps(
   };
 }
 
+/**
+ * The values native reads, kept by value rather than by identity.
+ *
+ * `controls` and `translations` are usually written as inline object literals,
+ * so their identity changes on every render of the parent. Memoizing on those
+ * identities would hand native a fresh `controlLabels` array every time and
+ * force a props update per render for a configuration that has not changed,
+ * which is the opposite of what a native display path is for. Comparing the
+ * resolved values instead means an unchanged configuration sends nothing.
+ */
 function useStableResolved(resolved: ResolvedControls): ResolvedControls {
   const stable = useRef(resolved);
   const previous = stable.current;
@@ -571,8 +577,15 @@ function StreamMarkdown({
     useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
   );
   // A stream view follows its controller's own transitions, so the callbacks fire
-  // on the first append of a generation and on `finish()` rather than on a prop.
-  useStreamAnimationCallbacks(state, onAnimationStart, onAnimationEnd);
+  // on the first append of a generation and on `finish()`, unless an explicit
+  // `isAnimating` overrides the flag, which takes the callbacks with it.
+  useStreamAnimationCallbacks(
+    state,
+    isAnimating === undefined,
+    onAnimationStart,
+    onAnimationEnd
+  );
+  useAnimationCallbacks(isAnimating, onAnimationStart, onAnimationEnd);
   const animation = useAnimationProps(
     animated,
     caret,

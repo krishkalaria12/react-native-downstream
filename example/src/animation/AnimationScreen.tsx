@@ -198,13 +198,7 @@ function useReplay(source: string, cadence: Cadence) {
     []
   );
 
-  return {
-    stream,
-    running,
-    start,
-    stop,
-    pieces: useMemo(() => source.length, [source]),
-  };
+  return { stream, running, start, stop };
 }
 
 export function AnimationScreen() {
@@ -327,9 +321,9 @@ export function AnimationScreen() {
           <View style={styles.notice}>
             <Notice tone="accent" title="A burst, not a queue">
               One chunk this long would queue {Math.round(source.length / 6)}{' '}
-              words at a 40 ms stagger. Inside the {backlog} ms backlog they are
-              compressed, so the last word still starts within about a third of
-              a second.
+              words at a {stagger} ms stagger. Inside the {backlog} ms backlog
+              they are compressed, so the last word still starts within{' '}
+              {backlog} ms.
             </Notice>
           </View>
         )}

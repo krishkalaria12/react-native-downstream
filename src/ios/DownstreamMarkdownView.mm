@@ -230,40 +230,42 @@ NSString *nameForFormat(NSString *format) {
 /// the whole document.
 - (NSArray<DSRevealRun *> *)revealRunsForCharacterRange:(NSRange)range
                                             blockOffset:(NSInteger)blockOffset
+                                            blockRanges:(NSArray<NSValue *> *)blockRanges
                                                      now:(double)now {
-  if (!_state) {
+  if (blockOffset < 0 || blockRanges.count == 0) {
     return @[];
   }
-  const auto &document = _state->getData().document;
-  if (!document || blockOffset < 0 || static_cast<size_t>(blockOffset) >= document->blocks.size()) {
-    return @[];
-  }
-  const std::u16string &text = document->blocks[static_cast<size_t>(blockOffset)].text;
+  // Units are scheduled on the engine's millisecond clock; the draw pass asks in
+  // `CACurrentMediaTime()` seconds.
+  const double nowMs = now * 1000.0;
   NSMutableArray<DSRevealRun *> *runs = [NSMutableArray new];
   for (const downstream::RevealUnit &unit : _reveal.units()) {
-    if (unit.block != static_cast<uint32_t>(blockOffset)) {
+    if (unit.block < static_cast<uint32_t>(blockOffset)) {
       continue;
     }
-    const float alpha = downstream::revealAlpha(unit, now, _revealOptions);
+    // A layout holds several blocks, so a unit's block picks one of this
+    // layout's ranges and its offsets are added to where that block starts.
+    const NSUInteger index = unit.block - static_cast<uint32_t>(blockOffset);
+    if (index >= blockRanges.count) {
+      continue;
+    }
+    const float alpha = downstream::revealAlpha(unit, nowMs, _revealOptions);
     if (alpha >= 1) {
       continue;
     }
-    // A unit's offsets are into the block's own text, and the layout's range
-    // begins where this block's does in the segment's text, so the mapping is one
-    // addition on each end.
-    const long long from = std::max<long long>(unit.start, 0);
-    const long long to = std::min<long long>(unit.end, static_cast<long long>(text.size()));
+    const NSRange base = blockRanges[index].rangeValue;
+    const NSUInteger from = base.location + std::min<NSUInteger>(unit.start, base.length);
+    const NSUInteger to = base.location + std::min<NSUInteger>(unit.end, base.length);
     if (from >= to) {
       continue;
     }
-    const NSRange unitRange = NSMakeRange(static_cast<NSUInteger>(from), static_cast<NSUInteger>(to - from));
-    const NSRange clipped = NSIntersectionRange(unitRange, range);
+    const NSRange clipped = NSIntersectionRange(NSMakeRange(from, to - from), range);
     if (clipped.length == 0) {
       continue;
     }
     [runs addObject:[[DSRevealRun alloc] initWithRange:clipped
                                                  alpha:alpha
-                                                  rise:downstream::revealRise(unit, now, _revealOptions)]];
+                                                  rise:downstream::revealRise(unit, nowMs, _revealOptions)]];
   }
   // Text order, because the draw pass walks `range` forwards and expects the runs
   // in the same order.
@@ -276,13 +278,8 @@ NSString *nameForFormat(NSString *format) {
   return runs;
 }
 
-/// The alpha at one character of a document block.
 - (CGFloat)revealAlphaAtBlock:(NSInteger)block offset:(NSUInteger)offset now:(double)now {
-  if (!_state) {
-    return 1;
-  }
-  const auto &document = _state->getData().document;
-  if (!document || block < 0 || static_cast<size_t>(block) >= document->blocks.size()) {
+  if (block < 0) {
     return 1;
   }
   for (const downstream::RevealUnit &unit : _reveal.units()) {
@@ -292,7 +289,7 @@ NSString *nameForFormat(NSString *format) {
     if (offset < unit.start || offset >= unit.end) {
       continue;
     }
-    return downstream::revealAlpha(unit, now, _revealOptions);
+    return downstream::revealAlpha(unit, now * 1000.0, _revealOptions);
   }
   return 1;
 }

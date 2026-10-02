@@ -104,8 +104,13 @@ internal class RevealFrame(
 ) {
   private val pool = ArrayList<RevealUnit>(64)
 
-  /** The per-unit duration in ms. The engine applies the animator scale itself. */
-  private val durationMs = if (timing.size > TIMING_DURATION) timing[TIMING_DURATION].toFloat() else 150f
+  /**
+   * The per-unit duration in ms, times the animator scale, which is how the engine
+   * scheduled and prunes the same units.
+   */
+  private val durationMs =
+    (if (timing.size > TIMING_DURATION) timing[TIMING_DURATION].toFloat() else 150f) *
+      (if (timing.size > TIMING_SCALE) timing[TIMING_SCALE].toFloat() else 1f)
 
   /** The four control points, in the order the engine lists them. */
   private val easing = FloatArray(4).also {
@@ -163,6 +168,9 @@ internal class RevealFrame(
     /** Where the curve's first control point sits. */
     const val TIMING_EASING = 5
 
+    /** Where the animator scale sits, last. */
+    const val TIMING_SCALE = 9
+
     /** CSS `ease`, the array's default and the engine's. */
     val DEFAULT_EASING = floatArrayOf(0.25f, 0.1f, 0.25f, 1f)
   }
@@ -194,11 +202,19 @@ internal class RevealBand(capacity: Int) {
   val first: Int
     get() = offsets[0]
 
+  /** Whether another unit would not fit, which past [MAX_BAND_UNITS] it never will. */
+  val isFull: Boolean
+    get() = count >= capacity
+
   /**
-   * Makes room for [wanted] units, so a burst larger than the first frame fits
-   * rather than being clipped.
+   * Starts a new frame's band, empty, with room for [wanted] units, so a burst
+   * larger than the first frame fits rather than being clipped.
+   *
+   * The band is reused across frames, so every frame starts here: a count carried
+   * over from the last frame would write past the arrays.
    */
-  fun reserve(wanted: Int) {
+  fun begin(wanted: Int) {
+    count = 0
     if (wanted <= capacity) return
     val grown = wanted.coerceAtMost(MAX_BAND_UNITS)
     if (grown <= capacity) return
@@ -206,7 +222,6 @@ internal class RevealBand(capacity: Int) {
     offsets = IntArray(grown * 2)
     alphas = FloatArray(grown)
     rises = FloatArray(grown)
-    count = 0
   }
 
   /**
