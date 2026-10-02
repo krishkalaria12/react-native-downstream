@@ -49,6 +49,11 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
 
 #pragma mark - One image
 
+@interface DSImageSegmentView ()
+/// Saves one image, which its box's download button asks for.
+- (void)downloadImageAt:(uint32_t)ordinal;
+@end
+
 /// One image's own subview: a picture, the placeholder, or the fallback line.
 ///
 /// A subview per image rather than one view drawing all of them, because each has
@@ -240,8 +245,8 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
   self.fallback.frame = bounds;
   // Bottom-trailing, as Streamdown draws it: over the picture, out of the way of
   // a caption, and large enough to hit.
-  self.download.frame = CGRectMake(std::max(0, CGRectGetWidth(bounds) - kControlGlyph - 4),
-                                   std::max(0, CGRectGetHeight(bounds) - kControlGlyph - 4), kControlGlyph,
+  self.download.frame = CGRectMake(std::max<CGFloat>(0, CGRectGetWidth(bounds) - kControlGlyph - 4),
+                                   std::max<CGFloat>(0, CGRectGetHeight(bounds) - kControlGlyph - 4), kControlGlyph,
                                    kControlGlyph);
 }
 
@@ -386,7 +391,7 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
   if (segment == nil) {
     return;
   }
-  const CGFloat column = std::max(0, CGRectGetWidth(self.bounds) - segment.contentLeading);
+  const CGFloat column = std::max<CGFloat>(0, CGRectGetWidth(self.bounds) - segment.contentLeading);
   CGFloat y = 0;
   for (NSUInteger index = 0; index < self->_boxes.count; index++) {
     DSImageBoxView *box = self->_boxes[index];
@@ -425,7 +430,7 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
   // loader reports a failure so the box draws its fallback rather than waiting
   // for something that is not coming.
   DSImageLoader *loader = [DSImageLoader
-      sharedLoaderWithReactLoader:(RCTImageLoader *)ImageLoaderRegistry::resolve()];
+      sharedLoaderWithReactLoader:(__bridge RCTImageLoader *)ImageLoaderRegistry::resolve()];
   __weak DSImageSegmentView *weakSelf = self;
   const std::string key = box.url.UTF8String ?: "";
   box.load = [loader loadURL:url
@@ -469,30 +474,17 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
   if (segment == nil || !self.controlsEnabled || (self.controls & ControlBits::ImageDownload) == 0) {
     return;
   }
-  NSUInteger index = segment.images.size();
-  for (NSUInteger at = 0; at < segment.images.size(); at++) {
-    if (segment.images[at] == ordinal) {
-      index = at;
-    }
-  }
-  if (index >= segment.images.size()) {
-    return;
-  }
-  const std::string url = segment.images[index] < 1 ? std::string() : std::string();
-  (void)url;
   NSURL *destination = nil;
-  __block DSImageSegmentView *strongSelf = self;
   // The alt text names the file the way a writer's caption names it, and the
   // extension comes from the URL, the MIME type, or `png`, in that order.
-  NSString *configured = @"";
-  (void)configured;
+  NSString *caption = @"";
   for (DSImageBoxView *box in _boxes) {
     if (box.ordinal != ordinal) {
       continue;
     }
     destination = [NSURL URLWithString:box.url];
-    configured = box.alt;
-    strongSelf = self;
+    caption = box.alt ?: @"";
+    break;
   }
   if (destination == nil) {
     return;
@@ -685,7 +677,7 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
   if (segment.layout == nil) {
     return;
   }
-  const CGFloat available = std::max(0, CGRectGetWidth(self.bounds) - segment.contentLeading);
+  const CGFloat available = std::max<CGFloat>(0, CGRectGetWidth(self.bounds) - segment.contentLeading);
   const CGFloat content = [segment contentWidth] + 2 * segment.padding;
   const CGFloat height = [segment height];
   // A formula narrower than the column is centred by default, which is what a
