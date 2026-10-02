@@ -53,11 +53,11 @@ public:
    * was recycled still count, and what makes six loads in one frame produce one
    * relayout rather than six.
    *
-   * Static because a view holds a `ShadowNode::Shared` and not the concrete
-   * node, and because the node that has to be re-measured is whichever revision
-   * is mounted by the time the update lands.
+   * Static because a view holds a `std::shared_ptr<const ShadowNode>` and not
+   * the concrete node, and because the node that has to be re-measured is
+   * whichever revision is mounted by the time the update lands.
    */
-  static void imagesChanged(const ShadowNode::Shared &node);
+  static void imagesChanged(const std::shared_ptr<const ShadowNode> &node);
 
   Size measureContent(const LayoutContext &layoutContext, const LayoutConstraints &layoutConstraints) const override;
 

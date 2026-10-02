@@ -311,11 +311,11 @@ void DownstreamMarkdownShadowNode::relayoutWhenImagesChange(downstream::ImageSta
                   [answers = std::move(answers)](const StateData::Shared &data) -> StateData::Shared {
                     const auto &previous = *std::static_pointer_cast<const DownstreamMarkdownState>(data);
                     return std::make_shared<const DownstreamMarkdownState>(previous.withImages(answers));
-                  },
-                  EventQueue::UpdateMode::Asynchronous});
+                  }},
+      EventQueue::UpdateMode::Asynchronous);
 }
 
-void DownstreamMarkdownShadowNode::imagesChanged(const ShadowNode::Shared &node) {
+void DownstreamMarkdownShadowNode::imagesChanged(const std::shared_ptr<const ShadowNode> &node) {
   if (!node) {
     return;
   }
