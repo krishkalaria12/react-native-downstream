@@ -47,6 +47,26 @@ bool sameRequest(std::string_view source, const MathOptions &math, const Prepare
 
 } // namespace
 
+std::shared_ptr<const PreparedDocument> PreparedDocument::completed(std::string_view source, MathOptions math) {
+  Cache &shared = cache();
+  std::lock_guard<std::mutex> lock(shared.mutex);
+  for (const auto &entry : shared.entries) {
+    if (sameRequest(source, math, *entry) && entry->done()) {
+      return entry;
+    }
+  }
+  return nullptr;
+}
+
+DocumentHandle PreparedDocument::blocksFor(std::string_view source, MathOptions math) {
+  const auto prepared = completed(source, math);
+  if (!prepared) {
+    return nullptr;
+  }
+  const ParseResult &result = prepared->result();
+  return result.status == ParseStatus::Ok ? result.document : nullptr;
+}
+
 PreparedDocument::PreparedDocument(std::string source, MathOptions math)
     : source_(std::move(source)), math_(math) {}
 

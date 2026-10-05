@@ -141,6 +141,11 @@ const TARGETS = {
     ...ENGINE,
     ...MD4C_SOURCES,
   ],
+  'downstream-fence-slots': [
+    join(CPP, 'tests', 'dump_fence_slots.cpp'),
+    ...ENGINE,
+    ...MD4C_SOURCES,
+  ],
   'downstream-fence-meta': [
     join(CPP, 'tests', 'test_fence_meta.cpp'),
     join(CPP, 'downstream', 'SegmentPlan.cpp'),
@@ -262,6 +267,55 @@ export function parse(source: string | Buffer): RenderModel {
       'utf8'
     )
   );
+}
+
+/** One fenced block the engine would hand a renderer, as the module returns it. */
+export interface FenceSlot {
+  /** The block's ordinal among the document's code blocks. */
+  ordinal: number;
+  /** The block's index in the document. */
+  blockIndex: number;
+  /** The info string's first word as written, cut at `:`. */
+  language: string;
+  /** The info string after the first word, trimmed. Empty when there is none. */
+  meta: string;
+  /** Exactly what the code block's copy button copies. */
+  code: string;
+  /** True while the fence's content is not final. */
+  incomplete: boolean;
+  /** The block's engine identity, 0 in a one-shot parse. */
+  identity: number;
+}
+
+function fenceSlotsBinary(): string {
+  return compile(TARGETS['downstream-fence-slots'], 'downstream-fence-slots');
+}
+
+/**
+ * The fence slots a source holds for `languages`, from the engine that ships in
+ * the app.
+ *
+ * The same binary the TurboModule runs, so a test asserts on the slots an app
+ * would mount rather than on a JavaScript reimplementation of the rule: matching
+ * case-insensitively on the normalized language, an ordinal that counts every
+ * code block, `code` exactly as copy returns it, and the incompleteness rule.
+ *
+ * `live` is the distinction the module draws between a controlled source and a
+ * finished stream.
+ */
+export function fenceSlots(
+  source: string,
+  languages: readonly string[],
+  mathFlags = 0,
+  live = true
+): readonly FenceSlot[] {
+  const input = Buffer.from(source, 'utf8');
+  const output = execFileSync(
+    fenceSlotsBinary(),
+    [String(mathFlags), live ? '1' : '0', languages.join(',')],
+    { input, maxBuffer: 64 << 20 }
+  ).toString('utf8');
+  return JSON.parse(output).slots as FenceSlot[];
 }
 
 /**

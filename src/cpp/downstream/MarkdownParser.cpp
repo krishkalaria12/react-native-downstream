@@ -224,6 +224,46 @@ public:
           // Parsed once, here, so the open-fence fast path copies a parsed meta
           // rather than re-parsing the string on every snapshot.
           current_->meta = parseFenceMeta(current_->info);
+          if (code->fence_char != 0) {
+            // Record the fence's own run so `fenceClosed` can be decided when
+            // the block finishes. The backward scan works because the info
+            // string sits right after the run on the opener line.
+            const size_t infoAt = code->info.text != nullptr
+                ? static_cast<size_t>(code->info.text - parse_.data())
+                : 0;
+            size_t runEnd = infoAt;
+            while (runEnd > 0 && source_[runEnd - 1] == ' ') {
+              runEnd--;
+            }
+            size_t runStart = runEnd;
+            while (runStart > 0 && source_[runStart - 1] == code->fence_char) {
+              runStart--;
+            }
+            fenceMarkerScratch_ = code->fence_char;
+            fenceLengthScratch_ = static_cast<uint32_t>(runEnd - runStart);
+            fenceRunStart_ = runStart;
+            size_t newline = source_.find('\n', fenceRunStart_);
+            // A fence with no info string has nothing to scan back from, so its
+            // run is read off the opener line itself: at most three spaces of
+            // indent and then the run, which is the rule that made it a fence.
+            if (fenceLengthScratch_ == 0) {
+              const size_t lineStart = runEnd == 0 ? 0 : source_.rfind('\n', runEnd - 1) + 1;
+              size_t at = lineStart;
+              size_t spaces = 0;
+              while (at < source_.size() && source_[at] == ' ' && spaces < 3) {
+                at++;
+                spaces++;
+              }
+              size_t runStartOnLine = at;
+              while (runStartOnLine < source_.size() && source_[runStartOnLine] == code->fence_char) {
+                runStartOnLine++;
+              }
+              fenceLengthScratch_ = static_cast<uint32_t>(runStartOnLine - at);
+              fenceRunStart_ = at;
+              newline = source_.find('\n', fenceRunStart_);
+            }
+            fenceLineEnd_ = newline == std::string_view::npos ? source_.size() : newline + 1;
+          }
         }
         break;
       }
@@ -582,6 +622,33 @@ private:
     }
   }
 
+  /// Strips `depth` container lines from the front of `line`, as the reader's
+  /// own content would be read. A quote level takes a `>` preceded by any
+  /// amount of rubric indentation, plus one optional space after it.
+  static std::optional<std::string_view> stripContainerLine(std::string_view line, size_t quoteDepth) {
+    for (size_t level = 0; level < quoteDepth; level++) {
+      size_t spaces = 0;
+      while (spaces < line.size() && line[spaces] == ' ') {
+        spaces++;
+      }
+      if (spaces >= line.size() || line[spaces] != '>') {
+        return std::nullopt;
+      }
+      size_t past = spaces + 1;
+      if (past < line.size() && line[past] == ' ') {
+        past++;
+      }
+      line = line.substr(past);
+    }
+    return line;
+  }
+
+  /// Decides `fenceClosed` for a code block whose closing line must be found
+  /// in the source: the line after the content must match `closesFence`
+  /// relative to the opener's own column, after the container path is
+  /// stripped. Fence lines longer than the opener close it, shorter or
+  /// different-character runs do not, and no line closes a block whose fence
+  /// ran to EOF.
   void finishLeaf() {
     if (!current_) {
       return;
@@ -594,6 +661,62 @@ private:
         run.end = std::min<uint32_t>(run.end, static_cast<uint32_t>(current_->text.size()));
       }
     }
+    if (current_->kind == BlockKind::CodeBlock && fenceMarkerScratch_ != 0) {
+      size_t quoteDepth = 0;
+      for (const auto &container : current_->containers) {
+        if (container.kind == ContainerKind::Quote) {
+          quoteDepth++;
+        }
+      }
+      const size_t contentEnd = current_->text.empty() ? fenceLineEnd_ : leafEnd_;
+      const size_t newline = fenceRunStart_ == 0 ? 0 : source_.rfind('\n', fenceRunStart_ - 1);
+      const size_t openerLineStart = newline == std::string_view::npos ? 0 : newline + 1;
+      // Compute the opener's column within the stripped opener directly from
+      // the quote-stripped form of the opener line.
+      std::string_view openerLine = source_.substr(openerLineStart, fenceLineEnd_ - openerLineStart);
+      // Trim at the newline
+      if (!openerLine.empty() && openerLine.back() == '\n') {
+        openerLine.remove_suffix(1);
+      }
+      auto stripped = stripContainerLine(openerLine, quoteDepth);
+      size_t rawCol = 0;
+      if (stripped) {
+        const size_t found = stripped->find(fenceMarkerScratch_);
+        rawCol = found == std::string_view::npos ? 0 : found;
+      }
+      // The candidate is the line after the content: a block's own last line ends
+      // with the newline `leafEnd_` points at, so the line that could close the
+      // fence starts after it. A fence whose closer is the next line is what
+      // `closesFence` then decides, with CommonMark's own rule for a shorter or
+      // different-character run.
+      const size_t afterContent = source_.find('\n', contentEnd);
+      const size_t candidateStart = afterContent == std::string_view::npos ? source_.size() : afterContent + 1;
+      auto candidate_op = [&]() -> bool {
+        if (candidateStart >= source_.size()) {
+          return false;
+        }
+        const size_t newline2 = source_.find('\n', candidateStart);
+        std::string_view candidate =
+            newline2 == std::string_view::npos ? source_.substr(candidateStart)
+                                               : source_.substr(candidateStart, newline2 - candidateStart);
+        auto s = stripContainerLine(candidate, quoteDepth);
+        if (!s) {
+          return false;
+        }
+        std::string_view rest = *s;
+        if (rest.size() < rawCol) {
+          return false;
+        }
+        if (rest.size() > rawCol && rest.substr(0, rawCol).find_first_not_of(' ') != std::string_view::npos) {
+          return false;
+        }
+        rest = rest.substr(rawCol);
+        return scan::closesFence(rest, fenceMarkerScratch_, fenceLengthScratch_);
+      };
+      current_->fenceMarker = fenceMarkerScratch_;
+      current_->fenceLength = fenceLengthScratch_;
+      current_->fenceClosed = candidate_op();
+    }
     promoteLeaf();
     document_->blocks.push_back(std::move(*current_));
     current_.reset();
@@ -603,6 +726,10 @@ private:
     blockSource_.push_back({static_cast<uint32_t>(leafStart_), static_cast<uint32_t>(leafEnd_)});
     lastLeafEnd_ = leafEnd_;
     leafStart_ = kUnknownOffset;
+    fenceMarkerScratch_ = 0;
+    fenceLengthScratch_ = 0;
+    fenceRunStart_ = 0;
+    fenceLineEnd_ = 0;
   }
 
   /**
@@ -1120,6 +1247,12 @@ private:
   size_t leafStart_{kUnknownOffset};
   size_t leafEnd_{0};
   size_t lastLeafEnd_{0};
+  /// Offset just after the newline ending a fenced block opener's line, so a
+  /// never-empty code block can be anchored even when md4c emitted no text.
+  size_t fenceLineEnd_{0};
+  char fenceMarkerScratch_{0};
+  uint32_t fenceLengthScratch_{0};
+  size_t fenceRunStart_{0};
   size_t cursor_{0};
   unsigned tableRow_{0};
   uint32_t containerCount_{0};

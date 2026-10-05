@@ -38,6 +38,20 @@ public:
                                                    const LayoutHint &hint = LayoutHint(),
                                                    MathOptions math = MathOptions());
 
+  /// The finished preparation for this source under these options, or null.
+  ///
+  /// A lookup rather than a request, for the fence-slot query: answering from a
+  /// preparation that has already run costs a parse's worth of nothing, while
+  /// requesting one here would schedule work for a message nobody is about to
+  /// measure. A preparation still in flight is not an answer — the caller
+  /// decides what to do about a source it cannot read yet.
+  static std::shared_ptr<const PreparedDocument> completed(std::string_view source, MathOptions math = MathOptions());
+
+  /// The parsed blocks of a finished preparation, or an empty document when
+  /// there is none, so a caller can walk fences without knowing which of the two
+  /// answers it has.
+  static DocumentHandle blocksFor(std::string_view source, MathOptions math = MathOptions());
+
   /// Drops cached results. For tests.
   static void clearCache();
 
