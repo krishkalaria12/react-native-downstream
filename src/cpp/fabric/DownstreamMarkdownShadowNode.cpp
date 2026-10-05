@@ -63,14 +63,14 @@ DownstreamMarkdownShadowNode::DownstreamMarkdownShadowNode(const ShadowNode &sou
     requestControlledSource();
   } else if (previous.markdown == props.markdown && previous.generation == props.generation &&
              previous.sessionSequence == props.sessionSequence && previous.sessionRevision == props.sessionRevision &&
-             previous.mathFlags == props.mathFlags) {
+             previous.parseFlags == props.parseFlags) {
     controlled_ = source.controlled_;
     // A revision that showed a fallback while its source was being prepared
     // collects the result in the next revision.
     needsDocument_ = source.needsDocument_ || source.awaitingPrepared_;
     pendingError_ = source.pendingError_;
   } else if (props.sessionId.empty() && previous.markdown == props.markdown &&
-             previous.mathFlags == props.mathFlags) {
+             previous.parseFlags == props.parseFlags) {
     // A generation change without a new source, after a rejected value.
     controlled_ = source.controlled_;
   } else {
@@ -141,9 +141,9 @@ void DownstreamMarkdownShadowNode::requestControlledSource() {
   // The view's math options are parse options: the same string parses to a
   // different document with math on, so they travel with the request and are
   // part of what the preparation cache keys on.
-  downstream::MathOptions math;
-  math.flags = static_cast<uint32_t>(props.mathFlags);
-  controlled_->prepared = downstream::PreparedDocument::request(props.markdown, layoutHint(1, 0, document_), math);
+  downstream::ParseOptions parse;
+  parse.flags = static_cast<uint32_t>(props.parseFlags);
+  controlled_->prepared = downstream::PreparedDocument::request(props.markdown, layoutHint(1, 0, document_), parse);
 }
 
 void DownstreamMarkdownShadowNode::setLayoutManager(

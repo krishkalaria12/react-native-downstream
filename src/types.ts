@@ -124,6 +124,28 @@ export type MarkdownPreviewOptions = Readonly<{
    * other repair. Streamdown closes it unconditionally; this does not.
    */
   math?: boolean;
+  /**
+   * Hide a half-arrived allowlisted tag (`<br`, `</su`) at the stream tail.
+   * Off by default, as every preview feature.
+   */
+  htmlTags?: boolean;
+}>;
+
+/**
+ * Which inline tag syntaxes the parser recognizes beyond the three raw tags.
+ *
+ * Both forms are off by default, because enabling either makes text that was
+ * prose into a styled span.
+ */
+export type MarkdownSyntaxOptions = Readonly<{
+  /**
+   * `^x^` is a superscript. Off: `2^10 and 3^5` would pair the carets.
+   */
+  superscript?: boolean;
+  /**
+   * `~x~` is a subscript instead of strikethrough. Off, as in Streamdown.
+   */
+  subscript?: boolean;
 }>;
 
 export type MarkdownStreamOptions = Readonly<{
@@ -145,6 +167,13 @@ export type MarkdownStreamOptions = Readonly<{
    * whether parsed formulas are typeset.
    */
   math?: boolean | MarkdownMathOptions;
+  /**
+   * Render `<br>`, `<sub>` and `<sup>`. Every other tag stays text. On by
+   * default; `false` restores the release that showed every tag as source.
+   */
+  inlineHtml?: boolean;
+  /** md4c's `^x^` and `~x~` syntaxes, both off by default. */
+  syntax?: MarkdownSyntaxOptions;
 }>;
 
 /** Created by createMarkdownStream(options), planned for the native session phase. */
@@ -568,6 +597,8 @@ export type MarkdownStyle = Readonly<{
   >;
   footnote?: { color?: MarkdownColor };
   imageAlt?: { color?: MarkdownColor };
+  superscript?: { fontScale?: number; baselineOffsetScale?: number };
+  subscript?: { fontScale?: number; baselineOffsetScale?: number };
   /** A display formula's own box. enriched-markdown's `latex` keys. */
   math?: {
     fontSize?: number;
@@ -697,6 +728,13 @@ type MarkdownViewBaseProps = Readonly<{
   math?: boolean | MarkdownMathOptions;
   /** A formula that could not be typeset, once per distinct source per view. */
   onMathError?: (event: MarkdownMathErrorEvent) => void;
+  /**
+   * Render `<br>`, `<sub>` and `<sup>`. Every other tag stays text. On by
+   * default; `false` restores the release that showed every tag as source.
+   */
+  inlineHtml?: boolean;
+  /** md4c's `^x^` and `~x~` syntaxes, both off by default. */
+  syntax?: MarkdownSyntaxOptions;
   /**
    * Load images. On by default, as in Streamdown.
    *

@@ -48,7 +48,7 @@ const Preview kDisabled{};
  * math off, which is also the state the whole fixture corpus is byte-identical
  * in, and `mathPreview` turns math on for the cases that are about it.
  */
-const MathOptions kNoMath{MathParseFlags::Enabled & ~MathParseFlags::Enabled};
+const ParseOptions kNoMath{ParseFlags::Enabled & ~ParseFlags::Enabled};
 
 /// `kPreview` with math off, so a case about a span is a case about a span.
 PreviewResult applyCorpus(std::string_view input, size_t origin = 0, size_t frozenBlocks = 0) {
@@ -659,7 +659,7 @@ bool featuresAreOptIn() {
   PreviewOptions mathOnly;
   mathOnly.features = static_cast<uint32_t>(PreviewFeature::Math);
   const Preview math{mathOnly};
-  CHECK(math.apply("See $$x + ", 0, 0, MathOptions{MathParseFlags::Default}).repaired,
+  CHECK(math.apply("See $$x + ", 0, 0, ParseOptions{ParseFlags::Default}).repaired,
         "math alone closes a formula");
   CHECK(!math.apply("**bold wor", 0, 0, kNoMath).repaired, "math alone does not close bold");
   // With math off there is no formula to close, so the repair proves nothing and
@@ -682,8 +682,8 @@ bool featuresAreOptIn() {
  * stated in `provesMathRepair`.
  */
 bool mathPreview() {
-  const MathOptions on{MathParseFlags::Default};
-  const MathOptions bracketsOff{MathParseFlags::Enabled | MathParseFlags::SingleDollar};
+  const ParseOptions on{ParseFlags::Default};
+  const ParseOptions bracketsOff{ParseFlags::Enabled | ParseFlags::SingleDollar};
 
   // The plain case: a formula that has not closed yet, closed provisionally and
   // typeset from then on.
@@ -813,6 +813,49 @@ bool corpusInvariants() {
 
 /// The scan primitives the policy and the parser share. These are the answers
 /// remend reimplements in JavaScript, so they need one suite of their own.
+/// The half-arrived tag fragment, which is the one place the pass removes
+/// source from the reader's view rather than restyling it.
+bool htmlTagFragments() {
+  const PreviewOptions tagsOnly{static_cast<PreviewOptions::features_t>(PreviewFeature::HtmlTags)};
+  const Preview preview{tagsOnly};
+  // The tags are on, because a fragment is only worth hiding when the engine
+  // would have rendered it.
+  const ParseOptions inlineHtml{ParseFlags::InlineHtml};
+  const auto shown = [&](std::string_view input) {
+    const PreviewResult result = preview.apply(input, 0, 0, inlineHtml);
+    return visible(*result.parsed.document);
+  };
+
+  CHECK(shown("Mix<br") == "Mix", "a half-arrived br is hidden");
+  CHECK(shown("Mix<b") == "Mix", "a fragment that could still be a br is hidden");
+  CHECK(shown("H<sub>2</sub") == "H2", "a half-arrived subscript is hidden");
+  CHECK(shown("x<sup>2</sup") == "x2", "a half-arrived superscript is hidden");
+
+  // A prefix of no allowlisted tag is text, and the proof says so rather than
+  // the shape of the fragment deciding it.
+  CHECK(shown("a<b and 2<3") == "a<b and 2<3", "a comparison stays");
+  CHECK(shown("a<blink") == "a<blink", "a longer word stays");
+  CHECK(shown("a<subtitle>x") == "a<subtitle>x", "a longer name stays");
+
+  // The writer's own backticks claimed the fragment as code, so it is content.
+  CHECK(shown("`<br`") == "<br", "a fragment inside a code span stays");
+
+  // Removing the fragment changed what came before it, so nothing is hidden.
+  CHECK(shown("a<br><su") == "a\n<su", "a fragment whose removal moves a line stays");
+
+  // The feature is opt-in like every other one.
+  const PreviewResult off = kDisabled.apply("Mix<br", 0, 0, inlineHtml);
+  CHECK(visible(*off.parsed.document) == "Mix<br", "the pass is inert without the feature");
+  CHECK(off.stats.probes == 0, "an inert pass costs no probe");
+
+  // A finished stream never previews, and the settled document keeps the source.
+  const PreviewResult finished = preview.apply("Mix<br", 0, 1, inlineHtml);
+  CHECK(!finished.repaired, "a settled tail is not repaired");
+  return true;
+}
+
+/// The scanner both the parser and the pass read, so the two can never disagree
+/// about which tags exist.
 bool sharedScanner() {
   using namespace downstream::scan;
 
@@ -839,6 +882,39 @@ bool sharedScanner() {
   CHECK(!isUnfinishedDestination("text\\](http://x", 6), "an escaped bracket is not one");
   CHECK(!isUnfinishedDestination("ab", 1), "too few bytes to hold a destination");
   CHECK(isUnfinishedDestination("[a](http://x", 4), "a link with no close is an unfinished target");
+
+  // The tag matcher, which is a table rather than an HTML tokenizer: md4c has
+  // already proved the piece is one well-formed tag.
+  CHECK(matchInlineTag("<br>") == InlineTag::Break, "a br is a break");
+  CHECK(matchInlineTag("<br/>") == InlineTag::Break, "a self-closed br is a break");
+  CHECK(matchInlineTag("<br />") == InlineTag::Break, "a spaced self-closed br is a break");
+  CHECK(matchInlineTag("<BR>") == InlineTag::Break, "a tag name is case-insensitive");
+  CHECK(matchInlineTag("</br>") == InlineTag::Break, "a stray closer is a break");
+  CHECK(matchInlineTag("<br clear=\"all\">") == InlineTag::Break, "attributes are ignored");
+  CHECK(matchInlineTag("<sub>") == InlineTag::SubOpen, "sub opens");
+  CHECK(matchInlineTag("<sup>") == InlineTag::SupOpen, "sup opens");
+  CHECK(matchInlineTag("</sub>") == InlineTag::SubClose, "sub closes");
+  CHECK(matchInlineTag("</sup >") == InlineTag::SupClose, "a close tag may carry space");
+  CHECK(matchInlineTag("<sub/>") == InlineTag::SubVoid, "a self-closed script is swallowed");
+  CHECK(matchInlineTag("<sup />") == InlineTag::SupVoid, "a spaced self-closed script is swallowed");
+  CHECK(matchInlineTag("<b>") == InlineTag::None, "a tag off the list is literal");
+  CHECK(matchInlineTag("<!-- x -->") == InlineTag::None, "a comment is literal");
+  CHECK(matchInlineTag("<subtitle>") == InlineTag::None, "a longer name is not a prefix match");
+  CHECK(matchInlineTag("<supplier>") == InlineTag::None, "and neither is this one");
+  CHECK(matchInlineTag("<brx>") == InlineTag::None, "a name that runs past br is not a br");
+  CHECK(matchInlineTag("a < b") == InlineTag::None, "prose is never a tag");
+
+  // The prefix rule the preview pass asks, on the same table.
+  CHECK(isInlineTagPrefix("<"), "a lone opener could still become a tag");
+  CHECK(isInlineTagPrefix("<s"), "a partial name could");
+  CHECK(isInlineTagPrefix("</su"), "a partial closer could");
+  CHECK(isInlineTagPrefix("<br /"), "a partial self-closer could");
+  CHECK(!isInlineTagPrefix("<br>"), "a complete tag is not a fragment");
+  CHECK(isInlineTagPrefix("<b"), "b can still reach br, so it is a fragment");
+  CHECK(!isInlineTagPrefix("<z"), "a name that cannot reach one of the three is not one");
+  CHECK(!isInlineTagPrefix("a<b"), "prose before the fragment does not matter");
+  CHECK(!isInlineTagPrefix("<subtitl"), "a longer word is not a fragment of sub");
+  CHECK(!isInlineTagPrefix("<br漢字"), "a fragment is ASCII, so its bytes are its units");
 
   // Destination scanning has to survive the shapes a model can emit mid-URL.
   CHECK(skipInlineDestination("(a(b)c)", 0) == 7, "nested parens close in order");
@@ -1158,6 +1234,7 @@ int main() {
   CHECK(mathPreview(), "math preview");
   CHECK(corpusInvariants(), "corpus invariants");
   CHECK(sessionIntegration(), "session integration");
+  CHECK(htmlTagFragments(), "half-arrived tag fragments");
   CHECK(sharedScanner(), "shared scanner");
   return ds_check_result();
 }

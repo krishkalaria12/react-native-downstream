@@ -113,7 +113,7 @@ export interface NativeProps extends ViewProps {
    * the first thing that reads them, and a formula that is never recognized can
    * never be laid out.
    */
-  mathFlags?: CodegenTypes.WithDefault<CodegenTypes.Int32, 0>;
+  parseFlags?: CodegenTypes.WithDefault<CodegenTypes.Int32, 0>;
   /**
    * Load images. Off shows alt text and makes no request, which is also what a
    * document with no image does whatever this says.

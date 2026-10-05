@@ -92,7 +92,7 @@ void DownstreamSessionModule::reportError(const std::string &sessionId, const st
 }
 
 void DownstreamSessionModule::create(jsi::Runtime & /*rt*/, std::string sessionId, std::string mode,
-                                     double mathFlags) {
+                                     double parseFlags) {
   if (sessionId.empty() || (mode != "full" && mode != "incremental")) {
     reportError(sessionId, "invalid_session", "A nonempty session ID and valid parse mode are required", 0, 0);
     return;
@@ -100,8 +100,8 @@ void DownstreamSessionModule::create(jsi::Runtime & /*rt*/, std::string sessionI
   // A bitmask crosses the bridge as a number. Anything negative or above 2^32 is a
   // caller that is not this library, and an unset parse is the safe answer: every
   // formula stays literal rather than one being read as a flag it was not.
-  const double validated = std::clamp(mathFlags, 0.0, 4294967295.0);
-  const auto mathOptions = downstream::MathOptions{static_cast<uint32_t>(validated)};
+  const double validated = std::clamp(parseFlags, 0.0, 4294967295.0);
+  const auto mathOptions = downstream::ParseOptions{static_cast<uint32_t>(validated)};
   const auto parseMode =
       mode == "incremental" ? downstream::ParseMode::IncrementalTail : downstream::ParseMode::FullParse;
   try {
@@ -127,7 +127,7 @@ void DownstreamSessionModule::create(jsi::Runtime & /*rt*/, std::string sessionI
     // Applied after the session exists, which is the only order that works: a
     // parse queued before this would read the default flags and lay the same
     // source out two different ways.
-    downstream::SessionRegistry::setMath(sessionId, mathOptions);
+    downstream::SessionRegistry::setParse(sessionId, mathOptions);
   } catch (const std::exception &error) {
     reportError(sessionId, "create_failed", error.what(), 0, 0);
   }

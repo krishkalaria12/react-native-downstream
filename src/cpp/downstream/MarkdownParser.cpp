@@ -101,17 +101,17 @@ std::string attributeToUtf8(const MD_ATTRIBUTE &attribute) {
 
 class DocumentBuilder {
 public:
-  DocumentBuilder(std::string_view source, MathOptions math)
-      : source_(source), parse_(source), brackets_(), math_(math), offsets_(source),
+  DocumentBuilder(std::string_view source, ParseOptions options)
+      : source_(source), parse_(source), brackets_(), options_(options), offsets_(source),
         document_(std::make_shared<Document>()) {
     document_->id = allocateDocumentId();
-    if (math_.enabled()) {
+    if (options_.enabled()) {
       // The rewrite is the same length as the source, so every offset md4c
       // reports is also an offset into `source_`. That is the whole reason
       // this is a rewrite rather than a translation table: `parse_` is what
       // md4c sees, and `source_` is what a reader should see, and they are the
       // same bytes at the same offsets.
-      brackets_ = scan::rewriteMathDelimiters(source, math_.brackets());
+      brackets_ = scan::rewriteMathDelimiters(source, options_.brackets());
       if (!brackets_.empty()) {
         parse_ = brackets_.text;
       }
@@ -290,6 +290,11 @@ public:
   }
 
   int enterSpan(MD_SPANTYPE type, void *detail) {
+    // A span boundary ends any pending break stretch: the styles were
+    // captured when the stretch opened, so flushing now keeps the appended
+    // newlines in callback order and the inner span's text offsets from
+    // absorbing the breaks between spans.
+    flushStretch(false);
     switch (type) {
       case MD_SPAN_EM:
         emphasisDepth_++;
@@ -343,6 +348,12 @@ public:
         spans_.push_back(frame);
         break;
       }
+      case MD_SPAN_SUPERSCRIPT:
+        openScripts_.push_back(1);
+        break;
+      case MD_SPAN_SUBSCRIPT:
+        openScripts_.push_back(0);
+        break;
       case MD_SPAN_LATEXMATH:
       case MD_SPAN_LATEXMATH_DISPLAY: {
         // md4c has already resolved the delimiters and reports the contents as a
@@ -356,8 +367,11 @@ public:
       case MD_SPAN_FOOTNOTE_REF: {
         const auto *reference = static_cast<MD_SPAN_FOOTNOTE_REF_DETAIL *>(detail);
         ensureLeaf();
-        appendText(asciiToUtf16(std::to_string(reference->id)), currentStyles() | InlineStyle::FootnoteRef,
-                   currentLink());
+        // A reference keeps only its own bit: a <sup> around it would raise a
+        // footnote marker twice. It precedes any slice flush, so use the
+        // stretch flush.
+        const uint32_t refStyles = InlineStyle::FootnoteRef | (currentLink() >= 0 ? InlineStyle::Link : 0);
+        appendStretchFlushed(asciiToUtf16(std::to_string(reference->id)), refStyles, currentLink());
         break;
       }
       default:
@@ -384,6 +398,12 @@ public:
       case MD_SPAN_LATEXMATH:
       case MD_SPAN_LATEXMATH_DISPLAY:
         mathDepth_--;
+        break;
+      case MD_SPAN_SUPERSCRIPT:
+        removeScript(1);
+        break;
+      case MD_SPAN_SUBSCRIPT:
+        removeScript(0);
         break;
       case MD_SPAN_A:
       case MD_SPAN_IMG:
@@ -416,26 +436,92 @@ public:
     }
     noteSourceText(text, size);
 
-    std::u16string piece;
     const bool verbatim = type == MD_TEXT_LATEXMATH;
     const uint32_t before = static_cast<uint32_t>(current_ ? current_->text.size() : 0);
+    auto done = [&]() {
+      noteBlockText(before, static_cast<uint32_t>(current_->text.size()));
+      return 0;
+    };
+
     switch (type) {
-      case MD_TEXT_NULLCHAR:
-        piece.push_back(kReplacementCharacter);
-        break;
       case MD_TEXT_BR:
-        piece.push_back(u'\n');
-        break;
+        stretchHard_++;
+        stretchStyles_ = currentStyles();
+        return done();
       case MD_TEXT_SOFTBR:
-        // The fixture contract keeps source line breaks visible.
-        piece.push_back(u'\n');
-        break;
-      case MD_TEXT_ENTITY:
-        appendEntity(piece, std::string_view(text, size));
-        break;
-      default:
+        // The fixture contract keeps source line breaks visible, but a stretch
+        // that also holds a <br> or a hard break is counted once per hard mark.
+        stretchSoft_++;
+        stretchStyles_ = currentStyles();
+        return done();
+      case MD_TEXT_HTML: {
+        if (options_.inlineHtml() && current_->kind != BlockKind::HtmlBlock) {
+          switch (scan::matchInlineTag(std::string_view(text, size))) {
+            case scan::InlineTag::Break:
+              trimTrailingSpaces();
+              stretchTag_++;
+              stretchStyles_ = currentStyles();
+              dropNextSpace_ = true;
+              return done();
+            case scan::InlineTag::SubOpen:
+              openScripts_.push_back(0);
+              return done();
+            case scan::InlineTag::SubClose:
+              removeScript(0);
+              return done();
+            case scan::InlineTag::SupOpen:
+              openScripts_.push_back(1);
+              return done();
+            case scan::InlineTag::SupClose:
+              removeScript(1);
+              return done();
+            case scan::InlineTag::SubVoid:
+            case scan::InlineTag::SupVoid:
+              return done();
+            case scan::InlineTag::None:
+              break;
+          }
+        }
+        // Any other tag, and every tag while inline HTML is off, stays text.
+        std::u16string piece;
         appendUtf8(piece, std::string_view(text, size));
+        appendStretchFlushed(piece, currentStyles(), currentLink());
+        return done();
+      }
+      case MD_TEXT_NULLCHAR: {
+        std::u16string piece;
+        piece.push_back(kReplacementCharacter);
+        appendStretchFlushed(piece, currentStyles(), currentLink());
+        return done();
+      }
+      case MD_TEXT_ENTITY: {
+        std::u16string piece;
+        appendEntity(piece, std::string_view(text, size));
+        appendStretchFlushed(piece, currentStyles(), currentLink());
+        return done();
+      }
+      case MD_TEXT_LATEXMATH:
         break;
+      default: {
+        std::u16string piece;
+        appendUtf8(piece, std::string_view(text, size));
+        if (dropNextSpace_) {
+          size_t skip = 0;
+          while (skip < piece.size() && (piece[skip] == u' ' || piece[skip] == u'\t')) {
+            skip++;
+          }
+          piece.erase(0, skip);
+          if (piece.empty()) {
+            // A whitespace-only piece between a <br> and the next text is
+            // dropped: the break that will flush the stretch stands in its
+            // place, and the count is not settled until real text arrives.
+            return done();
+          }
+          dropNextSpace_ = false;
+        }
+        appendStretchFlushed(piece, currentStyles(), currentLink());
+        return done();
+      }
     }
     if (verbatim) {
       // md4c hands over only the TeX, pointing just past the opening delimiter
@@ -446,7 +532,7 @@ public:
       // The verbatim run begins just past the opening delimiter and ends just
       // short of the closing one, so the delimiter's own length is read off the
       // bytes before it rather than assumed: a run of one dollar is a formula
-      // when the app asked for one, and a constant two would read the character
+      // when the app asked for it, and a constant two would read the character
       // in front of it as part of the delimiter.
       const size_t contentAt = static_cast<size_t>(text - parse_.data());
       mathDelimLength_ = 0;
@@ -464,12 +550,13 @@ public:
       // The delimiters and the TeX are appended together, so nothing appends
       // the TeX on its own first: the literal a reader sees is one piece, and
       // the span covers all of it.
+      flushStretch(false);
+      std::u16string piece;
+      appendUtf8(piece, std::string_view(text, size));
       appendMath(piece, mathDisplay_);
-    } else {
-      appendText(piece, currentStyles(), currentLink());
+      return done();
     }
-    noteBlockText(before, static_cast<uint32_t>(current_->text.size()));
-    return 0;
+    return done();
   }
 
   DocumentHandle finish() {
@@ -548,6 +635,10 @@ private:
     for (auto &list : lists_) {
       list.leaves++;
     }
+    openScripts_.clear();
+    stretchSoft_ = stretchHard_ = stretchTag_ = 0;
+    stretchStyles_ = 0;
+    dropNextSpace_ = false;
   }
 
   BlockSpacing spacingForNewLeaf() const {
@@ -594,6 +685,9 @@ private:
         run.end = std::min<uint32_t>(run.end, static_cast<uint32_t>(current_->text.size()));
       }
     }
+    flushStretch(true);
+    openScripts_.clear();
+    dropNextSpace_ = false;
     promoteLeaf();
     document_->blocks.push_back(std::move(*current_));
     current_.reset();
@@ -635,6 +729,10 @@ private:
       current_->info.clear();
       return;
     }
+    if (current_->kind == BlockKind::HtmlBlock) {
+      promoteBrOnlyHtml();
+      return;
+    }
     if (current_->kind != BlockKind::Paragraph) {
       return;
     }
@@ -642,6 +740,47 @@ private:
       return;
     }
     promoteImageParagraph();
+  }
+
+  /// A block that is nothing but `<br>` tags and whitespace becomes a
+  /// paragraph of empty lines, one per tag: a paragraph holding n−1 newlines
+  /// measures one line per tag, as does the mock. Anything else keeps the
+  /// html block's raw, visible text.
+  bool promoteBrOnlyHtml() {
+    const std::u16string &text = current_->text;
+    size_t count = 0;
+    size_t i = 0;
+    while (i < text.size()) {
+      while (i < text.size() && (text[i] == u' ' || text[i] == u'\t' || text[i] == u'\r' || text[i] == u'\n')) {
+        i++;
+      }
+      if (i >= text.size()) {
+        break;
+      }
+      size_t j = i;
+      while (j < text.size() && !(text[j] == u' ' || text[j] == u'\t' || text[j] == u'\r' || text[j] == u'\n')) {
+        j++;
+      }
+      std::string ascii;
+      for (size_t k = i; k < j; k++) {
+        if (text[k] >= 0x80) {
+          return false;
+        }
+        ascii.push_back(static_cast<char>(text[k]));
+      }
+      if (scan::matchInlineTag(ascii) != scan::InlineTag::Break) {
+        return false;
+      }
+      count++;
+      i = j;
+    }
+    if (count == 0) {
+      return false;
+    }
+    current_->kind = BlockKind::Paragraph;
+    current_->text.assign(count - 1, u'\n');
+    current_->runs.clear();
+    return true;
   }
 
   /**
@@ -741,6 +880,10 @@ private:
 
   void beginCell(bool header, MD_ALIGN align) {
     ensureLeaf();
+    // A stretch that ends in a cell is one break shorter, as at a block end.
+    flushStretch(true);
+    openScripts_.clear();
+    dropNextSpace_ = false;
     if (!current_->cells.empty()) {
       current_->text.push_back(u'\t');
     }
@@ -774,6 +917,11 @@ private:
     if (currentLink() >= 0) {
       styles |= InlineStyle::Link;
     }
+    if (!openScripts_.empty()) {
+      // The innermost still-open script wins, so <sup>a<sub>b</sub></sup>
+      // lowers b. Nesting the same tag twice sets the same bit twice.
+      styles |= openScripts_.back() == 0 ? InlineStyle::Subscript : InlineStyle::Superscript;
+    }
     return styles;
   }
 
@@ -805,6 +953,73 @@ private:
       }
     }
     block.runs.push_back({start, end, styles, link});
+  }
+
+  /// Folds the pending stretch into the block text with the per-stretch rule:
+  /// every tag and every hard break counts one line break, and soft breaks
+  /// count only when the stretch held no tag and no hard break. ‘trimmed’
+  /// is the block- or cell-end rule: a final break is invisible, so a
+  /// stretch-ending count is one smaller.
+  void flushStretch(bool trimmed) {
+    if (stretchSoft_ == 0 && stretchHard_ == 0 && stretchTag_ == 0) {
+      return;
+    }
+    int n = (stretchTag_ + stretchHard_) > 0 ? stretchTag_ + stretchHard_ : stretchSoft_;
+    if (trimmed) {
+      n = std::max(0, n - 1);
+    }
+    if (n > 0) {
+      appendText(std::u16string(n, u'\n'), stretchStyles_, currentLink());
+    }
+    stretchSoft_ = stretchHard_ = stretchTag_ = 0;
+    dropNextSpace_ = false;
+  }
+
+  /// Flushes the pending stretch before appending a piece of real text, so a
+  /// newline run always stands between the breaks that caused it and the text
+  /// that ends them.
+  void appendStretchFlushed(const std::u16string &piece, uint32_t styles, int32_t link) {
+    flushStretch(false);
+    appendText(piece, styles, link);
+  }
+
+  /// Trims spaces and tabs left of a <br>, which HTML's whitespace collapsing
+  /// drops the way the builder does it; run ends are clipped, never extended.
+  void trimTrailingSpaces() {
+    if (!current_) {
+      return;
+    }
+    auto &text = current_->text;
+    size_t n = text.size();
+    while (n > 0 && (text[n - 1] == u' ' || text[n - 1] == u'\t')) {
+      n--;
+    }
+    if (n == text.size()) {
+      return;
+    }
+    text.resize(n);
+    for (auto &run : current_->runs) {
+      run.end = std::min<uint32_t>(run.end, static_cast<uint32_t>(n));
+    }
+    for (auto it = current_->runs.begin(); it != current_->runs.end();) {
+      if (it->start >= it->end) {
+        it = current_->runs.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+
+  /// Removes the last open script of the kind /kind/, or no-op when none is
+  /// open: a stray end tag is a browser's no-op too, and an escaped opener
+  /// leaves no open to close.
+  void removeScript(int kind) {
+    for (auto it = openScripts_.rbegin(); it != openScripts_.rend(); ++it) {
+      if (*it == static_cast<uint8_t>(kind)) {
+        openScripts_.erase(std::next(it).base());
+        return;
+      }
+    }
   }
 
   /// Records where in the block's own text each open span's text landed, so an
@@ -1109,7 +1324,7 @@ private:
   /// The rewritten source and the pairs it came from. Held for the whole parse
   /// because `parse_` is a view into it.
   scan::MathSource brackets_;
-  MathOptions math_;
+  ParseOptions options_;
   Utf16OffsetMap offsets_;
   std::shared_ptr<Document> document_;
   std::optional<Block> current_;
@@ -1128,6 +1343,20 @@ private:
   int emphasisDepth_{0};
   int strikeDepth_{0};
   int codeDepth_{0};
+  /// Open script tags, innermost last: 0 is a subscript, 1 a superscript.
+  /// A small stack, not two depths, because the innermost-opened one wins and
+  /// nesting the same tag twice does not shift further.
+  std::vector<uint8_t> openScripts_;
+  /// A run of soft breaks, hard breaks and <br> tags with no text between
+  /// them: each tag and each hard break counts one '\n', and soft breaks
+  /// count only when the stretch holds no tag and no hard break. Flushed once,
+  /// when the next text arrives or the block or cell ends.
+  int stretchSoft_{0};
+  int stretchHard_{0};
+  int stretchTag_{0};
+  uint32_t stretchStyles_{0};
+  /// Spaces directly around a <br> are dropped, as HTML's collapsing does.
+  bool dropNextSpace_{false};
   /// md4c does not nest math spans, so one flag is the whole display state.
   int mathDepth_{0};
   bool mathDisplay_{false};
@@ -1147,9 +1376,9 @@ uint64_t allocateDocumentId() {
   return nextDocumentId.fetch_add(1, std::memory_order_relaxed);
 }
 
-ParseResult parseMarkdown(std::string_view source, MathOptions options) {
+ParseResult parseMarkdown(std::string_view source, ParseOptions options) {
   ParseResult result;
-  result.math = options;
+  result.parse = options;
   if (source.size() > kMaxSourceBytes) {
     result.status = ParseStatus::InputLimit;
     result.message = "Markdown source exceeds 1 MiB of UTF-8.";
@@ -1181,6 +1410,12 @@ ParseResult parseMarkdown(std::string_view source, MathOptions options) {
       parser.flags |= MD_FLAG_LATEXMATHNOSINGLE;
     }
   }
+  if (options.superscriptSyntax()) {
+    parser.flags |= MD_FLAG_SUPERSCRIPTS;
+  }
+  if (options.subscriptSyntax()) {
+    parser.flags |= MD_FLAG_SUBSCRIPTS;
+  }
   parser.enter_block = [](MD_BLOCKTYPE type, void *detail, void *userdata) {
     return static_cast<DocumentBuilder *>(userdata)->enterBlock(type, detail);
   };
@@ -1209,7 +1444,7 @@ ParseResult parseMarkdown(std::string_view source, MathOptions options) {
   return result;
 }
 
-ParseResult parseMarkdownAt(std::string_view region, size_t origin, MathOptions options) {
+ParseResult parseMarkdownAt(std::string_view region, size_t origin, ParseOptions options) {
   const uint32_t pad = static_cast<uint32_t>(origin % 256);
   if (pad == 0) {
     return parseMarkdown(region, options);

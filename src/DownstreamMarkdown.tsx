@@ -16,7 +16,11 @@ import {
 import { resolveControls, type ResolvedControls } from './controls';
 import NativeDownstreamMarkdownView from './DownstreamMarkdownViewNativeComponent';
 import { getStreamState } from './createMarkdownStream';
-import { mathAvailable, resolveMath, warnAboutMissingMathEngine } from './math';
+import {
+  mathAvailable,
+  resolveParseFlags,
+  warnAboutMissingMathEngine,
+} from './parseFlags';
 import { resolveTheme, type ResolvedTheme } from './theme';
 import type {
   MarkdownControlAction,
@@ -345,18 +349,30 @@ function useMathAndImages(
     allowedImagePrefixes?: readonly string[];
     onMathError?: (event: MarkdownMathErrorEvent) => void;
     onImagePress?: (event: MarkdownImageEvent) => void;
+    inlineHtml?: boolean;
+    syntax?: MarkdownViewProps['syntax'];
   },
   currentGeneration: () => number
 ) {
-  const { math, images, allowedImagePrefixes, onMathError, onImagePress } =
-    props;
+  const {
+    math,
+    images,
+    allowedImagePrefixes,
+    onMathError,
+    onImagePress,
+    inlineHtml,
+    syntax,
+  } = props;
 
   // One read of the platform's answer for the lifetime of the process. A test
   // that installs a mock engine calls the reset hook to observe the change.
   const engine = useRef<boolean | undefined>(undefined);
   if (engine.current === undefined) engine.current = mathAvailable();
 
-  const resolved = useMemo(() => resolveMath(math, engine.current), [math]);
+  const resolved = useMemo(
+    () => resolveParseFlags(math, inlineHtml, syntax, engine.current),
+    [math, inlineHtml, syntax]
+  );
   const resolvedStable = useRef(resolved);
   if (resolvedStable.current.flags !== resolved.flags) {
     resolvedStable.current = resolved;
@@ -426,7 +442,7 @@ function useMathAndImages(
   );
 
   return {
-    mathFlags: resolvedStable.current.flags,
+    parseFlags: resolvedStable.current.flags,
     images: images !== false,
     allowedImagePrefixes: prefixesStable.current,
     onImagePress: onImagePress ? handleImagePress : undefined,
@@ -537,7 +553,7 @@ function ControlledMarkdown({
       imageFilename={resolved.imageFilename}
       csvSeparator={resolved.csvSeparator}
       controlLabels={resolved.labels}
-      mathFlags={images.mathFlags}
+      parseFlags={images.parseFlags}
       images={images.images}
       allowedImagePrefixes={images.allowedImagePrefixes}
       themeSlots={resolvedTheme.slots}
@@ -643,7 +659,7 @@ function StreamMarkdown({
       imageFilename={resolved.imageFilename}
       csvSeparator={resolved.csvSeparator}
       controlLabels={resolved.labels}
-      mathFlags={images.mathFlags}
+      parseFlags={images.parseFlags}
       images={images.images}
       allowedImagePrefixes={images.allowedImagePrefixes}
       themeSlots={resolvedTheme.slots}

@@ -41,6 +41,9 @@ export const STYLE = {
   link: 1 << 4,
   imageAlt: 1 << 5,
   footnote: 1 << 6,
+  math: 1 << 7,
+  superscript: 1 << 8,
+  subscript: 1 << 9,
 } as const;
 
 /** Container kinds, matching `Container::Kind`. */
@@ -92,6 +95,14 @@ export interface Link {
   range: [number, number];
 }
 
+/** An image the document records, as the drivers print them. */
+export interface ImageRecord {
+  url: string;
+  /** Plain alt text, as a reader would see it. */
+  alt: string;
+  loadable: boolean;
+}
+
 /** What the highlighter did over a session's passes. */
 export interface HighlightCounters {
   blocks: number;
@@ -104,6 +115,8 @@ export interface HighlightCounters {
 export interface RenderModel {
   blocks: Block[];
   links: Link[];
+  /** Every image the document records, whether or not a block names it. */
+  images: ImageRecord[];
   /** Leading blocks no later input can change, as `Document::settledBlocks`. */
   settled: number;
   error?: string;
@@ -164,21 +177,27 @@ export const PREVIEW_INLINE_CODE = 1 << 1;
 export const PREVIEW_LINKS = 1 << 2;
 export const PREVIEW_IMAGES = 1 << 3;
 export const PREVIEW_MATH = 1 << 4;
+export const PREVIEW_HTML_TAGS = 1 << 5;
 export const PREVIEW_ALL =
   PREVIEW_EMPHASIS |
   PREVIEW_INLINE_CODE |
   PREVIEW_LINKS |
   PREVIEW_IMAGES |
-  PREVIEW_MATH;
+  PREVIEW_MATH |
+  PREVIEW_HTML_TAGS;
 
 /**
- * Bits of the parse-level `mathFlags` prop, mirroring `src/math.ts` and
- * `downstream::MathParseFlags`.
+ * Bits of the parse-level `parseFlags` prop, mirroring `src/parseFlags.ts` and
+ * `downstream::ParseFlags`.
  */
-export const MATH_ENABLED = 1 << 0;
-export const MATH_SINGLE_DOLLAR = 1 << 1;
-export const MATH_BRACKETS = 1 << 2;
-export const MATH_FLAGS_DEFAULT = MATH_ENABLED | MATH_BRACKETS;
+export const PARSE_ENABLED = 1 << 0;
+export const PARSE_SINGLE_DOLLAR = 1 << 1;
+export const PARSE_BRACKETS = 1 << 2;
+/** `<br>`, `<sub>` and `<sup>` are recognized. On unless `inlineHtml` is false. */
+export const PARSE_INLINE_HTML = 1 << 3;
+export const PARSE_SUPERSCRIPT_SYNTAX = 1 << 4;
+export const PARSE_SUBSCRIPT_SYNTAX = 1 << 5;
+export const PARSE_FLAGS_DEFAULT = PARSE_ENABLED | PARSE_BRACKETS;
 
 function sessionBinary(): string {
   return compile(TARGETS['downstream-session'], 'downstream-session');
@@ -227,10 +246,11 @@ function encodeOp(step: SessionOp): Buffer {
  */
 export function replaySession(
   mode: SessionMode,
-  steps: readonly SessionOp[]
+  steps: readonly SessionOp[],
+  parseFlags = 0
 ): RenderModel {
   return JSON.parse(
-    execFileSync(sessionBinary(), [mode], {
+    execFileSync(sessionBinary(), [mode, String(parseFlags)], {
       input: Buffer.concat(steps.map(encodeOp)),
       maxBuffer: 256 << 20,
     }).toString('utf8')
@@ -241,12 +261,20 @@ export function replaySession(
  * The first frame of a stream that previews: `source` arrives in one chunk of
  * an unfinished full-mode session with `features` enabled.
  */
-export function preview(source: string, features: number): RenderModel {
-  return replaySession('full', [
-    { op: 'preview', features },
-    { op: 'append', chunk: source },
-    { op: 'parse', finished: false },
-  ]);
+export function preview(
+  source: string,
+  features: number,
+  parseFlags = 0
+): RenderModel {
+  return replaySession(
+    'full',
+    [
+      { op: 'preview', features },
+      { op: 'append', chunk: source },
+      { op: 'parse', finished: false },
+    ],
+    parseFlags
+  );
 }
 
 function incrementalBinary(): string {
@@ -254,13 +282,14 @@ function incrementalBinary(): string {
 }
 
 /** Parses a complete document with the engine that ships in the app. */
-export function parse(source: string | Buffer): RenderModel {
+export function parse(source: string | Buffer, parseFlags = 0): RenderModel {
   const input =
     typeof source === 'string' ? Buffer.from(source, 'utf8') : source;
   return JSON.parse(
-    execFileSync(engineBinary(), { input, maxBuffer: 256 << 20 }).toString(
-      'utf8'
-    )
+    execFileSync(engineBinary(), parseFlags ? [String(parseFlags)] : [], {
+      input,
+      maxBuffer: 256 << 20,
+    }).toString('utf8')
   );
 }
 

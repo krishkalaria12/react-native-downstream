@@ -120,14 +120,14 @@ class DownstreamMarkdownViewManager :
   }
 
   /**
-   * The math flags, and the `images` switch, are props the shadow node parses: it
-   * decides whether a formula resolves and whether a URL may be fetched at all, and
-   * it writes both answers into the state this view draws from. The view keeps the
-   * flags for the one decision the state does not carry — what a picture's save is
-   * named — and nothing else.
+   * The parse flags, and the `images` switch, are props the shadow node parses: it
+   * decides whether a formula resolves, whether a tag is a break or a script, and
+   * whether a URL may be fetched at all, and it writes those answers into the state
+   * this view draws from. The view keeps the flags for the one decision the state
+   * does not carry — what a picture's save is named — and nothing else.
    */
-  override fun setMathFlags(view: DownstreamMarkdownView, value: Int) {
-    view.setMathFlags(value)
+  override fun setParseFlags(view: DownstreamMarkdownView, value: Int) {
+    view.setParseFlags(value)
   }
 
   override fun setImages(view: DownstreamMarkdownView, value: Boolean) {

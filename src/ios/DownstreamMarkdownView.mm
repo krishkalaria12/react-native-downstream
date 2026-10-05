@@ -314,7 +314,7 @@ NSString *nameForFormat(NSString *format) {
   // this view reads them only to pick the loader and the image delegate's own
   // policy, and neither changes a height, so nothing is rebuilt here. A change
   // to either reaches the frames through the next state update.
-  if (newProps.mathFlags != previous.mathFlags) {
+  if (newProps.parseFlags != previous.parseFlags) {
     // A formula that has just become literal, or just become typeset, is a
     // different rendering of the same document, and the shadow node's next
     // layout will have a different height for it.

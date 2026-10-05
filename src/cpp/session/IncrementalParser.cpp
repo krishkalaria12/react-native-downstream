@@ -268,11 +268,11 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   // one even though this parse covers them.
   ParseResult result;
   if (previewable) {
-    const remend::PreviewResult preview = preview_.apply(source, 0, committedCount(), math_);
+    const remend::PreviewResult preview = preview_.apply(source, 0, committedCount(), parse_);
     notePreview(preview);
     result = preview.parsed;
   } else {
-    result = parseMarkdown(source, math_);
+    result = parseMarkdown(source, parse_);
     counters_.bytesParsed += source.size();
   }
   counters_.fullParses++;
@@ -489,7 +489,7 @@ ParseResult IncrementalParser::parseTail() {
   // rebuilds from scratch. Everything below committedBytes_ lives in storage
   // the repair cannot reach, so no repair can restyle a block a reader has
   // already seen settled.
-  const remend::PreviewResult preview = preview_.apply(tail, committedBytes_, 0, math_);
+  const remend::PreviewResult preview = preview_.apply(tail, committedBytes_, 0, parse_);
   notePreview(preview);
   ParseResult result = preview.parsed;
   counters_.tailParses++;
@@ -588,7 +588,7 @@ bool IncrementalParser::commitRegion(size_t boundary) {
   const std::string_view region = std::string_view(source_).substr(committedBytes_, boundary - committedBytes_);
   counters_.commitAttempts++;
   counters_.bytesParsed += region.size();
-  const ParseResult parsed = parseMarkdownAt(region, committedBytes_, math_);
+  const ParseResult parsed = parseMarkdownAt(region, committedBytes_, parse_);
   bool closed = provesClosed(region, parsed) &&
       committedCount() + parsed.document->blocks.size() <= kMaxCommittedBlocks;
   if (closed && !parsed.document->blocks.empty()) {
@@ -598,7 +598,7 @@ bool IncrementalParser::commitRegion(size_t boundary) {
       std::string probe(region);
       probe += "x\n";
       counters_.bytesParsed += probe.size();
-      closed = splitsBefore(parsed, parseMarkdownAt(probe, committedBytes_, math_));
+      closed = splitsBefore(parsed, parseMarkdownAt(probe, committedBytes_, parse_));
     }
   }
   if (!closed) {
@@ -699,7 +699,7 @@ void IncrementalParser::watchOpenFence(std::string_view source, size_t from, siz
       if (closesFence(line, open->marker, open->length)) {
         open.reset();
       }
-    } else if (const auto candidate = fenceOpener(line, math_.enabled() && last.kind == BlockKind::MathBlock)) {
+    } else if (const auto candidate = fenceOpener(line, parse_.enabled() && last.kind == BlockKind::MathBlock)) {
       // An opener still being typed can change its info string, and a `$$` line
       // with no newline yet is not yet a fence.
       if (newline == kNoOffset) {
@@ -744,7 +744,7 @@ void IncrementalParser::watchOpenFence(std::string_view source, size_t from, siz
   std::string probe(source.substr(from));
   probe.push_back('x');
   counters_.bytesParsed += probe.size();
-  const ParseResult probed = parseMarkdownAt(probe, from, math_);
+  const ParseResult probed = parseMarkdownAt(probe, from, parse_);
   if (pendingNewline) {
     projected.push_back(u'\n');
   }
@@ -780,7 +780,7 @@ bool IncrementalParser::appendOpenFence() {
     // A `$$` line closes a math fence, so the fast path must decline whenever
     // the new bytes could be one. Otherwise a formula would keep growing past
     // the line that ended it.
-    if (math_.enabled() && (isMathFenceLine(line) || startsWith(line, '$'))) {
+    if (parse_.enabled() && (isMathFenceLine(line) || startsWith(line, '$'))) {
       return false;
     }
     if (newline == kNoOffset) {
