@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <random>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -133,6 +134,164 @@ void testAlignment() {
     cursor = run.nextStart + run.length;
   }
   CHECK(ordered, "aligned runs are in order and do not overlap");
+}
+
+// The original bounded alignment walk, kept as an independent differential
+// oracle for fast prefix comparisons and changed-block scheduling.
+std::vector<AlignedRun> referenceAlignment(std::u16string_view previous, std::u16string_view next) {
+  std::vector<AlignedRun> result;
+  size_t pi = 0, ni = 0;
+  while (pi < previous.size() && ni < next.size()) {
+    const size_t beginPrevious = pi, beginNext = ni;
+    while (pi < previous.size() && ni < next.size() && previous[pi] == next[ni]) { ++pi; ++ni; }
+    if (ni > beginNext) result.push_back({static_cast<uint32_t>(beginNext), static_cast<uint32_t>(beginPrevious),
+                                         static_cast<uint32_t>(ni - beginNext)});
+    if (pi == previous.size() || ni == next.size()) break;
+    const auto confirms = [](std::u16string_view a, size_t ai, std::u16string_view b, size_t bi) {
+      const size_t length = std::min<size_t>(3, std::min(a.size() - ai, b.size() - bi));
+      return length != 0 && a.substr(ai, length) == b.substr(bi, length);
+    };
+    bool moved = false;
+    for (size_t skip = 1; skip <= 4 && pi + skip < previous.size(); ++skip) {
+      if (confirms(previous, pi + skip, next, ni)) { pi += skip; moved = true; break; }
+    }
+    if (!moved) {
+      for (size_t skip = 1; skip <= 4 && ni + skip < next.size(); ++skip) {
+        if (confirms(next, ni + skip, previous, pi)) { ni += skip; moved = true; break; }
+      }
+    }
+    if (!moved) break;
+  }
+  return result;
+}
+
+DocumentHandle revealDocument(std::initializer_list<std::u16string> texts) {
+  auto document = std::make_shared<Document>();
+  for (const auto &text : texts) {
+    Block block;
+    block.text = text;
+    document->blocks.push_back(std::move(block));
+  }
+  return document;
+}
+
+void testTracker() {
+  RevealOptions options;
+  options.effect = RevealEffect::Fade;
+  RevealTracker tracker;
+  const auto first = revealDocument({u"hello", u"world"});
+  tracker.apply(first, 1000, options);
+  CHECK(tracker.units().size() == 2, "first snapshot schedules both blocks");
+  tracker.apply(first, 1020, options);
+  CHECK(tracker.units().size() == 2 && tracker.units()[1].startAt == 1040,
+        "reapplying the same snapshot preserves active fades");
+  tracker.apply(revealDocument({u"hello", u"world again"}), 1050, options);
+  CHECK(tracker.units().size() == 3 && tracker.units()[0].startAt == 1000 && tracker.units()[1].startAt == 1040,
+        "an unchanged block and the old tail keep their start times");
+  CHECK(revealUnitsForBlock(tracker.units(), 0).size() == 1 && revealUnitsForBlock(tracker.units(), 1).size() == 2,
+        "block lookup selects only that block's units");
+  CHECK(revealUnitsForBlock(tracker.units(), 2).empty() && revealUnitsForBlock({}, 0).empty(),
+        "missing blocks and empty lists have no reveal units");
+  CHECK(!tracker.prune(10000, options), "completed fades stop the ticker");
+  tracker.apply(revealDocument({u"hello", u"world again"}), 11000, options);
+  CHECK(!tracker.active(), "already opaque text never fades again");
+  CHECK(tracker.reReveals() == 0, "preserved text never triggers the rereveal diagnostic");
+
+  tracker.clear();
+  tracker.apply(revealDocument({u"**hello**world"}), 1000, options);
+  tracker.apply(revealDocument({u"helloworld"}), 1010, options);
+  const auto &reconciled = tracker.units();
+  CHECK(reconciled.size() == 2 && reconciled[0].start == 0 && reconciled[0].end == 5 &&
+        reconciled[1].start == 5 && reconciled[1].end == 10 && reconciled[0].startAt == 1000 &&
+        reconciled[1].startAt == 1000, "both aligned parts of a word retain their fade after markers disappear");
+
+  // Equal shared prefix lengths do not identify the same stream.
+  const auto prefixed = [](std::u16string text, std::shared_ptr<const SharedList<Block>::Prefix> prefix = nullptr) {
+    auto document = std::make_shared<Document>();
+    if (!prefix) {
+      Block block;
+      block.text = std::move(text);
+      prefix = SharedList<Block>::Prefix::extend(nullptr, {std::move(block)});
+    }
+    document->blocks = {std::move(prefix), {}};
+    return document;
+  };
+  tracker.clear();
+  tracker.seed(prefixed(u"old"));
+  tracker.apply(prefixed(u"fresh"), 1000, options);
+  CHECK(tracker.units().size() == 1 && tracker.units()[0].end == 5,
+        "independent shared prefixes are compared after a replacement");
+  const auto shared = prefixed(u"hello");
+  tracker.clear();
+  tracker.apply(shared, 1000, options);
+  tracker.apply(prefixed(u"", shared->blocks.prefix()), 1010, options);
+  CHECK(tracker.units().size() == 1 && tracker.units()[0].startAt == 1000,
+        "a shared committed prefix preserves a fade across snapshots");
+
+  tracker.clear();
+  tracker.apply(revealDocument({u""}), 1000, options);
+  CHECK(tracker.units().size() == 1 && tracker.units()[0].end == 1, "a new empty block animates its placeholder");
+  options.effect = RevealEffect::None;
+  const auto disabled = revealDocument({u"already visible"});
+  tracker.apply(disabled, 1010, options);
+  CHECK(!tracker.active() && tracker.shown() == disabled, "disabled animations record what was shown");
+  options.effect = RevealEffect::Fade;
+  tracker.apply(revealDocument({u"already visible more"}), 1020, options);
+  CHECK(tracker.units().size() == 1 && tracker.units()[0].start == 16,
+        "enabling animation reveals only text added since the disabled snapshot");
+  tracker.apply(nullptr, 1030, options);
+  CHECK(!tracker.active() && !tracker.shown(), "null documents clear animation state");
+
+  tracker.clear();
+  options.split = RevealSplit::Char;
+  tracker.apply(revealDocument({u"\U0001F600e\u0301"}), 1000, options);
+  CHECK(tracker.units().size() == 2 && tracker.units()[0].end == 2 && tracker.units()[1].end == 4,
+        "tracker scheduling retains surrogate and combining clusters");
+}
+
+void testAlignmentDifferential() {
+  std::mt19937 random(0x20);
+  constexpr std::u16string_view alphabet = u"abc *`[]()~\n\U0001F600\u0301";
+  RevealOptions options;
+  options.effect = RevealEffect::Fade;
+  options.staggerMs = 0;
+  for (size_t sample = 0; sample < 2000; ++sample) {
+    std::u16string previous;
+    for (size_t i = random() % 60; i != 0; --i) previous += alphabet[random() % alphabet.size()];
+    std::u16string next = previous;
+    const size_t position = random() % (next.size() + 1);
+    switch (sample % 3) {
+      case 0: next += u"new text"; break;
+      case 1: next.insert(position, u"**"); break;
+      case 2: next.erase(position, std::min<size_t>(4, next.size() - position)); break;
+    }
+    const auto reference = referenceAlignment(previous, next);
+    const auto actual = alignVisibleText(previous, next);
+    bool same = actual.size() == reference.size();
+    for (size_t i = 0; same && i < reference.size(); ++i) {
+      same = actual[i].nextStart == reference[i].nextStart && actual[i].prevStart == reference[i].prevStart &&
+          actual[i].length == reference[i].length;
+    }
+    CHECK(same, "randomized alignment matches the original bounded walk");
+    RevealTracker tracker;
+    tracker.seed(revealDocument({previous}));
+    const auto document = revealDocument({next});
+    std::vector<RevealUnit> expected;
+    uint32_t cursor = 0;
+    for (const auto &run : reference) {
+      if (run.nextStart > cursor) splitUnits(document->blocks[0], 0, cursor, run.nextStart, options.split, expected);
+      cursor = run.nextStart + run.length;
+    }
+    if (cursor < next.size()) splitUnits(document->blocks[0], 0, cursor, static_cast<uint32_t>(next.size()), options.split, expected);
+    const auto &scheduled = tracker.apply(document, 1000, options);
+    same = scheduled.size() == expected.size();
+    for (size_t i = 0; same && i < expected.size(); ++i) {
+      same = scheduled[i].block == expected[i].block && scheduled[i].start == expected[i].start &&
+          scheduled[i].end == expected[i].end && scheduled[i].startAt == 1000;
+    }
+    CHECK(same, "randomized changed-block scheduling matches the original alignment gaps");
+    CHECK(tracker.reReveals() == 0, "randomized edits never reschedule previously aligned text");
+  }
 }
 
 // ---------------------------------------------------------------------- units
@@ -295,6 +454,9 @@ void testAlpha() {
   CHECK(revealRise(unit, 1075, options) > 0 && revealRise(unit, 1075, options) < kRevealRisePoints,
         "a rise is halfway at the midpoint");
   CHECK(revealRise(unit, 1150, options) == 0.0f, "a rise has landed at the end");
+  options.durationMs = 0;
+  CHECK(revealRise(unit, 1000, options) == 0.0f && revealRise(unit, 999, options) == 0.0f,
+        "a zero-duration rise is stationary even at or before its scheduled start");
 }
 
 // ----------------------------------------------------------------- the fence
@@ -394,6 +556,8 @@ void testCaret() {
 
 int main() {
   testAlignment();
+  testAlignmentDifferential();
+  testTracker();
   testUnits();
   testTimeline();
   testEasing();

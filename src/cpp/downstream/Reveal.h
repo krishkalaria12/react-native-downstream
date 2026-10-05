@@ -199,7 +199,7 @@ public:
   /// True while any unit still needs drawing, which is what keeps a platform's
   /// ticker running.
   bool active() const { return !active_.empty(); }
-  /// The units still fading. A draw pass walks this on every frame, so it is the
+  /// The units still fading, sorted by block and then UTF-16 start. A draw pass walks this on every frame, so it is the
   /// whole per-frame work: a lookup, never a re-align.
   const std::vector<RevealUnit> &units() const { return active_; }
   const DocumentHandle &shown() const { return shown_; }
@@ -226,6 +226,10 @@ private:
   std::vector<std::vector<AlignedRun>> settled_;
   uint64_t reReveals_{0};
 };
+
+/// Returns one block's units from a list sorted by block, as units() is.
+/// Draw passes can select a block without scanning the entire document.
+std::span<const RevealUnit> revealUnitsForBlock(std::span<const RevealUnit> units, uint32_t block);
 
 /// A unit's alpha at `now`: 0 before it starts, eased progress during the fade,
 /// 1 after. The fade never changes layout, so nothing else has to move.

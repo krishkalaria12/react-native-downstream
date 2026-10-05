@@ -44,6 +44,13 @@ NS_ASSUME_NONNULL_BEGIN
                                             blockRanges:(nullable NSArray<NSValue *> *)blockRanges
                                                      now:(double)now;
 
+/// First hidden character in the requested layout range, or NSNotFound. The
+/// caret needs only this position, without allocating every fading draw run.
+- (NSUInteger)revealFrontierForCharacterRange:(NSRange)range
+                                   blockOffset:(NSInteger)blockOffset
+                                   blockRanges:(nullable NSArray<NSValue *> *)blockRanges
+                                            now:(double)now;
+
 /// The alpha at one character of a document block.
 ///
 /// A list marker and a rule ask for offset 0, which is their block's first

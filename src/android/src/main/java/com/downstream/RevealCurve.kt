@@ -83,8 +83,8 @@ internal object RevealMath {
    * and not the other.
    */
   fun progress(startAt: Double, durationMs: Float, now: Double): Float {
-    if (now <= startAt) return 0f
     if (durationMs <= 0f) return 1f
+    if (now <= startAt) return 0f
     val progress = ((now - startAt) / durationMs).toFloat()
     return if (progress >= 1f) 1f else progress
   }

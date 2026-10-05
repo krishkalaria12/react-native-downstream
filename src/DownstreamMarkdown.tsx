@@ -226,12 +226,14 @@ function useAnimationCallbacks(
   onEnd: (() => void) | undefined
 ): void {
   const mounted = useRef(false);
+  const handlers = useRef({ onStart, onEnd });
+  handlers.current = { onStart, onEnd };
   useLayoutEffect(() => {
     if (isAnimating === undefined) return;
-    if (isAnimating) onStart?.();
-    else if (mounted.current) onEnd?.();
+    if (isAnimating) handlers.current.onStart?.();
+    else if (mounted.current) handlers.current.onEnd?.();
     mounted.current = true;
-  }, [isAnimating, onStart, onEnd]);
+  }, [isAnimating]);
 }
 
 /**

@@ -38,6 +38,20 @@ constexpr size_t kInlineExportBytes = 64 * 1024;
 /// another Markdown view, supersedes an older worker that is still running.
 uint64_t copyRequestEpoch = 0;
 
+std::span<const downstream::RevealUnit> unitsForLayout(
+    std::span<const downstream::RevealUnit> units, NSInteger blockOffset, NSUInteger blockCount) {
+  if (blockOffset < 0 || blockCount == 0 || units.empty()) {
+    return {};
+  }
+  const uint64_t firstBlock = static_cast<uint64_t>(blockOffset);
+  const uint64_t lastBlock = firstBlock + blockCount;
+  const auto first = std::lower_bound(units.begin(), units.end(), firstBlock,
+      [](const downstream::RevealUnit &unit, uint64_t block) { return unit.block < block; });
+  const auto last = std::lower_bound(first, units.end(), lastBlock,
+      [](const downstream::RevealUnit &unit, uint64_t block) { return unit.block < block; });
+  return units.subspan(static_cast<size_t>(first - units.begin()), static_cast<size_t>(last - first));
+}
+
 NSString *toNSString(const std::u16string &text) {
   return [NSString stringWithCharacters:reinterpret_cast<const unichar *>(text.data()) length:text.size()];
 }
@@ -249,66 +263,95 @@ NSString *nameForFormat(NSString *format) {
                                             blockOffset:(NSInteger)blockOffset
                                             blockRanges:(NSArray<NSValue *> *)blockRanges
                                                      now:(double)now {
-  if (blockOffset < 0 || blockRanges.count == 0) {
+  if (blockOffset < 0 || blockRanges.count == 0 || range.length == 0 || _reveal.units().empty()) {
     return @[];
   }
-  // Units are scheduled on the engine's millisecond clock; the draw pass asks in
-  // `CACurrentMediaTime()` seconds.
   const double nowMs = now * 1000.0;
   NSMutableArray<DSRevealRun *> *runs = [NSMutableArray new];
-  for (const downstream::RevealUnit &unit : _reveal.units()) {
-    if (unit.block < static_cast<uint32_t>(blockOffset)) {
-      continue;
+  NSRange pending = NSMakeRange(0, 0);
+  CGFloat pendingAlpha = 1;
+  CGFloat pendingRise = 0;
+  const auto flush = [&] {
+    if (pending.length > 0) {
+      [runs addObject:[[DSRevealRun alloc] initWithRange:pending alpha:pendingAlpha rise:pendingRise]];
     }
-    // A layout holds several blocks, so a unit's block picks one of this
-    // layout's ranges and its offsets are added to where that block starts.
+  };
+  for (const downstream::RevealUnit &unit : unitsForLayout(_reveal.units(), blockOffset, blockRanges.count)) {
     const NSUInteger index = unit.block - static_cast<uint32_t>(blockOffset);
-    if (index >= blockRanges.count) {
+    const NSRange base = blockRanges[index].rangeValue;
+    const NSUInteger from = base.location + std::min<NSUInteger>(unit.start, base.length);
+    const NSUInteger to = base.location + std::min<NSUInteger>(unit.end, base.length);
+    if (from >= NSMaxRange(range)) {
+      break;
+    }
+    if (to <= range.location || from >= to) {
       continue;
     }
+    const NSRange clipped = NSIntersectionRange(NSMakeRange(from, to - from), range);
     const float alpha = downstream::revealAlpha(unit, nowMs, _revealOptions);
     if (alpha >= 1) {
       continue;
     }
+    // Rise uses the same eased progress as alpha. Do not solve the curve twice.
+    const CGFloat rise = _revealOptions.effect == downstream::RevealEffect::Rise
+        ? downstream::kRevealRisePoints * (1.0f - alpha) : 0;
+    if (pending.length > 0 && NSMaxRange(pending) == clipped.location &&
+        pendingAlpha == alpha && pendingRise == rise) {
+      // Most units in a backlog are still hidden. One contiguous hidden run
+      // carries exactly the same draw/frontier information as thousands.
+      pending.length += clipped.length;
+    } else {
+      flush();
+      pending = clipped;
+      pendingAlpha = alpha;
+      pendingRise = rise;
+    }
+  }
+  flush();
+  // Both block ranges and tracker units are already in text order.
+  return runs;
+}
+
+- (NSUInteger)revealFrontierForCharacterRange:(NSRange)range
+                                   blockOffset:(NSInteger)blockOffset
+                                   blockRanges:(NSArray<NSValue *> *)blockRanges
+                                            now:(double)now {
+  if (blockOffset < 0 || range.length == 0) {
+    return NSNotFound;
+  }
+  for (const downstream::RevealUnit &unit : unitsForLayout(_reveal.units(), blockOffset, blockRanges.count)) {
+    const NSUInteger index = unit.block - static_cast<uint32_t>(blockOffset);
     const NSRange base = blockRanges[index].rangeValue;
     const NSUInteger from = base.location + std::min<NSUInteger>(unit.start, base.length);
     const NSUInteger to = base.location + std::min<NSUInteger>(unit.end, base.length);
-    if (from >= to) {
+    if (from >= NSMaxRange(range)) {
+      break;
+    }
+    if (to <= range.location || from >= to) {
       continue;
     }
-    const NSRange clipped = NSIntersectionRange(NSMakeRange(from, to - from), range);
-    if (clipped.length == 0) {
-      continue;
+    if (downstream::revealAlpha(unit, now * 1000.0, _revealOptions) <= 0) {
+      return std::max(from, range.location);
     }
-    [runs addObject:[[DSRevealRun alloc] initWithRange:clipped
-                                                 alpha:alpha
-                                                  rise:downstream::revealRise(unit, nowMs, _revealOptions)]];
   }
-  // Text order, because the draw pass walks `range` forwards and expects the runs
-  // in the same order.
-  [runs sortUsingComparator:^NSComparisonResult(DSRevealRun *a, DSRevealRun *b) {
-    if (a.range.location != b.range.location) {
-      return a.range.location < b.range.location ? NSOrderedAscending : NSOrderedDescending;
-    }
-    return NSOrderedSame;
-  }];
-  return runs;
+  return NSNotFound;
 }
 
 - (CGFloat)revealAlphaAtBlock:(NSInteger)block offset:(NSUInteger)offset now:(double)now {
   if (block < 0) {
     return 1;
   }
-  for (const downstream::RevealUnit &unit : _reveal.units()) {
-    if (unit.block != static_cast<uint32_t>(block)) {
-      continue;
-    }
-    if (offset < unit.start || offset >= unit.end) {
-      continue;
-    }
-    return downstream::revealAlpha(unit, now * 1000.0, _revealOptions);
+  const auto units = downstream::revealUnitsForBlock(_reveal.units(), static_cast<uint32_t>(block));
+  if (units.empty()) {
+    return 1;
   }
-  return 1;
+  const auto after = std::upper_bound(units.begin(), units.end(), offset,
+      [](NSUInteger at, const downstream::RevealUnit &unit) { return at < unit.start; });
+  if (after == units.begin()) {
+    return 1;
+  }
+  const auto &unit = *std::prev(after);
+  return offset < unit.end ? downstream::revealAlpha(unit, now * 1000.0, _revealOptions) : 1;
 }
 
 - (void)didMoveToWindow {
@@ -596,20 +639,9 @@ NSString *nameForFormat(NSString *format) {
   if (!document) {
     return;
   }
-  const double now = CACurrentMediaTime() * 1000.0;
-  for (const downstream::RevealUnit &unit : _reveal.units()) {
-    if (unit.block >= document->blocks.size()) {
-      continue;
-    }
-    const std::u16string &text = document->blocks[unit.block].text;
-    const uint32_t start = std::min<uint32_t>(unit.start, static_cast<uint32_t>(text.size()));
-    const uint32_t end = std::min<uint32_t>(unit.end, static_cast<uint32_t>(text.size()));
-    for (UIView<DSRevealInvalidatable> *view in [_documentView revealViewsForBlock:unit.block]) {
-      [view invalidateRevealCharacterRange:NSMakeRange(start, end - start)
-                                blockOffset:unit.block
-                                         now:now];
-    }
-  }
+  [_documentView invalidateRevealUnits:_reveal.units()
+                             document:*document
+                                  now:CACurrentMediaTime() * 1000.0];
 }
 
 /// Stops the ticker without finishing anything.
@@ -625,6 +657,11 @@ NSString *nameForFormat(NSString *format) {
 /// rather than a fade nobody is watching finish.
 - (void)finishReveal {
   const bool hadUnits = _reveal.active();
+  // A parent view redraw does not dirty TextKit child views. Invalidate the
+  // affected ranges while they are still available, then draw them at full alpha.
+  if (hadUnits) {
+    [self invalidateReveals];
+  }
   _reveal.clear();
   [self stopReveal];
   if (hadUnits) {

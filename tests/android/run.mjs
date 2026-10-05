@@ -28,19 +28,54 @@ import { revealCurveCases } from '../../tests/engine.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const kotlin = (...names) =>
-  names.map((name) => join(here, '..', '..', 'src', 'android', 'src', 'main', 'java', 'com', 'downstream', name));
+  names.map((name) =>
+    join(
+      here,
+      '..',
+      '..',
+      'src',
+      'android',
+      'src',
+      'main',
+      'java',
+      'com',
+      'downstream',
+      name
+    )
+  );
 
 /** Each mirror, its table, and the `main` that runs the table. */
 const suites = [
-  { jar: 'code_layout', sources: [kotlin('CodeLayout.kt'), join(here, 'CodeLayoutCheck.kt')] },
-  { jar: 'image_layout', sources: [kotlin('ImageLayout.kt'), join(here, 'ImageLayoutCheck.kt')] },
-  { jar: 'math_layout', sources: [kotlin('MathLayout.kt'), join(here, 'MathLayoutCheck.kt')] },
+  {
+    jar: 'reveal_frame',
+    sources: [
+      ...kotlin('RevealCurve.kt', 'Reveal.kt'),
+      join(here, 'RevealFrameCheck.kt'),
+      ...readdirSync(join(here, 'reveal-stubs'))
+        .filter((name) => name.endsWith('.kt'))
+        .map((name) => join(here, 'reveal-stubs', name)),
+    ],
+  },
+  {
+    jar: 'code_layout',
+    sources: [kotlin('CodeLayout.kt'), join(here, 'CodeLayoutCheck.kt')],
+  },
+  {
+    jar: 'image_layout',
+    sources: [kotlin('ImageLayout.kt'), join(here, 'ImageLayoutCheck.kt')],
+  },
+  {
+    jar: 'math_layout',
+    sources: [kotlin('MathLayout.kt'), join(here, 'MathLayoutCheck.kt')],
+  },
   {
     jar: 'math_render',
     sources: [
       ...kotlin('MathLayout.kt', 'MathDisplayList.kt', 'MathSegmentView.kt'),
       join(here, 'MathRenderCheck.kt'),
-      ...readdirSync(join(here, 'math-stubs')).filter((name) => name.endsWith('.kt')).map((name) => join(here, 'math-stubs', name)),
+      ...readdirSync(join(here, 'math-stubs'))
+        .filter((name) => name.endsWith('.kt'))
+        .map((name) => join(here, 'math-stubs', name)),
     ],
   },
 ];
@@ -65,10 +100,18 @@ const output = mkdtempSync(join(tmpdir(), 'downstream-kotlin-'));
 try {
   for (const suite of suites) {
     const jar = join(output, `${suite.jar}.jar`);
-    execFileSync(kotlinc(), ['-include-runtime', '-nowarn', '-d', jar, ...suite.sources], {
-      stdio: 'inherit',
-    });
-    execFileSync('java', ['-cp', jar, `com.downstream.${camel(suite.jar)}CheckKt`], { stdio: 'inherit' });
+    execFileSync(
+      kotlinc(),
+      ['-include-runtime', '-nowarn', '-d', jar, ...suite.sources],
+      {
+        stdio: 'inherit',
+      }
+    );
+    execFileSync(
+      'java',
+      ['-cp', jar, `com.downstream.${camel(suite.jar)}CheckKt`],
+      { stdio: 'inherit' }
+    );
   }
 
   // The reveal check is the one table that is piped in rather than compiled in,
@@ -84,8 +127,10 @@ try {
   execFileSync(
     kotlinc(),
     [
-      '-nowarn', '-include-runtime',
-      '-d', join(output, 'reveal.jar'),
+      '-nowarn',
+      '-include-runtime',
+      '-d',
+      join(output, 'reveal.jar'),
       kotlin('RevealCurve.kt'),
       join(here, 'RevealCheck.kt'),
     ],
@@ -96,15 +141,25 @@ try {
   const table = revealCurveCases()
     .map((entry) =>
       [
-        entry.x1, entry.y1, entry.x2, entry.y2,
-        entry.durationMs, entry.offsetMs, entry.alpha, entry.rise,
+        entry.x1,
+        entry.y1,
+        entry.x2,
+        entry.y2,
+        entry.durationMs,
+        entry.offsetMs,
+        entry.alpha,
+        entry.rise,
       ].join(' ')
     )
     .join('\n');
-  execFileSync('java', ['-cp', join(output, 'reveal.jar'), 'com.downstream.RevealCheckKt'], {
-    input: table + '\n',
-    stdio: ['pipe', 'inherit', 'inherit'],
-  });
+  execFileSync(
+    'java',
+    ['-cp', join(output, 'reveal.jar'), 'com.downstream.RevealCheckKt'],
+    {
+      input: table + '\n',
+      stdio: ['pipe', 'inherit', 'inherit'],
+    }
+  );
 } finally {
   rmSync(output, { recursive: true, force: true });
 }

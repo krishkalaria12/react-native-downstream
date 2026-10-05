@@ -274,6 +274,8 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    */
   private var revealRanges = LongArray(0)
   private var revealStarts = DoubleArray(0)
+  private val revealTargets = RevealTargets()
+  private var revealSegmentEnds = IntArray(0)
 
   /**
    * Takes the engine's units and rebuilds the frame the segments draw from.
@@ -283,9 +285,13 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    * them for a frame at full alpha before the first tick.
    */
   private fun setRevealUnits(ranges: LongArray, starts: DoubleArray) {
+    // Previously fading roots also need a redraw when their last unit finishes.
+    invalidateReveal()
     revealRanges = ranges
     revealStarts = starts
     buildRevealFrame()
+    revealTargets.build(ranges, revealSegmentEnds)
+    invalidateReveal()
   }
 
   /** The frame at this instant, or an empty one when nothing is fading. */
@@ -297,6 +303,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   /** The tick currently queued, so a second apply does not queue a second loop. */
   private var revealTickQueued = false
+  private val revealTickCallback = Runnable { revealTick() }
 
   /** The animator scale, which multiplies every duration and can turn the fade off. */
   private var animatorScale = 1f
@@ -409,6 +416,14 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
     scheduleTraceFrame()
+    buildRevealFrame()
+    invalidateReveal()
+    startRevealTick()
+  }
+
+  override fun onDetachedFromWindow() {
+    stopRevealTick()
+    super.onDetachedFromWindow()
   }
 
   fun setSelectable(selectable: Boolean) {
@@ -703,17 +718,17 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   /**
    * The tick, one per view.
    *
-   * `postOnAnimation` rather than a `Choreographer` callback of its own, because
-   * that is the platform's own "do this before the next frame" and it stops by
-   * itself when the view leaves the window.
+   * The same runnable is posted and canceled, so a stop followed by a restart
+   * cannot leave an older callback driving a second animation loop.
    */
   private fun startRevealTick() {
-    if (revealTickQueued || revealRanges.isEmpty()) return
+    if (revealTickQueued || revealRanges.isEmpty() || !isAttachedToWindow) return
     revealTickQueued = true
-    postOnAnimation { revealTick() }
+    postOnAnimation(revealTickCallback)
   }
 
   private fun stopRevealTick() {
+    removeCallbacks(revealTickCallback)
     revealTickQueued = false
   }
 
@@ -748,9 +763,8 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   /**
    * Finishes every fade at once and redraws.
    *
-   * Three callers need the same thing: a scale of zero or Reduce Motion, an
-   * explicit `animated: false` mid-fade, and a view leaving its window. All three
-   * want the text at once rather than a fade nobody is watching finish.
+   * A scale of zero or an explicit `animated: false` shows all text at once.
+   * Detaching only pauses callbacks and retains the timeline for reattachment.
    */
   private fun finishReveal() {
     stopRevealTick()
@@ -801,9 +815,9 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   internal fun blockAlpha(block: Int): Float {
     val current = frame ?: return 1f
     var best = 1f
-    for (index in 0 until current.size) {
+    for (index in current.firstUnitForBlock(block) until current.size) {
       val unit = current.unitAt(index)
-      if (unit.block != block) continue
+      if (unit.block != block) break
       if (unit.start > 0) continue
       if (unit.alpha < best) best = unit.alpha
     }
@@ -812,13 +826,11 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   /** Redraws whatever the fade touched. */
   internal fun invalidateReveal() {
-    // Every child is asked rather than only the affected ones: a document view
-    // holds a screenful of segments, and a `postOnAnimation` tick that walked the
-    // plan to find the two that matter would cost more than redrawing them. A
-    // child with no active unit answers the same one-pass draw it always did,
-    // because its band is empty.
-    for (index in 0 until childCount) {
-      invalidateTree(getChildAt(index))
+    // Targets come from the retained JNI ranges, so they include units that
+    // became opaque this tick. Settled siblings keep their display lists.
+    for (index in 0 until revealTargets.size) {
+      val child = getChildAt(revealTargets.indexAt(index)) ?: continue
+      invalidateTree(child)
     }
   }
 
@@ -971,6 +983,14 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   }
 
   fun reset() {
+    disposeReveal()
+    animationEffect = EFFECT_NONE
+    animationSplitValue = 0
+    animationValues = null
+    animationTiming = null
+    animatorScale = 1f
+    revealRises = false
+    caret = PlacedCaret.NONE
     if (pendingTraceDocumentId != 0L) {
       DownstreamNative.traceDocument(pendingTraceDocumentId, "frame_unavailable")
       pendingTraceDocumentId = 0L
@@ -1003,8 +1023,20 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   /** Invalidates pending exports and picker results when the view goes away. */
   fun release() {
+    disposeReveal()
     sourceEpoch++
     exporter.release()
+  }
+
+  private fun disposeReveal() {
+    stopRevealTick()
+    if (revealHandle != 0L) DownstreamNative.revealDispose(revealHandle)
+    revealHandle = 0L
+    revealRanges = LongArray(0)
+    revealStarts = DoubleArray(0)
+    revealSeeded = false
+    frame = null
+    revealTargets.build(revealRanges, revealSegmentEnds)
   }
 
   /**
@@ -1142,6 +1174,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   private fun syncSegmentViews() {
     val document = rendered
     val segments = document?.segments.orEmpty()
+    revealSegmentEnds = IntArray(document?.plan?.size ?: 0) { document!!.plan[it].to }
     segments.forEachIndexed { index, segment ->
       var view = if (index < childCount) getChildAt(index) else null
       val reusable = when (segment) {
@@ -1202,6 +1235,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     while (childCount > segments.size) {
       removeViewAt(childCount - 1)
     }
+    revealTargets.build(revealRanges, revealSegmentEnds)
     applySettledState()
     layoutSegments()
   }
@@ -1358,6 +1392,9 @@ internal class TextSegmentView(context: Context) : TextView(context) {
    * decorations cannot change what they draw.
    */
   private val caretPaint = TextPaint()
+  private val caretBounds = RectF()
+  private val caretMetrics = Paint.FontMetrics()
+  private val revealClipBounds = Rect()
   private val codePath = Path()
   private val codeBounds = RectF()
   private var readingParts = emptyList<TextReadingPart>()
@@ -1442,10 +1479,12 @@ internal class TextSegmentView(context: Context) : TextView(context) {
    */
   /** The document block this view's text starts at, for a body shown with [setContent]. */
   fun setBlockOffset(firstBlock: Int) {
+    bandFrame = null
     blockOffset = firstBlock
   }
 
   fun setContent(text: Spanned, accessibleBlocks: List<AccessibleBlock>, rendered: RenderedDocument) {
+    bandFrame = null
     segment = null
     readingBlocks = accessibleBlocks
     val precomputed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
@@ -1542,18 +1581,15 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     // twice.
     val paddingLeft = totalPaddingLeft.toFloat()
     val paddingTop = totalPaddingTop.toFloat()
-    val layout = layout
-
-    val content = text ?: return
-    val hidden = Path()
-    if (layout != null) hiddenPath(layout, band.first, content.length, hidden)
-    hidden.offset(paddingLeft, paddingTop)
-    if (!hidden.isEmpty) {
-      canvas.save()
-      clipOut(canvas, hidden)
-      drawContent(canvas)
-      canvas.restore()
-    }
+    val layout = layout ?: return
+    val paths = revealPaths ?: RevealClipPaths().also { revealPaths = it }
+    // Exclude only active ranges, preserving settled gaps and trailing text.
+    val buckets = paths.build(layout, band, paddingLeft, paddingTop)
+    val hidden = paths.hidden
+    canvas.save()
+    clipOut(canvas, hidden)
+    drawContent(canvas)
+    canvas.restore()
 
     // One layer per alpha bucket, so a compressed burst of forty words at forty
     // different alphas costs eight layers rather than forty. A bucket's path holds
@@ -1561,24 +1597,10 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     // is drawn twice.
     // `getSelectionPath` resets the path it fills, so each unit is drawn into a
     // scratch path and added to its bucket's.
-    val unitPath = Path()
     for (bucket in 1..MAX_ALPHA_BUCKETS) {
-      val path = Path()
-      var any = false
-      for (unit in 0 until band.count) {
-        if (alphaBucket(band.alphas[unit]) != bucket) continue
-        val start = band.offsets[unit * 2]
-        layout?.getSelectionPath(start, band.offsets[unit * 2 + 1], unitPath)
-        path.addPath(unitPath)
-        // A unit that opens a line takes that line's leading margin with it, which
-        // is where a list marker or a task box is drawn, so the marker fades with
-        // its item's first word.
-        if (layout != null) addLeadingMargin(layout, start, path)
-        any = true
-      }
-      if (!any) continue
-      path.offset(paddingLeft, paddingTop)
-      val bounds = RectF()
+      if (buckets and (1 shl bucket) == 0) continue
+      val path = paths.buckets[bucket - 1]
+      val bounds = paths.bounds
       path.computeBounds(bounds, true)
       if (bounds.isEmpty()) continue
       // `saveLayerAlpha` rather than a paint alpha, because the draw below is the
@@ -1592,7 +1614,7 @@ internal class TextSegmentView(context: Context) : TextView(context) {
       // bucket, and a bucket is a rounding of the alpha, so the difference is below
       // a pixel.
       canvas.save()
-      val rise = band.riseFor(bucket)
+      val rise = paths.rises[bucket - 1]
       if (rise != 0f) {
         canvas.translate(0f, rise)
       }
@@ -1606,39 +1628,7 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     drawCaret(canvas, band)
   }
 
-  /**
-   * Everything from [first] on that the opaque pass must not draw: the rest of
-   * [first]'s line, and every later line whole, margins included. A selection
-   * path covers only the glyphs, which would leave a later item's marker drawn at
-   * full alpha before its text.
-   */
-  private fun hiddenPath(layout: Layout, first: Int, end: Int, out: Path) {
-    val firstLine = layout.getLineForOffset(first)
-    if (first == layout.getLineStart(firstLine)) {
-      out.addRect(0f, layout.getLineTop(firstLine).toFloat(), layout.width.toFloat(),
-        layout.getLineBottom(firstLine).toFloat(), Path.Direction.CW)
-    } else {
-      layout.getSelectionPath(first, layout.getLineEnd(firstLine).coerceAtMost(end), out)
-    }
-    if (firstLine + 1 < layout.lineCount) {
-      out.addRect(0f, layout.getLineTop(firstLine + 1).toFloat(), layout.width.toFloat(),
-        layout.height.toFloat(), Path.Direction.CW)
-    }
-  }
-
-  /** Adds the leading margin of [start]'s line to [path] when [start] opens it. */
-  private fun addLeadingMargin(layout: Layout, start: Int, path: Path) {
-    val line = layout.getLineForOffset(start)
-    if (start != layout.getLineStart(line)) return
-    val x = layout.getPrimaryHorizontal(start)
-    val top = layout.getLineTop(line).toFloat()
-    val bottom = layout.getLineBottom(line).toFloat()
-    if (layout.getParagraphDirection(line) == Layout.DIR_RIGHT_TO_LEFT) {
-      path.addRect(x, top, layout.width.toFloat(), bottom, Path.Direction.CW)
-    } else {
-      path.addRect(0f, top, x, bottom, Path.Direction.CW)
-    }
-  }
+  private var revealPaths: RevealClipPaths? = null
 
   /** Everything the segment draws: the one call the clipped passes repeat. */
   private fun drawContent(canvas: Canvas) {
@@ -1664,7 +1654,7 @@ internal class TextSegmentView(context: Context) : TextView(context) {
       return
     }
     @Suppress("DEPRECATION")
-    val bounds = Rect()
+    val bounds = revealClipBounds
     canvas.getClipBounds(bounds)
     @Suppress("DEPRECATION")
     canvas.clipRect(bounds)
@@ -1704,8 +1694,8 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     if (line < 0) return
     val baseline = layout.getLineBaseline(line) + totalPaddingTop
     val rect = when (current.caretKind) {
-      2 -> CaretShape.dotRect(paint, x + totalPaddingLeft, baseline.toFloat())
-      else -> CaretShape.barRect(paint, x + totalPaddingLeft, baseline.toFloat())
+      2 -> CaretShape.dotRect(paint, x + totalPaddingLeft, baseline.toFloat(), caretBounds)
+      else -> CaretShape.barRect(paint, x + totalPaddingLeft, baseline.toFloat(), caretBounds, caretMetrics)
     }
     val shape = caretPaint
     shape.set(paint)
@@ -1731,6 +1721,9 @@ internal class TextSegmentView(context: Context) : TextView(context) {
    * range is drawn by the first pass exactly as it always was.
    */
   private var revealBand: RevealBand? = null
+  private var bandFrame: RevealFrame? = null
+  private var bandRevision = -1L
+  private var cachedBand: RevealBand? = null
 
   /**
    * The fading characters of this view, or null when nothing is fading.
@@ -1759,21 +1752,27 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   }
 
   private fun bandFor(hostFrame: RevealFrame): RevealBand? {
+    if (bandFrame === hostFrame && bandRevision == hostFrame.revision) return cachedBand
+    bandFrame = hostFrame
+    bandRevision = hostFrame.revision
+    cachedBand = buildBand(hostFrame)
+    return cachedBand
+  }
+
+  private fun buildBand(hostFrame: RevealFrame): RevealBand? {
     // The blocks this view shows, which a code body has without a text segment of
     // its own: `setContent` records them for both.
     val blocks = readingBlocks
     if (blocks.isEmpty()) return null
     val length = text?.length ?: return null
-    var count = 0
-    for (index in 0 until hostFrame.size) {
-      val unit = hostFrame.unitAt(index)
-      if (unit.alpha < 1f) count++
-    }
+    val first = hostFrame.firstUnitForBlock(blockOffset)
+    val last = hostFrame.firstUnitForBlock(blockOffset + blocks.size)
+    val count = last - first
     if (count == 0) return null
 
     val band = revealBand ?: RevealBand(count).also { revealBand = it }
     band.begin(count)
-    for (index in 0 until hostFrame.size) {
+    for (index in first until last) {
       // Past the cap a unit draws at full alpha rather than overflowing the band.
       if (band.isFull) break
       val unit = hostFrame.unitAt(index)

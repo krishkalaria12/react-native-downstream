@@ -1,5 +1,8 @@
 package com.downstream
 
+import android.graphics.Path
+import android.graphics.RectF
+import android.text.Layout
 import android.view.animation.PathInterpolator
 
 /**
@@ -11,7 +14,8 @@ import android.view.animation.PathInterpolator
  * `tests/android/RevealCheck.kt` is what bounds the two.
  */
 internal object RevealInterpolators {
-  private val cache = HashMap<Int, (Float) -> Float>(4)
+  private data class Points(val x1: Float, val y1: Float, val x2: Float, val y2: Float)
+  private val cache = HashMap<Points, (Float) -> Float>(4)
 
   /**
    * Whether the platform's own solver answers here.
@@ -35,7 +39,7 @@ internal object RevealInterpolators {
    * building a curve per unit per frame would be the dominant cost of a fade.
    */
   fun forPoints(x1: Float, y1: Float, x2: Float, y2: Float): (Float) -> Float {
-    val key = (x1.toBits() * 31 + y1.toBits()) * 31 * 31 + (x2.toBits() * 31 + y2.toBits()) * 31 + y2.toBits()
+    val key = Points(x1, y1, x2, y2)
     cache[key]?.let { return it }
     val built = if (!platformSolver) {
       mirror(x1, y1, x2, y2)
@@ -129,7 +133,22 @@ internal class RevealFrame(
   var size = 0
     private set
 
+  /** Changes on every rebuild, including the empty frame after a fade finishes. */
+  var revision = 0L
+    private set
+
   fun unitAt(index: Int): RevealUnit = pool[index]
+
+  /** The engine orders units by block and then text offset. */
+  fun firstUnitForBlock(block: Int): Int {
+    var low = 0
+    var high = size
+    while (low < high) {
+      val middle = (low + high) ushr 1
+      if (pool[middle].block < block) low = middle + 1 else high = middle
+    }
+    return low
+  }
 
   /**
    * Rebuilds the frame from the engine's flat arrays, and answers whether anything
@@ -140,9 +159,17 @@ internal class RevealFrame(
    * text order within a block and a drawing pass can walk them forwards.
    */
   fun build(ranges: LongArray, starts: DoubleArray, now: Double): Boolean {
+    revision++
     size = 0
     val count = minOf(ranges.size / 3, starts.size)
+    var previousStart = Double.NaN
+    var previousAlpha = 0f
     for (index in 0 until count) {
+      val startAt = starts[index]
+      val progress = RevealMath.progress(startAt, durationMs, now)
+      // JNI's arrays are retained between ticks even when its tracker prunes.
+      // Finished units need neither interpolation nor a slot in the draw frame.
+      if (progress >= 1f) continue
       if (size == pool.size) {
         pool.add(RevealUnit())
       }
@@ -150,13 +177,13 @@ internal class RevealFrame(
       unit.block = ranges[index * 3].toInt()
       unit.start = ranges[index * 3 + 1].toInt()
       unit.end = ranges[index * 3 + 2].toInt()
-      unit.startAt = starts[index]
-      unit.alpha = RevealMath.alpha(unit.startAt, durationMs, easing, now, curve)
-      unit.rise = if (rise) {
-        RevealMath.rise(unit.startAt, durationMs, easing, density, now, curve)
-      } else {
-        0f
-      }
+      unit.startAt = startAt
+      // Compressed bursts often schedule adjacent units at the same instant.
+      // Alpha and rise share that one eased progress, including fade-only units.
+      unit.alpha = if (startAt == previousStart) previousAlpha else if (progress <= 0f) 0f else curve(progress)
+      previousStart = startAt
+      previousAlpha = unit.alpha
+      unit.rise = if (rise) (1f - unit.alpha) * RevealMath.RISE_POINTS * density else 0f
     }
     return size > 0
   }
@@ -274,5 +301,91 @@ internal class RevealBand(capacity: Int) {
      * rather than proportional to the burst.
      */
     const val MAX_BAND_UNITS = 512
+  }
+}
+
+/** Maps sorted engine ranges to distinct segment roots once per document update. */
+internal class RevealTargets {
+  private var indices = IntArray(0)
+  var size = 0
+    private set
+
+  fun indexAt(index: Int): Int = indices[index]
+
+  fun build(ranges: LongArray, segmentEnds: IntArray) {
+    size = 0
+    val count = ranges.size / 3
+    val wanted = minOf(count, segmentEnds.size)
+    if (indices.size < wanted) indices = IntArray(wanted)
+    var previous = -1
+    for (unit in 0 until count) {
+      val block = ranges[unit * 3].toInt()
+      if (block < 0) continue
+      var low = 0
+      var high = segmentEnds.size
+      while (low < high) {
+        val middle = (low + high) ushr 1
+        if (segmentEnds[middle] <= block) low = middle + 1 else high = middle
+      }
+      if (low == segmentEnds.size || low == previous) continue
+      indices[size++] = low
+      previous = low
+    }
+  }
+}
+
+/** Reused selection clips for one segment's opaque and alpha passes. */
+internal class RevealClipPaths {
+  val hidden = Path()
+  private val unit = Path()
+  val buckets = Array(MAX_ALPHA_BUCKETS) { Path() }
+  val rises = FloatArray(MAX_ALPHA_BUCKETS)
+  val bounds = RectF()
+
+  fun build(layout: Layout, band: RevealBand, paddingLeft: Float, paddingTop: Float): Int {
+    hidden.rewind()
+    for (path in buckets) path.rewind()
+    var mask = 0
+    for (index in 0 until band.count) {
+      val start = band.offsets[index * 2]
+      val end = band.offsets[index * 2 + 1]
+      val line = layout.getLineForOffset(start)
+      val lineEnd = layout.getLineEnd(line)
+      // JNI gives an empty block one U+200B so it occupies a line. Its selection
+      // has zero width, but rules and container decorations span that line.
+      val placeholder = end == start + 1 && layout.text[start] == '\u200B' &&
+        start == layout.getLineStart(line) && (end == lineEnd ||
+        (end + 1 == lineEnd && (layout.text[end] == '\n' || layout.text[end] == '\uFFFC')))
+      if (placeholder) {
+        unit.rewind()
+        unit.addRect(0f, layout.getLineTop(line).toFloat(), layout.width.toFloat(),
+          layout.getLineBottom(line).toFloat(), Path.Direction.CW)
+      } else {
+        layout.getSelectionPath(start, end, unit)
+      }
+      // Markers and task boxes share the first word's alpha.
+      if (start == layout.getLineStart(line)) {
+        val x = layout.getPrimaryHorizontal(start)
+        val top = layout.getLineTop(line).toFloat()
+        val bottom = layout.getLineBottom(line).toFloat()
+        if (layout.getParagraphDirection(line) == Layout.DIR_RIGHT_TO_LEFT) {
+          unit.addRect(x, top, layout.width.toFloat(), bottom, Path.Direction.CW)
+        } else {
+          unit.addRect(0f, top, x, bottom, Path.Direction.CW)
+        }
+      }
+      hidden.addPath(unit)
+      val bucket = alphaBucket(band.alphas[index])
+      if (bucket <= 0) continue
+      val bit = 1 shl bucket
+      if (mask and bit == 0) rises[bucket - 1] = band.rises[index]
+      mask = mask or bit
+      buckets[bucket - 1].addPath(unit)
+    }
+    hidden.offset(paddingLeft, paddingTop)
+    for (bucket in 1..MAX_ALPHA_BUCKETS) {
+      if (mask and (1 shl bucket) != 0) buckets[bucket - 1].offset(paddingLeft, paddingTop)
+    }
+    return mask
   }
 }

@@ -320,6 +320,39 @@ describe('the animation props a stream view sends', () => {
 });
 
 describe('the animation callbacks', () => {
+  it.each(['controlled', 'stream'] as const)(
+    'reports transitions once with inline callbacks in a %s view',
+    (mode) => {
+      const session = mode === 'stream' ? stream() : undefined;
+      const starts: number[] = [];
+      const ends: number[] = [];
+      function render(revision: number, animating: boolean) {
+        const source = session
+          ? { stream: session }
+          : { markdown: `text ${revision}` };
+        mount(
+          <DownstreamMarkdown
+            {...source}
+            isAnimating={animating}
+            onAnimationStart={() => starts.push(revision)}
+            onAnimationEnd={() => ends.push(revision)}
+          />
+        );
+      }
+
+      render(0, false);
+      for (let revision = 1; revision <= 20; revision++) render(revision, true);
+      expect(starts).toEqual([1]);
+      expect(ends).toEqual([]);
+      render(21, false);
+      for (let revision = 22; revision <= 40; revision++)
+        render(revision, false);
+      expect(ends).toEqual([21]);
+      render(41, true);
+      expect(starts).toEqual([1, 41]);
+    }
+  );
+
   it('fires start on mount when a controlled view is already animating', () => {
     const onStart = vi.fn();
     mount(

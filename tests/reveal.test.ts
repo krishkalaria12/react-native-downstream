@@ -124,16 +124,19 @@ describe('reveal replay properties', () => {
           true
         )
       );
-      const units = passes.flatMap((pass) => pass.units);
-      expect(units.length).toBeGreaterThan(1);
-      for (let index = 1; index < units.length; index++) {
-        const previous = units[index - 1]!;
-        const current = units[index]!;
-        const follows =
-          current[0] > previous[0] ||
-          (current[0] === previous[0] && current[1] >= previous[1]);
-        expect(follows).toBe(true);
-        expect(current[3]).toBeGreaterThanOrEqual(previous[3]);
+      expect(passes.some((pass) => pass.units.length > 1)).toBe(true);
+      // A later pass retains active units from earlier passes. Its first unit
+      // therefore need not follow the last unit of the preceding snapshot.
+      for (const { units } of passes) {
+        for (let index = 1; index < units.length; index++) {
+          const previous = units[index - 1]!;
+          const current = units[index]!;
+          const follows =
+            current[0] > previous[0] ||
+            (current[0] === previous[0] && current[1] >= previous[1]);
+          expect(follows).toBe(true);
+          expect(current[3]).toBeGreaterThanOrEqual(previous[3]);
+        }
       }
     });
   }

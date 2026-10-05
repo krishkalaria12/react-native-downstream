@@ -206,6 +206,11 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 @property (nonatomic, weak, nullable) id<DSRevealProvider> revealProvider;
 /// The segment views that can fade, so a tick invalidates only the lines holding
 /// an active unit rather than the whole document.
+- (nullable UIView<DSRevealInvalidatable> *)revealViewForBlock:(NSInteger)block;
+/// Coalesces active character units into one display invalidation per block.
+- (void)invalidateRevealUnits:(std::span<const downstream::RevealUnit>)units
+                    document:(const downstream::Document &)document
+                         now:(double)now;
 - (NSArray<UIView<DSRevealInvalidatable> *> *)revealViewsForBlock:(NSInteger)block;
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
 @property (nonatomic, weak, nullable) id<DSControlDelegate> controlDelegate;

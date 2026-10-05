@@ -187,6 +187,12 @@ std::vector<AlignedRun> alignVisibleText(std::u16string_view prev, std::u16strin
     runs.push_back({0, 0, static_cast<uint32_t>(next.size())});
     return runs;
   }
+  if (next.size() >= prev.size() && next.substr(0, prev.size()) == prev) {
+    // Appends dominate streaming. Compare the old prefix in one contiguous
+    // operation and only segment the newly arrived suffix.
+    runs.push_back({0, 0, static_cast<uint32_t>(prev.size())});
+    return runs;
+  }
   if (prev.size() > kRevealAlignLimit || next.size() > kRevealAlignLimit) {
     // Streamdown's rule, unchanged: below the old length is what the reader has
     // seen. Alignment on a block this size costs more than the occasional
@@ -340,21 +346,24 @@ namespace {
 /// half-open in `next`'s coordinates once this returns, and one that no longer
 /// covers any character is dropped.
 std::vector<AlignedRun> mapForward(const std::vector<AlignedRun> &settled,
-                                   const std::vector<AlignedRun> &runs, uint32_t length) {
+                                   const std::vector<AlignedRun> &runs) {
   std::vector<AlignedRun> mapped;
+  size_t first = 0;
   for (const AlignedRun &range : settled) {
-    for (const AlignedRun &run : runs) {
+    const uint32_t end = range.nextStart + range.length;
+    while (first < runs.size() && runs[first].prevStart + runs[first].length <= range.nextStart) {
+      ++first;
+    }
+    for (size_t index = first; index < runs.size() && runs[index].prevStart < end; ++index) {
+      const AlignedRun &run = runs[index];
       const uint32_t from = std::max(range.nextStart, run.prevStart);
-      const uint32_t to = std::min(range.nextStart + range.length, run.prevStart + run.length);
-      if (from >= to) {
-        continue;
+      const uint32_t to = std::min(end, run.prevStart + run.length);
+      if (from < to) {
+        const uint32_t at = run.nextStart + (from - run.prevStart);
+        mapped.push_back({at, at, to - from});
       }
-      const uint32_t at = run.nextStart + (from - run.prevStart);
-      mapped.push_back({at, at, to - from});
-      break;
     }
   }
-  (void)length;
   return mapped;
 }
 
@@ -365,29 +374,36 @@ void addRange(std::vector<AlignedRun> &ranges, uint32_t start, uint32_t end) {
   if (start >= end) {
     return;
   }
-  ranges.push_back({start, 0, end - start});
-  std::sort(ranges.begin(), ranges.end(),
-            [](const AlignedRun &a, const AlignedRun &b) { return a.nextStart < b.nextStart; });
-  // Merge the ranges that now touch, so the list stays proportional to the
-  // blocks' contents rather than to how many snapshots have been applied.
-  size_t write = 0;
-  for (size_t read = 1; read < ranges.size(); read++) {
-    AlignedRun &previous = ranges[write];
-    const AlignedRun &current = ranges[read];
-    if (current.nextStart <= previous.nextStart + previous.length) {
-      previous.length = std::max(previous.nextStart + previous.length,
-                                 current.nextStart + current.length) - previous.nextStart;
-      continue;
+  // Snapshots add ranges in text order. Most additions extend
+  // the last range, so do not sort the whole list for every word.
+  if (!ranges.empty() && start >= ranges.back().nextStart) {
+    AlignedRun &last = ranges.back();
+    if (start <= last.nextStart + last.length) {
+      last.length = std::max(end, last.nextStart + last.length) - last.nextStart;
+    } else {
+      ranges.push_back({start, 0, end - start});
     }
-    ranges[++write] = current;
+    return;
   }
-  ranges.resize(write + 1);
+  auto first = std::lower_bound(ranges.begin(), ranges.end(), start,
+                               [](const AlignedRun &range, uint32_t at) {
+                                 return range.nextStart + range.length < at;
+                               });
+  auto last = first;
+  while (last != ranges.end() && last->nextStart <= end) {
+    start = std::min(start, last->nextStart);
+    end = std::max(end, last->nextStart + last->length);
+    ++last;
+  }
+  const auto at = ranges.erase(first, last);
+  ranges.insert(at, {start, 0, end - start});
 }
 
 /// How much of `[start, end)` this block's settled ranges already cover.
 uint32_t overlapWith(const std::vector<AlignedRun> &ranges, uint32_t start, uint32_t end) {
   uint32_t covered = 0;
   for (const AlignedRun &range : ranges) {
+    if (range.nextStart >= end) break;
     const uint32_t from = std::max(start, range.nextStart);
     const uint32_t to = std::min(end, range.nextStart + range.length);
     if (from < to) {
@@ -455,100 +471,70 @@ const std::vector<RevealUnit> &RevealTracker::apply(const DocumentHandle &next, 
     // reveal text that has been on screen all along.
     shown_ = next;
     active_.clear();
+    settled_.clear();
     timeline_.clear();
     return active_;
   }
 
-  // Nothing shown yet means every character is new, which is the same walk with an
-  // empty previous document. A view seeds its first document instead when it
-  // wants that one to appear without a fade, which is what keeps a message that
-  // mounts complete from animating.
+  if (next == shown_) {
+    return active_;
+  }
+
   static const Document emptyShown;
   const Document &previousDocument = shown_ ? *shown_ : emptyShown;
+  const size_t count = next->blocks.size();
   const size_t previousCount = previousDocument.blocks.size();
-  const size_t sharedShown = previousDocument.blocks.sharedSize();
-  const size_t sharedNext = next->blocks.sharedSize();
+  const size_t shared = std::min(previousDocument.blocks.sharedSize(), next->blocks.sharedSize());
+  // Prefix::extend only appends immutable chunks. The same last block proves
+  // that these snapshots share the entire preceding prefix. Equal prefix sizes
+  // alone do not prove this after an edit or a stream reset.
+  const size_t unchangedPrefix = shared != 0 &&
+      &previousDocument.blocks[shared - 1] == &next->blocks[shared - 1] ? shared : 0;
 
-  // The alignment is computed once per changed block and read twice: to carry
-  // the units that are still fading through it, and to cut the new text that is
-  // left over. One walk per block rather than two.
-  std::vector<std::vector<AlignedRun>> runs(next->blocks.size());
-  // Which blocks were scanned, because an empty run list means two different
-  // things: a block that did not change, and a block where nothing aligned.
-  std::vector<bool> scanned(next->blocks.size(), false);
-  for (size_t index = 0; index < next->blocks.size(); index++) {
-    const Block &block = next->blocks[index];
-    // The shared committed prefix is the same storage in both snapshots, so it
-    // cannot have changed and is never scanned. Most of a stream's blocks take
-    // this path, which is what keeps an apply proportional to the tail rather
-    // than to the document.
-    if (index < sharedShown && index < sharedNext) {
-      continue;
-    }
-    const Block *previous = index < previousCount ? &previousDocument.blocks[index] : nullptr;
-    if (previous != nullptr) {
-      if (previous->text == block.text) {
-        continue;
-      }
-      // An identity promises its block's content, so a pair of them that agree is
-      // one block whatever else happened to it.
-      if (block.identity != 0 && previous->identity != 0 && block.identity == previous->identity) {
-        continue;
-      }
-      runs[index] = alignVisibleText(previous->text, block.text);
-    }
-    // A block that was not there before aligns with nothing, so every character
-    // of it is new. That is the case for the first document a view is given and
-    // for a block a paragraph has just grown into.
-    scanned[index] = true;
-  }
-
-  // What is at full alpha, carried forward through the same alignment. A block
-  // that was not scanned aligns with nothing, so none of its characters are
-  // known to be the same as anything the reader has already seen.
-  settled_.resize(next->blocks.size());
-  for (size_t index = 0; index < next->blocks.size(); index++) {
-    settled_[index] = mapForward(settled_[index], runs[index], static_cast<uint32_t>(next->blocks[index].text.size()));
-  }
-
-  // A unit that is still fading is remapped through the same alignment, so it
-  // keeps its start time when the text around it shifts. A unit whose characters
-  // no longer align is dropped: the text it described is gone.
+  settled_.resize(count);
   std::vector<RevealUnit> carried;
   carried.reserve(active_.size());
-  for (const RevealUnit &unit : active_) {
-    if (unit.block >= next->blocks.size()) {
-      continue;
-    }
-    for (const AlignedRun &run : runs[unit.block]) {
-      const uint32_t from = std::max(unit.start, run.prevStart);
-      const uint32_t to = std::min(unit.end, run.prevStart + run.length);
-      if (from >= to) {
-        continue;
-      }
-      const uint32_t at = run.nextStart + (from - run.prevStart);
-      carried.push_back({unit.block, at, at + (to - from), unit.startAt});
-      break;
-    }
+  size_t activeIndex = 0;
+  while (activeIndex < active_.size() && active_[activeIndex].block < unchangedPrefix) {
+    carried.push_back(active_[activeIndex++]);
   }
-
-  // New text: everything in the new document that the alignment does not cover.
   std::vector<RevealUnit> fresh;
-  for (size_t index = 0; index < next->blocks.size(); index++) {
-    if (!scanned[index]) {
+  for (size_t index = unchangedPrefix; index < count; ++index) {
+    const Block &block = next->blocks[index];
+    const Block *previous = index < previousCount ? &previousDocument.blocks[index] : nullptr;
+    const bool unchanged = previous != nullptr &&
+        ((block.identity != 0 && block.identity == previous->identity) || previous->text == block.text);
+    const size_t firstUnit = activeIndex;
+    while (activeIndex < active_.size() && active_[activeIndex].block == index) ++activeIndex;
+    if (unchanged) {
+      carried.insert(carried.end(), active_.begin() + firstUnit, active_.begin() + activeIndex);
       continue;
     }
-    const std::vector<AlignedRun> &blockRuns = runs[index];
-    const Block &block = next->blocks[index];
+
+    const auto runs = previous != nullptr ? alignVisibleText(previous->text, block.text) : std::vector<AlignedRun>{};
+    settled_[index] = mapForward(settled_[index], runs);
+    size_t firstRun = 0;
+    for (size_t unitIndex = firstUnit; unitIndex < activeIndex; ++unitIndex) {
+      const RevealUnit &unit = active_[unitIndex];
+      while (firstRun < runs.size() && runs[firstRun].prevStart + runs[firstRun].length <= unit.start) ++firstRun;
+      for (size_t runIndex = firstRun; runIndex < runs.size() && runs[runIndex].prevStart < unit.end; ++runIndex) {
+        const AlignedRun &run = runs[runIndex];
+        const uint32_t from = std::max(unit.start, run.prevStart);
+        const uint32_t to = std::min(unit.end, run.prevStart + run.length);
+        if (from < to) {
+          const uint32_t at = run.nextStart + (from - run.prevStart);
+          carried.push_back({unit.block, at, at + (to - from), unit.startAt});
+        }
+      }
+    }
+
     const uint32_t length = static_cast<uint32_t>(block.text.size());
     uint32_t cursor = 0;
-    for (const AlignedRun &run : blockRuns) {
-      if (run.nextStart > cursor) {
-        splitUnits(block, static_cast<uint32_t>(index), cursor, run.nextStart, options.split, fresh);
-      }
+    for (const AlignedRun &run : runs) {
+      if (run.nextStart > cursor) splitUnits(block, static_cast<uint32_t>(index), cursor, run.nextStart, options.split, fresh);
       cursor = std::max(cursor, run.nextStart + run.length);
     }
-    if (cursor < length) {
+    if (cursor < length || (previous == nullptr && length == 0)) {
       splitUnits(block, static_cast<uint32_t>(index), cursor, length, options.split, fresh);
     }
   }
@@ -569,20 +555,17 @@ const std::vector<RevealUnit> &RevealTracker::apply(const DocumentHandle &next, 
   // longer in `carried`, so the rest gets a unit of its own.
   std::vector<RevealUnit> scheduled;
   scheduled.reserve(fresh.size());
+  size_t joinIndex = 0;
   for (RevealUnit &unit : fresh) {
     const Block &block = next->blocks[unit.block];
-    bool joined = false;
-    for (RevealUnit &carriedUnit : carried) {
-      if (carriedUnit.block != unit.block || carriedUnit.end != unit.start || unit.start == 0) {
-        continue;
-      }
-      if (isSpace(block.text[unit.start - 1])) {
-        continue;
-      }
-      carriedUnit.end = unit.end;
-      joined = true;
-      break;
+    while (joinIndex < carried.size() &&
+           (carried[joinIndex].block < unit.block ||
+            (carried[joinIndex].block == unit.block && carried[joinIndex].end < unit.start))) {
+      ++joinIndex;
     }
+    bool joined = joinIndex < carried.size() && carried[joinIndex].block == unit.block &&
+        carried[joinIndex].end == unit.start && unit.start != 0 && !isSpace(block.text[unit.start - 1]);
+    if (joined) carried[joinIndex].end = unit.end;
     if (!joined) {
       scheduled.push_back(unit);
     }
@@ -590,14 +573,17 @@ const std::vector<RevealUnit> &RevealTracker::apply(const DocumentHandle &next, 
 
   timeline_.schedule(std::span<RevealUnit>(scheduled), now, options);
 
-  carried.insert(carried.end(), scheduled.begin(), scheduled.end());
-  std::stable_sort(carried.begin(), carried.end(), [](const RevealUnit &a, const RevealUnit &b) {
-    return a.block != b.block ? a.block < b.block : a.start < b.start;
-  });
-  active_ = std::move(carried);
-  // Everything the reader can see that is not fading is settled, which is what
-  // the next apply checks against.
-  for (const RevealUnit &unit : active_) {
+  // Both lists are already in block/text order. Merge them once rather than
+  // sorting every active character again after each streamed append.
+  active_.clear();
+  active_.reserve(carried.size() + scheduled.size());
+  std::merge(carried.begin(), carried.end(), scheduled.begin(), scheduled.end(), std::back_inserter(active_),
+             [](const RevealUnit &a, const RevealUnit &b) {
+               return a.block != b.block ? a.block < b.block : a.start < b.start;
+             });
+  // Carried ranges are already recorded through the alignment. Only newly
+  // scheduled text extends the record used by the next invariant check.
+  for (const RevealUnit &unit : fresh) {
     addRange(settled_[unit.block], unit.start, unit.end);
   }
   shown_ = next;
@@ -618,6 +604,15 @@ void RevealTracker::clear() {
   settled_.clear();
   timeline_.clear();
   shown_.reset();
+}
+
+std::span<const RevealUnit> revealUnitsForBlock(std::span<const RevealUnit> units, uint32_t block) {
+  if (units.empty()) return {};
+  const auto first = std::lower_bound(units.begin(), units.end(), block,
+                                     [](const RevealUnit &unit, uint32_t index) { return unit.block < index; });
+  const auto last = std::upper_bound(first, units.end(), block,
+                                    [](uint32_t index, const RevealUnit &unit) { return index < unit.block; });
+  return units.subspan(static_cast<size_t>(first - units.begin()), static_cast<size_t>(last - first));
 }
 
 float revealAlpha(const RevealUnit &unit, double now, const RevealOptions &options) {
@@ -645,11 +640,14 @@ float revealRise(const RevealUnit &unit, double now, const RevealOptions &option
     return 0;
   }
   const double duration = static_cast<double>(options.durationMs);
+  if (duration <= 0) {
+    return 0;
+  }
   const double elapsed = now - unit.startAt;
   if (elapsed <= 0) {
     return kRevealRisePoints;
   }
-  if (duration <= 0 || elapsed >= duration) {
+  if (elapsed >= duration) {
     return 0;
   }
   const float progress = options.easing.solve(static_cast<float>(elapsed / duration));

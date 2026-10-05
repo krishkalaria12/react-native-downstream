@@ -198,6 +198,9 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 /// The layout manager is what splits the glyph runs, so the provider is its as
 /// well as this view's.
 - (void)setRevealProvider:(id<DSRevealProvider>)revealProvider {
+  if (_revealProvider == revealProvider) {
+    return;
+  }
   _revealProvider = revealProvider;
   ((DSLayoutManager *)self.layoutManager).revealProvider = revealProvider;
   [self setNeedsDisplay];
@@ -970,6 +973,9 @@ constexpr CGFloat kPinThreshold = 8;
 /// The document block this card's body starts at. Set on every render because a
 /// card is reused across snapshots and the block it holds moves each time.
 - (void)setBlockOffset:(NSInteger)blockOffset {
+  if (_blockOffset == blockOffset) {
+    return;
+  }
   _blockOffset = blockOffset;
   _body.blockOffset = blockOffset;
   _gutter.blockOffset = blockOffset;
@@ -977,6 +983,9 @@ constexpr CGFloat kPinThreshold = 8;
 }
 
 - (void)setRevealProvider:(id<DSRevealProvider>)provider {
+  if (_revealProvider == provider) {
+    return;
+  }
   _revealProvider = provider;
   _body.revealProvider = provider;
   [_gutter setNeedsDisplay];
@@ -1950,6 +1959,9 @@ constexpr CGFloat kPinThreshold = 8;
 
 /// The document block this table's first row is.
 - (void)setBlockOffset:(NSInteger)blockOffset {
+  if (_blockOffset == blockOffset) {
+    return;
+  }
   _blockOffset = blockOffset;
   _grid.blockOffset = blockOffset;
   [_grid setNeedsDisplay];
@@ -1968,6 +1980,9 @@ constexpr CGFloat kPinThreshold = 8;
 }
 
 - (void)setRevealProvider:(id<DSRevealProvider>)provider {
+  if (_revealProvider == provider) {
+    return;
+  }
   _revealProvider = provider;
   _grid.revealProvider = provider;
   [_grid setNeedsDisplay];
@@ -2195,6 +2210,9 @@ static Class segmentViewClassFor(id segment) {
 /// Where the document's fading characters are. Set on every render because the
 /// provider holds the live unit list, which changes on every snapshot.
 - (void)setRevealProvider:(id<DSRevealProvider>)provider {
+  if (_revealProvider == provider) {
+    return;
+  }
   _revealProvider = provider;
   for (UIView<DSSegmentView> *view in _segmentViews) {
     if ([view isKindOfClass:DSTextSegmentView.class]) {
@@ -2320,32 +2338,79 @@ static Class segmentViewClassFor(id segment) {
   [self setNeedsLayout];
 }
 
-/// The views that can fade one document block's characters.
-///
-/// A block lives in exactly one segment, so this is a filter over the stack rather
-/// than a lookup, and it keeps the mapping from a document block to a segment
-/// inside the view that already holds that mapping.
-- (NSArray<UIView<DSRevealInvalidatable> *> *)revealViewsForBlock:(NSInteger)block {
-  NSMutableArray<UIView<DSRevealInvalidatable> *> *views = [NSMutableArray new];
-  for (NSUInteger index = 0; index < _segmentViews.count; index++) {
-    UIView *view = _segmentViews[index];
-    if (![view conformsToProtocol:@protocol(DSRevealInvalidatable)]) {
-      continue;
-    }
-    NSNumber *from = index < _rendered.segmentBlockIndexes.count
-        ? _rendered.segmentBlockIndexes[index]
-        : nil;
-    // How many blocks this view covers. A code card is one block; a table is one
-    // block per row; a text segment is one per block it holds.
-    NSInteger last = 1;
-    if ([view isKindOfClass:DSTextSegmentView.class]) {
-      last = (NSInteger)((DSTextSegmentView *)view).blockRanges.count;
-    }
-    if (block >= from.integerValue && block < from.integerValue + last) {
-      [views addObject:(UIView<DSRevealInvalidatable> *)view];
+/// Segment starts are in document order. Find the one segment owning the block
+/// without inspecting every earlier view on each display-link tick.
+- (UIView<DSRevealInvalidatable> *)revealViewForBlock:(NSInteger)block {
+  if (block < 0) {
+    return nil;
+  }
+  NSArray<NSNumber *> *indexes = _rendered.segmentBlockIndexes;
+  NSUInteger low = 0;
+  NSUInteger high = std::min(indexes.count, _segmentViews.count);
+  while (low < high) {
+    const NSUInteger middle = low + (high - low) / 2;
+    if (indexes[middle].integerValue <= block) {
+      low = middle + 1;
+    } else {
+      high = middle;
     }
   }
-  return views;
+  if (low == 0) {
+    return nil;
+  }
+  const NSUInteger index = low - 1;
+  UIView *view = _segmentViews[index];
+  if (![view conformsToProtocol:@protocol(DSRevealInvalidatable)]) {
+    return nil;
+  }
+  id segment = _rendered.segments[index];
+  NSInteger count = 1;
+  if ([segment isKindOfClass:DSTextSegment.class]) {
+    count = (NSInteger)((DSTextSegment *)segment).blockRanges.count;
+  } else if ([segment isKindOfClass:DSTableSegment.class]) {
+    count = ((DSTableSegment *)segment).blockCount;
+  }
+  // In particular, do not map a past-end block onto the last segment or a
+  // table's later rows onto the segment following the table.
+  if (block - indexes[index].integerValue >= count) {
+    return nil;
+  }
+  return (UIView<DSRevealInvalidatable> *)view;
+}
+
+- (void)invalidateRevealUnits:(std::span<const downstream::RevealUnit>)units
+                    document:(const downstream::Document &)document
+                         now:(double)now {
+  // RevealTracker stores units in block/start order. All units of a block
+  // touch the same segment, so invalidate their union once, without making an
+  // array or repeatedly asking TextKit to invalidate the same line fragment.
+  size_t index = 0;
+  while (index < units.size()) {
+    const uint32_t block = units[index].block;
+    uint32_t start = units[index].start;
+    uint32_t end = units[index].end;
+    do {
+      start = std::min(start, units[index].start);
+      end = std::max(end, units[index].end);
+      index++;
+    } while (index < units.size() && units[index].block == block);
+    if (block >= document.blocks.size()) {
+      continue;
+    }
+    // Text rendering reserves U+200B for an empty rule/fence/paragraph.
+    // Its single reveal unit still needs a display invalidation on completion.
+    const size_t length = std::max<size_t>(1, document.blocks[block].text.size());
+    const NSUInteger from = std::min<size_t>(start, length);
+    const NSUInteger to = std::min<size_t>(end, length);
+    [[self revealViewForBlock:block] invalidateRevealCharacterRange:NSMakeRange(from, to - from)
+                                                       blockOffset:block
+                                                                now:now];
+  }
+}
+
+- (NSArray<UIView<DSRevealInvalidatable> *> *)revealViewsForBlock:(NSInteger)block {
+  UIView<DSRevealInvalidatable> *view = [self revealViewForBlock:block];
+  return view == nil ? @[] : @[view];
 }
 
 /// TextKit draws its own selection, so a themed `colors.selection` has to reach

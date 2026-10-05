@@ -118,21 +118,23 @@ internal const val CARET_PLACEHOLDER = '\uFFFC'
  */
 internal object CaretShape {
   /** A bar as wide as half an em, as tall as the cap height plus half the descender. */
-  fun barRect(paint: Paint, x: Float, baseline: Float): android.graphics.RectF {
-    val metrics = paint.fontMetrics
+  fun barRect(paint: Paint, x: Float, baseline: Float, out: android.graphics.RectF, metrics: Paint.FontMetrics): android.graphics.RectF {
+    paint.getFontMetrics(metrics)
     val em = paint.textSize
     val width = em * 0.5f
     val top = baseline + metrics.ascent * 0.86f
     val bottom = baseline + metrics.descent * 0.5f
-    return android.graphics.RectF(x, top, x + width, bottom)
+    out.set(x, top, x + width, bottom)
+    return out
   }
 
   /** A dot 0.55 em across, centered on the x-height. */
-  fun dotRect(paint: Paint, x: Float, baseline: Float): android.graphics.RectF {
+  fun dotRect(paint: Paint, x: Float, baseline: Float, out: android.graphics.RectF): android.graphics.RectF {
     val em = paint.textSize
     val radius = em * 0.275f
     val center = baseline - em * 0.28f
-    return android.graphics.RectF(x, center - radius, x + radius * 2, center + radius)
+    out.set(x, center - radius, x + radius * 2, center + radius)
+    return out
   }
 
   /**

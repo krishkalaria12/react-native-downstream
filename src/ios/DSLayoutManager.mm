@@ -97,8 +97,12 @@ using namespace downstream;
 }
 
 - (void)drawGlyphsForGlyphRange:(NSRange)glyphsToShow atPoint:(CGPoint)origin {
-  const NSRange characters = [self characterRangeForGlyphRange:glyphsToShow actualGlyphRange:NULL];
-  [self drawFadingGlyphs:glyphsToShow characters:characters atPoint:origin];
+  if (self.revealProvider == nil) {
+    [super drawGlyphsForGlyphRange:glyphsToShow atPoint:origin];
+  } else {
+    const NSRange characters = [self characterRangeForGlyphRange:glyphsToShow actualGlyphRange:NULL];
+    [self drawFadingGlyphs:glyphsToShow characters:characters atPoint:origin];
+  }
   // The caret is drawn rather than typeset, over the placeholder the measured text
   // reserved for it, and after the text so nothing paints over it.
   [self drawCaretAtPoint:origin];
@@ -110,59 +114,70 @@ using namespace downstream;
     [super drawGlyphsForGlyphRange:glyphsToShow atPoint:origin];
     return;
   }
-  // Everything before the first run is fully shown, so it is drawn as one range
-  // with the base class rather than a run at alpha 1.
-  const NSRange first = runs.firstObject.range;
-  if (first.location > characters.location) {
-    const NSRange shown = [self clampedGlyphsFor:NSMakeRange(characters.location,
-                                                             first.location - characters.location)];
-    [super drawGlyphsForGlyphRange:shown atPoint:origin];
-  }
+  NSUInteger cursor = characters.location;
   for (DSRevealRun *run in runs) {
-    // A unit is stored in the segment's text, and glyphs are not characters: a
-    // ligature or a combining mark is several characters in one glyph, so a run
-    // has to be converted before it can be drawn.
     const NSRange clipped = NSIntersectionRange(run.range, characters);
     if (clipped.length == 0) {
       continue;
     }
-    [self drawGlyphs:[self clampedGlyphsFor:clipped] atPoint:origin alpha:run.alpha rise:run.rise];
+    // Active units can surround already-settled text, including a later block
+    // whose fade finished earlier. Every gap and the tail remain opaque.
+    if (clipped.location > cursor) {
+      [super drawGlyphsForGlyphRange:[self clampedGlyphsFor:NSMakeRange(cursor, clipped.location - cursor)]
+                            atPoint:origin];
+    }
+    if (run.alpha > 0) {
+      [self drawGlyphs:[self clampedGlyphsFor:clipped] atPoint:origin alpha:run.alpha rise:run.rise];
+    }
+    cursor = std::max(cursor, NSMaxRange(clipped));
   }
-  // Everything after the last run has not started, and is not drawn at all. Its
-  // space is still in the layout, which is what keeps a line from reflowing while
-  // a word fades in.
+  if (cursor < NSMaxRange(characters)) {
+    [super drawGlyphsForGlyphRange:[self clampedGlyphsFor:NSMakeRange(cursor, NSMaxRange(characters) - cursor)]
+                          atPoint:origin];
+  }
 }
 
 - (void)drawBackgroundForGlyphRange:(NSRange)glyphsToShow atPoint:(CGPoint)origin {
-  const NSRange characters = [self characterRangeForGlyphRange:glyphsToShow actualGlyphRange:NULL];
-  NSArray<DSRevealRun *> *runs = [self fadingRunsFor:characters];
-  if (runs.count == 0) {
+  if (self.revealProvider == nil) {
+    [super drawBackgroundForGlyphRange:glyphsToShow atPoint:origin];
     [self drawDecorationsForGlyphs:glyphsToShow atPoint:origin];
     return;
   }
-  // The same split as the glyphs, so an inline-code background and a link
-  // underline appear with the word they belong to rather than before it.
-  const NSRange first = runs.firstObject.range;
-  if (first.location > characters.location) {
-    [self drawDecorationsForGlyphs:[self clampedGlyphsFor:NSMakeRange(characters.location,
-                                                                       first.location - characters.location)]
-                            atPoint:origin];
-  }
-  for (DSRevealRun *run in runs) {
-    const NSRange clipped = NSIntersectionRange(run.range, characters);
-    if (clipped.length == 0) {
-      continue;
+  const NSRange characters = [self characterRangeForGlyphRange:glyphsToShow actualGlyphRange:NULL];
+  NSArray<DSRevealRun *> *runs = [self fadingRunsFor:characters];
+  if (runs.count == 0) {
+    [super drawBackgroundForGlyphRange:glyphsToShow atPoint:origin];
+  } else {
+    NSUInteger cursor = characters.location;
+    for (DSRevealRun *run in runs) {
+      const NSRange clipped = NSIntersectionRange(run.range, characters);
+      if (clipped.length == 0) {
+        continue;
+      }
+      if (clipped.location > cursor) {
+        [super drawBackgroundForGlyphRange:[self clampedGlyphsFor:NSMakeRange(cursor, clipped.location - cursor)]
+                                   atPoint:origin];
+      }
+      if (run.alpha > 0) {
+        CGContextRef context = UIGraphicsGetCurrentContext();
+        CGContextSaveGState(context);
+        CGContextSetAlpha(context, run.alpha);
+        if (run.rise != 0) {
+          CGContextTranslateCTM(context, 0, run.rise);
+        }
+        [super drawBackgroundForGlyphRange:[self clampedGlyphsFor:clipped] atPoint:origin];
+        CGContextRestoreGState(context);
+      }
+      cursor = std::max(cursor, NSMaxRange(clipped));
     }
-    if (run.alpha >= 1) {
-      [self drawDecorationsForGlyphs:[self clampedGlyphsFor:clipped] atPoint:origin];
-      continue;
+    if (cursor < NSMaxRange(characters)) {
+      [super drawBackgroundForGlyphRange:[self clampedGlyphsFor:NSMakeRange(cursor, NSMaxRange(characters) - cursor)]
+                                 atPoint:origin];
     }
-    CGContextRef context = UIGraphicsGetCurrentContext();
-    CGContextSaveGState(context);
-    CGContextSetAlpha(context, run.alpha);
-    [self drawDecorationsForGlyphs:[self clampedGlyphsFor:clipped] atPoint:origin];
-    CGContextRestoreGState(context);
   }
+  // Markers and bars belong to blocks, rather than to word/character runs.
+  // Drawing them once also avoids repeatedly compositing the same fading marker.
+  [self drawDecorationsForGlyphs:glyphsToShow atPoint:origin];
 }
 
 /// Quote bars, list markers, and rules, with no fade split of their own.
@@ -173,8 +188,6 @@ using namespace downstream;
 /// appear with the text it belongs to; a rule takes its block's single unit. A
 /// quote bar draws at full alpha, as Streamdown draws a border.
 - (void)drawDecorationsForGlyphs:(NSRange)glyphsToShow atPoint:(CGPoint)origin {
-  [super drawBackgroundForGlyphRange:glyphsToShow atPoint:origin];
-
   NSTextStorage *storage = self.textStorage;
   NSTextContainer *container = self.textContainers.firstObject;
   if (storage.length == 0 || container == nil) {
@@ -191,8 +204,11 @@ using namespace downstream;
                      longestEffectiveRange:&blockRange
                                    inRange:NSMakeRange(0, storage.length)];
     index = NSMaxRange(blockRange);
+    if (info == nil || (info.containers.count == 0 && info.rule == nil)) {
+      continue;
+    }
     DSBlockTextBounds bounds;
-    if (info == nil || ![self textBoundsForCharacterRange:blockRange bounds:&bounds]) {
+    if (![self textBoundsForCharacterRange:blockRange bounds:&bounds]) {
       continue;
     }
     const CGFloat top = origin.y + bounds.top;
@@ -267,10 +283,14 @@ using namespace downstream;
   // While a fade runs the caret sits at the reveal frontier, where the first unit
   // that has not started begins, so it never trails a gap of invisible words.
   NSUInteger frontier = placeholder.location;
-  for (DSRevealRun *run in [self fadingRunsFor:NSMakeRange(0, placeholder.location)]) {
-    if (run.alpha <= 0) {
-      frontier = run.range.location;
-      break;
+  id<DSRevealProvider> provider = self.revealProvider;
+  if (provider != nil) {
+    const NSUInteger hidden = [provider revealFrontierForCharacterRange:NSMakeRange(0, placeholder.location)
+                                                              blockOffset:self.blockOffset
+                                                              blockRanges:self.blockRanges
+                                                                       now:CACurrentMediaTime()];
+    if (hidden != NSNotFound) {
+      frontier = hidden;
     }
   }
   const NSUInteger glyph = [self glyphIndexForCharacterAtIndex:frontier];
