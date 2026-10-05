@@ -69,4 +69,3 @@ $ eslint "**/*.{js,ts,tsx}"
   267:18  warning  Unexpected use of '>>>'  no-bitwise
 
 ✖ 5 problems (0 errors, 5 warnings)
-
