@@ -1,0 +1,72 @@
+pr22-focused.log
+$ vitest run -- tests/inline-html.test.ts tests/streaming-preview.test.ts
+
+ RUN  v5.0.2 /Users/krish/orca/workspaces/react-native-downstream/ningyo
+
+
+ Test Files  23 passed (23)
+      Tests  562 passed (562)
+   Start at  18:13:58
+   Duration  7.84s (tests 83%, environment 13%, transform 3%, import 2%)
+
+    Isolate  23 workers spawned · ~264ms startup each (spawn + environment, per file)
+             at least ~411ms faster with isolate: false — reuses workers across files instead of one per file
+
+
+pr22-native-final.log
+  ✔ every table in the oracle corpus round trips (5.397625ms)
+  ✔ copy ignores layout (3.217875ms)
+  ✔ a fence info string is kept whole for a file name (4.603792ms)
+  ✔ a controlled document settles every block (1.815833ms)
+  ✔ an open stream settles only what it can prove (8.973667ms)
+  ✔ full mode settles nothing until the stream finishes (4.082292ms)
+✔ copy and download controls (777.954542ms)
+ℹ tests 317
+ℹ suites 14
+ℹ pass 317
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6131.532584
+
+pr22-kotlin.log
+$ node tests/android/run.mjs
+(node:44305) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/krish/orca/workspaces/react-native-downstream/ningyo/tests/engine.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/krish/orca/workspaces/react-native-downstream/ningyo/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+reveal frame, target invalidation and drawing operations passed
+code layout checks passed
+image layout mirror: every case matches the C++ table
+math layout mirror: every case matches the C++ table
+math rendering: cached draw inputs, style guards, accessibility, metrics and lifecycle passed
+reveal mirror agrees with the engine on 108 cases
+
+pr22-typecheck.log
+$ tsc -p tsconfig.test.json
+
+pr22-android-typecheck.log
+$ node tests/android/typecheck.mjs
+ok java stubs
+ok codegen
+ok generated java
+ok kotlin source set
+ok engine directories (7) are built on both platforms
+ok jni DownstreamJni.cpp
+ok jni DownstreamTextLayoutManager.cpp
+
+pr22-lint.log
+$ eslint "**/*.{js,ts,tsx}"
+
+/Users/krish/orca/workspaces/react-native-downstream/ningyo/tests/react-native.ts
+  126:10  warning  Unexpected use of '>>>'  no-bitwise
+  126:11  warning  Unexpected use of '|'    no-bitwise
+  126:12  warning  Unexpected use of '<<'   no-bitwise
+  126:28  warning  Unexpected use of '>>>'  no-bitwise
+
+/Users/krish/orca/workspaces/react-native-downstream/ningyo/tests/syntax-theme.test.ts
+  267:18  warning  Unexpected use of '>>>'  no-bitwise
+
+✖ 5 problems (0 errors, 5 warnings)
+
