@@ -1481,6 +1481,38 @@ internal class RenderedDocument(
             flags,
           )
         }
+        if (styles and NativeDocument.STYLE_SUPERSCRIPT != 0) {
+          // A fraction of the block's size, so the script keeps its proportions
+          // when a theme changes the body size.
+          text.setSpan(
+            RelativeSizeSpan(theme.number(ThemeSlots.SLOT_SUPERSCRIPT_FONT_SCALE)),
+            start,
+            end,
+            flags,
+          )
+          text.setSpan(
+            BaselineShiftSpan(theme.number(ThemeSlots.SLOT_SUPERSCRIPT_BASELINE_OFFSET_SCALE)),
+            start,
+            end,
+            flags,
+          )
+        }
+        if (styles and NativeDocument.STYLE_SUBSCRIPT != 0) {
+          text.setSpan(
+            RelativeSizeSpan(theme.number(ThemeSlots.SLOT_SUBSCRIPT_FONT_SCALE)),
+            start,
+            end,
+            flags,
+          )
+          // BaselineShiftSpan raises for a positive fraction, so a subscript
+          // negates: it lowers.
+          text.setSpan(
+            BaselineShiftSpan(-theme.number(ThemeSlots.SLOT_SUBSCRIPT_BASELINE_OFFSET_SCALE)),
+            start,
+            end,
+            flags,
+          )
+        }
         if (styles and NativeDocument.STYLE_FOOTNOTE != 0) {
           // A fraction of the block's size, so the reference keeps its
           // proportions when a theme changes the body size.

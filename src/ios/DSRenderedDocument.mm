@@ -73,6 +73,21 @@ NSWritingDirection writingDirection(const std::u16string &text) {
   return NSWritingDirectionNatural;
 }
 
+/// Whether any of this block's runs is raised or lowered: a footnote
+/// reference, a `<sup>` or `<sub>`, or a `^x^` run.
+bool holdsBaselineShift(const Block &block) {
+  for (const InlineRun &run : block.runs) {
+    if ((run.styles & (InlineStyle::FootnoteRef | InlineStyle::Superscript | InlineStyle::Subscript)) != 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Whether the block carries an inline formula, whose attachment box a cap would
+/// clip. A display formula is a block of its own and never reaches here.
+bool hasInlineMath(const Block &block) { return !block.math.empty(); }
+
 /// Applies a block's inline runs within [clampStart, clampEnd) to text that
 /// starts at `offset`.
 ///
@@ -95,6 +110,8 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
     const NSRange range = NSMakeRange(offset + start - clampStart, end - start);
     const bool code = (run.styles & InlineStyle::Code) != 0 && !isCode;
     const bool footnote = (run.styles & InlineStyle::FootnoteRef) != 0;
+    const bool sup = (run.styles & InlineStyle::Superscript) != 0;
+    const bool sub = (run.styles & InlineStyle::Subscript) != 0;
     const bool bold = (run.styles & InlineStyle::Strong) != 0;
     const bool italic = (run.styles & InlineStyle::Emphasis) != 0;
 
@@ -114,6 +131,17 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
       runSize = inlineCodeSizeFor(theme, size, 1);
     } else if (footnote) {
       runSize = footnoteSize;
+    } else if (sup) {
+      runSize = size * superscriptFontScale(theme);
+    } else if (sub) {
+      runSize = size * subscriptFontScale(theme);
+    }
+    // Inline code keeps the code face and takes the script's scale too, so
+    // `<sup>`code`</sup>` is raised as well as monospaced.
+    if (code && sup) {
+      runSize = inlineCodeSizeFor(theme, size, 1) * superscriptFontScale(theme);
+    } else if (code && sub) {
+      runSize = inlineCodeSizeFor(theme, size, 1) * subscriptFontScale(theme);
     }
     if (run.link >= 0) {
       runTypeface = linkFont(theme, runTypeface);
@@ -158,6 +186,12 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
     if (footnote) {
       attributes[NSBaselineOffsetAttributeName] = @(size * footnoteRaise(theme));
       attributes[NSForegroundColorAttributeName] = footnoteColor;
+    }
+    if (sup) {
+      attributes[NSBaselineOffsetAttributeName] = @(size * superscriptBaselineOffset(theme));
+    }
+    if (sub) {
+      attributes[NSBaselineOffsetAttributeName] = @(-size * subscriptBaselineOffset(theme));
     }
     if (run.link >= 0) {
       attributes[NSForegroundColorAttributeName] =
@@ -495,6 +529,20 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
     // is clipped. A line height below the face's own is ignored by the platform
     // anyway, so the default of zero and a small value behave alike.
     style.minimumLineHeight = font.lineHeight * scale;
+    // TextKit grows a line fragment to fit a baseline offset, so a raised or
+    // lowered run opens its line by about four points where the web's
+    // `line-height: 0` on `sub` and `sup` does not. A paragraph holding a
+    // script or a footnote reference is capped at the block's own line height
+    // so a formula's marker cannot change the leading of the text around it.
+    // A paragraph with an inline formula keeps its natural height: an
+    // attachment's box is what the line has to hold.
+    if (holdsBaselineShift(block) && !hasInlineMath(block)) {
+      // The cap is the height the line would have anyway: the theme's own line
+      // height when it set one, and the face's when it did not, which is what
+      // the platform would use for itself.
+      const CGFloat themed = font.lineHeight * scale;
+      style.maximumLineHeight = themed > 0 ? themed : baseFont.lineHeight;
+    }
     NSMutableParagraphStyle *firstStyle = [style mutableCopy];
     firstStyle.paragraphSpacingBefore = gap;
 

@@ -313,6 +313,8 @@ internal class NativeDocument(
     const val STYLE_CODE = 1 shl 3
     const val STYLE_IMAGE_ALT = 1 shl 5
     const val STYLE_FOOTNOTE = 1 shl 6
+    const val STYLE_SUPERSCRIPT = 1 shl 8
+    const val STYLE_SUBSCRIPT = 1 shl 9
 
     // Token classes, in the order src/cpp/downstream/Document.h declares them.
     const val TOKEN_PLAIN = 0

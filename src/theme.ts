@@ -354,6 +354,14 @@ const ELEMENT_SLOTS: Readonly<Record<string, ElementSlots>> = {
   },
   footnote: { color: 'footnote.color' },
   imageAlt: { color: 'imageAlt.color' },
+  superscript: {
+    fontScale: 'superscript.fontScale',
+    baselineOffsetScale: 'superscript.baselineOffsetScale',
+  },
+  subscript: {
+    fontScale: 'subscript.fontScale',
+    baselineOffsetScale: 'subscript.baselineOffsetScale',
+  },
   // A display formula is a box of its own, not a paragraph, so it has its own
   // keys rather than a `textAlign` the paragraph would have to understand.
   math: {

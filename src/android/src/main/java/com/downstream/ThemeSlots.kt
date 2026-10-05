@@ -512,9 +512,17 @@ internal object ThemeSlots {
   const val SLOT_IMAGE_PLACEHOLDER_COLOR = 250
   /** "image.placeholderColor", dark half */
   const val SLOT_IMAGE_PLACEHOLDER_COLOR_DARK = 251
+  /** "superscript.fontScale" */
+  const val SLOT_SUPERSCRIPT_FONT_SCALE = 252
+  /** "superscript.baselineOffsetScale" */
+  const val SLOT_SUPERSCRIPT_BASELINE_OFFSET_SCALE = 253
+  /** "subscript.fontScale" */
+  const val SLOT_SUBSCRIPT_FONT_SCALE = 254
+  /** "subscript.baselineOffsetScale" */
+  const val SLOT_SUBSCRIPT_BASELINE_OFFSET_SCALE = 255
 
   /** One past the highest id in use. */
-  const val SLOT_ID_COUNT = 252
+  const val SLOT_ID_COUNT = 256
 
 
   /**
