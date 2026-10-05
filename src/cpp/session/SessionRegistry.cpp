@@ -67,6 +67,9 @@ public:
     finished_ = false;
     SessionTrace::record(id_, generation, 0, "reset_received");
     snapshot_.reset();
+    // The new source has shown nothing, so a view that binds to it fades from
+    // its first word rather than starting from the previous one's tail.
+    shown_.reset();
     readyGeneration_ = 0;
     readySequence_ = 0;
     markDirty();
@@ -133,6 +136,16 @@ public:
   void noteLayout(LayoutHint hint) {
     std::lock_guard<std::mutex> lock(mutex_);
     layout_ = hint;
+  }
+
+  void noteShown(const DocumentHandle &document) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    shown_ = document;
+  }
+
+  DocumentHandle shown() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return shown_;
   }
 
 private:
@@ -247,6 +260,9 @@ private:
   uint64_t readyGeneration_{0};
   uint64_t readySequence_{0};
   DocumentHandle snapshot_;
+  // The last document a view showed for this session. Not the snapshot: a view
+  // may be showing a snapshot that has since been superseded.
+  DocumentHandle shown_;
   std::optional<LayoutHint> layout_;
   std::optional<remend::PreviewOptions> preview_;
   std::optional<ParseOptions> parse_;
@@ -320,6 +336,17 @@ void SessionRegistry::noteLayout(const std::string &id, LayoutHint hint) {
   if (const auto session = findSession(id)) {
     session->noteLayout(hint);
   }
+}
+
+void SessionRegistry::noteShown(const std::string &id, const DocumentHandle &document) {
+  if (const auto session = findSession(id)) {
+    session->noteShown(document);
+  }
+}
+
+DocumentHandle SessionRegistry::shown(const std::string &id) {
+  const auto session = findSession(id);
+  return session ? session->shown() : nullptr;
 }
 
 bool SessionRegistry::setPreview(const std::string &id, remend::PreviewOptions options) {

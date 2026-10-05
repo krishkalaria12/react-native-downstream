@@ -7,6 +7,7 @@
 #import "DSRenderedDocument.h"
 
 #include "Controls.h"
+#include "Reveal.h"
 #include "ImageSizeCache.h"
 #include "math/MathSpeech.h"
 
@@ -151,6 +152,10 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
   DSTextKitStack *_stack;
   DSTextSegment *_segment;
   NSArray *_cachedAccessibilityElements;
+  /// The document block this view's first character is. A reveal unit names a
+  /// block and an offset within it, and this is what turns that into a range in
+  /// this view's own text.
+  NSInteger _blockOffset;
 }
 
 - (instancetype)init {
@@ -176,10 +181,64 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
     return;
   }
   _segment = segment;
+  ((DSLayoutManager *)self.layoutManager).blockRanges = segment.blockRanges;
   [_stack.textStorage setAttributedString:segment.attributedString];
   self.selectedRange = NSMakeRange(0, 0);
   invalidateAccessibleLinks(_cachedAccessibilityElements);
   _cachedAccessibilityElements = nil;
+}
+
+/// The document block index this view's text starts at, which is what maps a
+/// reveal unit's block-and-offset pair into this view's own coordinates.
+- (void)setBlockOffset:(NSInteger)blockOffset {
+  _blockOffset = blockOffset;
+  ((DSLayoutManager *)self.layoutManager).blockOffset = blockOffset;
+}
+
+/// The layout manager is what splits the glyph runs, so the provider is its as
+/// well as this view's.
+- (void)setRevealProvider:(id<DSRevealProvider>)revealProvider {
+  if (_revealProvider == revealProvider) {
+    return;
+  }
+  _revealProvider = revealProvider;
+  ((DSLayoutManager *)self.layoutManager).revealProvider = revealProvider;
+  [self setNeedsDisplay];
+}
+
+/// This view's own block ranges, which the reveal provider maps units through.
+/// This view's block ranges, which the document view counts blocks with.
+- (NSArray<NSValue *> *)blockRanges {
+  return _segment.blockRanges;
+}
+
+/// Redraws one block's characters, which is what a frame of animation asks for.
+///
+/// The range is in the block's own text, and this view knows where the block
+/// starts in its own, so the translation is one addition. TextKit then redraws
+/// only the line fragments that range touches, with no text storage edit, no glyph
+/// invalidation, and no layout.
+- (void)invalidateRevealCharacterRange:(NSRange)range
+                            blockOffset:(NSInteger)blockOffset
+                                     now:(double)now {
+  (void)now;
+  // `blockOffset` is the unit's document block, which can be any block this view
+  // holds, not only its first.
+  if (blockOffset < _blockOffset || _segment == nil || range.length == 0) {
+    return;
+  }
+  const NSUInteger index = (NSUInteger)(blockOffset - _blockOffset);
+  if (index >= _segment.blockRanges.count) {
+    return;
+  }
+  const NSRange base = _segment.blockRanges[index].rangeValue;
+  const NSRange characters = NSMakeRange(base.location + range.location, range.length);
+  if (NSMaxRange(characters) > _stack.textStorage.length) {
+    return;
+  }
+  // The background and the glyphs are separate passes over the same range, so an
+  // inline-code background that outlived its glyph would leave a rectangle behind.
+  [self.layoutManager invalidateDisplayForCharacterRange:characters];
 }
 
 - (void)setLinkDelegate:(id<DSLinkDelegate>)linkDelegate {
@@ -440,6 +499,9 @@ constexpr CGFloat kPinThreshold = 8;
 /// The code's own color, which the numbers draw in at `kGutterAlpha`. Nil falls
 /// back to the system secondary label, which is what a card with no theme gets.
 @property (nonatomic, nullable, strong) UIColor *textColor;
+/// The document block the card's body starts at, so a gutter can ask the fade
+/// for its block's alpha rather than for its body's.
+@property (nonatomic) NSInteger blockOffset;
 @end
 
 @implementation DSCodeGutterView {
@@ -596,11 +658,25 @@ constexpr CGFloat kPinThreshold = 8;
       continue;
     }
     const CGSize size = [number sizeWithAttributes:attributes];
+    // A line's number fades with that line's own text, which is what makes a new
+    // line of streaming code bring its number with it rather than showing the
+    // number first.
+    const id<DSRevealProvider> provider = body.revealProvider;
+    const CGFloat alpha =
+        provider == nil
+            ? 1
+            : [provider revealAlphaAtBlock:self.blockOffset offset:offset now:CACurrentMediaTime()];
+    if (alpha <= 0) {
+      continue;
+    }
     // Right-aligned against the gap, so the numbers line up on their last digit
     // as they do in GitHub and VS Code.
     [number drawAtPoint:CGPointMake(std::max<CGFloat>(0, width - downstream::kGutterGap - size.width),
                                     baseline - font.ascender)
-          withAttributes:attributes];
+          withAttributes:alpha >= 1 ? attributes : @{
+            NSFontAttributeName : font,
+            NSForegroundColorAttributeName : [color colorWithAlphaComponent:CGColorGetAlpha(color.CGColor) * alpha]
+          }];
   }
 }
 
@@ -784,6 +860,12 @@ constexpr CGFloat kPinThreshold = 8;
   /// `translations` prop rebuilds them instead of leaving stale strings up.
   NSArray<NSString *> *_builtLabels;
   BOOL _copied;
+  /// The document block this card's body starts at, which a reveal unit's own
+  /// block index is relative to.
+  NSInteger _blockOffset;
+  /// Where the body and the gutter read their fading alphas from. Weak, because
+  /// the provider is the Markdown view's and this card is recycled.
+  __weak id<DSRevealProvider> _revealProvider;
   NSTimer *_copiedTimer;
   CGFloat _savedOffset;
   CGFloat _savedVerticalOffset;
@@ -888,6 +970,27 @@ constexpr CGFloat kPinThreshold = 8;
   return _segmentStorage;
 }
 
+/// The document block this card's body starts at. Set on every render because a
+/// card is reused across snapshots and the block it holds moves each time.
+- (void)setBlockOffset:(NSInteger)blockOffset {
+  if (_blockOffset == blockOffset) {
+    return;
+  }
+  _blockOffset = blockOffset;
+  _body.blockOffset = blockOffset;
+  _gutter.blockOffset = blockOffset;
+  [_gutter setNeedsDisplay];
+}
+
+- (void)setRevealProvider:(id<DSRevealProvider>)provider {
+  if (_revealProvider == provider) {
+    return;
+  }
+  _revealProvider = provider;
+  _body.revealProvider = provider;
+  [_gutter setNeedsDisplay];
+}
+
 - (void)setSegment:(DSCodeSegment *)segment {
   if (segment == _segmentStorage) {
     return;
@@ -906,12 +1009,16 @@ constexpr CGFloat kPinThreshold = 8;
   _segmentStorage = segment;
   _body.linkDelegate = self.linkDelegate;
   [_body setSegment:segment.text];
+  _body.blockOffset = _blockOffset;
   _gutter.body = _body;
   _gutter.segment = segment;
   _gutter.firstNumber = segment.fenceMeta.startLine;
   _gutter.lineCount = segment.lineCount;
   _gutter.digitAdvance = segment.digitAdvance;
   _gutter.font = segment.codeFont;
+  // The gutter's line starts are the same offsets a reveal unit names, so asking
+  // for the block's own alpha per line is a lookup rather than a mapping.
+  _gutter.blockOffset = _blockOffset;
   // The gutter draws in the code's own color, dimmed rather than re-themed: the
   // numbers annotate the code beside them, so a theme that restyles code restyles
   // its numbers in step. Streamdown's `muted-foreground/50` is the same idea.
@@ -1038,9 +1145,6 @@ constexpr CGFloat kPinThreshold = 8;
   }
 }
 
-/// Rebuilds the header's buttons from the current controls, enabled state, and
-/// layout. The buttons are created once; only their glyphs, labels, and states
-/// change, which is what keeps a snapshot from allocating any.
 /// Rebuilds the header's buttons from the current controls, enabled state, and
 /// layout. The buttons are created once; only their glyphs, labels, and states
 /// change, which is what keeps a snapshot from allocating any.
@@ -1274,6 +1378,16 @@ constexpr CGFloat kPinThreshold = 8;
   // what keeps a themed card the height the measurement gave it.
   UIColor *fill = [_segmentStorage.theme colorForSlot:kSlotCodeBlockBackgroundColor
                                            fallback:UIColor.tertiarySystemFillColor];
+  // A card fades with its own first unit, so a new code block brings its
+  // background, its border, and its header with it rather than appearing behind
+  // text that is already there. Its body fades by its own units, so the card does
+  // not multiply them.
+  const CGFloat alpha = _revealProvider == nil
+      ? 1
+      : [_revealProvider revealAlphaAtBlock:_blockOffset offset:0 now:CACurrentMediaTime()];
+  CGContextRef alphaContext = UIGraphicsGetCurrentContext();
+  CGContextSaveGState(alphaContext);
+  CGContextSetAlpha(alphaContext, alpha);
   UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:card cornerRadius:_segmentStorage.borderRadius];
   [fill setFill];
   [path fill];
@@ -1296,6 +1410,7 @@ constexpr CGFloat kPinThreshold = 8;
       [container.marker drawAtPoint:CGPointMake(x, baseline - font.ascender)];
     }
   }
+  CGContextRestoreGState(alphaContext);
 
   // The fade says there is more below without covering the last line's text: it
   // is short, and it sits inside the card's own bottom padding.
@@ -1367,6 +1482,18 @@ constexpr CGFloat kPinThreshold = 8;
   return elements;
 }
 
+/// A card's chrome fades through the card's own alpha, its numbers through the
+/// gutter's, and its code through the body's text. Each is a view of its own
+/// that draws only when asked, so the card, the gutter and the body's fading
+/// lines are all invalidated.
+- (void)invalidateRevealCharacterRange:(NSRange)range
+                            blockOffset:(NSInteger)blockOffset
+                                     now:(double)now {
+  [self setNeedsDisplay];
+  [_gutter setNeedsDisplay];
+  [_body invalidateRevealCharacterRange:range blockOffset:blockOffset now:now];
+}
+
 /// The block is finished once its fence has closed. A card stops following its
 /// newest line then, and keeps whatever offset the reader left.
 - (void)setStreaming:(BOOL)streaming {
@@ -1384,6 +1511,11 @@ constexpr CGFloat kPinThreshold = 8;
 @interface DSTableGridView : UIView
 @property (nonatomic, nullable) DSTableSegment *segment;
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
+/// Where the rows' fading alphas come from. A row is one reveal unit, so a new
+/// row brings its fill, its cells, and its grid lines with it.
+@property (nonatomic, weak, nullable) id<DSRevealProvider> revealProvider;
+/// The document block this table's first row is.
+@property (nonatomic) NSInteger blockOffset;
 - (NSInteger)linkIndexAtPoint:(CGPoint)point;
 @end
 
@@ -1457,6 +1589,11 @@ constexpr CGFloat kPinThreshold = 8;
 
   // The zebra fill is drawn under the cells, per row rather than per cell, so
   // an empty trailing cell in a short row still gets the row's fill.
+  //
+  // A row is one reveal unit, so the whole row draws at one alpha: its fill, its
+  // cells, and the grid lines under it. A table row is a block, and its cells are
+  // laid out by this grid rather than by a text run, so there is nothing finer to
+  // fade within one.
   NSUInteger firstDataRow = _segment.hasHeader ? 1 : 0;
   [_segment.rows enumerateObjectsUsingBlock:^(NSArray<DSTableCell *> *row, NSUInteger rowIndex, BOOL *stop) {
     if (self->_rowOffsets[rowIndex] > CGRectGetMaxY(rect)) {
@@ -1466,6 +1603,17 @@ constexpr CGFloat kPinThreshold = 8;
     if (self->_rowOffsets[rowIndex + 1] < CGRectGetMinY(rect)) {
       return;
     }
+    const CGFloat alpha = self.revealProvider == nil
+        ? 1
+        : [self.revealProvider revealAlphaAtBlock:self.blockOffset
+                                            offset:(NSUInteger)rowIndex
+                                               now:CACurrentMediaTime()];
+    if (alpha <= 0) {
+      return;
+    }
+    CGContextRef context = UIGraphicsGetCurrentContext();
+    CGContextSaveGState(context);
+    CGContextSetAlpha(context, alpha);
     if (rowIndex >= firstDataRow) {
       UIColor *stripe = [self->_segment.theme colorForSlot:(rowIndex - firstDataRow) % 2 == 0
                                                           ? kSlotTableRowEvenBackgroundColor
@@ -1483,6 +1631,7 @@ constexpr CGFloat kPinThreshold = 8;
         [cell.text drawWithRect:content options:options context:nil];
       }
     }];
+    CGContextRestoreGState(context);
   }];
 
   [[_segment.theme colorForSlot:kSlotTableBorderColor fallback:UIColor.separatorColor] setFill];
@@ -1593,6 +1742,12 @@ constexpr CGFloat kPinThreshold = 8;
   BOOL _preserveScrollPosition;
   BOOL _forceScrollReset;
   CGFloat _savedScrollPosition;
+  /// The document block this table's first row is, which a reveal unit's own block
+  /// index is relative to.
+  NSInteger _blockOffset;
+  /// Where the rows' fading alphas come from. Weak, because the provider is the
+  /// Markdown view's and this card is recycled.
+  __weak id<DSRevealProvider> _revealProvider;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -1783,6 +1938,8 @@ constexpr CGFloat kPinThreshold = 8;
   _needsScrollRestore = YES;
   _segment = segment;
   _grid.segment = segment;
+  _grid.revealProvider = _revealProvider;
+  _grid.blockOffset = _blockOffset;
   // The toolbar's buttons take the theme's own toolbar color when it set one.
   UIColor *toolbar = segment.toolbarButtonColor ?: UIColor.secondaryLabelColor;
   for (UIView *button in _buttons.arrangedSubviews) {
@@ -1798,6 +1955,37 @@ constexpr CGFloat kPinThreshold = 8;
   _preserveScrollPosition = NO;
   _needsScrollRestore = YES;
   [self setNeedsLayout];
+}
+
+/// The document block this table's first row is.
+- (void)setBlockOffset:(NSInteger)blockOffset {
+  if (_blockOffset == blockOffset) {
+    return;
+  }
+  _blockOffset = blockOffset;
+  _grid.blockOffset = blockOffset;
+  [_grid setNeedsDisplay];
+}
+
+/// A table row is one reveal unit and the grid draws every row from its own
+/// offsets, so a tick has nothing to invalidate here: the grid redraws from the
+/// alphas the provider gives it.
+- (void)invalidateRevealCharacterRange:(NSRange)range
+                            blockOffset:(NSInteger)blockOffset
+                                     now:(double)now {
+  (void)range;
+  (void)blockOffset;
+  (void)now;
+  [_grid setNeedsDisplay];
+}
+
+- (void)setRevealProvider:(id<DSRevealProvider>)provider {
+  if (_revealProvider == provider) {
+    return;
+  }
+  _revealProvider = provider;
+  _grid.revealProvider = provider;
+  [_grid setNeedsDisplay];
 }
 
 - (void)layoutSubviews {
@@ -1921,6 +2109,10 @@ constexpr CGFloat kPinThreshold = 8;
   CGFloat _screenScale;
   /// The theme's selection color, applied to every text view in the stack.
   UIColor *_selectionColor;
+  /// Where this stack's fading characters are. Weak, because the layout manager is
+  /// owned by a view this one owns and a fade that outlived its provider would
+  /// draw into nothing.
+  __weak id<DSRevealProvider> _revealProvider;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -2015,6 +2207,24 @@ static Class segmentViewClassFor(id segment) {
   table.controlsEnabled = [self isSegmentSettledAtIndex:index];
 }
 
+/// Where the document's fading characters are. Set on every render because the
+/// provider holds the live unit list, which changes on every snapshot.
+- (void)setRevealProvider:(id<DSRevealProvider>)provider {
+  if (_revealProvider == provider) {
+    return;
+  }
+  _revealProvider = provider;
+  for (UIView<DSSegmentView> *view in _segmentViews) {
+    if ([view isKindOfClass:DSTextSegmentView.class]) {
+      ((DSTextSegmentView *)view).revealProvider = provider;
+    } else if ([view isKindOfClass:DSCodeSegmentView.class]) {
+      ((DSCodeSegmentView *)view).revealProvider = provider;
+    } else if ([view isKindOfClass:DSTableSegmentView.class]) {
+      ((DSTableSegmentView *)view).revealProvider = provider;
+    }
+  }
+}
+
 - (void)setRendered:(DSRenderedDocument *)rendered {
   if (rendered == _rendered) {
     return;
@@ -2084,6 +2294,29 @@ static Class segmentViewClassFor(id segment) {
     } else {
       [(DSTableSegmentView *)view setSegment:segment];
     }
+    // A reveal unit names a document block, so every view that draws text needs
+    // to know which document block its own first character is. Set on every
+    // render rather than once, because a view is reused across snapshots and the
+    // segment it holds is a different range each time. The offset is set even
+    // with no provider, because one can arrive after the segments do.
+    {
+      NSNumber *from = index < _rendered.segmentBlockIndexes.count
+          ? _rendered.segmentBlockIndexes[index]
+          : nil;
+      if ([view isKindOfClass:DSTextSegmentView.class]) {
+        DSTextSegmentView *text = (DSTextSegmentView *)view;
+        text.blockOffset = from.integerValue;
+        text.revealProvider = _revealProvider;
+      } else if ([view isKindOfClass:DSCodeSegmentView.class]) {
+        DSCodeSegmentView *code = (DSCodeSegmentView *)view;
+        code.blockOffset = from.integerValue;
+        code.revealProvider = _revealProvider;
+      } else if ([view isKindOfClass:DSTableSegmentView.class]) {
+        DSTableSegmentView *table = (DSTableSegmentView *)view;
+        table.blockOffset = from.integerValue;
+        table.revealProvider = _revealProvider;
+      }
+    }
     // A view created here has not seen the selection color yet, and a theme can
     // arrive after the segments do.
     if (_selectionColor != nil) {
@@ -2103,6 +2336,81 @@ static Class segmentViewClassFor(id segment) {
     [_codeOrdinals removeLastObject];
   }
   [self setNeedsLayout];
+}
+
+/// Segment starts are in document order. Find the one segment owning the block
+/// without inspecting every earlier view on each display-link tick.
+- (UIView<DSRevealInvalidatable> *)revealViewForBlock:(NSInteger)block {
+  if (block < 0) {
+    return nil;
+  }
+  NSArray<NSNumber *> *indexes = _rendered.segmentBlockIndexes;
+  NSUInteger low = 0;
+  NSUInteger high = std::min(indexes.count, _segmentViews.count);
+  while (low < high) {
+    const NSUInteger middle = low + (high - low) / 2;
+    if (indexes[middle].integerValue <= block) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  if (low == 0) {
+    return nil;
+  }
+  const NSUInteger index = low - 1;
+  UIView *view = _segmentViews[index];
+  if (![view conformsToProtocol:@protocol(DSRevealInvalidatable)]) {
+    return nil;
+  }
+  id segment = _rendered.segments[index];
+  NSInteger count = 1;
+  if ([segment isKindOfClass:DSTextSegment.class]) {
+    count = (NSInteger)((DSTextSegment *)segment).blockRanges.count;
+  } else if ([segment isKindOfClass:DSTableSegment.class]) {
+    count = ((DSTableSegment *)segment).blockCount;
+  }
+  // In particular, do not map a past-end block onto the last segment or a
+  // table's later rows onto the segment following the table.
+  if (block - indexes[index].integerValue >= count) {
+    return nil;
+  }
+  return (UIView<DSRevealInvalidatable> *)view;
+}
+
+- (void)invalidateRevealUnits:(std::span<const downstream::RevealUnit>)units
+                    document:(const downstream::Document &)document
+                         now:(double)now {
+  // RevealTracker stores units in block/start order. All units of a block
+  // touch the same segment, so invalidate their union once, without making an
+  // array or repeatedly asking TextKit to invalidate the same line fragment.
+  size_t index = 0;
+  while (index < units.size()) {
+    const uint32_t block = units[index].block;
+    uint32_t start = units[index].start;
+    uint32_t end = units[index].end;
+    do {
+      start = std::min(start, units[index].start);
+      end = std::max(end, units[index].end);
+      index++;
+    } while (index < units.size() && units[index].block == block);
+    if (block >= document.blocks.size()) {
+      continue;
+    }
+    // Text rendering reserves U+200B for an empty rule/fence/paragraph.
+    // Its single reveal unit still needs a display invalidation on completion.
+    const size_t length = std::max<size_t>(1, document.blocks[block].text.size());
+    const NSUInteger from = std::min<size_t>(start, length);
+    const NSUInteger to = std::min<size_t>(end, length);
+    [[self revealViewForBlock:block] invalidateRevealCharacterRange:NSMakeRange(from, to - from)
+                                                       blockOffset:block
+                                                                now:now];
+  }
+}
+
+- (NSArray<UIView<DSRevealInvalidatable> *> *)revealViewsForBlock:(NSInteger)block {
+  UIView<DSRevealInvalidatable> *view = [self revealViewForBlock:block];
+  return view == nil ? @[] : @[view];
 }
 
 /// TextKit draws its own selection, so a themed `colors.selection` has to reach
@@ -2268,7 +2576,5 @@ static Class segmentViewClassFor(id segment) {
   }
   return -1;
 }
-
-
 
 @end

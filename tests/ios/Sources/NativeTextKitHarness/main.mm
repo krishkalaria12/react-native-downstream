@@ -3,6 +3,7 @@
 #import "DSRenderedDocument.h"
 #import "DSSegmentViews.h"
 #import <objc/runtime.h>
+#include "Caret.h"
 #include "Document.h"
 #include "theme/Theme.h"
 #include <chrono>
@@ -70,7 +71,8 @@ static void checkEmojiGlyphMapping() {
   DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:makeDocument(source)
                                                                 fontScale:1
                                                        syntaxHighlighting:NO
-                                                                    theme:downstream::Theme::defaultTheme()];
+                                                                    theme:downstream::Theme::defaultTheme()
+                                                              caret:downstream::PlacedCaret{}];
   DSCodeSegmentView *view = [DSCodeSegmentView new];
   DSCodeSegment *emojiSegment = (DSCodeSegment *)rendered.segments.firstObject;
   [view setSegment:emojiSegment];
@@ -114,7 +116,8 @@ static void checkEmojiGlyphMapping() {
 static void checkBlankSuffixDraw() {
   DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:makeDocument([@"\n" stringByPaddingToLength:4096
                                                                                                                withString:@"\n" startingAtIndex:0])
-                                                                fontScale:1 syntaxHighlighting:NO theme:downstream::Theme::defaultTheme()];
+                                                                fontScale:1 syntaxHighlighting:NO theme:downstream::Theme::defaultTheme()
+                                                              caret:downstream::PlacedCaret{}];
   DSCodeSegmentView *view = [DSCodeSegmentView new];
   [view setSegment:rendered.segments.firstObject];
   view.layout = downstream::CodeBlockLayout{false, true, 1, 0, false};
@@ -146,7 +149,8 @@ static void checkGutterOwnerLifetime() {
   __weak DSCodeSegment *owner;
   @autoreleasepool {
     DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:makeDocument(@"keep\n\nalive")
-                                                                  fontScale:1 syntaxHighlighting:NO theme:downstream::Theme::defaultTheme()];
+                                                                  fontScale:1 syntaxHighlighting:NO theme:downstream::Theme::defaultTheme()
+                                                              caret:downstream::PlacedCaret{}];
     DSCodeSegmentView *view = [DSCodeSegmentView new];
     [view setSegment:rendered.segments.firstObject];
     gutter = findGutter(view);
@@ -181,14 +185,16 @@ static void checkScriptLineHeight() {
   DSRenderedDocument *plain = [DSRenderedDocument renderedDocumentFor:documentFor(std::u16string(prose), {})
                                                               fontScale:1
                                                      syntaxHighlighting:NO
-                                                                  theme:downstream::Theme::defaultTheme()];
+                                                                  theme:downstream::Theme::defaultTheme()
+                                                                caret:downstream::PlacedCaret{}];
   DSRenderedDocument *raised =
       [DSRenderedDocument renderedDocumentFor:documentFor(std::u16string(prose),
                                                           {{2, 3, downstream::InlineStyle::Superscript},
                                                            {7, 8, downstream::InlineStyle::Subscript}})
                                         fontScale:1
                                syntaxHighlighting:NO
-                                        theme:downstream::Theme::defaultTheme()];
+                                        theme:downstream::Theme::defaultTheme()
+                                                                caret:downstream::PlacedCaret{}];
   DSTextSegment *plainSegment = (DSTextSegment *)plain.segments.firstObject;
   DSTextSegment *raisedSegment = (DSTextSegment *)raised.segments.firstObject;
   require(plainSegment != nil && raisedSegment != nil, @"paragraph did not produce a text segment");
@@ -232,7 +238,8 @@ static void checkCellBreakHeight() {
   DSRenderedDocument *broken = [DSRenderedDocument renderedDocumentFor:document
                                                               fontScale:1
                                                      syntaxHighlighting:NO
-                                                                  theme:downstream::Theme::defaultTheme()];
+                                                                  theme:downstream::Theme::defaultTheme()
+                                                                caret:downstream::PlacedCaret{}];
   auto without = std::make_shared<downstream::Document>(*document);
   without->id = 9501;
   without->blocks.tail().clear();
@@ -249,7 +256,8 @@ static void checkCellBreakHeight() {
   DSRenderedDocument *plain = [DSRenderedDocument renderedDocumentFor:without
                                                                fontScale:1
                                                       syntaxHighlighting:NO
-                                                                   theme:downstream::Theme::defaultTheme()];
+                                                                   theme:downstream::Theme::defaultTheme()
+                                                                caret:downstream::PlacedCaret{}];
   DSTableSegment *brokenTable = (DSTableSegment *)broken.segments.firstObject;
   DSTableSegment *plainTable = (DSTableSegment *)plain.segments.firstObject;
   require(brokenTable != nil && plainTable != nil, @"the table did not produce a table segment");
@@ -276,7 +284,8 @@ int main() {
     DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:makeDocument(source)
                                                                   fontScale:1
                                                          syntaxHighlighting:NO
-                                                                      theme:downstream::Theme::defaultTheme()];
+                                                                      theme:downstream::Theme::defaultTheme()
+                                                              caret:downstream::PlacedCaret{}];
     DSCodeSegment *segment = rendered.segments.firstObject;
     require(segment != nil, @"code document did not produce a code segment");
 #ifndef BASELINE

@@ -67,6 +67,7 @@ before(async () => {
     ['dump_export', [downstream('SegmentPlan.cpp'), ...engine]],
     ['test_export', [downstream('SegmentPlan.cpp'), ...engine]],
     ['test_fence_meta', [downstream('SegmentPlan.cpp'), ...engine]],
+    ['test_reveal', [incremental, ...engine]],
     ['test_preview', [incremental, ...engine]],
     ['test_session_registry', [registry, incremental, ...pool, ...engine]],
     [
@@ -1167,6 +1168,12 @@ describe('input', () => {
 
   test('fence info string meta, prefixes, and identity', () => {
     execFileSync(binary('test_fence_meta'), { timeout: 30_000, stdio: 'inherit' });
+  });
+
+  test('reveal alignment, units, timeline, easing, and caret placement', () => {
+    // The rules both platforms draw streamed text with, against the real parser,
+    // so a fade cannot disagree between them or with what a reader sees.
+    execFileSync(binary('test_reveal'), { timeout: 30_000, stdio: 'inherit' });
   });
 
   test('rejects malformed UTF-8', () => {

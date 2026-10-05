@@ -6,6 +6,7 @@ export type RouteId =
   | 'theme'
   | 'controls'
   | 'math'
+  | 'animation'
   | 'testing'
   | 'preview'
   | 'bench'
@@ -55,6 +56,13 @@ export const ROUTES: readonly Route[] = [
     title: 'Math & images',
     summary: 'Formulas typeset by RaTeX, and pictures in every load state.',
     icon: 'calculator-outline',
+  },
+  {
+    id: 'animation',
+    label: 'Animation',
+    title: 'Streaming animation',
+    summary: 'A per-word fade-in and a caret, on a replayed source.',
+    icon: 'sparkles-outline',
   },
   {
     id: 'testing',

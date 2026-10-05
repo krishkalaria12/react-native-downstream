@@ -76,6 +76,17 @@ previewed.append('hello **wor');
 // md4c's own `^x^` and `~x~`, each of which turns prose into a script, so both
 // are opt-in.
 <DownstreamMarkdown markdown={message} syntax={{ superscript: true }} />;
+
+// Text fades in as it arrives, with a caret at the writing point. A stream works
+// `isAnimating` out for itself; a controlled view says so.
+<DownstreamMarkdown stream={stream} animated caret="block" />;
+
+<DownstreamMarkdown
+  markdown={message}
+  animated
+  isAnimating={isStreaming}
+  caret="circle"
+/>
 ```
 
 The examples describe the runtime API. A view receives exactly one of `markdown` or `stream`. TypeScript rejects both or neither. A controlled string replacement starts a new generation when its value changes. An unchanged value, including a React rerender, does not reset work. `stream` identity changes unbind the previous controller and bind the new one; they do not copy source between controllers.
@@ -171,6 +182,65 @@ type MarkdownControlEvent = {
 `onCopy` and `onDownload` observe a press the library has already carried out, so an app can log, toast, or undo. `onToggle` on `wrap` reports the block's layout after the press, and `onToggle` on `expand` reports whether the block's cap is lifted after it; neither takes over anything: the button still changes the block, and the event is a report. `codeBlockWrap` sets the starting state for every code block and the button changes one block without changing the prop; `codeBlockMaxHeight` is the cap for all of them and expand lifts it for one block. A press on a document that has since been replaced is dropped, so a handler never sees an event for content the reader is no longer looking at.
 
 A control that fails reports `control_failed` to that control's own `onError`, and to the view's `onError` when the control has none, so an app can watch every failure in one place without giving up per-control handling. The error carries `block` and `action` naming the control that failed, so nothing has to be parsed out of the message.
+
+## Streaming animation and the caret
+
+A message can fade its new text in as it arrives, with a caret at the writing point. Both are off by default, and both are drawing only: they never change the canonical source, the settled parse, a source range, a selection, or the accessibility text. See [streaming semantics](streaming-semantics.md#streaming-animation-and-the-caret) for that boundary.
+
+```tsx
+// A controlled view says whether text is still arriving, as Streamdown requires.
+<DownstreamMarkdown
+  markdown={message}
+  animated
+  isAnimating={isStreaming}
+  caret="block"
+  onAnimationStart={() => setBusy(true)}
+  onAnimationEnd={() => setBusy(false)}
+/>;
+
+// A stream works `isAnimating` out from its own controller, so it needs no prop.
+const stream = createMarkdownStream();
+<DownstreamMarkdown stream={stream} animated caret="circle" />;
+
+// The whole option object, with Streamdown's names and defaults.
+<DownstreamMarkdown
+  stream={stream}
+  animated={{ animation: 'slideUp', sep: 'char', duration: 200, stagger: 20 }}
+/>;
+```
+
+```ts
+type MarkdownAnimateOptions = Readonly<{
+  /** 'fadeIn' by default. 'blurIn' and other names draw as 'fadeIn' and warn once. */
+  animation?: 'fadeIn' | 'slideUp' | 'blurIn' | (string & {});
+  /** Per unit, in ms. 150 by default. */
+  duration?: number;
+  /** A CSS timing keyword or cubic-bezier(). 'ease' by default. */
+  easing?: string;
+  /** 'word' by default. CJK text is split per character in either mode. */
+  sep?: 'word' | 'char';
+  /** Delay between units, in ms. 40 by default; 0 turns the cascade off. */
+  stagger?: number;
+  /** How far ahead of now a burst may be scheduled, in ms. 320 by default. */
+  maxBacklogMs?: number;
+}>;
+```
+
+`animated` is `false` by default, or the option object. `animation` is `fadeIn` (alpha) or `slideUp` (alpha and a four-point rise). `blurIn` draws as `fadeIn` and warns once in development: neither platform can blur one run of glyphs cheaply inside a text draw pass, and a CSS keyframe name means nothing natively. An unknown name does the same.
+
+A unit is a word by default, and takes its trailing whitespace with it, so a link's underline never shows before its word. CJK is split per syllable in either mode, because a CJK paragraph has no spaces and would otherwise fade as one block. `sep: 'char'` splits per grapheme, keeping a surrogate pair, combining marks, and a ZWJ emoji sequence whole. A rule, a table row, and an empty fence are one unit each.
+
+`stagger` is the delay between units, and a burst is compressed to fit `maxBacklogMs` rather than queued: forty words on a 40 ms stagger are scheduled across about 320 ms, not 1.6 s of invisible text. `stagger: 0` has no floor and turns the cascade off. Every time value is multiplied by Android's animator duration scale, and a scale of zero turns the fade off.
+
+`isAnimating` is required for a controlled `markdown` view, as in Streamdown: the library cannot know whether a string prop is still growing. A `stream` view works it out from its own controller — on from the first append until `finish()` — and an explicit `isAnimating` overrides that. `onAnimationStart` fires when it turns true, including on mount; `onAnimationEnd` fires when it turns false, but not on mount. Neither fires while the view is not animating at all.
+
+`caret` is `'none'` by default, or `'block'` (a bar) or `'circle'` (a dot). It is drawn, not typeset, so it looks the same in every font and cannot change a line's height. It is shown while `isAnimating` is true, so the two props are needed together.
+
+The caret sits after the last character when the last block is a paragraph, a heading, a list item at any depth, or a fence that is still open — that is where text is being written. It takes a line of its own when the document is empty, or ends with a table, a closed fence, or a rule, because that is where the next block's first line will appear. While a fade is running it is drawn at the reveal frontier, the end of the last word that has started, so it never sits after a gap of words that have not appeared yet.
+
+The caret is never copied, selected, exported, or read aloud. Copying a selection that touches it writes the selection without it. The placeholder it reserves is measured with the text, so measured height equals drawn height, and a caret that wraps to a new line moves the document by that line. The final snapshot removes it, so a view shrinks by a line when a stream finishes, as Streamdown's `::after` does.
+
+No fade is drawn when the system asks for reduced motion: `UIAccessibilityIsReduceMotionEnabled()` on iOS, and Android's Reduce Motion and animator duration scale as well. The caret is unaffected, because it does not move. With `animated` and `caret` off, a view's output is byte-identical to one built without this feature.
 
 ## Events and failures
 
@@ -279,6 +349,8 @@ A document is a vertical stack of segments. A text segment is a run of non-table
 
 Theming is on both platforms. A theme is interned by content in the shadow node, so equal themes are one object and a theme change costs one intern rather than one per view. The interned theme travels with the mounting state as its id, the way the parsed document does, so nothing copies 232 slot values across the platform boundary on every update. A color-only change rebuilds the drawing objects and measures nothing; a size change is measured again like any other layout change.
 
+Streaming animation works the same way. What is new, where the unit boundaries fall, when each unit starts, and where the caret goes are all decided in the engine, in `src/cpp/downstream/Reveal.h` and `Caret.h`, and both renderers call those. A per-view tracker holds the document that view last showed, so a message scrolled back into view does not fade all of itself again. None of that lives in a rendering: a segment is shared and immutable, so alpha can only be applied in a draw pass. iOS splits `DSLayoutManager`'s glyph drawing into runs of equal alpha and redraws only the lines holding an active unit. Android draws a text segment in clipped passes, one outside the fading band and one per alpha bucket inside it, capped at eight layers a frame. The caret is the exception, because it takes space: its placeholder is a real character in the measured text, so it is part of the rendering and of the measurement, and of both platforms' rendering cache keys.
+
 The rules that decide what a block draws with are written once, in the engine, and both renderers call them. A document read resolves each block's typography, its element, and its two margins on the C++ side and hands the result to the platform, so a theme means one thing rather than one thing per platform. A theme slot that nothing reads is a value that resolves, interns, redraws, and never appears, which is why `pnpm test:native` fails when one is added.
 
 ### Line numbers, titles, and the height cap
@@ -318,6 +390,7 @@ Parsing and platform text preparation run on one shared pool of worker threads: 
 | Area | Current behavior | Planned |
 | --- | --- | --- |
 | Input | Controlled `markdown` and `createMarkdownStream` with a `stream` prop. Streams use incremental parsing, share completed blocks, and fall back to a full parse at unproven boundaries. The stream buffers up to 64 KiB per native append and 256 KiB of unacknowledged input. Lone surrogates and sources over 1 MiB are rejected in JavaScript. | Real-device performance measurements. |
+| Streaming animation | `animated`, `isAnimating`, `caret`, `onAnimationStart`, and `onAnimationEnd`, on both platforms. The engine decides what is new and when each unit starts; each platform's existing draw pass applies the alpha, so a frame costs no React render, no Fabric state update, no relayout, and no change to a shared segment. | `smooth` pacing for bursty providers, and effects beyond fade and rise. |
 | Line breaks | Soft line breaks display as line breaks, as the fixture contract requires. `<br>` is one break too: a `<br>` next to a source line break still shows one break, and a stretch of soft breaks, hard breaks, and tags is counted once per hard mark, with the spaces around a `<br>` dropped. A cell can hold a `<br>`, and it is written back as one in Markdown and HTML exports. | None |
 | Tables | Columns take their widest cell, clamped to 56–280 points plus padding, with md4c's column alignment. Wide tables scroll horizontally. Cells keep inline styles and links. Completed rows appear during streaming without resetting the scroll position. A toolbar copies the table as HTML, Markdown, CSV, or TSV and saves it as CSV or Markdown. | None |
 | Admonitions and footnotes | Admonitions render as a quote with a colored bar and title. Footnote references are superscript numbers; definitions follow a rule at the end. A `<sup>1</sup>` a model writes looks the same as the `[^1]` it writes, and `superscript` and `subscript` in `markdownStyle` set each script's size and baseline shift. | None |

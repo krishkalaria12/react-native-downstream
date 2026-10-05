@@ -5,6 +5,7 @@
 #include "check.h"
 #include "tests/dump_model.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <cstdint>
@@ -600,6 +601,36 @@ static int batchedCorpus(ParseOptions parse) {
   return ds_check_result();
 }
 
+// What a pass returns is what a session hands every view, so it has to be the
+// snapshot the parser recorded, carrying both of its flags: a stream still
+// arriving, and how many leading blocks have settled. Each path is fed in turn:
+// the first full parse, a tail parse after a commit, the open-fence fast path,
+// and the finishing parse.
+bool snapshotsCarryTheirFlags(ParseMode mode) {
+  IncrementalParser parser(mode);
+  const std::string prose = std::string(200, 'a') + "\n\n# Heading\n\nactive";
+  const std::vector<std::string> sources = {
+      prose,
+      prose + " tail",
+      prose + " tail\n\n```ts\nconst a = 1;\n",
+      prose + " tail\n\n```ts\nconst a = 1;\nconst b = 2;\n",
+  };
+  bool ok = true;
+  uint32_t settled = 0;
+  for (const std::string &source : sources) {
+    const ParseResult result = feed(parser, source, false);
+    ok = ok && result.status == ParseStatus::Ok && result.document == parser.document() &&
+        result.document->streaming;
+    if (ok) settled = std::max(settled, result.document->settledBlocks);
+  }
+  const ParseResult last = feed(parser, sources.back() + "```\n", true);
+  ok = ok && last.status == ParseStatus::Ok && last.document == parser.document() && !last.document->streaming &&
+      last.document->settledBlocks == last.document->blocks.size();
+  // The incremental parser commits the leading paragraph and heading, which is
+  // what a control may act on before the stream finishes.
+  return ok && (mode == ParseMode::FullParse || settled > 0);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -634,6 +665,8 @@ int main(int argc, char **argv) {
   CHECK(realisticAnswer(), "realistic answer");
   CHECK(unchangedTailCodeIsCached(), "unchanged tail code is cached in both parse modes");
   CHECK(fullModeKeepsIdentities(), "full mode keeps identities");
+  CHECK(snapshotsCarryTheirFlags(ParseMode::IncrementalTail), "a pass returns the snapshot it flagged (incremental)");
+  CHECK(snapshotsCarryTheirFlags(ParseMode::FullParse), "a pass returns the snapshot it flagged (full)");
   CHECK(fullParseOracleSettles(), "the full-parse oracle settles code with a zero highlight budget");
   return ds_check_result();
 }

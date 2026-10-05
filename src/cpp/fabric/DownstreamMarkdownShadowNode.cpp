@@ -123,8 +123,52 @@ downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale,
                                 static_cast<float>(width),
                                 chromeFor(state),
                                 codeLayout(state),
+                                state.caret,
                                 imageLayout(document),
                                 theme_};
+}
+
+/// The two small enums, mapped from the codegen ones.
+///
+/// The wire names are parsed once, by codegen's own `fromRawValue`, so this is a
+/// table rather than a set of string comparisons: there is no string to compare
+/// against by the time the node sees the prop, and a table keeps the two
+/// vocabularies from drifting apart silently.
+downstream::CaretKind caretKind(DownstreamMarkdownViewCaret value) {
+  switch (value) {
+    case DownstreamMarkdownViewCaret::Block:
+      return downstream::CaretKind::Block;
+    case DownstreamMarkdownViewCaret::Circle:
+      return downstream::CaretKind::Circle;
+    case DownstreamMarkdownViewCaret::None:
+      break;
+  }
+  return downstream::CaretKind::None;
+}
+
+downstream::Animating animatingFor(DownstreamMarkdownViewAnimating value) {
+  switch (value) {
+    case DownstreamMarkdownViewAnimating::Auto:
+      return downstream::Animating::Auto;
+    case DownstreamMarkdownViewAnimating::On:
+      return downstream::Animating::On;
+    case DownstreamMarkdownViewAnimating::Off:
+      break;
+  }
+  return downstream::Animating::Off;
+}
+
+downstream::PlacedCaret DownstreamMarkdownShadowNode::caretFor(const downstream::DocumentHandle &document) const {
+  const auto &props = getConcreteProps();
+  downstream::CaretSpec spec;
+  spec.kind = caretKind(props.caret);
+  spec.animating = animatingFor(props.animating);
+  // A stream's own `streaming` flag is set by the session that published the
+  // snapshot, so an `auto` caret follows the stream without JavaScript knowing.
+  if (!document) {
+    return downstream::PlacedCaret{};
+  }
+  return downstream::resolveCaret(*document, spec);
 }
 
 void DownstreamMarkdownShadowNode::requestControlledSource() {
@@ -397,8 +441,9 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
   if (!props.sessionId.empty()) {
     downstream::SessionRegistry::noteLayout(props.sessionId, hint);
   }
-  return layoutManager_->measure(getDocument(), layoutContext.fontSizeMultiplier, layoutConstraints,
-                                 getSurfaceId(), chrome, codeLayout(state), imageLayout(getDocument()), theme_);
+  return layoutManager_->measure(getDocument(), layoutContext.fontSizeMultiplier, layoutConstraints, getSurfaceId(),
+                                 chrome, codeLayout(state), caretFor(getDocument()), imageLayout(getDocument()),
+                                 theme_);
 }
 
 void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
@@ -414,20 +459,24 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   // The theme is compared by id rather than by pointer, so a view whose theme
   // resolved to an equal value it already had does not ask for a state update.
   const downstream::CodeLayout code = codeLayout(state);
-  // The image answers are part of this comparison for the same reason the code
-  // layout is: the node measured with one set and would otherwise mount with
-  // another, which is a picture that draws at a height it was not measured at.
+  // The caret and the image answers are both part of this comparison for the
+  // same reason the code layout is: the node measured with one set and would
+  // otherwise mount with another, which is a caret or a picture drawn at a
+  // height it was not measured at.
+  const downstream::PlacedCaret caret = caretFor(document);
   const downstream::ImageStateLayout images = imageState(imageLayout(document));
   if (document && state.document != document) {
     reportMathErrors(document, state.document);
   }
   if (state.document != document || state.fontSizeMultiplier != layoutContext.fontSizeMultiplier ||
-      state.chrome != chrome || state.code != code || state.images != images || state.themeId() != themeId()) {
+      state.chrome != chrome || state.code != code || state.caret != caret || state.images != images ||
+      state.themeId() != themeId()) {
     DownstreamMarkdownState next{state};
     next.document = document;
     next.fontSizeMultiplier = layoutContext.fontSizeMultiplier;
     next.chrome = chrome;
     next.code = code;
+    next.caret = caret;
     next.images = images;
     next.theme = theme_;
     setStateData(std::move(next));

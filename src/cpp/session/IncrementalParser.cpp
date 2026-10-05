@@ -253,10 +253,23 @@ void IncrementalParser::resetScan() {
   lineAttempted_ = 0;
 }
 
-void IncrementalParser::publish(DocumentHandle document) {
+const DocumentHandle &IncrementalParser::publish(DocumentHandle document, uint32_t settled) {
+  // The two flags a snapshot carries that its blocks do not: how many leading
+  // blocks no later input can change, and whether a stream is still arriving.
+  // The second is how an `isAnimating` prop reaches the native rendering. A pass
+  // that built its document sets both in place; only a document shared with an
+  // earlier snapshot is copied here.
+  const bool streaming = !finished_;
+  if (document && (document->settledBlocks != settled || document->streaming != streaming)) {
+    auto copy = std::make_shared<Document>(*document);
+    copy->settledBlocks = settled;
+    copy->streaming = streaming;
+    document = std::move(copy);
+  }
   document_ = std::move(document);
   parsedBytes_ = source_.size();
   replaced_ = false;
+  return document_;
 }
 
 ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable, bool settled) {
@@ -311,10 +324,10 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   // is settled until the stream finishes. Only a finished stream settles; a
   // controlled document settles in PreparedDocument, the moment it is parsed.
   const uint32_t count = static_cast<uint32_t>(std::min<size_t>(result.document->blocks.size(), UINT32_MAX));
-  result.document = withSettledBlocks(result.document, settled ? count : 0);
+  const uint32_t settledCount = settled ? count : 0;
   if (mode_ == ParseMode::FullParse) {
     carryIdentities(result);
-    publish(result.document);
+    result.document = publish(result.document, settledCount);
     return result;
   }
 
@@ -355,7 +368,7 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   if (reason == ParseFallback::NonAppend) {
     resetScan();
   }
-  publish(result.document);
+  result.document = publish(result.document, settledCount);
   watchOpenFence(source, committedBytes_, committedCount());
   return result;
 }
@@ -524,11 +537,12 @@ ParseResult IncrementalParser::parseTail() {
   // The committed prefix is exactly what md4c has proved no later input can
   // change, so it is what a control or a selection may act on.
   combined->settledBlocks = static_cast<uint32_t>(std::min<size_t>(committed, UINT32_MAX));
+  combined->streaming = !finished_;
   counters_.cacheHits += committed;
   result.document = combined;
   highlightTail(combined.get());
   layoutTail(combined.get());
-  publish(combined);
+  result.document = publish(combined, combined->settledBlocks);
   watchOpenFence(source, committedBytes_, committed);
   return result;
 }
@@ -793,6 +807,7 @@ bool IncrementalParser::appendOpenFence() {
   auto next = std::make_shared<Document>(*document_);
   next->id = allocateDocumentId();
   next->settledBlocks = static_cast<uint32_t>(std::min<size_t>(committedCount(), UINT32_MAX));
+  next->streaming = !finished_;
   std::u16string &text = next->blocks.tail().back().text;
   if (fencePendingNewline_) {
     text.push_back(u'\n');
@@ -805,13 +820,14 @@ bool IncrementalParser::appendOpenFence() {
   }
   highlightTail(next.get());
   layoutTail(next.get());
-  publish(next);
+  publish(next, next->settledBlocks);
   counters_.openFenceFastUpdates++;
   return true;
 }
 
 ParseResult IncrementalParser::parse(bool finished) {
   counters_.updates++;
+  finished_ = finished;
   if (source_.size() > kMaxSourceBytes) {
     return fullParse(ParseFallback::InvalidSource, false, false);
   }

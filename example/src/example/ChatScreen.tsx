@@ -79,6 +79,8 @@ function Answer({ message }: { message: ChatMessage }) {
         {message.stream ? (
           <DownstreamMarkdown
             stream={message.stream}
+            animated
+            caret="block"
             onError={({ code, message: text }) => console.warn(code, text)}
           />
         ) : (
