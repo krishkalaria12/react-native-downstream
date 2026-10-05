@@ -31,7 +31,8 @@ sources=(
   ios/DSRenderedDocument.mm ios/DSSegmentViews.mm ios/DSLayoutManager.mm ios/DSThemeColors.mm \
   cpp/theme/Theme.cpp cpp/theme/ThemeLayout.cpp cpp/downstream/CodeLayout.cpp cpp/downstream/SegmentPlan.cpp
 )
-harness_sources=(DSFontsShim.mm main.mm)
+harness_sources=(DSFontsShim.mm)
+harness_main=${DOWNSTREAM_IOS_HARNESS_MAIN:-$ios_dir/Sources/NativeTextKitHarness/main.mm}
 if [ -f "$source_root/src/ios/DSBoxSegmentViews.mm" ]; then
   # Use the real box views and math renderer. Only React's image transport and
   # presentation entry point are unavailable in this standalone executable.
@@ -54,6 +55,8 @@ for source in "${harness_sources[@]}"; do
   "$clang" "${flags[@]}" -c "$ios_dir/Sources/NativeTextKitHarness/$source" -o "$object"
   objects+=("$object")
 done
+"$clang" "${flags[@]}" -c "$harness_main" -o "$build/harness-main.o"
+objects+=("$build/harness-main.o")
 app="$build/NativeTextKitHarness.app"
 mkdir -p "$app"
 "$clang" -target "$target" -isysroot "$sdk" "${objects[@]}" \
@@ -65,4 +68,4 @@ xcrun simctl bootstatus "$device" -b >/dev/null
 xcrun simctl install "$device" "$app"
 output=$(xcrun simctl launch --console-pty "$device" com.downstream.NativeTextKitHarness)
 printf '%s\n' "$output"
-[[ "$output" == *"native TextKit checks passed"* ]]
+[[ "$output" == *"${DOWNSTREAM_IOS_HARNESS_SUCCESS:-native TextKit checks passed}"* ]]

@@ -145,12 +145,18 @@ private:
   /// Colors the tail code block, resuming from the last pass. A tail that is
   /// not code clears the state, which is what releases its lexer.
   void highlightTail(Document *document);
+/// Records the snapshot the view will show, with the two flags that are the
+  /// document's rather than its blocks': how many leading blocks no later input
+  /// can change, and whether a stream is still arriving.
+  ///
+  /// It answers the document it recorded, which is a copy when the flags had to
+  /// change, so a caller returns that rather than the one it passed in.
+  const DocumentHandle &publish(DocumentHandle document, uint32_t settled);
   /// Lays out the tail's formulas in place, keeping the last good layout for
   /// one that is still arriving.
   void layoutTail(Document *document);
   /// Adds one set of layout passes to the counters.
   void noteMath(const MathLayoutStats &stats);
-  void publish(DocumentHandle document);
   void tryCommit();
   bool commitRegion(size_t boundary);
   bool appendOpenFence();
@@ -199,6 +205,10 @@ private:
   remend::PreviewStats previewStats_{};
   // A new policy has to reach the reader even if no new input arrived.
   bool previewDirty_{false};
+  // Whether the pass now running is the stream's last. `publish` reads it, so a
+  // snapshot's own `streaming` flag always answers for that pass rather than for
+  // whichever one happened to set it.
+  bool finished_{false};
 
   IncrementalCounters counters_;
 };

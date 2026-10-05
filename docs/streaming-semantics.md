@@ -32,6 +32,18 @@ A single tilde never opens a span. md4c's GitHub dialect reads `~x~` as striketh
 
 An unfinished link or image previews as its text, the way Streamdown shows it. `[text` and `[text](https://exa` read as `text`, and `![alt](https://exa` as `alt`, which is how a finished image renders. The partial target is dropped rather than followed, so nothing is tappable until the link's own `)` arrives, and a stream that finishes first shows the syntax as typed. `[note](which is long` stays literal: a space ends a bare destination, so it is prose that will never be a link.
 
+## Streaming animation and the caret
+
+Animation and the caret are drawing only. They never change the canonical source, the settled parse, a source range, the visible text a reader can select or copy, or the accessibility tree. A document with `animated` and `caret` off is byte-identical to one built without them.
+
+What fades is decided against the document the view last showed, not against the source. Two texts are compared after the parser has removed the markers, so a character keeps its identity when a `**` closes around it: `hello **wor` followed by `hello world` makes only `ld` new, where a count of the visible length would have shown the closing word at once. A word split across two snapshots joins the unit already fading, and keeps its start time.
+
+Unit timing lives in a per-view tracker and not in any rendered object, so a snapshot that changes a block can cut a fade short or leave it running without anything having to be retracted from the screen. A unit whose characters still align keeps its start time across snapshots; a unit that loses them is dropped. A character drawn at full alpha is never scheduled again, which is the invariant the tracker exists to keep and the one a re-render must not break.
+
+`finish()` does not stop the last fades. The final snapshot is still scheduled, every fade runs to its end, and a caret that wrapped to its own line takes that line with it. `reset()` clears the tracker, so the new source animates from its first word rather than resuming the old one's timing. A view that binds to a live stream is seeded from the session's own record of what it has already put on screen, so a message scrolled out of a virtualized list and back does not fade all of itself again; a controlled view has no session, and a fresh one shows its first document without a fade.
+
+Hidden text is still in the layout and still readable by a screen reader, for at most `maxBacklogMs + duration` — about half a second. The caret is drawn at the reveal frontier rather than at the end of the layout so the writing point stays visible, and the caret placeholder is outside every block's range, so it is never selected, copied, exported, or read aloud.
+
 ## Classification and ordering
 
 A newline alone never commits a block. A following setext underline, table separator, list continuation, reference definition, quote continuation, or fence close may change earlier classification. Until the native implementation proves a safe boundary, it reparses the full source. A later tail optimization must fall back to full parse when context is uncertain and pass every prefix case in the parser oracle.

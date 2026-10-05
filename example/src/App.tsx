@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { BenchScreen } from './bench/BenchScreen';
 import { StressScreen } from './bench/StressScreen';
 import { ChatScreen } from './example/ChatScreen';
+import { AnimationScreen } from './animation/AnimationScreen';
 import { ControlsScreen } from './controls/ControlsScreen';
 import { MathScreen } from './math/MathScreen';
 import { ROUTES, routeById, type RouteId } from './navigation';
@@ -125,6 +126,8 @@ function Navigation() {
               <ControlsScreen />
             ) : route.id === 'math' ? (
               <MathScreen />
+            ) : route.id === 'animation' ? (
+              <AnimationScreen />
             ) : route.id === 'testing' ? (
               <CompareScreen />
             ) : route.id === 'bench' ? (

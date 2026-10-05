@@ -472,8 +472,17 @@ public:
     return 0;
   }
 
-  DocumentHandle finish() {
+  /// `openFence` says the source ended inside a fenced code block, which the
+  /// parser cannot report on its own. Only the document's last block can be that
+  /// fence, so the flag lands on it and nowhere else.
+  DocumentHandle finish(bool openFence) {
     finishLeaf();
+    if (openFence && !document_->blocks.empty()) {
+      Block &last = document_->blocks.tail().back();
+      if (last.kind == BlockKind::CodeBlock) {
+        last.fenceOpen = true;
+      }
+    }
     return document_;
   }
 
@@ -1161,10 +1170,10 @@ ParseResult parseMarkdown(std::string_view source, MathOptions options) {
     return result;
   }
 
-  DocumentBuilder builder(source, options);
+DocumentBuilder builder(source, options);
   const std::string_view &parsed = builder.parsedText();
   if (parsed.empty()) {
-    result.document = builder.finish();
+    result.document = builder.finish(false);
     result.blockSource = builder.takeBlockSource();
     return result;
   }
@@ -1202,7 +1211,7 @@ ParseResult parseMarkdown(std::string_view source, MathOptions options) {
     result.message = "The Markdown parser could not complete.";
     return result;
   }
-  result.document = builder.finish();
+  result.document = builder.finish(scan::endsInsideFence(source));
   result.containerCount = builder.containerCount();
   result.tableCount = builder.tableCount();
   result.blockSource = builder.takeBlockSource();

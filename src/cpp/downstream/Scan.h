@@ -68,6 +68,15 @@ bool closesFence(std::string_view line, char marker, size_t length);
 /// Whether this line is a fence delimiter of either kind, opening or closing.
 bool isFenceLine(std::string_view line);
 
+/// Whether the source ends inside a fenced code block, which is to say a writer
+/// has not typed the closing fence yet.
+///
+/// A line inside an open fence is content rather than a new fence, so this is a
+/// walk with one open fence in it rather than a search for the last opener. An
+/// indented code block can also continue, but it is not a fence and md4c will
+/// not tell a caller which it was, so this answers only for fences.
+bool endsInsideFence(std::string_view source);
+
 /// Whether this line is a `$$` display-math fence delimiter: a line that is
 /// exactly two dollars, after up to three spaces, with nothing after it.
 ///

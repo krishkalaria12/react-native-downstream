@@ -68,6 +68,8 @@ export const ENGINE = [
     'ExportNames.cpp',
     'FenceMeta.cpp',
     'CodeLayout.cpp',
+    'Reveal.cpp',
+    'Caret.cpp',
     'ImageLayout.cpp',
     'ImageLoaderRegistry.cpp',
     'ImageSizeCache.cpp',

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Caret.h"
 #include "CodeLayout.h"
 #include "Document.h"
 #include "ImageLayout.h"
@@ -43,6 +44,11 @@ struct LayoutHint {
   /// worker to measure the same heights the view draws. The choice sets are
   /// almost always empty, so the comparison below is one size check in practice.
   CodeLayout code;
+  /// The caret to draw, resolved against the document. It is a height, like
+  /// `chrome`, because the caret's placeholder is in the measured text: only the
+  /// last segment changes, but a layout measured without it and a layout drawn
+  /// with it would not agree about where the document ends.
+  PlacedCaret caret;
   /// The image layout: whether images are on, the app's prefix list, and what
   /// this process already knows about each image's size.
   ///
@@ -51,6 +57,7 @@ struct LayoutHint {
   /// worker would measure a layout the view is not about to draw. Almost always
   /// empty, so the comparison is one size check in practice.
   ImageLayout images;
+
   /// The theme this view draws with, or null for the default one. A worker
   /// builds the rendering the view will mount, so the theme has to be part of
   /// the hint: without it the worker would prepare an unthemed layout that
@@ -59,16 +66,19 @@ struct LayoutHint {
 
   // Constructors rather than aggregate initialisation, so a caller that names
   // only a width and a scale says so instead of leaving the chrome, the code
-  // layout and the theme to default, and a caller that names all four cannot
+  // layout and the theme to default, and a caller that names all of them cannot
   // leave one out by accident.
   LayoutHint() = default;
   LayoutHint(float scale, float at) : fontScale(scale), width(at) {}
   LayoutHint(float scale, float at, uint32_t chromeIn, CodeLayout codeIn, Theme::Handle themeIn = nullptr)
       : fontScale(scale), width(at), chrome(chromeIn), code(std::move(codeIn)), theme(std::move(themeIn)) {}
-  LayoutHint(float scale, float at, uint32_t chromeIn, CodeLayout codeIn, ImageLayout imagesIn,
+  LayoutHint(float scale, float at, uint32_t chromeIn, CodeLayout codeIn, PlacedCaret caretIn,
              Theme::Handle themeIn = nullptr)
-      : fontScale(scale), width(at), chrome(chromeIn), code(std::move(codeIn)), images(std::move(imagesIn)),
-        theme(std::move(themeIn)) {}
+      : fontScale(scale), width(at), chrome(chromeIn), code(std::move(codeIn)), caret(caretIn), theme(std::move(themeIn)) {}
+  LayoutHint(float scale, float at, uint32_t chromeIn, CodeLayout codeIn, PlacedCaret caretIn, ImageLayout imagesIn,
+             Theme::Handle themeIn = nullptr)
+      : fontScale(scale), width(at), chrome(chromeIn), code(std::move(codeIn)), caret(caretIn),
+        images(std::move(imagesIn)), theme(std::move(themeIn)) {}
 
   /// Equal when two layouts would draw the same sizes. The theme compares by
   /// id rather than by pointer, so two equal themes are one layout hint and a
@@ -76,7 +86,7 @@ struct LayoutHint {
   /// rendering rather than rebuilding them.
   bool operator==(const LayoutHint &other) const {
     return fontScale == other.fontScale && width == other.width && chrome == other.chrome &&
-        code == other.code && images == other.images && themeId() == other.themeId();
+           code == other.code && caret == other.caret && images == other.images && themeId() == other.themeId();
   }
 
   /// The theme's id, or 0 for the default one, which is its id too.

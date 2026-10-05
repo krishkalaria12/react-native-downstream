@@ -23,6 +23,16 @@ using namespace downstream::theme_layout;
 
 NSAttributedStringKey const DSBlockInfoAttributeName = @"DSBlockInfo";
 NSAttributedStringKey const DSLinkIndexAttributeName = @"DSLinkIndex";
+NSAttributedStringKey const DSCaretKindAttributeName = @"DSCaretKind";
+
+/// The character a caret reserves its space with.
+///
+/// U+FFFC OBJECT REPLACEMENT is what a text attachment occupies, and the
+/// attachment carries explicit bounds rather than an image, so the placeholder's
+/// height is the last character's own. Nothing is drawn from it: the shape comes
+/// from the run's foreground color, which is how the caret takes the color of the
+/// text it follows.
+NSString *const kCaretPlaceholder = @"\uFFFC";
 
 namespace {
 
@@ -410,7 +420,8 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
                               scale:(CGFloat)scale
                          markerFont:(UIFont *)markerFont
                   syntaxHighlighting:(BOOL)syntaxHighlighting
-                             inCard:(BOOL)inCard {
+                             inCard:(BOOL)inCard
+                              caret:(const PlacedCaret &)caret {
   DSTextSegment *segment = [DSTextSegment new];
   segment->_measurementLock = [NSLock new];
   segment.theme = [DSThemeColors colorsFor:theme];
@@ -418,6 +429,12 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
   NSMutableAttributedString *text = [NSMutableAttributedString new];
   NSMutableArray<DSBlockInfo *> *blocks = [NSMutableArray arrayWithCapacity:to - from];
   NSMutableArray<NSValue *> *blockRanges = [NSMutableArray arrayWithCapacity:to - from];
+  // The last block's own typography, which a caret after it takes. Held here
+  // rather than looked up again, because the placeholder below is drawn in the
+  // face and color of the character it follows.
+  UIFont *lastFont = nil;
+  UIColor *lastColor = nil;
+  NSParagraphStyle *lastStyle = nil;
 
   for (size_t index = from; index < to; index++) {
     const Block &block = document.blocks[index];
@@ -495,6 +512,9 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
     // is clipped. A line height below the face's own is ignored by the platform
     // anyway, so the default of zero and a small value behave alike.
     style.minimumLineHeight = font.lineHeight * scale;
+    lastFont = baseFont;
+    lastColor = baseColor;
+    lastStyle = style;
     NSMutableParagraphStyle *firstStyle = [style mutableCopy];
     firstStyle.paragraphSpacingBefore = gap;
 
@@ -523,6 +543,31 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
     replaceInlineMath(text, block, start);
     [blocks addObject:info];
     [blockRanges addObject:[NSValue valueWithRange:NSMakeRange(start, text.length - start - (hasSeparator ? 1 : 0))]];
+  }
+
+  // The caret goes after the last block, inside this segment, so it takes the
+  // face and color of the character it follows and wraps to the next line when
+  // the line is full — the same thing Streamdown's `::after` does.
+  if (caret.place == CaretPlace::AfterText && lastFont != nil) {
+    NSTextAttachment *attachment = [NSTextAttachment new];
+    attachment.image = nil;
+    // The bounds stay inside the font's own ascent and descent, so a line
+    // holding a caret is exactly as tall as one without it. That is the whole
+    // reason the placeholder is in the measured text rather than an overlay: the
+    // measured height and the drawn height are then the same number.
+    const CGFloat size = lastFont.pointSize;
+    attachment.bounds = CGRectMake(0, std::round(size * -0.24), std::round(size * 0.5),
+                                   std::round(size * 1.06));
+    NSMutableAttributedString *placeholder =
+        [[NSMutableAttributedString alloc] initWithString:kCaretPlaceholder
+                                              attributes:@{
+                                                NSFontAttributeName : lastFont,
+                                                NSForegroundColorAttributeName : lastColor,
+                                                NSParagraphStyleAttributeName : lastStyle,
+                                                DSCaretKindAttributeName : @(static_cast<unsigned char>(caret.kind)),
+                                              }];
+    [placeholder addAttribute:NSAttachmentAttributeName value:attachment range:NSMakeRange(0, 1)];
+    [text appendAttributedString:placeholder];
   }
 
   segment.attributedString = [text copy];
@@ -874,9 +919,13 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                              theme:(const Theme &)theme
                               scale:(CGFloat)scale
                          markerFont:(UIFont *)markerFont
-                  syntaxHighlighting:(BOOL)syntaxHighlighting {
+                  syntaxHighlighting:(BOOL)syntaxHighlighting
+                              caret:(const PlacedCaret &)caret {
   DSCodeSegment *segment = [DSCodeSegment new];
   const Block &block = document.blocks[index];
+  // The body is a one-block text segment, so a caret inside an open fence goes
+  // where a caret after prose would: inside this segment's text, after its last
+  // character.
   segment.text = [DSTextSegment segmentWithDocument:document
                                               from:index
                                                 to:index + 1
@@ -884,7 +933,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                               scale:scale
                                         markerFont:markerFont
                                  syntaxHighlighting:syntaxHighlighting
-                                            inCard:YES];
+                                            inCard:YES
+                                             caret:caret];
   segment.language = [NSString stringWithUTF8String:block.language.c_str()];
   // The header row's own typography and its two remaining colors, all from the
   // theme rather than from literals in the card view.
@@ -1184,6 +1234,10 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   NSArray *_segments;
   NSArray<NSNumber *> *_segmentBlockIndexes;
   uint32_t _settledBlocks;
+  /// The caret this rendering reserved room for, which the view draws at its
+  /// placeholder. Already resolved, because the placeholder's presence is a height
+  /// and the measurement had to agree about it.
+  PlacedCaret _caret;
   std::vector<CGFloat> _gaps;
   NSLock *_lock;
   CGFloat _cachedWidth;
@@ -1229,9 +1283,15 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                     theme:(const Theme &)theme
                     scale:(CGFloat)scale
                markerFont:(UIFont *)markerFont
-        syntaxHighlighting:(BOOL)syntaxHighlighting {
+        syntaxHighlighting:(BOOL)syntaxHighlighting
+                  caretAfter:(const PlacedCaret &)caretAfter {
   // The theme is in the key because a segment holds resolved colors and
   // measured sizes, and a second theme must not read the first one's.
+  // The plan's kind is in it for the same reason: a math block and an image-only
+  // paragraph are their own segments, so the same identity can build a formula
+  // and a paragraph and the two are not interchangeable.
+  // The caret is not in it because its placeholder is only ever in the last
+  // segment's measured text, and a committed segment is never the last one.
   NSString *key = [NSString stringWithFormat:@"%llu:%zu:%llu:%.4f:%d:%d", (unsigned long long)document.blocks[from].identity,
                                              to - from, (unsigned long long)theme.id(), scale, syntaxHighlighting,
                                              static_cast<int>(kind)];
@@ -1281,7 +1341,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                                         theme:theme
                                                         scale:scale
                                                    markerFont:markerFont
-                                        syntaxHighlighting:syntaxHighlighting];
+                                        syntaxHighlighting:syntaxHighlighting
+                                                         caret:caretAfter];
       break;
     case SegmentKind::Text:
       cached->segment = (id)[DSTextSegment segmentWithDocument:document
@@ -1291,7 +1352,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                                            scale:scale
                                                      markerFont:markerFont
                                           syntaxHighlighting:syntaxHighlighting
-                                                         inCard:NO];
+                                                         inCard:NO
+                                                          caret:caretAfter];
       break;
   }
   [self.committedSegmentCache setObject:cached forKey:key cost:cost];
@@ -1301,26 +1363,32 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
 + (instancetype)renderedDocumentFor:(const DocumentHandle &)document
                           fontScale:(CGFloat)fontScale
                  syntaxHighlighting:(BOOL)syntaxHighlighting
-                              theme:(const Theme::Handle &)themeHandle {
+                              theme:(const Theme::Handle &)themeHandle
+                             caret:(const PlacedCaret &)caret {
   if (!document) {
     return [[self alloc] initWithDocument:document
                                fontScale:fontScale
                       syntaxHighlighting:syntaxHighlighting
-                                   theme:themeHandle ? themeHandle : Theme::defaultTheme()];
+                                   theme:themeHandle ? themeHandle : Theme::defaultTheme()
+                                  caret:caret];
   }
   // The theme id is in the key rather than the theme itself, because interned
   // themes are stable for the life of a process and their id is all a cache key
-  // needs to tell two of them apart.
-  NSString *key = [NSString stringWithFormat:@"%llu:%.4f:%d:%llu", (unsigned long long)document->id, fontScale,
-                                             syntaxHighlighting,
+  // needs to tell two of them apart. The caret is in it for the same reason: its
+  // placeholder is in the measured text, so two renderings that differ only in
+  // whether a caret was reserved are two different heights.
+  NSString *key = [NSString stringWithFormat:@"%llu:%.4f:%d:%llu:%d:%d", (unsigned long long)document->id,
+                                             fontScale, syntaxHighlighting,
                                              (unsigned long long)(themeHandle ? themeHandle->id()
-                                                                            : Theme::defaultTheme()->id())];
+                                                                          : Theme::defaultTheme()->id()),
+                                             static_cast<int>(caret.kind), static_cast<int>(caret.place)];
   DSRenderedDocument *rendered = [self.cache objectForKey:key];
   if (rendered == nil) {
     rendered = [[self alloc] initWithDocument:document
                                    fontScale:fontScale
                           syntaxHighlighting:syntaxHighlighting
-                                    theme:themeHandle ? themeHandle : Theme::defaultTheme()];
+                                    theme:themeHandle ? themeHandle : Theme::defaultTheme()
+                                   caret:caret];
     [self.cache setObject:rendered forKey:key];
   }
   return rendered;
@@ -1334,12 +1402,14 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
 - (instancetype)initWithDocument:(const DocumentHandle &)documentHandle
                        fontScale:(CGFloat)rawScale
               syntaxHighlighting:(BOOL)syntaxHighlighting
-                            theme:(const Theme::Handle &)themeHandle {
+                            theme:(const Theme::Handle &)themeHandle
+                           caret:(const PlacedCaret &)caret {
   if (!(self = [super init])) {
     return nil;
   }
   _lock = [NSLock new];
   _cachedWidth = -1;
+  _caret = caret;
   const Theme &theme = *themeHandle;
   // A theme can cap the platform's font scale but not raise it, so the cap is
   // applied here once and every measurement below works with the result.
@@ -1360,6 +1430,10 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   _settledBlocks = document.settledBlocks;
 
   for (const SegmentPlan &segment : planSegments(document)) {
+    // The caret belongs to the last segment, whichever kind it is, because that is
+    // where the document ends. The plan is in order, so that is the one segment
+    // that reaches the last block.
+    const PlacedCaret here = segment.to == document.blocks.size() ? caret : PlacedCaret{};
     id built = nil;
     if (segment.committed) {
       built = [DSRenderedDocument committedSegmentFor:document
@@ -1369,14 +1443,16 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                                 theme:theme
                                                 scale:scale
                                            markerFont:markerFont
-                                    syntaxHighlighting:syntaxHighlighting];
+                                    syntaxHighlighting:syntaxHighlighting
+                                           caretAfter:here];
     } else if (segment.isCode()) {
       built = [DSCodeSegment segmentWithDocument:document
                                            index:segment.from
                                           theme:theme
-                                          scale:scale
+                                           scale:scale
                                      markerFont:markerFont
-                              syntaxHighlighting:syntaxHighlighting];
+                              syntaxHighlighting:syntaxHighlighting
+                                           caret:here];
     } else if (segment.isMath()) {
       built = [DSMathSegment segmentWithDocument:document
                                           index:segment.from
@@ -1404,7 +1480,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                             scale:scale
                                        markerFont:markerFont
                                 syntaxHighlighting:syntaxHighlighting
-                                           inCard:NO];
+                                           inCard:NO
+                                            caret:here];
     }
     // The plan counted the code blocks, so the ordinal comes from there rather
     // than from a walk of the blocks. It is assigned here so a committed segment
@@ -1424,6 +1501,18 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                                      &document.blocks[segment.from - 1],
                                                      document.blocks[segment.from]) * scale);
   }
+  // A caret that takes a line of its own is a whole extra segment, because that is
+  // what it is: room for the next block's first line. It replaces nothing, so when
+  // text arrives it is simply gone and the block that arrives has the same gap
+  // above it.
+  if (caret.place == CaretPlace::OwnLine) {
+    [segments addObject:[DSRenderedDocument ownLineCaretSegmentWithTheme:theme
+                                                                  scale:scale
+                                                             markerFont:markerFont
+                                                                  caret:caret]];
+    [indexes addObject:@(document.blocks.size())];
+    _gaps.push_back(0);
+  }
   _segments = [segments copy];
   _segmentBlockIndexes = [indexes copy];
   return self;
@@ -1433,12 +1522,40 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   return _segments;
 }
 
+/// A one-line text segment holding nothing but a caret.
+///
+/// The own-line case: after a table, a closed fence, or a rule, the next block
+/// will start on a fresh line, so the caret takes that line rather than sitting at
+/// the end of a finished one. When text arrives this segment is simply gone, and
+/// the block that replaces it starts on the line the caret already occupied, so
+/// nothing jumps.
++ (DSTextSegment *)ownLineCaretSegmentWithTheme:(const Theme &)theme
+                                           scale:(CGFloat)scale
+                                      markerFont:(UIFont *)markerFont
+                                           caret:(const PlacedCaret &)caret {
+  Document document;
+  document.blocks.tail().push_back(Block{});
+  return [DSTextSegment segmentWithDocument:document
+                                       from:0
+                                         to:1
+                                      theme:theme
+                                       scale:scale
+                                  markerFont:markerFont
+                           syntaxHighlighting:NO
+                                      inCard:NO
+                                       caret:caret];
+}
+
 - (NSArray<NSNumber *> *)segmentBlockIndexes {
   return _segmentBlockIndexes;
 }
 
 - (uint32_t)settledBlocks {
   return _settledBlocks;
+}
+
+- (PlacedCaret)caret {
+  return _caret;
 }
 
 /// The height of one segment at a view width, including whatever control row

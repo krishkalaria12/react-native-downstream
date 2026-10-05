@@ -69,7 +69,8 @@ static void checkEmojiGlyphMapping() {
   DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:makeDocument(source)
                                                                 fontScale:1
                                                        syntaxHighlighting:NO
-                                                                    theme:downstream::Theme::defaultTheme()];
+                                                                    theme:downstream::Theme::defaultTheme()
+                                                                    caret:downstream::PlacedCaret{}];
   DSCodeSegmentView *view = [DSCodeSegmentView new];
   DSCodeSegment *emojiSegment = (DSCodeSegment *)rendered.segments.firstObject;
   [view setSegment:emojiSegment];
@@ -113,7 +114,8 @@ static void checkEmojiGlyphMapping() {
 static void checkBlankSuffixDraw() {
   DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:makeDocument([@"\n" stringByPaddingToLength:4096
                                                                                                                withString:@"\n" startingAtIndex:0])
-                                                                fontScale:1 syntaxHighlighting:NO theme:downstream::Theme::defaultTheme()];
+                                                                fontScale:1 syntaxHighlighting:NO theme:downstream::Theme::defaultTheme()
+                                                                    caret:downstream::PlacedCaret{}];
   DSCodeSegmentView *view = [DSCodeSegmentView new];
   [view setSegment:rendered.segments.firstObject];
   view.layout = downstream::CodeBlockLayout{false, true, 1, 0, false};
@@ -145,7 +147,8 @@ static void checkGutterOwnerLifetime() {
   __weak DSCodeSegment *owner;
   @autoreleasepool {
     DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:makeDocument(@"keep\n\nalive")
-                                                                  fontScale:1 syntaxHighlighting:NO theme:downstream::Theme::defaultTheme()];
+                                                                  fontScale:1 syntaxHighlighting:NO theme:downstream::Theme::defaultTheme()
+                                                                    caret:downstream::PlacedCaret{}];
     DSCodeSegmentView *view = [DSCodeSegmentView new];
     [view setSegment:rendered.segments.firstObject];
     gutter = findGutter(view);
@@ -170,7 +173,8 @@ int main() {
     DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:makeDocument(source)
                                                                   fontScale:1
                                                          syntaxHighlighting:NO
-                                                                      theme:downstream::Theme::defaultTheme()];
+                                                                      theme:downstream::Theme::defaultTheme()
+                                                                    caret:downstream::PlacedCaret{}];
     DSCodeSegment *segment = rendered.segments.firstObject;
     require(segment != nil, @"code document did not produce a code segment");
 #ifndef BASELINE

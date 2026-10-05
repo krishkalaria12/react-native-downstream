@@ -129,6 +129,16 @@ const TARGETS = {
     ...ENGINE,
     ...MD4C_SOURCES,
   ],
+  'downstream-reveal': [
+    join(CPP, 'tests', 'dump_reveal.cpp'),
+    join(CPP, 'session', 'IncrementalParser.cpp'),
+    ...ENGINE,
+    ...MD4C_SOURCES,
+  ],
+  'downstream-reveal-curve': [
+    join(CPP, 'tests', 'dump_reveal_curve.cpp'),
+    join(CPP, 'downstream', 'Reveal.cpp'),
+  ],
   'downstream-export': [
     join(CPP, 'tests', 'dump_export.cpp'),
     join(CPP, 'downstream', 'SegmentPlan.cpp'),
@@ -201,12 +211,14 @@ function frame(op: string, payload: Buffer): Buffer {
   return Buffer.concat([header, payload]);
 }
 
-function encodeOp(step: SessionOp): Buffer {
+function encodeOp(step: RevealStep): Buffer {
   switch (step.op) {
     case 'append':
       return frame('a', Buffer.from(step.chunk, 'utf8'));
     case 'replace':
       return frame('r', Buffer.from(step.source, 'utf8'));
+    case 'seed':
+      return frame('S', Buffer.from(step.source, 'utf8'));
     case 'preview': {
       const mask = Buffer.alloc(4);
       mask.writeUInt32LE(step.features >>> 0);
@@ -251,6 +263,97 @@ export function preview(source: string, features: number): RenderModel {
 
 function incrementalBinary(): string {
   return compile(TARGETS['downstream-incremental'], 'downstream-incremental');
+}
+
+function revealBinary(): string {
+  return compile(TARGETS['downstream-reveal'], 'downstream-reveal');
+}
+
+/** One case of the engine's eased alpha and rise, as `dump_reveal_curve` prints it. */
+export interface RevealCurveCase {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  durationMs: number;
+  offsetMs: number;
+  alpha: number;
+  rise: number;
+}
+
+/**
+ * The engine's own alpha and rise for every curve, duration and offset the Kotlin
+ * mirror has to agree with.
+ *
+ * The mirror is what Android's draw pass evaluates on a host, where the platform's
+ * `PathInterpolator` is a stub, so these are the numbers both copies answer.
+ */
+export function revealCurveCases(): RevealCurveCase[] {
+  const output = execFileSync(
+    compile(TARGETS['downstream-reveal-curve'], 'downstream-reveal-curve'),
+    { encoding: 'utf8' }
+  );
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      // Destructured with a default rather than indexed: the C++ side prints one
+      // line per case and this reads the shape of that line, so a case that lost a
+      // column would be `undefined` here rather than a silent `NaN`.
+      const [x1, y1, x2, y2, durationMs, offsetMs, alpha, rise] = line
+        .split(' ')
+        .map(Number);
+      return { x1, y1, x2, y2, durationMs, offsetMs, alpha, rise };
+    }) as RevealCurveCase[];
+}
+
+/** One snapshot's reveals, as `dump_reveal` reports them. */
+export interface RevealPass {
+  /** Each block's visible text, in document order. */
+  blocks: string[];
+  /** Whether the snapshot was published by a stream that was still open. */
+  streaming: boolean;
+  /** `[block, start, end, startAtMs]` per scheduled unit. */
+  units: [number, number, number, number][];
+  /**
+   * Cumulative characters scheduled that were already at full alpha, as the
+   * tracker's own alignment saw them. Always zero.
+   */
+  rereveals: number;
+}
+
+/** A step a reveal replay can take, which is a session step plus one seeding. */
+export type RevealStep =
+  | SessionOp
+  | {
+      /**
+       * The document the view has already shown, as a view binding to a live
+       * stream gets from the session's own record of it. Only `replayReveal`
+       * understands it.
+       */
+      op: 'seed';
+      source: string;
+    };
+
+/**
+ * Replays a session through the real parser *and* the real reveal tracker, and
+ * returns what each pass scheduled.
+ *
+ * No test double decides what counts as new: the snapshots are the ones the app
+ * shows and the tracker is the one the platform draws with, so a property stated
+ * here is a property of the shipped engine.
+ */
+export function replayReveal(
+  mode: SessionMode,
+  steps: readonly RevealStep[]
+): RevealPass[] {
+  return JSON.parse(
+    execFileSync(revealBinary(), [mode], {
+      input: Buffer.concat(steps.map(encodeOp)),
+      maxBuffer: 256 << 20,
+    }).toString('utf8')
+  ).passes;
 }
 
 /** Parses a complete document with the engine that ships in the app. */
