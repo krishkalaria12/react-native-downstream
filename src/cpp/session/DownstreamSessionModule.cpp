@@ -1,9 +1,13 @@
 #include "DownstreamSessionModule.h"
 
+#include "FenceSlots.h"
 #include "MarkdownParser.h"
+#include "PreparedDocument.h"
 #include "SessionRegistry.h"
 #include "SessionTrace.h"
+#include "WorkerPool.h"
 #include "math/MathEngine.h"
+#include "Unicode.h"
 
 #include <algorithm>
 #include <cmath>
@@ -29,6 +33,16 @@ struct Bridging<SessionErrorEvent> : NativeDownstreamSessionSessionErrorEventBri
 
 template <>
 struct Bridging<NativeTraceEvent> : NativeDownstreamSessionNativeTraceEventBridging<NativeTraceEvent> {};
+
+/// One fence slot on the wire, in the shape codegen generated for
+/// `FenceSlot`: an ordinal, the language as written, the meta string as an
+/// optional, the text, and whether the fence is still growing.
+using Slot = FenceSlotResult;
+
+/// The one specialization the generated header leaves to the module: how a
+/// slot structure becomes a JavaScript object, and back.
+template <>
+struct Bridging<Slot> : NativeDownstreamSessionFenceSlotBridging<Slot> {};
 
 namespace {
 
@@ -235,6 +249,202 @@ bool DownstreamSessionModule::mathAvailable(jsi::Runtime & /*rt*/) {
   // binary does, which is a relaunch, so caching it here would be a second place
   // that could disagree with the layout pass about whether there is an engine.
   return downstream::MathEngine::available();
+}
+
+namespace {
+
+/// The size of the source a controlled query parses on the JavaScript thread.
+///
+/// The same bound layout waits for (`kWaitForPreparedBytes`), which is what
+/// makes this the same wait moved earlier rather than a new one: a source
+/// larger than this goes to the worker pool, as it already did for layout.
+constexpr size_t kSyncSlotBytes = 16 * 1024;
+
+/// One cached answer, with every input that could change it.
+struct CachedSlots {
+  std::string source;
+  std::uint32_t mathFlags{0};
+  std::vector<std::string> languages;
+  std::vector<Slot> slots;
+};
+
+/// Answers keyed by the source, the math flags *and* the registered languages,
+/// so a chat that re-renders the same message, or a StrictMode double render,
+/// parses nothing twice — and so an app that registers a renderer later reads
+/// a different answer rather than the one that renderer-free screen made.
+/// Bounded the way `PreparedDocument`'s own cache is: by count, because one
+/// chat keeps a screenful of messages and not the whole history.
+struct SlotCache {
+  std::mutex mutex;
+  std::vector<CachedSlots> entries;
+  static constexpr size_t kCapacity = 16;
+};
+
+SlotCache &slotCache() {
+  static auto *instance = new SlotCache();
+  return *instance;
+}
+
+std::vector<Slot> slotsFor(const downstream::DocumentHandle &document, const std::vector<std::string> &languages,
+                           bool live) {
+  std::vector<Slot> out;
+  if (!document) {
+    return out;
+  }
+  for (const downstream::FenceSlot &slot : downstream::fenceSlots(*document, languages, live)) {
+    Slot bridged{static_cast<std::int32_t>(slot.ordinal),
+                 slot.language,
+                 slot.meta.empty() ? std::nullopt : std::optional<std::string>(slot.meta),
+                 downstream::utf16ToUtf8(slot.code),
+                 slot.incomplete,
+                 static_cast<double>(slot.identity)};
+    out.push_back(std::move(bridged));
+  }
+  return out;
+}
+
+jsi::Array toJs(jsi::Runtime &rt, const std::vector<Slot> &slots) {
+  jsi::Array array = jsi::Array(rt, slots.size());
+  for (size_t index = 0; index < slots.size(); index++) {
+    array.setValueAtIndex(rt, index,
+                          NativeDownstreamSessionFenceSlotBridging<Slot>::toJs(rt, slots[index], nullptr));
+  }
+  return array;
+}
+
+/// The slots of a controlled source, answering from a finished preparation when
+/// one exists and otherwise from a bare parse. Live is true: a controlled
+/// string is the whole message, so a fence the writer never closed reads as
+/// incomplete until the app settles it, which is Streamdown's rule for a
+/// streaming string that has not been finished yet.
+std::vector<Slot> controlledSlots(const std::string &source, downstream::MathOptions math,
+                                  const std::vector<std::string> &languages) {
+  SlotCache &cache = slotCache();
+  {
+    std::lock_guard<std::mutex> lock(cache.mutex);
+    for (const CachedSlots &entry : cache.entries) {
+      if (entry.source == source && entry.mathFlags == math.flags && entry.languages == languages) {
+        return entry.slots;
+      }
+    }
+  }
+  std::vector<Slot> slots;
+  if (const auto prepared = downstream::PreparedDocument::completed(source, math)) {
+    if (prepared->result().status == downstream::ParseStatus::Ok) {
+      slots = slotsFor(prepared->result().document, languages, true);
+    }
+  } else if (source.size() <= kSyncSlotBytes && downstream::isValidUtf8(source)) {
+    // A bare parse: no highlighting, no math layout, no platform preparation,
+    // because none of those can change which fences a document has. The
+    // platform rendering belongs to the node, which asks for its own hint.
+    const downstream::ParseResult result = downstream::parseMarkdown(source, math);
+    if (result.status == downstream::ParseStatus::Ok && result.document) {
+      // A controlled source is complete the moment it is parsed, so every block
+      // settles — the same rule `PreparedDocument` applies.
+      const auto count = static_cast<uint32_t>(std::min<size_t>(result.document->blocks.size(),
+                                                                 std::numeric_limits<uint32_t>::max()));
+      const downstream::DocumentHandle settled = downstream::withSettledBlocks(result.document, count);
+      slots = slotsFor(settled, languages, true);
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(cache.mutex);
+    if (cache.entries.size() >= SlotCache::kCapacity) {
+      cache.entries.erase(cache.entries.begin());
+    }
+    cache.entries.push_back(CachedSlots{source, math.flags, languages, std::move(slots)});
+  }
+  return slots;
+}
+
+} // namespace
+
+jsi::Object DownstreamSessionModule::fenceSlots(jsi::Runtime &rt, std::string source, double mathFlags,
+                                                std::vector<std::string> languages) {
+  const downstream::MathOptions math{static_cast<uint32_t>(std::clamp(mathFlags, 0.0, 4294967295.0))};
+  bool pending = false;
+  std::vector<Slot> slots;
+  try {
+    slots = controlledSlots(source, math, languages);
+  } catch (const std::exception &) {
+    slots.clear();
+  }
+  // Too large to read here, or unreadable at all: the caller draws code cards
+  // and asks again through the asynchronous form, which is what a source whose
+  // preparation is still running does today.
+  if (slots.empty() && source.size() > kSyncSlotBytes) {
+    pending = true;
+  }
+  auto result = jsi::Object(rt);
+  result.setProperty(rt, "pending", pending);
+  result.setProperty(rt, "slots", toJs(rt, slots));
+  return result;
+}
+
+AsyncPromise<std::vector<Slot>> DownstreamSessionModule::fenceSlotsAsync(jsi::Runtime &rt, std::string source,
+                                                                          double mathFlags,
+                                                                          std::vector<std::string> languages) {
+  const downstream::MathOptions math{static_cast<std::uint32_t>(std::clamp(mathFlags, 0.0, 4294967295.0))};
+  // The promise is made here, on the JavaScript thread, and settled from the
+  // worker that did the parse: `resolve` and `reject` here cross to the
+  // JavaScript thread through the call invoker themselves, so nothing about the
+  // runtime travels with them and the whole answer is one value on one thread.
+  auto promise = AsyncPromise<std::vector<Slot>>(rt, jsInvoker_);
+  std::string failure;
+  try {
+    // The same pool a preparation uses: a big message's fences are read while
+    // the rest of the app keeps working, which is the whole reason a large
+    // source does not parse here.
+    downstream::WorkerPool::shared().post([promise, source = std::move(source), math,
+                                          languages = std::move(languages)]() mutable {
+      std::vector<Slot> slots;
+      std::string message;
+      try {
+        const downstream::ParseResult result = downstream::parseMarkdown(source, math);
+        if (result.status == downstream::ParseStatus::Ok && result.document) {
+          // A controlled source is complete the moment it is parsed, so every
+          // block settles, exactly as the synchronous form settles them.
+          const auto count = static_cast<std::uint32_t>(
+              std::min<size_t>(result.document->blocks.size(), std::numeric_limits<std::uint32_t>::max()));
+          slots = slotsFor(downstream::withSettledBlocks(result.document, count), languages, true);
+        }
+      } catch (const std::exception &error) {
+        message = error.what();
+      }
+      if (!message.empty()) {
+        promise.reject(Error(message));
+        return;
+      }
+      promise.resolve(std::move(slots));
+    });
+  } catch (const std::exception &error) {
+    // A pool that will not take the job: answer now rather than leaving the
+    // view drawing code cards for a question that can no longer be asked.
+    failure = error.what();
+  }
+  if (!failure.empty()) {
+    promise.reject(Error(failure));
+  }
+  return promise;
+}
+
+jsi::Array DownstreamSessionModule::sessionFenceSlots(jsi::Runtime &rt, std::string sessionId, double generation,
+                                                      double sequence, std::vector<std::string> languages) {
+  std::vector<Slot> slots;
+  if (!validCounter(generation) || !validCounter(sequence)) {
+    return toJs(rt, slots);
+  }
+  // The snapshot the view is mounting, not the newest one: the props this
+  // answer renders beside name that exact version, so a snapshot that arrives
+  // mid-render cannot make the view mount slots from a document it never
+  // asked for.
+  const downstream::DocumentHandle document =
+      downstream::SessionRegistry::snapshot(sessionId, static_cast<uint64_t>(generation), static_cast<uint64_t>(sequence));
+  if (document) {
+    const bool live = !downstream::SessionRegistry::isFinished(sessionId);
+    slots = slotsFor(document, languages, live);
+  }
+  return toJs(rt, slots);
 }
 
 } // namespace facebook::react

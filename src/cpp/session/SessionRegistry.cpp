@@ -92,6 +92,14 @@ public:
                : nullptr;
   }
 
+  /// Whether the writer closed the stream at this generation. The fence-slot
+  /// query needs it: a finished stream is settled, so a fence it never closed
+  /// is final rather than still growing.
+  bool isFinished() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return finished_;
+  }
+
   /// Queues a new provisional-styling policy for the worker. It is applied on
   /// the worker thread, which is the only thread that touches the parser, and
   /// it queues a pass so the new policy reaches the reader without waiting for
@@ -314,6 +322,11 @@ void SessionRegistry::dispose(const std::string &id) {
 DocumentHandle SessionRegistry::snapshot(const std::string &id, uint64_t generation, uint64_t sequence) {
   const auto session = findSession(id);
   return session ? session->snapshot(generation, sequence) : nullptr;
+}
+
+bool SessionRegistry::isFinished(const std::string &id) {
+  const auto session = findSession(id);
+  return session != nullptr && session->isFinished();
 }
 
 void SessionRegistry::noteLayout(const std::string &id, LayoutHint hint) {

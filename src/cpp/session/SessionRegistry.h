@@ -37,6 +37,9 @@ public:
   /// further events.
   static void dispose(const std::string &id);
   static DocumentHandle snapshot(const std::string &id, uint64_t generation, uint64_t sequence);
+  /// Whether the writer finished the stream. A finished stream settles every
+  /// block, so a fence it never closed is final rather than still arriving.
+  static bool isFinished(const std::string &id);
   /// Records the width and font scale the session's view was measured at, so
   /// later snapshots are prepared for that layout.
   static void noteLayout(const std::string &id, LayoutHint hint);
