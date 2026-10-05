@@ -9,7 +9,7 @@ import com.facebook.react.bridge.WritableMap
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.uimanager.PixelUtil
 import com.facebook.react.uimanager.ReactStylesDiffMap
-import com.facebook.react.uimanager.SimpleViewManager
+import com.facebook.react.uimanager.ViewGroupManager
 import com.facebook.react.uimanager.StateWrapper
 import com.facebook.react.uimanager.ThemedReactContext
 import com.facebook.react.uimanager.UIManagerHelper
@@ -22,14 +22,58 @@ import com.facebook.yoga.YogaMeasureOutput
 import java.lang.ref.WeakReference
 
 @ReactModule(name = DownstreamMarkdownViewManager.NAME)
+/**
+ * The view manager for <DownstreamMarkdown>.
+ *
+ * A `ViewGroupManager` rather than a `SimpleViewManager` because this view can
+ * now have children: Fabric mounts one `DownstreamFenceSlot` per hosted fence on
+ * it, and a manager that accepts no children would drop them. The four child
+ * methods below address the view's host layer, which is the layer Fabric's
+ * children belong in, so the document's own segment views — reconciled by
+ * document index inside the view — and React's children — reconciled in React's
+ * order here — never see each other.
+ *
+ * `needsCustomLayoutForChildren()` is false, so Fabric lays the host children out
+ * at the frames the shadow node's measurement gave them and nothing here moves
+ * them.
+ */
 class DownstreamMarkdownViewManager :
-  SimpleViewManager<DownstreamMarkdownView>(),
+  ViewGroupManager<DownstreamMarkdownView>(),
   DownstreamMarkdownViewManagerInterface<DownstreamMarkdownView> {
   private val delegate = DownstreamMarkdownViewManagerDelegate(this)
 
   override fun getDelegate(): ViewManagerDelegate<DownstreamMarkdownView> = delegate
 
   override fun getName() = NAME
+
+  override fun addView(parent: DownstreamMarkdownView, child: android.view.View, index: Int) {
+    parent.hostLayer.addView(child, index)
+  }
+
+  override fun getChildCount(parent: DownstreamMarkdownView): Int = parent.hostLayer.childCount
+
+  override fun getChildAt(parent: DownstreamMarkdownView, index: Int): android.view.View? =
+    parent.hostLayer.getChildAt(index)
+
+  override fun removeViewAt(parent: DownstreamMarkdownView, index: Int) {
+    val child = parent.hostLayer.getChildAt(index) ?: return
+    parent.hostLayer.removeViewAt(index)
+    child.parent?.let { parent.hostLayer.removeView(child) }
+  }
+
+  override fun removeAllViews(parent: DownstreamMarkdownView) {
+    parent.hostLayer.removeAllViews()
+  }
+
+  override fun needsCustomLayoutForChildren(): Boolean = false
+
+  override fun onAfterUpdateTransaction(parent: DownstreamMarkdownView) {
+    super.onAfterUpdateTransaction(parent)
+    // A child mounted in this transaction has its frame from the shadow node
+    // already; this only asks the layer for a layout pass so it is not a frame
+    // behind the state update that placed it.
+    parent.layoutHostChildren()
+  }
 
   override fun createViewInstance(context: ThemedReactContext): DownstreamMarkdownView {
     DownstreamNative.preparationContext = WeakReference(context)
@@ -209,6 +253,9 @@ class DownstreamMarkdownViewManager :
     // answer and the prefix list that produced it, so a reload draws the box the
     // measurement reserved for it rather than a placeholder under a loaded image.
     view.setImageLayout(state.toImageLayout())
+    // The hosted React children, in the same state: a fence with a child is drawn
+    // as a host segment at that child's height, and one without keeps its card.
+    view.setHostLayout(state.toHostLayout())
     view.setChrome(state.numberAt("chrome", 0.0).toInt())
     // The caret is resolved in the node, against the document and its streaming
     // flag, so the view never decides where a caret goes. It is a state field
@@ -264,6 +311,10 @@ class DownstreamMarkdownViewManager :
     // height is its state and its size, and measuring without them would measure
     // a placeholder from a layout the view is not drawing.
     val images = localData?.toImageLayout() ?: ImageLayout()
+    // The hosted children's heights travel in the same map, for the same reason:
+    // a fence drawn by a React component is as tall as that component, and
+    // measuring without it would measure the card the child replaces.
+    val hosts = localData?.toHostLayout() ?: HostLayout()
     if (DownstreamNative.preparationContext?.get() !== context) {
       DownstreamNative.preparationContext = WeakReference(context)
     }
@@ -283,7 +334,7 @@ class DownstreamMarkdownViewManager :
     }
     return YogaMeasureOutput.make(
       PixelUtil.toDIPFromPixel(layoutWidth.toFloat()),
-      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth, chrome, code, images).toFloat()),
+      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth, chrome, code, images, hosts).toFloat()),
     )
   }
 

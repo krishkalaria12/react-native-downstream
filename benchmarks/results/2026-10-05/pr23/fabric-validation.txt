@@ -1,0 +1,10 @@
+$ node tests/fabric/syntax-check.mjs
+ok ios src/cpp/fabric/DownstreamMarkdownShadowNode.cpp
+ok ios src/cpp/fabric/DownstreamTextLayoutManager.cpp
+ok ios src/cpp/session/DownstreamSessionModule.cpp
+ok ios host rectangle lookup checks passed
+ok android src/cpp/fabric/DownstreamMarkdownShadowNode.cpp
+ok android src/cpp/fabric/DownstreamTextLayoutManager.cpp
+ok android src/cpp/session/DownstreamSessionModule.cpp
+ok android host rectangle lookup checks passed
+fabric syntax checks passed

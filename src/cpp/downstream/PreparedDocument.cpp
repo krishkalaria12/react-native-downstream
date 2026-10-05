@@ -47,6 +47,26 @@ bool sameRequest(std::string_view source, const ParseOptions &options, const Pre
 
 } // namespace
 
+std::shared_ptr<const PreparedDocument> PreparedDocument::completed(std::string_view source, ParseOptions parse) {
+  Cache &shared = cache();
+  std::lock_guard<std::mutex> lock(shared.mutex);
+  for (const auto &entry : shared.entries) {
+    if (sameRequest(source, parse, *entry) && entry->done()) {
+      return entry;
+    }
+  }
+  return nullptr;
+}
+
+DocumentHandle PreparedDocument::blocksFor(std::string_view source, ParseOptions parse) {
+  const auto prepared = completed(source, parse);
+  if (!prepared) {
+    return nullptr;
+  }
+  const ParseResult &result = prepared->result();
+  return result.status == ParseStatus::Ok ? result.document : nullptr;
+}
+
 PreparedDocument::PreparedDocument(std::string source, ParseOptions parse)
     : source_(std::move(source)), parse_(parse) {}
 

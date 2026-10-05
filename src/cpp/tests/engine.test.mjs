@@ -71,6 +71,16 @@ before(async () => {
     ['test_preview', [incremental, ...engine]],
     ['test_session_registry', [registry, incremental, ...pool, ...engine]],
     [
+      'test_controlled_slots',
+      [
+        downstream('ControlledSlots.cpp'),
+        downstream('PreparedDocument.cpp'),
+        ...pool,
+        ...theme,
+        ...engine,
+      ],
+    ],
+    [
       'test_worker_pool',
       [
         registry,
@@ -1166,6 +1176,10 @@ describe('input', () => {
     execFileSync(binary('test_preview'), { timeout: 15_000 });
   });
 
+  test('controlled fence slots: fresh and cached answers agree, large sources wait', () => {
+    execFileSync(binary('test_controlled_slots'), { timeout: 30_000, stdio: 'inherit' });
+  });
+
   test('fence info string meta, prefixes, and identity', () => {
     execFileSync(binary('test_fence_meta'), { timeout: 30_000, stdio: 'inherit' });
   });
@@ -1437,5 +1451,166 @@ describe('copy and download controls', () => {
       { op: 'parse', finished: true },
     ]);
     assert.equal(done.settled, done.blocks.length);
+  });
+});
+
+// Fence renderers: the slots the engine hands JavaScript, and the rule that
+// decides which fenced blocks are candidates at all.
+describe('fence slots', () => {
+  /** Parses `source` and returns the slots for `languages`. */
+  const slotsFor = (source, languages, { mathFlags = 0, live = true } = {}) => {
+    const output = execFileSync(
+      compile(
+        [join(CPP, 'tests', 'dump_fence_slots.cpp'), ...ENGINE, ...MD4C_SOURCES],
+        'downstream-fence-slots'
+      ),
+      [String(mathFlags), live ? '1' : '0', languages.join(',')],
+      { input: Buffer.from(source, 'utf8') }
+    ).toString('utf8');
+    return JSON.parse(output).slots;
+  };
+
+  test('a matching fence becomes one slot with the renderer props', () => {
+    const slots = slotsFor('```mermaid\ngraph TD;\nA-->B;\n```\n', ['mermaid']);
+    assert.equal(slots.length, 1);
+    assert.deepEqual(slots[0], {
+      ordinal: 0,
+      blockIndex: 0,
+      language: 'mermaid',
+      meta: '',
+      // Exactly what the code block's copy button copies: no fence markers.
+      code: 'graph TD;\nA-->B;',
+      incomplete: false,
+      identity: 0,
+    });
+  });
+
+  test('a language matches case-insensitively, as written', () => {
+    for (const written of ['mermaid', 'Mermaid', 'MERMAID']) {
+      const slots = slotsFor(`\u0060\u0060\u0060${written}\nx\n\u0060\u0060\u0060\n`, [
+        'mermaid',
+      ]);
+      assert.equal(slots.length, 1, `${written} matches mermaid`);
+      assert.equal(slots[0].language, written, 'the language is as written');
+    }
+  });
+
+  test('the language is cut at a colon and the meta is what follows', () => {
+    const slots = slotsFor(
+      '```chart title="Revenue" months=12\n{"a":1}\n```\n',
+      ['chart']
+    );
+    assert.equal(slots[0].language, 'chart');
+    assert.equal(slots[0].meta, 'title="Revenue" months=12');
+    const bare = slotsFor('```chart\n{"a":1}\n```\n', ['chart']);
+    assert.equal(bare[0].meta, '', 'no meta is an empty string');
+  });
+
+  test('ordinals count every code block, registered or not', () => {
+    const slots = slotsFor(
+      '```ts\nconst a = 1;\n```\n\n```mermaid\ngraph;\n```\n',
+      ['mermaid']
+    );
+    assert.equal(slots.length, 1);
+    // The `ts` block ahead of it is a code block whether or not a renderer was
+    // registered for it, so the fence a renderer hosts is the second one: the
+    // same number the wrap and expand choices are keyed by.
+    assert.equal(slots[0].ordinal, 1);
+    assert.equal(slots[0].blockIndex, 1);
+  });
+
+  test('fences inside containers are candidates', () => {
+    for (const source of [
+      '- ```mermaid\n  graph;\n  ```\n',
+      '1. ```mermaid\n   graph;\n   ```\n',
+      '> ```mermaid\n> graph;\n> ```\n',
+      '>> ```mermaid\n>> graph;\n>> ```\n',
+      '~~~mermaid\ngraph;\n~~~\n',
+    ]) {
+      const slots = slotsFor(source, ['mermaid']);
+      assert.equal(slots.length, 1, JSON.stringify(source));
+      assert.equal(slots[0].code, 'graph;', JSON.stringify(source));
+      assert.equal(slots[0].incomplete, false, JSON.stringify(source));
+    }
+  });
+
+  test('what is never a candidate', () => {
+    assert.deepEqual(slotsFor('    indented code\n', ['mermaid']), []);
+    assert.deepEqual(slotsFor('```mermaid\n```\n', ['js']), []);
+    // A fence whose info line has not ended is not a fence yet: it is still
+    // growing into one.
+    assert.deepEqual(slotsFor('```merm', ['mermaid']), []);
+    assert.deepEqual(slotsFor('```merm\n', ['mermaid']), []);
+    // A ```math fence is a formula block either way, exactly as Streamdown treats
+    // it: remark-math claims the language before the code component runs, so the
+    // engine never reports it as a code block and no renderer can be given one.
+    assert.deepEqual(slotsFor('```math\nx^2\n```\n', ['math'], { mathFlags: 1 }), []);
+    assert.deepEqual(slotsFor('```math\nx^2\n```\n', ['math'], { mathFlags: 0 }), []);
+    // The raw info word is matched, so an entity-encoded language is neither
+    // matched nor mistaken for the decoded one.
+    assert.deepEqual(
+      slotsFor('```mer&#x61;id\ngraph;\n```\n', ['mermaid']),
+      []
+    );
+  });
+
+  test('completeness follows the fence, not the document', () => {
+    const cases = [
+      ['```mermaid\ngraph;\n', true, 'open at the end of the source'],
+      ['```mermaid\ngraph;\n```\n', false, 'closed by its own fence'],
+      ['```mermaid\ngraph;\n````\n', false, 'closed by a longer fence'],
+      ['```mermaid\ngraph;\n``\n', true, 'a shorter fence does not close it'],
+      ['```mermaid\ngraph;\n~~~\n```\n', false, 'a different character runs on as code'],
+      ['```mermaid\ngraph;\n  ```\n', false, 'a closing fence may be indented three spaces'],
+      ['- ```mermaid\n  graph;\n  ```\n', false, 'a fence ended by its list item is closed'],
+    ];
+    for (const [source, incomplete, label] of cases) {
+      const slots = slotsFor(source, ['mermaid']);
+      assert.equal(slots.length, 1, label);
+      assert.equal(slots[0].incomplete, incomplete, label);
+    }
+  });
+
+  test('a settled stream reads a never-closed fence as final', () => {
+    const source = '```mermaid\ngraph;\n';
+    assert.equal(slotsFor(source, ['mermaid'], { live: true })[0].incomplete, true);
+    // The same fence after `finish()`: settled, so the renderer is told the
+    // spec is complete even though the model never closed the fence.
+    assert.equal(slotsFor(source, ['mermaid'], { live: false })[0].incomplete, false);
+  });
+
+  test('several fences, and one registered language', () => {
+    const slots = slotsFor(
+      '```js\nconst a = 1;\n```\n\n```mermaid\ngraph;\n```\n\n```ts:a.ts\nconst b = 2;\n```\n',
+      ['mermaid']
+    );
+    assert.deepEqual(
+      slots.map((slot) => slot.ordinal),
+      [1]
+    );
+    const both = slotsFor(
+      '```js\nconst a = 1;\n```\n\n```mermaid\ngraph;\n```\n',
+      ['js', 'mermaid']
+    );
+    assert.deepEqual(
+      both.map((slot) => [slot.ordinal, slot.language]),
+      [
+        [0, 'js'],
+        [1, 'mermaid'],
+      ]
+    );
+  });
+
+  test('an empty language list matches nothing', () => {
+    assert.deepEqual(slotsFor('```mermaid\ngraph;\n```\n', []), []);
+  });
+
+  test('the normalized language is what highlighting normalizes', () => {
+    // `lang:path` and a space both cut the word, and the case does not matter.
+    const slots = slotsFor('```MERMAID:src/x.mmd title="t"\ngraph;\n```\n', [
+      'mermaid',
+    ]);
+    assert.equal(slots.length, 1);
+    assert.equal(slots[0].language, 'MERMAID', 'as written, cut at the colon');
   });
 });

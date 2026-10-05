@@ -10,8 +10,12 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { DownstreamMarkdown } from 'react-native-downstream';
+import {
+  DownstreamMarkdown,
+  type MarkdownPlugins,
+} from 'react-native-downstream';
 
+import { ChartRenderer } from '../renderers/chart';
 import { CHAT_MODEL, CHAT_REASONING_EFFORT, chatSetupHint } from './chat';
 import type { ChatMessage } from './useChat';
 import { useChat } from './useChat';
@@ -58,6 +62,18 @@ function Prompt({ text }: { text: string }) {
   );
 }
 
+/**
+ * The one renderer this screen registers.
+ *
+ * A chat model writes a chart as a fenced JSON block more often than it writes
+ * one in a chart's own language, so ` ```chart ` is the language to claim: the
+ * spec is JSON the model produced, and the component is a bar chart drawn from
+ * it. Everything else in an answer keeps the code card, which is the point.
+ */
+const PLUGINS: MarkdownPlugins = {
+  renderers: [{ language: ['chart', 'chartjs'], component: ChartRenderer }],
+};
+
 function Answer({ message }: { message: ChatMessage }) {
   const t = useTheme();
   return (
@@ -79,6 +95,7 @@ function Answer({ message }: { message: ChatMessage }) {
         {message.stream ? (
           <DownstreamMarkdown
             stream={message.stream}
+            plugins={PLUGINS}
             animated
             caret="block"
             onError={({ code, message: text }) => console.warn(code, text)}

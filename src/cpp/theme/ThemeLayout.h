@@ -4,6 +4,8 @@
 #include "Theme.h"
 #include "downstream/ImageLayout.h"
 
+#include <vector>
+
 namespace downstream {
 namespace theme_layout {
 
@@ -132,6 +134,20 @@ double blockGap(const Theme &theme, BlockSpacing spacing, const Block *previous,
 
 /// The indent one nesting level adds to a block's content leading.
 double containerIndent(const Theme &theme, ContainerKind kind);
+
+/**
+ * The whole content leading a block's container path adds, in points at
+ * `scale`.
+ *
+ * One function because the column a fence renderer's component is measured at
+ * has to be the column it is drawn in: a hosted block sits inside the same
+ * quote bar and list marker gutter its code card would have sat in, so the
+ * shadow node measures a slot with this number and both platforms draw their
+ * container chrome with it. One definition rather than a sum written three
+ * times is what keeps a chart from being one list indent narrower than the text
+ * around it.
+ */
+double contentLeading(const Theme &theme, const std::vector<Container> &containers, double scale);
 
 /// The horizontal gap between a container's bar or marker and its text.
 double markerGap(const Theme &theme);

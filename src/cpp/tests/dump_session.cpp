@@ -10,6 +10,11 @@
 // argv[1] is the mode, `full` or `incremental`, as the TurboModule receives it.
 // argv[2] is the parse option bitmask, as the TurboModule's `create` receives it.
 // Absent means math is off, so the existing corpus is byte-identical.
+// argv[3], when present, is the registered languages, comma separated: the
+// model then carries `fenceSlots`, read from the published document exactly as
+// the TurboModule's `sessionFenceSlots` reads a snapshot, live until the last
+// pass was a finished one. That is what lets a TypeScript suite see a fence the
+// incremental parser has not settled, which no fresh parse of the source shows.
 // stdin is a sequence of frames: a one-byte operation, a little-endian u32
 // payload length, and the payload.
 //
@@ -52,6 +57,7 @@ int main(int argc, char **argv) {
   const std::string_view frames = input;
   ParseResult last;
   bool parsed = false;
+  bool finished = false;
   size_t at = 0;
   while (at < frames.size()) {
     if (frames.size() - at < 5) {
@@ -90,6 +96,7 @@ int main(int argc, char **argv) {
       case 'f':
         last = parser.parse(op == 'f');
         parsed = true;
+        finished = op == 'f';
         break;
       default:
         std::fprintf(stderr, "unknown operation '%c'\n", op);
@@ -118,6 +125,10 @@ int main(int argc, char **argv) {
               static_cast<unsigned long long>(counters.highlightCount(HighlightStop::Complete)),
               static_cast<unsigned long long>(counters.highlightCount(HighlightStop::Skipped)),
               static_cast<unsigned long long>(counters.highlightCount(HighlightStop::Budget)));
+  if (argc > 3 && parser.document()) {
+    std::printf(",\"fenceSlots\":");
+    testdump::writeFenceSlots(fenceSlots(*parser.document(), testdump::languagesFromArg(argc, argv, 3), !finished));
+  }
   testdump::writeModelClosed();
   return 0;
 }

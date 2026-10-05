@@ -5,15 +5,39 @@
 #import "DSThemeColors.h"
 
 #ifdef __cplusplus
+#include <utility>
 #include <vector>
 
 #include "Caret.h"
 #include "CodeLayout.h"
 #include "Document.h"
+#include "HostLayout.h"
 #include "ImageLayout.h"
 #include "RenderPreparer.h"
 #include "math/MathLayout.h"
 #include "theme/Theme.h"
+
+/// One measurement's answer: the document's size, and where each React child
+/// that replaced a fenced block goes.
+///
+/// The rectangles are the content rectangle of the block the child hosts, in
+/// the document view's coordinates. They come from the same stacking pass that
+/// produced the size, so the shadow node's placement and the view's own chrome
+/// are two readings of one set of numbers rather than two computations that
+/// could disagree.
+struct DSMeasurement {
+  CGSize size{0, 0};
+  std::vector<std::pair<uint32_t, CGRect>> hosts;
+};
+
+/// One stacking pass's answer: every segment frame, the document's size, and
+/// the content rectangle of each hosted fence. The view draws from the frames
+/// and the shadow node places children at the rectangles.
+struct DSStackedLayout {
+  std::vector<CGRect> frames;
+  std::vector<std::pair<uint32_t, CGRect>> hosts;
+  CGSize size{0, 0};
+};
 #endif
 
 NS_ASSUME_NONNULL_BEGIN
@@ -126,8 +150,13 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
 @property (nonatomic, readonly) UIFont *codeFont;
 @property (nonatomic, readonly) NSInteger blockIndex;
 /// The block's ordinal among the document's code blocks, which is what a
-/// reader's wrap or expand choice is keyed by.
+/// reader's wrap or expand choice is keyed by, and what a React child that
+/// replaced this block is keyed by.
 @property (nonatomic, readonly) uint32_t codeOrdinal;
+/// Whether the block's text runs right to left, which mirrors a hosted child's
+/// content rectangle to the trailing edge, the same way the container bars and
+/// the list marker are mirrored.
+@property (nonatomic, readonly) BOOL rightToLeft;
 @property (nonatomic, readonly) NSArray<DSContainerInfo *> *containers;
 @property (nonatomic, readonly) CGFloat contentLeading;
 /// The block's first line, which identifies it across snapshots while a fence
@@ -337,11 +366,27 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
 - (NSArray<NSValue *> *)segmentFramesForWidth:(CGFloat)width
                                      chrome:(uint32_t)chrome
                                         code:(const downstream::CodeLayout &)code
-                                      images:(const downstream::ImageStateLayout &)images;
+                                      images:(const downstream::ImageStateLayout &)images
+                                       hosts:(const downstream::HostLayout &)hosts;
 - (CGSize)sizeForWidth:(CGFloat)width
                 chrome:(uint32_t)chrome
                    code:(const downstream::CodeLayout &)code
-                 images:(const downstream::ImageStateLayout &)images;
+                 images:(const downstream::ImageStateLayout &)images
+                  hosts:(const downstream::HostLayout &)hosts;
+
+#ifdef __cplusplus
+/// The size and the hosted children's rectangles, from one stacking pass.
+///
+/// `measure` is what the shadow node asks for, and the hosted rectangles are
+/// what it places the children at: the same call produces the document's height
+/// and the positions inside it, so a frame that draws a child where the
+/// document was measured to put it is not possible.
+- (DSMeasurement)measureForWidth:(CGFloat)width
+                          chrome:(uint32_t)chrome
+                             code:(const downstream::CodeLayout &)code
+                          images:(const downstream::ImageStateLayout &)images
+                           hosts:(const downstream::HostLayout &)hosts;
+#endif
 
 @end
 

@@ -280,6 +280,15 @@ struct Block {
   /// Several images in one paragraph stack vertically rather than sharing a row,
   /// which is what an image-only paragraph becomes.
   std::vector<uint32_t> images;
+  /// CodeBlock only: the fence's own delimiter ('`' or '~'), 0 for an indented
+  /// block. A candidate slot is always a fenced block.
+  char fenceMarker{0};
+  /// The opener's run length, 0 for an indented block.
+  uint32_t fenceLength{0};
+  /// A closing fence line ended this block. False when the fence ran out of
+  /// input or was ended by its container; a block followed by another block is
+  /// always closed, which is why this is only the last block's question.
+  bool fenceClosed{false};
 };
 
 /// An actionable link. Links that fail the URL policy are plain text and are

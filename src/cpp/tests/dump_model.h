@@ -6,6 +6,7 @@
 #pragma once
 
 #include "Document.h"
+#include "FenceSlots.h"
 #include "MarkdownParser.h"
 #include "Unicode.h"
 
@@ -13,6 +14,7 @@
 #include <cstdlib>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace downstream::testdump {
 
@@ -225,6 +227,49 @@ inline ParseOptions parseFlagsFromArg(int argc, char **argv, int at) {
   }
   options.flags = static_cast<uint32_t>(std::strtoul(argv[at], nullptr, 10));
   return options;
+}
+
+/// The registered languages from argv[at], comma separated and unnormalized,
+/// exactly as JavaScript sends them, so a driver exercises the engine's own
+/// normalization. Absent or empty is no languages.
+inline std::vector<std::string> languagesFromArg(int argc, char **argv, int at) {
+  std::vector<std::string> languages;
+  if (at >= argc || argv[at] == nullptr) {
+    return languages;
+  }
+  const std::string joined(argv[at]);
+  size_t start = 0;
+  while (start <= joined.size()) {
+    const size_t comma = joined.find(',', start);
+    const std::string one = joined.substr(start, comma == std::string::npos ? comma : comma - start);
+    if (!one.empty()) {
+      languages.push_back(one);
+    }
+    if (comma == std::string::npos) {
+      break;
+    }
+    start = comma + 1;
+  }
+  return languages;
+}
+
+/// Fence slots as the JSON array `tests/engine.ts` reads, in the shape the
+/// TurboModule bridges them.
+inline void writeFenceSlots(const std::vector<FenceSlot> &slots) {
+  std::printf("[");
+  for (size_t index = 0; index < slots.size(); index++) {
+    const FenceSlot &slot = slots[index];
+    std::printf("%s{\"ordinal\":%u,\"blockIndex\":%zu,\"language\":", index ? "," : "", slot.ordinal,
+                slot.blockIndex);
+    writeString(slot.language);
+    std::printf(",\"meta\":");
+    writeString(slot.meta);
+    std::printf(",\"code\":");
+    writeString(slot.code);
+    std::printf(",\"incomplete\":%s,\"identity\":%llu}", slot.incomplete ? "true" : "false",
+                static_cast<unsigned long long>(slot.identity));
+  }
+  std::printf("]");
 }
 
 /// Closes what write left open and ends the line. A driver that has more to

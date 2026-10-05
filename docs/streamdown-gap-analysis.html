@@ -185,12 +185,12 @@
               <tr>
                 <td>Mermaid diagrams<br /><span class="tag new">not planned</span></td>
                 <td>Fenced code</td>
-                <td><code>plugins.mermaid</code> with pan and zoom, full screen, and export as SVG, PNG or <code>.mmd</code>. Heavy on native: likely a web view or a server-side render. Better served by fence-language renderers below than by the core.</td>
+                <td><code>plugins.mermaid</code> with pan and zoom, full screen, and export as SVG, PNG or <code>.mmd</code>. Heavy on native: likely a web view or a server-side render. Better served by fence-language renderers below than by the core; <a href="fence-renderers-plan.html#catalog">the fence renderers plan</a> proposes an opt-in package built on a DOM-free Mermaid renderer.</td>
               </tr>
               <tr>
-                <td>Custom renderers by fence language<br /><span class="tag scope">contract change</span></td>
-                <td>None</td>
-                <td><code>plugins.renderers: [{ language, component }]</code> replaces one fenced block with a component that receives <code>code</code>, <code>isIncomplete</code> and <code>meta</code>. This is narrower than per-node renderers and is the natural route for diagrams, charts and tool UIs. The "custom renderers: none" row in <code>docs/api.md</code> rules it out today; it needs a segment type that hosts a React child.</td>
+                <td>Custom renderers by fence language<br /><span class="tag new">shipped</span></td>
+                <td><code>plugins.renderers: [{ language, component }]</code></td>
+                <td>Shipped. A fenced block whose language is registered is drawn by that component inside the same view: the view's shadow node measures it at the block's column and places it where the card would have been, in the same commit, with the code card underneath for every case where the component is not up. The component receives <code>code</code>, <code>language</code>, <code>meta</code> and <code>isIncomplete</code>. Matching is case-insensitive, which differs from Streamdown on purpose. See <a href="api.md#fence-renderers">the contract</a> and <a href="fence-renderers-plan.html">the plan</a>.</td>
               </tr>
               <tr>
                 <td>Link safety<br /><span class="tag new">not planned</span></td>

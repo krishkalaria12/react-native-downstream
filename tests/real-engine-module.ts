@@ -12,11 +12,17 @@
 import { vi } from 'vitest';
 
 import {
+  fenceSlots,
   replaySession,
+  replaySessionSlots,
+  type FenceSlot,
   type RenderModel,
   type SessionMode,
   type SessionOp,
 } from './engine';
+
+/** The largest source a synchronous query parses, as the module's bound is. */
+export const SYNC_SLOT_BYTES = 16 * 1024;
 
 type SnapshotListener = (event: object) => void;
 type ErrorListener = (event: object) => void;
@@ -125,6 +131,32 @@ function publish(session: Session, sessionId: string): void {
   }
 }
 
+/**
+ * How many times a fence-slot query reached the engine, so a test can assert
+ * that a view with no renderers asks nothing and that an unchanged list asks
+ * once.
+ */
+export const slotWork = { queries: 0, async: 0 };
+
+/** The slots a controlled source holds, as the TurboModule answers them. */
+function controlledSlots(
+  source: string,
+  parseFlags: number,
+  languages: readonly string[]
+): { pending: boolean; slots: readonly FenceSlot[] } {
+  slotWork.queries += 1;
+  // The real bound: a source past it answers `pending` and the caller asks the
+  // worker instead, which is what keeps a big message off the JavaScript thread.
+  const bytes = Buffer.byteLength(source, 'utf8');
+  if (bytes > SYNC_SLOT_BYTES) {
+    return { pending: true, slots: [] };
+  }
+  return {
+    pending: false,
+    slots: fenceSlots(source, languages, parseFlags, true),
+  };
+}
+
 export const realEngineModule = {
   __esModule: true,
   default: {
@@ -189,6 +221,52 @@ export const realEngineModule = {
       else nativeTraceEnabled.delete(sessionId);
     },
 
+    fenceSlots(
+      source: string,
+      parseFlags: number,
+      languages: readonly string[]
+    ): { pending: boolean; slots: readonly FenceSlot[] } {
+      return controlledSlots(source, parseFlags, languages);
+    },
+
+    async fenceSlotsAsync(
+      source: string,
+      parseFlags: number,
+      languages: readonly string[]
+    ): Promise<readonly FenceSlot[]> {
+      slotWork.async += 1;
+      // The worker parses the same source with the same rule; only the thread
+      // differs, and a test cannot see which thread ran it.
+      return fenceSlots(source, languages, parseFlags, true);
+    },
+
+    sessionFenceSlots(
+      sessionId: string,
+      generation: number,
+      sequence: number,
+      languages: readonly string[]
+    ): readonly FenceSlot[] {
+      const session = sessions.get(sessionId);
+      if (
+        !session ||
+        session.generation !== generation ||
+        session.sequence !== sequence
+      ) {
+        return [];
+      }
+      slotWork.queries += 1;
+      // The snapshot the view is mounting, as the session's own parser
+      // published it: the native query walks those blocks and never parses, so
+      // which fences are settled is the incremental parser's answer, not a
+      // fresh parse's, where every block is.
+      return replaySessionSlots(
+        session.mode,
+        session.steps,
+        session.parseFlags,
+        languages
+      );
+    },
+
     setPreview(sessionId: string, features: number) {
       const session = sessions.get(sessionId);
       if (!session) return;
@@ -226,6 +304,8 @@ export function resetEngine(): void {
   nativeTraceEnabled.clear();
   nativeWork.appends = 0;
   nativeWork.parses = 0;
+  slotWork.queries = 0;
+  slotWork.async = 0;
 }
 
 export const mockTurboModule = vi.fn(() => realEngineModule.default);

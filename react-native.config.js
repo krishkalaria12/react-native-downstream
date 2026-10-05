@@ -12,7 +12,10 @@ module.exports = {
         // Builds the shared C++ engine and the custom shadow node, which
         // Codegen does not generate for interfaceOnly components.
         cmakeListsPath: 'src/main/jni/CMakeLists.txt',
-        componentDescriptors: ['DownstreamMarkdownViewComponentDescriptor'],
+        componentDescriptors: [
+          'DownstreamMarkdownViewComponentDescriptor',
+          'DownstreamFenceSlotComponentDescriptor',
+        ],
         // The session TurboModule is shared C++ (src/cpp/session), compiled by
         // the CMakeLists above.
         cxxModuleHeaderName: 'DownstreamSessionModule',

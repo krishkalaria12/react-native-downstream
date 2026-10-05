@@ -516,6 +516,54 @@ internal object DownstreamNative {
     }
   }
 
+  /**
+   * The content rectangle of every hosted React child, as `[ordinal, left, top,
+   * right, bottom]` groups in points.
+   *
+   * Called from `measure` (through C++) because `FabricUIManager.measure`
+   * returns a packed size and nothing else: only `measureText` reports
+   * attachment positions, and a hosted child is not text. The rendering is the
+   * one measurement just filled, cached by document and width, so this reads
+   * the frames it stacked rather than laying anything out again.
+   *
+   * [layout] is the same map `measure` and `updateState` carry, and [width] is
+   * the width Yoga measured at, in points as the shadow node holds it. It is
+   * converted to pixels here exactly as `FabricUIManager.measure` converts it
+   * before `measure`, so this reads the rendering that measurement filled rather
+   * than laying the document out again at a width the view never draws.
+   */
+  @JvmStatic
+  @DoNotStrip
+  fun hostFrames(documentId: Long, layout: ReadableMap, width: Float): FloatArray {
+    val context = preparationContext?.get() ?: return FloatArray(0)
+    return try {
+      val rendered = RenderedDocument.obtain(
+        context,
+        documentId,
+        layout.numberAt("fontScale", 1.0).toFloat(),
+        themeId = layout.numberAt("themeId", 0.0).toLong(),
+      ) ?: return FloatArray(0)
+      val hosts = layout.toHostLayout()
+      if (hosts.isEmpty()) {
+        return FloatArray(0)
+      }
+      val frames = rendered.hostFrames(
+        PixelUtil.toPixelFromDIP(width).toInt(),
+        layout.numberAt("chrome", 0.0).toInt(),
+        layout.toCodeLayout(),
+        layout.toImageLayout(),
+        hosts,
+      )
+      // Every fifth value is an ordinal, not a length: converting it with the
+      // edges would hand a chart another fence's rectangle.
+      FloatArray(frames.size) { index ->
+        if (index % 5 == 0) frames[index].toFloat() else PixelUtil.toDIPFromPixel(frames[index].toFloat())
+      }
+    } catch (error: RuntimeException) {
+      FloatArray(0)
+    }
+  }
+
   /** Returns null when the document is no longer alive. */
   fun readDocument(id: Long, from: Int, to: Int, themeId: Long): NativeDocument? {
     val parts = nativeReadDocument(id, from, to, themeId) ?: return null

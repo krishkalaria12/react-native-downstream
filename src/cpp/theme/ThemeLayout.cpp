@@ -324,8 +324,15 @@ double containerIndent(const Theme &theme, ContainerKind kind) {
   return theme.number(kSlotListMarginLeft);
 }
 
-double markerGap(const Theme &theme) { return theme.number(kSlotListGapWidth); }
-double quoteBarWidth(const Theme &theme) { return theme.number(kSlotBlockquoteBorderWidth); }
+double contentLeading(const Theme &theme, const std::vector<Container> &containers, double scale) {
+  double leading = 0;
+  for (const Container &container : containers) {
+    leading += containerIndent(theme, container.kind);
+  }
+  return leading * scale;
+}
+
+double markerGap(const Theme &theme) { return theme.number(kSlotListGapWidth); }double quoteBarWidth(const Theme &theme) { return theme.number(kSlotBlockquoteBorderWidth); }
 double codeCardPadding(const Theme &theme) { return theme.number(kSlotCodeBlockPadding); }
 double codeCardBorderWidth(const Theme &theme) { return theme.number(kSlotCodeBlockBorderWidth); }
 

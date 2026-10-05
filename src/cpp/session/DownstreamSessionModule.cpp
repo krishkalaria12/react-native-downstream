@@ -1,9 +1,13 @@
 #include "DownstreamSessionModule.h"
 
+#include "ControlledSlots.h"
+#include "FenceSlots.h"
 #include "MarkdownParser.h"
 #include "SessionRegistry.h"
 #include "SessionTrace.h"
+#include "WorkerPool.h"
 #include "math/MathEngine.h"
+#include "Unicode.h"
 
 #include <algorithm>
 #include <cmath>
@@ -29,6 +33,16 @@ struct Bridging<SessionErrorEvent> : NativeDownstreamSessionSessionErrorEventBri
 
 template <>
 struct Bridging<NativeTraceEvent> : NativeDownstreamSessionNativeTraceEventBridging<NativeTraceEvent> {};
+
+/// One fence slot on the wire, in the shape codegen generated for
+/// `FenceSlot`: an ordinal, the language as written, the meta string as an
+/// optional, the text, and whether the fence is still growing.
+using Slot = FenceSlotResult;
+
+/// The one specialization the generated header leaves to the module: how a
+/// slot structure becomes a JavaScript object, and back.
+template <>
+struct Bridging<Slot> : NativeDownstreamSessionFenceSlotBridging<Slot> {};
 
 namespace {
 
@@ -235,6 +249,111 @@ bool DownstreamSessionModule::mathAvailable(jsi::Runtime & /*rt*/) {
   // binary does, which is a relaunch, so caching it here would be a second place
   // that could disagree with the layout pass about whether there is an engine.
   return downstream::MathEngine::available();
+}
+
+namespace {
+
+/// The engine's slots in the shape codegen bridges to JavaScript.
+std::vector<Slot> bridged(const std::vector<downstream::FenceSlot> &slots) {
+  std::vector<Slot> out;
+  out.reserve(slots.size());
+  for (const downstream::FenceSlot &slot : slots) {
+    out.push_back(Slot{static_cast<std::int32_t>(slot.ordinal),
+                       slot.language,
+                       slot.meta.empty() ? std::nullopt : std::optional<std::string>(slot.meta),
+                       downstream::utf16ToUtf8(slot.code),
+                       slot.incomplete,
+                       static_cast<double>(slot.identity)});
+  }
+  return out;
+}
+
+jsi::Array toJs(jsi::Runtime &rt, const std::vector<Slot> &slots) {
+  jsi::Array array = jsi::Array(rt, slots.size());
+  for (size_t index = 0; index < slots.size(); index++) {
+    array.setValueAtIndex(rt, index,
+                          NativeDownstreamSessionFenceSlotBridging<Slot>::toJs(rt, slots[index], nullptr));
+  }
+  return array;
+}
+
+} // namespace
+
+jsi::Object DownstreamSessionModule::fenceSlots(jsi::Runtime &rt, std::string source, double mathFlags,
+                                                std::vector<std::string> languages) {
+  const downstream::ParseOptions parse{static_cast<uint32_t>(std::clamp(mathFlags, 0.0, 4294967295.0))};
+  downstream::ControlledSlots answer;
+  try {
+    answer = downstream::controlledFenceSlots(source, parse, languages);
+  } catch (const std::exception &) {
+    // Unreadable: code cards, and the same `pending` rule a source with no
+    // answer gets, so a large one is still asked for on the worker.
+    answer = downstream::ControlledSlots{source.size() > downstream::kSyncSlotBytes, {}};
+  }
+  auto result = jsi::Object(rt);
+  result.setProperty(rt, "pending", answer.pending);
+  result.setProperty(rt, "slots", toJs(rt, bridged(answer.slots)));
+  return result;
+}
+
+AsyncPromise<std::vector<Slot>> DownstreamSessionModule::fenceSlotsAsync(jsi::Runtime &rt, std::string source,
+                                                                          double mathFlags,
+                                                                          std::vector<std::string> languages) {
+  const downstream::ParseOptions parse{static_cast<std::uint32_t>(std::clamp(mathFlags, 0.0, 4294967295.0))};
+  // The promise is made here, on the JavaScript thread, and settled from the
+  // worker that did the parse: `resolve` and `reject` here cross to the
+  // JavaScript thread through the call invoker themselves, so nothing about the
+  // runtime travels with them and the whole answer is one value on one thread.
+  auto promise = AsyncPromise<std::vector<Slot>>(rt, jsInvoker_);
+  std::string failure;
+  try {
+    // The same pool a preparation uses: a big message's fences are read while
+    // the rest of the app keeps working, which is the whole reason a large
+    // source does not parse here.
+    downstream::WorkerPool::shared().post([promise, source = std::move(source), parse,
+                                          languages = std::move(languages)]() mutable {
+      std::vector<Slot> slots;
+      std::string message;
+      try {
+        // Reuse a finished preparation or slot answer before parsing on the worker.
+        slots = bridged(downstream::resolvedFenceSlots(source, parse, languages));
+      } catch (const std::exception &error) {
+        message = error.what();
+      }
+      if (!message.empty()) {
+        promise.reject(Error(message));
+        return;
+      }
+      promise.resolve(std::move(slots));
+    });
+  } catch (const std::exception &error) {
+    // A pool that will not take the job: answer now rather than leaving the
+    // view drawing code cards for a question that can no longer be asked.
+    failure = error.what();
+  }
+  if (!failure.empty()) {
+    promise.reject(Error(failure));
+  }
+  return promise;
+}
+
+jsi::Array DownstreamSessionModule::sessionFenceSlots(jsi::Runtime &rt, std::string sessionId, double generation,
+                                                      double sequence, std::vector<std::string> languages) {
+  std::vector<Slot> slots;
+  if (!validCounter(generation) || !validCounter(sequence)) {
+    return toJs(rt, slots);
+  }
+  // The snapshot the view is mounting, not the newest one: the props this
+  // answer renders beside name that exact version, so a snapshot that arrives
+  // mid-render cannot make the view mount slots from a document it never
+  // asked for.
+  const downstream::DocumentHandle document =
+      downstream::SessionRegistry::snapshot(sessionId, static_cast<uint64_t>(generation), static_cast<uint64_t>(sequence));
+  if (document) {
+    const bool live = !downstream::SessionRegistry::isFinished(sessionId);
+    slots = bridged(downstream::fenceSlots(*document, languages, live));
+  }
+  return toJs(rt, slots);
 }
 
 } // namespace facebook::react

@@ -2,6 +2,7 @@
 
 #ifdef __cplusplus
 #include "CodeLayout.h"
+#include "HostLayout.h"
 #include "ImageLayout.h"
 #endif
 
@@ -224,6 +225,14 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 /// What each image is, which the image views draw from and the frames are
 /// stacked with.
 @property (nonatomic) downstream::ImageStateLayout imageState;
+/// Which fenced blocks a React child replaced, and how tall each one is.
+///
+/// A code segment whose ordinal is in here is drawn as a host segment: its
+/// container chrome and nothing else, at the height the child measured, with
+/// the child itself drawn above it by Fabric. An empty layout is a view with no
+/// renderers, which is the state this view was in before fence renderers
+/// existed.
+@property (nonatomic) downstream::HostLayout hostLayout;
 /// The screen scale pictures are decoded at.
 @property (nonatomic) CGFloat screenScale;
 /// Label strings in the order `src/controls.ts` sends them.

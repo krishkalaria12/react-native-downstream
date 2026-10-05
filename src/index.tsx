@@ -16,6 +16,8 @@ export type { ResolvedAnimate } from './animation';
 export type { ResolvedMath } from './parseFlags';
 export type { SyntaxColorsFromTheme } from './syntaxTheme';
 export type {
+  CustomRenderer,
+  CustomRendererProps,
   EnrichedSyntaxKey,
   MarkdownAnimateOptions,
   MarkdownColor,
@@ -33,6 +35,7 @@ export type {
   MarkdownMathErrorEvent,
   MarkdownMathOptions,
   MarkdownOperationError,
+  MarkdownPlugins,
   MarkdownPreset,
   MarkdownPreviewOptions,
   MarkdownSourceRange,

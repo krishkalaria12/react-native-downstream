@@ -168,6 +168,23 @@ internal class ContainerDecoration(
 /** One native block's reading order and role inside a shared text layout. */
 internal class AccessibleBlock(val start: Int, val end: Int, val heading: Boolean, val taskState: Int)
 
+/**
+ * The Kotlin mirror of `downstream::theme_layout::contentLeading`: the whole
+ * content leading a block's container path adds.
+ *
+ * One function because the column a React child hosted in a fence is measured
+ * at has to be the column it is drawn in, and the shadow node reads the C++
+ * version to measure it. The two summing the same indents in two files is
+ * exactly the drift this avoids, which is the same argument `imageBox` makes.
+ */
+internal fun contentLeading(containers: List<ContainerDecoration>): Float {
+  // Each decoration's leading is the sum of the levels above it and its width is
+  // its own level, so the content leading of the whole path is the last level's
+  // end. The levels have already been measured with the theme's own indents.
+  val last = containers.lastOrNull() ?: return 0f
+  return last.leading + last.width
+}
+
 private fun startsRightToLeft(text: CharSequence, start: Int, end: Int): Boolean {
   var index = start
   while (index < end) {
@@ -577,6 +594,12 @@ internal class CodeSegment(
   val codeOrdinal: Int,
   val containers: List<ContainerDecoration>,
   val contentLeading: Int,
+  /**
+   * Whether the block's text runs right to left, which mirrors a React child
+   * hosted in this block to the trailing edge, the same way the container bars
+   * and the list marker are mirrored.
+   */
+  val rtl: Boolean,
   /** The block's first line, which identifies it while a fence is still growing. */
   val firstLine: String,
   /** Padding inside the card, the same on every side. */
@@ -776,6 +799,7 @@ internal class RenderedDocument(
   private var cachedChrome = -1
   private var cachedCode: CodeLayout? = null
   private var cachedImages: ImageLayout? = null
+  private var cachedHosts: HostLayout? = null
   private var cachedFrames = IntArray(0)
 
   fun createTextLayout(segment: TextSegment, width: Int): StaticLayout =
@@ -788,7 +812,14 @@ internal class RenderedDocument(
    * `chrome`, because a document can hold wrapped and unwrapped code at once and
    * `chrome` says only whether every block wraps.
    */
-  private fun heightOf(segment: Segment, width: Int, chrome: Int, code: CodeLayout, images: ImageLayout): Int =
+  private fun heightOf(
+    segment: Segment,
+    width: Int,
+    chrome: Int,
+    code: CodeLayout,
+    images: ImageLayout,
+    hosts: HostLayout,
+  ): Int =
     when (segment) {
       is TextSegment -> segment.height(width, paint)
       // A picture's box is the state and the theme, and nothing else: there is no
@@ -814,24 +845,33 @@ internal class RenderedDocument(
           (style.bodySize * LINE_HEIGHT + style.mathPadding * 2 +
             style.mathMarginTop + style.mathMarginBottom).toInt()
         }
+      // A hosted fence is as tall as the React child that replaced it, as on iOS:
+      // the component owns its height, and the block's margins stay a code
+      // block's, so the space around it does not change when a fence becomes a
+      // chart. The height arrives in pixels, converted where the map is read.
       is CodeSegment -> {
-        // The one definition: the props, the reader's choices, and this block's
-        // own fence meta all meet in `resolveCodeBlock`, and `codeCardHeight` is
-        // the only function that turns that into a height. The view calls the
-        // same two, which is what keeps a measured card and a drawn card the same
-        // size.
-        val layout = resolveCodeBlock(code, segment.codeOrdinal, segment.fenceMeta)
-        val gutter = segment.gutterWidth(layout)
-        val body = segment.bodyHeight(
-          paint, width, layout.wraps, gutter,
-        )
-        codeCardHeight(
-          layout,
-          if (chrome and CHROME_CODE_HEADER != 0) style.chromeRowHeight else 0,
-          segment.padding,
-          body,
-          segment.lineHeight(),
-        )
+        val hosted = hosts.find(segment.codeOrdinal)
+        if (hosted != null) {
+          ceil(hosted.height.toDouble()).toInt()
+        } else {
+          // The one definition: the props, the reader's choices, and this block's
+          // own fence meta all meet in `resolveCodeBlock`, and `codeCardHeight` is
+          // the only function that turns that into a height. The view calls the
+          // same two, which is what keeps a measured card and a drawn card the same
+          // size.
+          val layout = resolveCodeBlock(code, segment.codeOrdinal, segment.fenceMeta)
+          val gutter = segment.gutterWidth(layout)
+          val body = segment.bodyHeight(
+            paint, width, layout.wraps, gutter,
+          )
+          codeCardHeight(
+            layout,
+            if (chrome and CHROME_CODE_HEADER != 0) style.chromeRowHeight else 0,
+            segment.padding,
+            body,
+            segment.lineHeight(),
+          )
+        }
       }
       is TableSegment ->
         segment.tableHeight + (if (chrome and CHROME_TABLE_TOOLBAR != 0) style.chromeRowHeight else 0)
@@ -845,12 +885,23 @@ internal class RenderedDocument(
    * spans. A measurement only holds for the choices it was made under.
    */
   @Synchronized
-  fun frames(width: Int, chrome: Int = 0, code: CodeLayout = CodeLayout(), images: ImageLayout = ImageLayout()): IntArray {
+  fun frames(
+    width: Int,
+    chrome: Int = 0,
+    code: CodeLayout = CodeLayout(),
+    images: ImageLayout = ImageLayout(),
+    hosts: HostLayout = HostLayout(),
+  ): IntArray {
     // A measurement only holds for the layout it was made under, so the whole code
-    // layout and the whole image layout are part of the key rather than the
-    // rendering. An image's height is its state, so a picture that loads has to
-    // restack the frames or the text under it stays where the placeholder was.
-    if (width == cachedWidth && chrome == cachedChrome && code == cachedCode && images == cachedImages) {
+    // layout, the whole image layout, and the hosted heights are all part of the
+    // key rather than the rendering. An image's height is its state and a hosted
+    // fence's height is its component's, so a picture that loads or a chart that
+    // changes size has to restack the frames or the text under it stays where the
+    // old box was.
+    if (
+      width == cachedWidth && chrome == cachedChrome && code == cachedCode &&
+      images == cachedImages && hosts == cachedHosts
+    ) {
       return cachedFrames
     }
     val frames = IntArray(segments.size * 2)
@@ -858,20 +909,72 @@ internal class RenderedDocument(
     segments.forEachIndexed { index, segment ->
       y += segment.gapBefore
       frames[index * 2] = y
-      frames[index * 2 + 1] = heightOf(segment, width, chrome, code, images)
+      frames[index * 2 + 1] = heightOf(segment, width, chrome, code, images, hosts)
       y += frames[index * 2 + 1]
     }
     cachedWidth = width
     cachedChrome = chrome
     cachedCode = code
     cachedImages = images
+    cachedHosts = hosts
     cachedFrames = frames
     return frames
   }
 
-  fun height(width: Int, chrome: Int = 0, code: CodeLayout = CodeLayout(), images: ImageLayout = ImageLayout()): Int {
-    val frames = frames(width, chrome, code, images)
+  fun height(
+    width: Int,
+    chrome: Int = 0,
+    code: CodeLayout = CodeLayout(),
+    images: ImageLayout = ImageLayout(),
+    hosts: HostLayout = HostLayout(),
+  ): Int {
+    val frames = frames(width, chrome, code, images, hosts)
     return if (frames.isEmpty()) 0 else frames[frames.size - 2] + frames[frames.size - 1]
+  }
+
+  /**
+   * The content rectangle of every hosted block, as `[ordinal, left, top, right,
+   * bottom]` groups, in the document's own coordinates.
+   *
+   * Read by `DownstreamNative.hostFrames` for the measurement path, because
+   * `FabricUIManager.measure` returns a size and nothing else: only `measureText`
+   * reports attachment positions, and a hosted child is not text. The rectangles
+   * come from the frames just stacked, so the shadow node places a child where
+   * this rendering puts it.
+   */
+  @Synchronized
+  fun hostFrames(
+    width: Int,
+    chrome: Int = 0,
+    code: CodeLayout = CodeLayout(),
+    images: ImageLayout = ImageLayout(),
+    hosts: HostLayout = HostLayout(),
+  ): IntArray {
+    if (hosts.isEmpty()) {
+      return IntArray(0)
+    }
+    val frames = frames(width, chrome, code, images, hosts)
+    val out = IntArray(hosts.entries.size * 5)
+    var count = 0
+    segments.forEachIndexed { index, segment ->
+      if (segment !is CodeSegment || !hosts.hosts(segment.codeOrdinal)) {
+        return@forEachIndexed
+      }
+      val top = frames[index * 2]
+      val height = frames[index * 2 + 1]
+      val leading = segment.contentLeading
+      val column = max(0, width - leading)
+      // A right-to-left block mirrors its indent to the trailing edge, the same
+      // way the container bars and the list marker are mirrored.
+      val left = if (segment.rtl) width - leading - column else leading
+      out[count++] = segment.codeOrdinal
+      out[count++] = left
+      out[count++] = top
+      out[count++] = left + column
+      out[count++] = top + height
+    }
+    // A streamed replacement can remove fences before their host state arrives.
+    return if (count == out.size) out else out.copyOf(count)
   }
 
   /**
@@ -1849,7 +1952,8 @@ internal class RenderedDocument(
         blockIndex = blockIndex,
         codeOrdinal = codeOrdinal,
         containers = containers.first,
-        contentLeading = containers.second.toInt(),
+        contentLeading = contentLeading(containers.first).toInt(),
+        rtl = startsRightToLeft(text, 0, text.length),
         firstLine = firstLine,
         padding = style.codePadding,
         gutterGap = ceil(GUTTER_GAP * style.density).toInt(),

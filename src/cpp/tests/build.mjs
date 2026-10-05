@@ -67,6 +67,7 @@ export const ENGINE = [
     'Export.cpp',
     'ExportNames.cpp',
     'FenceMeta.cpp',
+    'FenceSlots.cpp',
     'CodeLayout.cpp',
     'Reveal.cpp',
     'Caret.cpp',

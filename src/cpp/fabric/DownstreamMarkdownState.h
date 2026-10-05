@@ -5,6 +5,7 @@
 #include "Controls.h"
 #include "Document.h"
 #include "DocumentRegistry.h"
+#include "HostLayout.h"
 #include "ImageLayout.h"
 #include "RenderPreparer.h"
 #include "theme/Theme.h"
@@ -40,14 +41,16 @@ public:
   DownstreamMarkdownState(downstream::DocumentHandle document, Float fontSizeMultiplier, uint32_t chrome = 0,
                           downstream::CodeLayout code = {}, downstream::Theme::Handle theme = nullptr,
                           downstream::PlacedCaret caret = {},
-                          downstream::ImageStateLayout images = {})
+                          downstream::ImageStateLayout images = {},
+                          downstream::HostLayout hosts = {})
       : document(std::move(document)),
         fontSizeMultiplier(fontSizeMultiplier),
         chrome(chrome),
         code(std::move(code)),
         theme(std::move(theme)),
         caret(caret),
-        images(std::move(images)) {}
+        images(std::move(images)),
+        hosts(std::move(hosts)) {}
 
   downstream::DocumentHandle document;
   Float fontSizeMultiplier{1.0};
@@ -79,6 +82,14 @@ public:
   /// entry, the shadow node notices, and the frame is re-measured and re-mounted
   /// with no React render — which is the same path a code block's expand takes.
   downstream::ImageStateLayout images;
+  /// Every React child this view mounts into a fence, and the height it
+  /// measured at. A code segment whose ordinal is in here draws its container
+  /// chrome and nothing else, and takes the child's height.
+  ///
+  /// It travels in the state for the reason `images` does: a child that
+  /// changes size is a change to this view and not to the Markdown, and it is
+  /// re-measured and re-mounted without a React render.
+  downstream::HostLayout hosts;
 
   /// The theme to draw with, resolving null to the default so a platform never
   /// has to check.
@@ -94,6 +105,10 @@ public:
   downstream::CodeBlockLayout layoutOf(uint32_t ordinal, const downstream::FenceMeta &meta) const {
     return downstream::resolveCodeBlock(code, ordinal, meta);
   }
+
+  /// Whether the code block at `ordinal` is drawn by a React child rather than
+  /// by the native code card. Both platforms ask this before building a card.
+  bool hostsBlock(uint32_t ordinal) const { return hosts.hosts(ordinal); }
 
   /// A copy with `ordinal` toggled and its chrome resolved again.
   DownstreamMarkdownState toggledWrap(uint32_t ordinal, uint32_t controls) const {
@@ -128,6 +143,14 @@ public:
     return next;
   }
 
+  /// A copy with new hosted-child heights, which is what a React child that
+  /// changed size produces on the next measurement.
+  DownstreamMarkdownState withHosts(downstream::HostLayout answers) const {
+    DownstreamMarkdownState next(*this);
+    next.hosts = std::move(answers);
+    return next;
+  }
+
 #ifdef RN_SERIALIZABLE_STATE
   /// The view hands a new state back through StateWrapper, so the choices the
   /// reader just made have to survive the round trip through JNI. The arrays are
@@ -139,7 +162,8 @@ public:
         code(previous.code),
         theme(previous.theme),
         caret(previous.caret),
-        images(previous.images) {
+        images(previous.images),
+        hosts(previous.hosts) {
     if (!data.isObject()) {
       return;
     }
@@ -175,6 +199,11 @@ public:
     if (auto value = data.get_ptr("imageEntries")) {
       readImages(*value, &images);
     }
+    // The hosted children, in the shape the measure map writes them, so the
+    // state, the measure map and a round trip all read one set of keys.
+    if (auto value = data.get_ptr("hostEntries")) {
+      readHosts(*value, &hosts);
+    }
   }
 
   /// Java resolves the document through the native registry by id rather than
@@ -198,7 +227,7 @@ public:
         "themeId", static_cast<double>(themeId()))(
         // The same keys the Android measure map uses, because the view reads
         // this state and that map through one function.
-        "imagesEnabled", images.enabled ? 1.0 : 0.0)("imageEntries", writeImages(images));
+        "imagesEnabled", images.enabled ? 1.0 : 0.0)("imageEntries", writeImages(images))("hostEntries", writeHosts(hosts));
   }
 
 private:
@@ -240,8 +269,43 @@ private:
               });
   }
 
-  static std::vector<uint32_t> readOrdinals(const folly::dynamic &array) {
-    std::vector<uint32_t> ordinals;
+  static void readHosts(const folly::dynamic &array, downstream::HostLayout *out) {
+    out->entries.clear();
+    if (!array.isArray()) {
+      return;
+    }
+    out->entries.reserve(array.size());
+    for (const auto &object : array) {
+      if (!object.isObject()) {
+        continue;
+      }
+      const auto *ordinal = object.get_ptr("ordinal");
+      const auto *height = object.get_ptr("height");
+      if (ordinal == nullptr || height == nullptr || !ordinal->isNumber() || !height->isNumber()) {
+        continue;
+      }
+      downstream::HostEntry entry;
+      entry.ordinal = static_cast<uint32_t>(ordinal->asDouble());
+      entry.height = static_cast<float>(height->asDouble());
+      out->entries.push_back(entry);
+    }
+    std::sort(out->entries.begin(), out->entries.end(),
+              [](const downstream::HostEntry &a, const downstream::HostEntry &b) {
+                return a.ordinal < b.ordinal;
+              });
+  }
+
+  /// One object per hosted child, as the measure map writes them.
+  static folly::dynamic writeHosts(const downstream::HostLayout &hosts) {
+    auto array = folly::dynamic::array();
+    for (const downstream::HostEntry &entry : hosts.entries) {
+      array.push_back(
+          folly::dynamic::object("ordinal", static_cast<double>(entry.ordinal))("height", static_cast<double>(entry.height)));
+    }
+    return array;
+  }
+
+  static std::vector<uint32_t> readOrdinals(const folly::dynamic &array) {    std::vector<uint32_t> ordinals;
     if (!array.isArray()) {
       return ordinals;
     }

@@ -1027,6 +1027,7 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
 @end
 
 @interface DSCodeSegment ()
+@property (nonatomic) BOOL rightToLeft;
 @property (nonatomic) DSTextSegment *text;
 @property (nonatomic) NSString *language;
 @property (nonatomic) NSString *title;
@@ -1136,10 +1137,15 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   NSMutableArray<DSContainerInfo *> *containers = [NSMutableArray new];
   NSMutableArray<NSString *> *spoken = [NSMutableArray new];
   bool inQuote = false;
-  segment.contentLeading = buildContainers(block, nullptr, theme, segment.theme, scale, markerFont,
-                                           [segment.theme colorForSlot:kSlotListMarkerColor
-                                                           fallback:UIColor.secondaryLabelColor],
-                                           containers, spoken, &inQuote);
+  buildContainers(block, nullptr, theme, segment.theme, scale, markerFont,
+                 [segment.theme colorForSlot:kSlotListMarkerColor fallback:UIColor.secondaryLabelColor],
+                 containers, spoken, &inQuote);
+  // The engine's own sum of the container indents, rather than the one
+  // `buildContainers` accumulated on the way past. A React child replacing this
+  // block is measured at this number by the shadow node, so the two platforms
+  // and the node cannot drift apart on where the column is.
+  segment.contentLeading = theme_layout::contentLeading(theme, block.containers, scale);
+  segment.rightToLeft = writingDirection(block.text) == NSWritingDirectionRightToLeft;
   segment.containers = containers;
   const size_t newline = block.text.find(u'\n');
   segment.firstLine = toNSString(block.text.substr(0, newline == std::u16string::npos ? block.text.size() : newline));
@@ -1395,8 +1401,15 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   /// because a load changes a picture's height, so a frame cached for a
   /// placeholder is wrong for a loaded image.
   downstream::ImageStateLayout _cachedImages;
+  /// The hosted children's heights the cached frames were stacked with. Part of
+  /// the key for the reason the image answers are: a chart is as tall as the
+  /// component that draws it, so a frame cached for one component's height is
+  /// wrong for another's.
+  downstream::HostLayout _cachedHosts;
   bool _hasCachedFrames;
-  NSArray<NSValue *> *_cachedFrames;
+  /// Cache native geometry. Measurement needs no NSValue boxing, and each
+  /// caller copies only the frames it consumes while holding the cache lock.
+  DSStackedLayout _cachedLayout;
 }
 
 + (NSCache<NSString *, DSRenderedDocument *> *)cache {
@@ -1716,7 +1729,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
             atWidth:(CGFloat)width
              chrome:(uint32_t)chrome
                 code:(const downstream::CodeLayout &)code
-              images:(const downstream::ImageStateLayout &)images {
+              images:(const downstream::ImageStateLayout &)images
+               hosts:(const downstream::HostLayout &)hosts {
   if ([segment isKindOfClass:DSTextSegment.class]) {
     return [(DSTextSegment *)segment heightForWidth:width];
   }
@@ -1736,6 +1750,13 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   }
   if ([segment isKindOfClass:DSCodeSegment.class]) {
     DSCodeSegment *card = segment;
+    // A hosted fence is as tall as the React child that replaced it: the
+    // component owns its height, and the block's margins are a code block's
+    // margins, which is why the space around it does not change when a fence
+    // becomes a chart.
+    if (hosts.hosts(card.codeOrdinal)) {
+      return hosts.heightFor(card.codeOrdinal);
+    }
     // The one definition: the props, the reader's choices, and this block's own
     // fence meta all meet in `resolveCodeBlock`, and `codeCardHeight` is the only
     // function that turns that into a height. The view calls the same two, which
@@ -1781,22 +1802,73 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
 - (NSArray<NSValue *> *)segmentFramesForWidth:(CGFloat)width
                                      chrome:(uint32_t)chrome
                                         code:(const downstream::CodeLayout &)code
-                                      images:(const downstream::ImageStateLayout &)images {
-  // A measurement only holds for the layout it was made under, so the whole code
-  // layout *and* the image answers are part of the key. The choice sets and the
-  // answers are empty in every document the reader has not changed, so this is
-  // one comparison in practice — and a load that finishes changes the answers,
-  // which is what makes the cache miss rather than serve a placeholder height.
+                                      images:(const downstream::ImageStateLayout &)images
+                                       hosts:(const downstream::HostLayout &)hosts {
+  NSMutableArray<NSValue *> *frames = [NSMutableArray arrayWithCapacity:_segments.count];
+  for (const CGRect frame : [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts
+                                      includeFrames:YES includeHosts:NO].frames) {
+    [frames addObject:[NSValue valueWithCGRect:frame]];
+  }
+  return frames;
+}
+
+- (CGSize)sizeForWidth:(CGFloat)width
+                chrome:(uint32_t)chrome
+                   code:(const downstream::CodeLayout &)code
+                 images:(const downstream::ImageStateLayout &)images
+                  hosts:(const downstream::HostLayout &)hosts {
+  return [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts
+               includeFrames:NO includeHosts:NO].size;
+}
+
+- (DSMeasurement)measureForWidth:(CGFloat)width
+                          chrome:(uint32_t)chrome
+                             code:(const downstream::CodeLayout &)code
+                          images:(const downstream::ImageStateLayout &)images
+                           hosts:(const downstream::HostLayout &)hosts {
+  DSMeasurement measurement;
+  DSStackedLayout stacked = [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts
+                                 includeFrames:NO includeHosts:YES];
+  measurement.size = stacked.size;
+  measurement.hosts = std::move(stacked.hosts);
+  return measurement;
+}
+
+/// The one stacking pass: every segment's frame, the document's size, and the
+/// content rectangle of each hosted fence.
+///
+/// A measurement only holds for the layout it was made under, so the whole code
+/// layout, the image answers, and the hosted heights are all part of the key. A
+/// renderer that changes size changes one of them, which is what makes the cache
+/// miss rather than leave a chart in the box it was measured at. All three are
+/// empty or trivial in every document that registers no renderers, so this is a
+/// few comparisons in practice.
+- (DSStackedLayout)stackForWidth:(CGFloat)width
+                          chrome:(uint32_t)chrome
+                             code:(const downstream::CodeLayout &)code
+                          images:(const downstream::ImageStateLayout &)images
+                           hosts:(const downstream::HostLayout &)hosts
+                   includeFrames:(BOOL)includeFrames
+                    includeHosts:(BOOL)includeHosts {
   [_lock lock];
   if (_hasCachedFrames && _cachedWidth == width && _cachedChrome == chrome && _cachedCode == code &&
-      _cachedImages == images) {
-    NSArray *frames = _cachedFrames;
+      _cachedImages == images && _cachedHosts == hosts) {
+    DSStackedLayout cached;
+    if (includeFrames) {
+      cached.frames = _cachedLayout.frames;
+    }
+    if (includeHosts) {
+      cached.hosts = _cachedLayout.hosts;
+    }
+    cached.size = _cachedLayout.size;
     [_lock unlock];
-    return frames;
+    return cached;
   }
   [_lock unlock];
 
-  NSMutableArray<NSValue *> *frames = [NSMutableArray arrayWithCapacity:_segments.count];
+  DSStackedLayout stacked;
+  stacked.frames.reserve(_segments.count);
+  stacked.hosts.reserve(hosts.entries.size());
   // Segment edges round up from their exact positions, so frames stay on
   // whole points without rounding error accumulating across segments.
   CGFloat y = 0;
@@ -1805,7 +1877,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   for (NSUInteger index = 0; index < _segments.count; index++) {
     y += _gaps[index];
     id segment = _segments[index];
-    const CGFloat height = [self heightOf:segment atWidth:width chrome:chrome code:code images:images];
+    const CGFloat height =
+        [self heightOf:segment atWidth:width chrome:chrome code:code images:images hosts:hosts];
     if (!constrained) {
       unconstrainedWidth = std::max(unconstrainedWidth, [self unconstrainedWidthOf:segment
                                                                              atWidth:width
@@ -1816,18 +1889,39 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
     // point when y is fractional, and a text view lays out only the lines that
     // fit its frame, so a segment a fraction short would drop its last line.
     const CGFloat bottom = std::max(std::ceil(y + height), top + std::ceil(height));
-    [frames addObject:[NSValue valueWithCGRect:CGRectMake(0, top, constrained ? width : 0, bottom - top)]];
+    stacked.frames.push_back(CGRectMake(0, top, constrained ? width : 0, bottom - top));
+    // A hosted block's rectangle: its content column, at the full height the
+    // component measured. The column comes from the block's own container path
+    // through the engine's `contentLeading`, the same number the shadow node
+    // measured the child at, so the two cannot disagree about where it goes.
+    if ([segment isKindOfClass:DSCodeSegment.class]) {
+      DSCodeSegment *card = segment;
+      if (hosts.hosts(card.codeOrdinal)) {
+        const CGFloat leading = card.contentLeading;
+        const CGFloat column = constrained ? std::max<CGFloat>(0, width - leading) : 0;
+        CGFloat x = leading;
+        if (card.rightToLeft && constrained) {
+          // RTL mirrors the indent to the trailing edge, the same way the
+          // container bars and the marker are mirrored.
+          x = width - leading - column;
+        }
+        stacked.hosts.emplace_back(card.codeOrdinal,
+                                CGRectMake(x, top, column, bottom - top));
+      }
+    }
     y += height;
   }
 
   // Every segment spans the view; an unconstrained measure uses the widest
   // segment that does not fit.
   if (!constrained) {
-    for (NSUInteger index = 0; index < frames.count; index++) {
-      CGRect frame = frames[index].CGRectValue;
+    for (CGRect &frame : stacked.frames) {
       frame.size.width = unconstrainedWidth;
-      frames[index] = [NSValue valueWithCGRect:frame];
     }
+  }
+  if (!stacked.frames.empty()) {
+    const CGRect last = stacked.frames.back();
+    stacked.size = CGSizeMake(std::ceil(CGRectGetWidth(last)), std::ceil(CGRectGetMaxY(last)));
   }
 
   [_lock lock];
@@ -1835,22 +1929,18 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   _cachedChrome = chrome;
   _cachedCode = code;
   _cachedImages = images;
+  _cachedHosts = hosts;
   _hasCachedFrames = YES;
-  _cachedFrames = frames;
+  _cachedLayout = stacked;
   [_lock unlock];
-  return frames;
-}
 
-- (CGSize)sizeForWidth:(CGFloat)width
-                chrome:(uint32_t)chrome
-                   code:(const downstream::CodeLayout &)code
-                 images:(const downstream::ImageStateLayout &)images {
-  NSArray<NSValue *> *frames = [self segmentFramesForWidth:width chrome:chrome code:code images:images];
-  if (frames.count == 0) {
-    return CGSizeZero;
+  if (!includeFrames) {
+    stacked.frames.clear();
   }
-  const CGRect last = frames.lastObject.CGRectValue;
-  return CGSizeMake(std::ceil(CGRectGetWidth(last)), std::ceil(CGRectGetMaxY(last)));
+  if (!includeHosts) {
+    stacked.hosts.clear();
+  }
+  return stacked;
 }
 
 @end

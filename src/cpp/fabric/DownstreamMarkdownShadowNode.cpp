@@ -4,12 +4,16 @@
 #include "ImageSizeCache.h"
 #include "MarkdownParser.h"
 #include "RenderPreparer.h"
+#include "SegmentPlan.h"
 #include "SessionRegistry.h"
+#include "theme/ThemeLayout.h"
 
 #include <algorithm>
 
+#include <react/renderer/components/DownstreamSpec/ShadowNodes.h>
 #include <react/renderer/core/LayoutContext.h>
 #include <react/renderer/core/StateUpdate.h>
+#include <react/renderer/graphics/Rect.h>
 
 #include <utility>
 
@@ -425,10 +429,93 @@ void DownstreamMarkdownShadowNode::imagesChanged(const std::shared_ptr<const Sha
   concrete->relayoutWhenImagesChange(answers);
 }
 
+std::vector<DownstreamMarkdownShadowNode::SlotChild> DownstreamMarkdownShadowNode::slotChildren() const {
+  std::vector<SlotChild> slots;
+  const auto &children = getChildren();
+  for (size_t index = 0; index < children.size(); index++) {
+    const auto &child = children[index];
+    // The dedicated component rather than an app's own view carrying the
+    // ordinal some other way: a renderer can only ever be hosted through this,
+    // so nothing an app renders itself can be mistaken for a slot.
+    const auto *slot = dynamic_cast<const DownstreamFenceSlotShadowNode *>(child.get());
+    if (slot == nullptr) {
+      continue;
+    }
+    // React hides a suspended subtree with `display: none`, and a hidden child
+    // is not a renderer any more: its fence draws as the code card, which is
+    // what the fallback is for. Read from the props, where React writes it, and
+    // not from the layout metrics: `layoutSlots` hides a slot whose fence is not
+    // in the document it is laying out the same way, and reading that back here
+    // would keep the slot hidden after its fence arrives.
+    if (slot->getConcreteProps().yogaStyle.display() == yoga::Display::None) {
+      continue;
+    }
+    slots.push_back({static_cast<uint32_t>(std::max(slot->getConcreteProps().ordinal, 0)), child, index});
+  }
+  return slots;
+}
+
+downstream::HostLayout DownstreamMarkdownShadowNode::measureSlots(const LayoutContext &layoutContext,
+                                                                  const LayoutConstraints &layoutConstraints) const {
+  const Float maximumWidth = layoutConstraints.maximumSize.width;
+  downstream::HostLayout hosts;
+  const std::vector<SlotChild> slots = slotChildren();
+  if (slots.empty()) {
+    // No renderer is mounted: the measurement is the one a view with no
+    // renderers has always made, and the cache key is the same empty host
+    // layout it was before this existed.
+    return hosts;
+  }
+  const downstream::DocumentHandle &document = getDocument();
+  // Index code blocks once for every mounted child, including indented blocks
+  // that consume an ordinal but cannot be hosted. The old per-child walk grew
+  // quadratically with the number of fences in a message.
+  std::vector<const downstream::Block *> codeBlocks;
+  if (document) {
+    uint32_t lastOrdinal = 0;
+    for (const auto &slot : slots) {
+      lastOrdinal = std::max(lastOrdinal, slot.ordinal);
+    }
+    for (const auto &block : document->blocks) {
+      if (block.kind == downstream::BlockKind::CodeBlock) {
+        codeBlocks.push_back(&block);
+        if (codeBlocks.size() > lastOrdinal) {
+          break;
+        }
+      }
+    }
+  }
+  const auto &theme = theme_;
+  const double scale = theme ? downstream::theme_layout::fontScale(*theme, layoutContext.fontSizeMultiplier) : 1;
+  hosts.entries.reserve(slots.size());
+  for (const SlotChild &slot : slots) {
+    const auto *layoutable = dynamic_cast<const LayoutableShadowNode *>(slot.node.get());
+    if (layoutable == nullptr) {
+      continue;
+    }
+    // The exact column and an unbounded height, as Paragraph measures an
+    // inline view: the child is a component of the message, and nothing below
+    // it may constrain it.
+    float column = static_cast<float>(maximumWidth);
+    if (slot.ordinal < codeBlocks.size() && theme && std::isfinite(maximumWidth)) {
+      const double leading = downstream::theme_layout::contentLeading(*theme, codeBlocks[slot.ordinal]->containers, scale);
+      column = static_cast<float>(std::max(0.0, static_cast<double>(maximumWidth) - leading));
+    }
+    LayoutConstraints constraints{Size{column, 0}, Size{column, std::numeric_limits<Float>::infinity()},
+                                 layoutConstraints.layoutDirection};
+    const Size size = layoutable->measure(layoutContext, constraints);
+    hosts.entries.push_back({slot.ordinal, static_cast<float>(size.height)});
+  }
+  std::sort(hosts.entries.begin(), hosts.entries.end(),
+            [](const downstream::HostEntry &a, const downstream::HostEntry &b) { return a.ordinal < b.ordinal; });
+  return hosts;
+}
+
 Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutContext,
                                                   const LayoutConstraints &layoutConstraints) const {
   const auto &props = getConcreteProps();
   const auto &state = getStateData();
+  const auto &document = getDocument();
   const uint32_t chrome = chromeFor(state);
   // The layout is the props' defaults plus the reader's own choices, so a hint
   // carries both. Measuring reads the props rather than the state's copy of them,
@@ -436,14 +523,83 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
   // that records it does. The hint carries the theme too, so the worker builds
   // the rendering this measurement will mount rather than one Fabric discards.
   const downstream::LayoutHint hint =
-      layoutHint(layoutContext.fontSizeMultiplier, layoutConstraints.maximumSize.width, getDocument());
+      layoutHint(layoutContext.fontSizeMultiplier, layoutConstraints.maximumSize.width, document);
   downstream::RenderPreparer::noteLayout(hint);
   if (!props.sessionId.empty()) {
     downstream::SessionRegistry::noteLayout(props.sessionId, hint);
   }
-  return layoutManager_->measure(getDocument(), layoutContext.fontSizeMultiplier, layoutConstraints, getSurfaceId(),
-                                 chrome, codeLayout(state), caretFor(getDocument()), imageLayout(getDocument()),
-                                 theme_);
+  // Each mounted renderer is measured before the document is, because a hosted
+  // fence is as tall as its component: the component's height is an input to
+  // the document's, exactly as a loaded image's box is.
+  measuredHosts_ = measureSlots(layoutContext, layoutConstraints);
+  return layoutManager_
+      ->measure(document, layoutContext.fontSizeMultiplier, layoutConstraints, getSurfaceId(), chrome,
+                codeLayout(state), caretFor(document), imageLayout(document), measuredHosts_, theme_)
+      .size;
+}
+
+void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
+  const std::vector<SlotChild> slots = slotChildren();
+  if (slots.empty()) {
+    return;
+  }
+  const downstream::DocumentHandle &document = getDocument();
+  const auto &state = getStateData();
+  const Float width = getLayoutMetrics().frame.size.width;
+  // The rectangles come from a measurement at the frame's own width and with the
+  // heights this pass measured, the way Paragraph places its inline views. Not a
+  // lookup under the measured constraint: Yoga rounds the frame to the pixel
+  // grid, so the frame width is rarely bit-equal to the width measured at, and
+  // the state's hosts can still be the previous pass's. When the two widths do
+  // agree this is the cache hit that measurement just wrote.
+  const LayoutConstraints frame{Size{width, 0}, Size{width, std::numeric_limits<Float>::infinity()},
+                                getLayoutMetrics().layoutDirection};
+  const DocumentMeasurement measurement =
+      layoutManager_->measure(document, layoutContext.fontSizeMultiplier, frame, getSurfaceId(), chromeFor(state),
+                              codeLayout(state), caretFor(document), imageLayout(document), measuredHosts_, theme_);
+  if (measurement.slots.empty()) {
+    return;
+  }
+  if (children_ == nullptr) {
+    return;
+  }
+  // A copy of the child list, written back once every slot is placed: cloning a
+  // child while walking the list would otherwise invalidate the walk.
+  auto children = std::make_shared<std::vector<std::shared_ptr<const ShadowNode>>>(*children_);
+  for (const SlotChild &slot : slots) {
+    const size_t index = slot.childIndex;
+    // A leaf Yoga node lays its own children out, exactly as the text shadow
+    // node lays its inline views out: the child is cloned, laid out at the size
+    // the document gave it, and given the origin the document put it at.
+    std::shared_ptr<ShadowNode> cloned = slot.node->clone({});
+    auto *layoutable = dynamic_cast<LayoutableShadowNode *>(cloned.get());
+    if (layoutable == nullptr) {
+      continue;
+    }
+    const Rect *rect = measurement.slotFor(slot.ordinal);
+    if (rect == nullptr) {
+      // A slot whose ordinal has no hosted block in this document: a stale
+      // child from a lagging render, or one that arrived while the source was
+      // still being prepared. Nothing is drawn for it, which is what a clipped
+      // inline view does.
+      layoutable->setLayoutMetrics(LayoutMetrics{.frame = {}, .displayType = DisplayType::None});
+      (*children)[index] = std::move(cloned);
+      continue;
+    }
+    const Size size{rect->size.width, rect->size.height};
+    LayoutConstraints constraints{size, size, getLayoutMetrics().layoutDirection};
+    layoutable->layoutTree(layoutContext, constraints);
+    LayoutMetrics metrics = layoutable->getLayoutMetrics();
+    metrics.frame.size = size;
+    metrics.frame.origin = rect->origin;
+    // Shown again explicitly: a slot hidden while its fence was missing keeps
+    // that metric through a clone, and a Yoga tree with nothing new to lay out
+    // does not overwrite it.
+    metrics.displayType = DisplayType::Flex;
+    layoutable->setLayoutMetrics(std::move(metrics));
+    (*children)[index] = std::move(cloned);
+  }
+  children_ = std::move(children);
 }
 
 void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
@@ -465,11 +621,18 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   // height it was not measured at.
   const downstream::PlacedCaret caret = caretFor(document);
   const downstream::ImageStateLayout images = imageState(imageLayout(document));
+  // The hosted children are part of it for the same reason again: a fence drawn
+  // by a React component takes that component's height, so the view has to
+  // mount with the same set the node measured. The measurement's own answers,
+  // not a second measurement: a child measured twice at two widths would put
+  // the document and the view at two different heights.
+  const downstream::HostLayout hosts = measuredHosts_;
   if (document && state.document != document) {
     reportMathErrors(document, state.document);
   }
   if (state.document != document || state.fontSizeMultiplier != layoutContext.fontSizeMultiplier ||
       state.chrome != chrome || state.code != code || state.caret != caret || state.images != images ||
+      state.hosts != hosts ||
       state.themeId() != themeId()) {
     DownstreamMarkdownState next{state};
     next.document = document;
@@ -478,9 +641,11 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
     next.code = code;
     next.caret = caret;
     next.images = images;
+    next.hosts = hosts;
     next.theme = theme_;
     setStateData(std::move(next));
   }
+  layoutSlots(layoutContext);
 
   if (pendingError_) {
     getConcreteEventEmitter().onMarkdownError({
