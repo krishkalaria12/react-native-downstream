@@ -1403,6 +1403,27 @@ internal class RenderedDocument(
 
       // Blocks whose inline formula has a layout, whose box its line must hold.
       val formulaBlocks = document.formulas.filter { it.list != null }.mapTo(HashSet()) { it.block }
+      // Scripts and inline code use the block's size before their own size spans.
+      // Read the same integer size written above instead of searching the growing
+      // span tree for every run. Table rows have no block size span.
+      var metricBlock = -1
+      var metricPaint = paint
+      var metricAscent = 0
+      var metricDescent = 0
+      fun blockPaintFor(block: Int): TextPaint {
+        if (metricBlock != block) {
+          metricBlock = block
+          metricPaint = TextPaint(paint).apply {
+            if (document.blockKind(block) != NativeDocument.KIND_TABLE_ROW) {
+              textSize = px(document.blockFontSize(block)).toInt().toFloat()
+            }
+          }
+          val metrics = metricPaint.fontMetricsInt
+          metricAscent = metrics.ascent
+          metricDescent = metrics.descent
+        }
+        return metricPaint
+      }
       for (run in 0 until document.runCount) {
         val styles = document.runStyles(run)
         val link = document.runLink(run)
@@ -1412,13 +1433,6 @@ internal class RenderedDocument(
         val italic = styles and NativeDocument.STYLE_EMPHASIS != 0
         val isCode = styles and NativeDocument.STYLE_CODE != 0
         val linked = link >= 0
-        // The block's own paint, which inline code's metrics and a script's
-        // shift are measured against.
-        val blockPaint by lazy {
-          val size = text.getSpans(start, end, AbsoluteSizeSpan::class.java).firstOrNull()?.size?.toFloat()
-          TextPaint(paint).apply { if (size != null) textSize = size }
-        }
-
         // The run's face starts as the block's own and takes the inline kind's
         // slots on top, so a `strong` in a themed heading is a heavier heading
         // rather than a heading that drops back to the body face. A face rather
@@ -1500,9 +1514,9 @@ internal class RenderedDocument(
           )
         }
         if (isCode) {
-          val metrics = blockPaint.fontMetricsInt
+          blockPaintFor(blockIndex)
           text.setSpan(
-            HeldLineSpan(metrics.ascent, metrics.descent),
+            HeldLineSpan(metricAscent, metricDescent),
             start,
             end,
             flags or (1 shl Spanned.SPAN_PRIORITY_SHIFT),
@@ -1520,7 +1534,7 @@ internal class RenderedDocument(
             if (isTable) {
               BackgroundColorSpan(colors.codeBackground)
             } else {
-              InlineCodeBackgroundSpan(colors.codeBackground, metrics.ascent, metrics.descent)
+              InlineCodeBackgroundSpan(colors.codeBackground, metricAscent, metricDescent)
             },
             start,
             end,
@@ -1556,14 +1570,13 @@ internal class RenderedDocument(
               -theme.number(ThemeSlots.SLOT_SUBSCRIPT_BASELINE_OFFSET_SCALE)
           }
           text.setSpan(RelativeSizeSpan(sizeScale), start, end, flags)
-          text.setSpan(BaselineShiftSpan((blockPaint.textSize * raise).roundToInt()), start, end, flags)
+          text.setSpan(BaselineShiftSpan((blockPaintFor(blockIndex).textSize * raise).roundToInt()), start, end, flags)
           // The web's `sub` and `sup` have `line-height: 0`, so a shifted run
           // never opens its line. A formula's box is what its line has to hold,
           // so a block with one keeps its natural height, as on iOS.
-          if (blockIndex !in formulaBlocks) {
-            val metrics = blockPaint.fontMetricsInt
+          if (!isCode && blockIndex !in formulaBlocks) {
             text.setSpan(
-              HeldLineSpan(metrics.ascent, metrics.descent),
+              HeldLineSpan(metricAscent, metricDescent),
               start,
               end,
               flags or (1 shl Spanned.SPAN_PRIORITY_SHIFT),

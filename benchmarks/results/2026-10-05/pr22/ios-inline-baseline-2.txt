@@ -1,0 +1,6 @@
+ios_inline_attributes runs=96 links=24 scale_isolated=1
+ios_inline_build runs=32 median_ms=0.039 min_ms=0.034 max_ms=0.051
+ios_inline_build runs=512 median_ms=0.465 min_ms=0.445 max_ms=0.489
+ios_inline_build runs=4096 median_ms=3.589 min_ms=3.360 max_ms=3.928
+native inline run checks passed
+com.downstream.NativeTextKitHarness: 65895

@@ -107,17 +107,42 @@ bool hasInlineMath(const Block &block) { return !block.math.empty(); }
 void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockFont &font, const Theme &theme,
                DSThemeColors *colors, NSUInteger offset, CGFloat size, bool monospaced, uint32_t clampStart,
                uint32_t clampEnd) {
+  const auto runs = inlineRunsInRange(block.runs, clampStart, clampEnd);
+  if (runs.empty()) {
+    return;
+  }
   const bool isCode = block.kind == BlockKind::CodeBlock;
   UIColor *inlineCodeBackground = [colors colorForSlot:kSlotCodeBackgroundColor fallback:UIColor.tertiarySystemFillColor];
   UIColor *footnoteColor = [colors colorForSlot:kSlotFootnoteColor fallback:UIColor.linkColor];
   const CGFloat footnoteSize = size * footnoteSizeScale(theme);
-  for (const InlineRun &run : inlineRunsInRange(block.runs, clampStart, clampEnd)) {
+  // Offsets change between runs, but their attributes depend only on style and
+  // link within this block. Bound the local cache so many distinct links cannot
+  // retain an extra dictionary for every run.
+  struct RunAttributes {
+    uint32_t styles;
+    int32_t link;
+    NSDictionary<NSAttributedStringKey, id> *attributes;
+  };
+  std::array<RunAttributes, 16> cachedAttributes{};
+  size_t cachedCount = 0;
+  for (const InlineRun &run : runs) {
     const uint32_t start = std::max(run.start, clampStart);
     const uint32_t end = std::min(run.end, clampEnd);
     if (start >= end) {
       continue;
     }
     const NSRange range = NSMakeRange(offset + start - clampStart, end - start);
+    NSDictionary<NSAttributedStringKey, id> *cached = nil;
+    for (size_t index = 0; index < cachedCount; ++index) {
+      if (cachedAttributes[index].styles == run.styles && cachedAttributes[index].link == run.link) {
+        cached = cachedAttributes[index].attributes;
+        break;
+      }
+    }
+    if (cached != nil) {
+      [text addAttributes:cached range:range];
+      continue;
+    }
     const bool code = (run.styles & InlineStyle::Code) != 0 && !isCode;
     const bool footnote = (run.styles & InlineStyle::FootnoteRef) != 0;
     const bool sup = (run.styles & InlineStyle::Superscript) != 0;
@@ -215,7 +240,12 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
       }
       attributes[DSLinkIndexAttributeName] = @(run.link);
     }
-    [text addAttributes:attributes range:range];
+    NSDictionary<NSAttributedStringKey, id> *resolved = attributes;
+    if (cachedCount < cachedAttributes.size()) {
+      resolved = [attributes copy];
+      cachedAttributes[cachedCount++] = {run.styles, run.link, resolved};
+    }
+    [text addAttributes:resolved range:range];
   }
 }
 
