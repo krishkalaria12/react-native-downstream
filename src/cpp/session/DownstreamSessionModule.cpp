@@ -315,9 +315,8 @@ AsyncPromise<std::vector<Slot>> DownstreamSessionModule::fenceSlotsAsync(jsi::Ru
       std::vector<Slot> slots;
       std::string message;
       try {
-        // The synchronous form's own parse, without its bound: the same answer
-        // on another thread.
-        slots = bridged(downstream::parsedFenceSlots(source, parse, languages));
+        // Reuse a finished preparation or slot answer before parsing on the worker.
+        slots = bridged(downstream::resolvedFenceSlots(source, parse, languages));
       } catch (const std::exception &error) {
         message = error.what();
       }

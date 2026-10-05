@@ -140,6 +140,24 @@ fun main() {
   check(layout.find(0)!!.state == ImageState.PENDING, "the right entry comes back")
   check(ImageStateLayout().find(0) == null, "an empty layout has no entries")
   check(layout.find(1)!!.state == ImageState.FAILED, "sorting by ordinal leaves every entry findable")
+  val entries = List(8192) { ImageEntry(it * 2, ImageState.LOADED, 10f, 20f) }
+  var reads = 0
+  val counted = object : AbstractList<ImageEntry>() {
+    override val size: Int get() = entries.size
+    override fun get(index: Int): ImageEntry {
+      reads++
+      return entries[index]
+    }
+  }
+  val sparse = ImageStateLayout(entries = counted)
+  check(sparse.find(16382) == entries.last(), "a large sparse image layout finds its final entry")
+  check(reads <= 14, "image lookup stays logarithmic")
+  reads = 0
+  check(sparse.find(16381) == null, "a missing image ordinal stays absent")
+  check(reads <= 14, "missing image lookup stays logarithmic")
+  check(sparse.find(-1) == null, "an ordinal before the first image stays absent")
+  check(sparse.find(16384) == null, "an ordinal after the last image stays absent")
+
   checkEq(ImageState.LOADED.code, 2, "the state codes match the wire order")
   checkEq(ImageState.DISABLED.code, 5, "the disabled code matches the wire order")
   check(ImageState.of(3) == ImageState.FAILED, "a code round trips to its state")

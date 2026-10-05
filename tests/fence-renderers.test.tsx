@@ -33,6 +33,8 @@ import type { CustomRendererProps } from '../src/types';
 import { brokenVariants } from './remend-corpus';
 
 const nativeView: NativeView = createNativeView();
+const nativeSlotRenders = new Map<number, number>();
+let observeSlotCommit: (() => void) | undefined;
 
 // React only treats `act` as a real act outside a test renderer when the
 // environment says so, and this file drives `act` directly.
@@ -42,7 +44,12 @@ const nativeView: NativeView = createNativeView();
 
 vi.mock('../src/DownstreamMarkdownViewNativeComponent', () => ({
   __esModule: true,
-  default: (props: Record<string, unknown>) => nativeView.component(props),
+  default: function NativeMarkdownView(props: Record<string, unknown>) {
+    React.useLayoutEffect(() => {
+      observeSlotCommit?.();
+    });
+    return nativeView.component(props);
+  },
 }));
 
 // The slot is a real Fabric child in the app. Here it is a real React child of
@@ -56,11 +63,14 @@ vi.mock('../src/DownstreamFenceSlotNativeComponent', () => ({
   }: {
     ordinal: number;
     children?: React.ReactNode;
-  }) => (
-    <div data-slot-ordinal={ordinal} data-slot="true">
-      {children}
-    </div>
-  ),
+  }) => {
+    nativeSlotRenders.set(ordinal, (nativeSlotRenders.get(ordinal) ?? 0) + 1);
+    return (
+      <div data-slot-ordinal={ordinal} data-slot="true">
+        {children}
+      </div>
+    );
+  },
 }));
 
 vi.mock(
@@ -154,6 +164,8 @@ function runFrames(): void {
 beforeEach(() => {
   if (host) host.replaceChildren();
   nativeView.reset();
+  nativeSlotRenders.clear();
+  observeSlotCommit = undefined;
   resetEngine();
   frames = [];
   vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(
@@ -199,6 +211,27 @@ describe('fence renderers, matching and props', () => {
       meta: undefined,
       isIncomplete: false,
     });
+  });
+
+  it('replaces the renderer when its component changes with identical fence props', () => {
+    const First = () => <span>first chart</span>;
+    const Second = () => <span>second chart</span>;
+    const markdown = '```chart\n{"a":1}\n```\n';
+    mount(
+      <DownstreamMarkdown
+        markdown={markdown}
+        plugins={{ renderers: [{ language: 'chart', component: First }] }}
+      />
+    );
+    expect(slots()).toEqual([{ ordinal: 0, text: 'first chart' }]);
+
+    rerender(
+      <DownstreamMarkdown
+        markdown={markdown}
+        plugins={{ renderers: [{ language: 'chart', component: Second }] }}
+      />
+    );
+    expect(slots()).toEqual([{ ordinal: 0, text: 'second chart' }]);
   });
 
   it('a language that is not registered keeps the code card', () => {
@@ -328,6 +361,71 @@ describe('fence renderers, the code card fallback', () => {
     expect(
       errors.map((error) => ({ code: error.code, language: error.language }))
     ).toEqual([{ code: 'renderer_failed', language: 'mermaid' }]);
+  });
+
+  it('retries a failed fence when its renderer component is replaced', () => {
+    const markdown = '```chart\nchart spec\n```\n';
+    const Boom = () => {
+      throw new Error('failed chart');
+    };
+    const Chart = (props: CustomRendererProps) => <span>{props.code}</span>;
+    mount(
+      <DownstreamMarkdown
+        markdown={markdown}
+        plugins={{ renderers: [{ language: 'chart', component: Boom }] }}
+      />
+    );
+    expect(slots()).toEqual([]);
+    rerender(
+      <DownstreamMarkdown
+        markdown={markdown}
+        plugins={{ renderers: [{ language: 'chart', component: Chart }] }}
+      />
+    );
+    expect(slots()).toEqual([{ ordinal: 0, text: 'chart spec' }]);
+  });
+
+  it('refreshes the error callback without rerendering an unchanged renderer', () => {
+    let renders = 0;
+    let fail: (() => void) | undefined;
+    const Chart = (props: CustomRendererProps) => {
+      const [broken, setBroken] = React.useState(false);
+      fail = () => setBroken(true);
+      renders += 1;
+      if (broken) throw new Error('later chart failure');
+      return <span>{props.code}</span>;
+    };
+    const plugins = { renderers: [{ language: 'chart', component: Chart }] };
+    const firstError = vi.fn();
+    const currentError = vi.fn();
+    const markdown = '```chart\nchart spec\n```\n';
+    mount(
+      <DownstreamMarkdown
+        markdown={markdown}
+        plugins={plugins}
+        onError={firstError}
+      />
+    );
+    rerender(
+      <DownstreamMarkdown
+        markdown={markdown}
+        plugins={plugins}
+        onError={currentError}
+      />
+    );
+    expect(renders).toBe(1);
+    expect(slots()).toEqual([{ ordinal: 0, text: 'chart spec' }]);
+
+    act(() => fail!());
+    expect(firstError).not.toHaveBeenCalled();
+    expect(currentError).toHaveBeenCalledTimes(1);
+    expect(currentError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'renderer_failed',
+        message: 'later chart failure',
+      })
+    );
+    expect(slots()).toEqual([]);
   });
 
   it('a view handed a new stream reports and mounts that stream afresh', async () => {
@@ -544,6 +642,36 @@ describe('fence renderers while streaming', () => {
     expect(slots()).toEqual([{ ordinal: 0, text: 'graph;' }]);
   });
 
+  it('settled fences keep their native slot children across later snapshots', () => {
+    const Chart = (props: CustomRendererProps) => <span>{props.code}</span>;
+    const created = stream();
+    mount(
+      <DownstreamMarkdown
+        stream={created}
+        plugins={{ renderers: [{ language: 'chart', component: Chart }] }}
+      />
+    );
+    const fences = Array.from(
+      { length: 24 },
+      (_, index) => `\`\`\`chart\nchart ${index}\n\`\`\`\n\n`
+    ).join('');
+    act(() => created.append(fences + SETTLING_PARAGRAPH));
+    runFrames();
+    expect(slots()).toHaveLength(24);
+    const afterSettling = new Map(nativeSlotRenders);
+    const queries = slotWork.queries;
+
+    for (let index = 0; index < 20; index++) {
+      act(() => created.append(`Later paragraph ${index}.\n\n`));
+      runFrames();
+    }
+    // Fresh snapshots and slot objects were queried, but Fabric children skip
+    // reconciliation because all 24 renderer inputs stayed unchanged.
+    expect(slotWork.queries).toBeGreaterThan(queries);
+    expect(nativeSlotRenders).toEqual(afterSettling);
+    expect(slots()).toHaveLength(24);
+  });
+
   it('a growing fence keeps its component instance across snapshots', () => {
     const instances = new Set<unknown>();
     const Chart = (props: CustomRendererProps) => {
@@ -692,6 +820,47 @@ describe('fence renderers, cost', () => {
     expect(slotWork.async).toBe(1);
     expect(slots()).toEqual([{ ordinal: 0, text: 'graph;' }]);
   });
+
+  it.each(['empty', 'pending'] as const)(
+    'never commits old worker slots when the next answer is %s',
+    async (replacement) => {
+      const Chart = (props: CustomRendererProps) => <span>{props.code}</span>;
+      const plugins = { renderers: [{ language: 'chart', component: Chart }] };
+      const filler = 'A large paragraph.\n\n'.repeat(1200);
+      mount(
+        <DownstreamMarkdown
+          markdown={`${filler}\`\`\`chart\nold chart\n\`\`\`\n`}
+          plugins={plugins}
+        />
+      );
+      await act(async () => {});
+      expect(slots()).toEqual([{ ordinal: 0, text: 'old chart' }]);
+
+      const commits: { ordinal: number; text: string }[][] = [];
+      // Read the committed native children in layout, before a clearing passive
+      // effect could hide a stale frame from the final DOM assertion.
+      observeSlotCommit = () => commits.push(slots());
+      rerender(
+        <DownstreamMarkdown
+          markdown={
+            replacement === 'empty'
+              ? 'A chart mentioned in prose without a fence.\n'
+              : `${filler}\`\`\`chart\nnew chart\n\`\`\`\n`
+          }
+          plugins={plugins}
+        />
+      );
+      expect(commits.length).toBeGreaterThan(0);
+      expect(commits[0]).toEqual([]);
+      await act(async () => {});
+      expect(commits.flat().some((slot) => slot.text === 'old chart')).toBe(
+        false
+      );
+      expect(slots()).toEqual(
+        replacement === 'empty' ? [] : [{ ordinal: 0, text: 'new chart' }]
+      );
+    }
+  );
 
   it('an answer the engine gave in full is never asked for again', async () => {
     // A fence that names a registered language and still yields no slot: the

@@ -56,6 +56,14 @@ std::string normalizeFenceLanguage(std::string_view info) {
 
 std::vector<FenceSlot> fenceSlots(const Document &document, const std::vector<std::string> &languages,
                                   bool live) {
+  return fenceSlots(document, languages, live, document.settledBlocks);
+}
+
+std::vector<FenceSlot> fenceSlots(const Document &document, const std::vector<std::string> &languages,
+                                  bool live, uint32_t settledBlocks) {
+  if (languages.empty()) {
+    return {};
+  }
   std::unordered_set<std::string> wanted;
   wanted.reserve(languages.size());
   for (const auto &language : languages) {
@@ -90,7 +98,7 @@ std::vector<FenceSlot> fenceSlots(const Document &document, const std::vector<st
     slot.language = std::string(firstInfoWord(block.info));
     slot.meta = rawMeta(block.info);
     slot.code = exportCodeText(document, index);
-    const bool settled = index < document.settledBlocks;
+    const bool settled = index < settledBlocks;
     const bool last = index + 1 == document.blocks.size();
     slot.incomplete = !settled || (last && !block.fenceClosed && live);
     slot.identity = block.identity;

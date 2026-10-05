@@ -1407,10 +1407,9 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   /// wrong for another's.
   downstream::HostLayout _cachedHosts;
   bool _hasCachedFrames;
-  NSArray<NSValue *> *_cachedFrames;
-  /// The content rectangle of each hosted block, cached with the frames so the
-  /// shadow node's placement and the view's chrome read one set of numbers.
-  std::vector<std::pair<uint32_t, CGRect>> _cachedHostFrames;
+  /// Cache native geometry. Measurement needs no NSValue boxing, and each
+  /// caller copies only the frames it consumes while holding the cache lock.
+  DSStackedLayout _cachedLayout;
 }
 
 + (NSCache<NSString *, DSRenderedDocument *> *)cache {
@@ -1806,7 +1805,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                       images:(const downstream::ImageStateLayout &)images
                                        hosts:(const downstream::HostLayout &)hosts {
   NSMutableArray<NSValue *> *frames = [NSMutableArray arrayWithCapacity:_segments.count];
-  for (const CGRect frame : [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts].frames) {
+  for (const CGRect frame : [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts
+                                      includeFrames:YES includeHosts:NO].frames) {
     [frames addObject:[NSValue valueWithCGRect:frame]];
   }
   return frames;
@@ -1817,7 +1817,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                    code:(const downstream::CodeLayout &)code
                  images:(const downstream::ImageStateLayout &)images
                   hosts:(const downstream::HostLayout &)hosts {
-  return [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts].size;
+  return [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts
+               includeFrames:NO includeHosts:NO].size;
 }
 
 - (DSMeasurement)measureForWidth:(CGFloat)width
@@ -1826,12 +1827,10 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                           images:(const downstream::ImageStateLayout &)images
                            hosts:(const downstream::HostLayout &)hosts {
   DSMeasurement measurement;
-  measurement.size = [self sizeForWidth:width chrome:chrome code:code images:images hosts:hosts];
-  // Read under the lock rather than from the loop that just wrote it, because a
-  // second thread may have restacked since.
-  [_lock lock];
-  measurement.hosts = _cachedHostFrames;
-  [_lock unlock];
+  DSStackedLayout stacked = [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts
+                                 includeFrames:NO includeHosts:YES];
+  measurement.size = stacked.size;
+  measurement.hosts = std::move(stacked.hosts);
   return measurement;
 }
 
@@ -1848,26 +1847,28 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                           chrome:(uint32_t)chrome
                              code:(const downstream::CodeLayout &)code
                           images:(const downstream::ImageStateLayout &)images
-                           hosts:(const downstream::HostLayout &)hosts {
+                           hosts:(const downstream::HostLayout &)hosts
+                   includeFrames:(BOOL)includeFrames
+                    includeHosts:(BOOL)includeHosts {
   [_lock lock];
   if (_hasCachedFrames && _cachedWidth == width && _cachedChrome == chrome && _cachedCode == code &&
       _cachedImages == images && _cachedHosts == hosts) {
     DSStackedLayout cached;
-    for (NSValue *value in _cachedFrames) {
-      cached.frames.push_back(value.CGRectValue);
+    if (includeFrames) {
+      cached.frames = _cachedLayout.frames;
     }
-    cached.hosts = _cachedHostFrames;
-    cached.size = cached.frames.empty()
-        ? CGSizeZero
-        : CGSizeMake(std::ceil(CGRectGetWidth(cached.frames.back())),
-                     std::ceil(CGRectGetMaxY(cached.frames.back())));
+    if (includeHosts) {
+      cached.hosts = _cachedLayout.hosts;
+    }
+    cached.size = _cachedLayout.size;
     [_lock unlock];
     return cached;
   }
   [_lock unlock];
 
-  NSMutableArray<NSValue *> *frames = [NSMutableArray arrayWithCapacity:_segments.count];
-  std::vector<std::pair<uint32_t, CGRect>> hostFrames;
+  DSStackedLayout stacked;
+  stacked.frames.reserve(_segments.count);
+  stacked.hosts.reserve(hosts.entries.size());
   // Segment edges round up from their exact positions, so frames stay on
   // whole points without rounding error accumulating across segments.
   CGFloat y = 0;
@@ -1888,7 +1889,7 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
     // point when y is fractional, and a text view lays out only the lines that
     // fit its frame, so a segment a fraction short would drop its last line.
     const CGFloat bottom = std::max(std::ceil(y + height), top + std::ceil(height));
-    [frames addObject:[NSValue valueWithCGRect:CGRectMake(0, top, constrained ? width : 0, bottom - top)]];
+    stacked.frames.push_back(CGRectMake(0, top, constrained ? width : 0, bottom - top));
     // A hosted block's rectangle: its content column, at the full height the
     // component measured. The column comes from the block's own container path
     // through the engine's `contentLeading`, the same number the shadow node
@@ -1904,7 +1905,7 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
           // container bars and the marker are mirrored.
           x = width - leading - column;
         }
-        hostFrames.emplace_back(card.codeOrdinal,
+        stacked.hosts.emplace_back(card.codeOrdinal,
                                 CGRectMake(x, top, column, bottom - top));
       }
     }
@@ -1914,11 +1915,13 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   // Every segment spans the view; an unconstrained measure uses the widest
   // segment that does not fit.
   if (!constrained) {
-    for (NSUInteger index = 0; index < frames.count; index++) {
-      CGRect frame = frames[index].CGRectValue;
+    for (CGRect &frame : stacked.frames) {
       frame.size.width = unconstrainedWidth;
-      frames[index] = [NSValue valueWithCGRect:frame];
     }
+  }
+  if (!stacked.frames.empty()) {
+    const CGRect last = stacked.frames.back();
+    stacked.size = CGSizeMake(std::ceil(CGRectGetWidth(last)), std::ceil(CGRectGetMaxY(last)));
   }
 
   [_lock lock];
@@ -1928,18 +1931,15 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   _cachedImages = images;
   _cachedHosts = hosts;
   _hasCachedFrames = YES;
-  _cachedFrames = frames;
-  _cachedHostFrames = hostFrames;
+  _cachedLayout = stacked;
   [_lock unlock];
 
-  DSStackedLayout stacked;
-  for (NSValue *value in frames) {
-    stacked.frames.push_back(value.CGRectValue);
+  if (!includeFrames) {
+    stacked.frames.clear();
   }
-  stacked.hosts = std::move(hostFrames);
-  const CGRect last = frames.lastObject.CGRectValue;
-  stacked.size = frames.count == 0 ? CGSizeZero
-                                   : CGSizeMake(std::ceil(CGRectGetWidth(last)), std::ceil(CGRectGetMaxY(last)));
+  if (!includeHosts) {
+    stacked.hosts.clear();
+  }
   return stacked;
 }
 

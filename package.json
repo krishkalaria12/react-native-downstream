@@ -57,6 +57,8 @@
     "test:fabric": "node tests/fabric/syntax-check.mjs",
     "bench": "vitest bench --run",
     "bench:native": "node benchmarks/native-highlight.mjs",
+    "bench:fence-slots": "node benchmarks/native-fence-slots.mjs",
+    "bench:fences": "node benchmarks/fence-renderers.mjs",
     "bench:inline-html": "node benchmarks/native-inline-html.mjs",
     "bench:math": "node benchmarks/native-math.mjs",
     "bench:reveal": "node benchmarks/native-reveal.mjs",

@@ -52,4 +52,9 @@ std::string normalizeFenceLanguage(std::string_view info);
 std::vector<FenceSlot> fenceSlots(const Document &document, const std::vector<std::string> &languages,
                                   bool live);
 
+/// Reads slots using an explicit settled prefix without copying the document.
+/// Controlled bare parses use this to treat every block as settled.
+std::vector<FenceSlot> fenceSlots(const Document &document, const std::vector<std::string> &languages,
+                                  bool live, uint32_t settledBlocks);
+
 } // namespace downstream

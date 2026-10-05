@@ -32,21 +32,24 @@ internal data class HostLayout(
 ) {
   fun isEmpty(): Boolean = entries.isEmpty()
 
-  /** The height for [ordinal], or 0 when this view hosts no child there. */
-  fun heightFor(ordinal: Int): Float {
+  /** The hosted entry, including a zero-height child, or null for a native card. */
+  fun find(ordinal: Int): HostEntry? {
     var low = 0
     var high = entries.size - 1
     while (low <= high) {
-      val middle = (low + high) / 2
+      val middle = low + (high - low) / 2
       val entry = entries[middle]
       when {
         entry.ordinal < ordinal -> low = middle + 1
         entry.ordinal > ordinal -> high = middle - 1
-        else -> return entry.height
+        else -> return entry
       }
     }
-    return 0f
+    return null
   }
+
+  /** The height for [ordinal], or 0 when this view hosts no child there. */
+  fun heightFor(ordinal: Int): Float = find(ordinal)?.height ?: 0f
 
   /**
    * Whether the block at [ordinal] is drawn by a React child rather than by the
@@ -56,18 +59,5 @@ internal data class HostLayout(
    * component that renders nothing has a height of zero and still owns its
    * fence, so the card stays away because the app said so.
    */
-  fun hosts(ordinal: Int): Boolean {
-    var low = 0
-    var high = entries.size - 1
-    while (low <= high) {
-      val middle = (low + high) / 2
-      val entry = entries[middle]
-      when {
-        entry.ordinal < ordinal -> low = middle + 1
-        entry.ordinal > ordinal -> high = middle - 1
-        else -> return true
-      }
-    }
-    return false
-  }
+  fun hosts(ordinal: Int): Boolean = find(ordinal) != null
 }

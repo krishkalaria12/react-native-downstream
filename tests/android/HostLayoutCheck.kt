@@ -69,6 +69,24 @@ fun main() {
   checkEq(blank.heightFor(1), 0f, "a zero height is zero")
   check(blank.hosts(1), "a zero height still hosts its fence")
 
+  check(blank.find(1)?.height == 0f, "one lookup preserves a zero-height child's presence")
+  check(blank.find(0) == null, "one lookup distinguishes a missing fence from zero height")
+  val entries = List(8192) { HostEntry(it * 2, it.toFloat()) }
+  var reads = 0
+  val counted = object : AbstractList<HostEntry>() {
+    override val size: Int get() = entries.size
+    override fun get(index: Int): HostEntry {
+      reads++
+      return entries[index]
+    }
+  }
+  val sparse = HostLayout(counted)
+  check(sparse.find(16382) == entries.last(), "a large sparse host layout finds its final entry")
+  check(reads <= 14, "host lookup stays logarithmic")
+  reads = 0
+  check(sparse.find(16381) == null, "a missing ordinal between hosted fences stays absent")
+  check(reads <= 14, "missing host lookup stays logarithmic")
+
   if (failures > 0) {
     println("FAIL host layout: $failures check(s) failed")
     exitProcess(1)

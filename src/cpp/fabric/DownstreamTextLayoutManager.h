@@ -13,6 +13,7 @@
 #include <react/renderer/graphics/Rect.h>
 #include <react/utils/ContextContainer.h>
 
+#include <algorithm>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -34,17 +35,15 @@ struct HostRect {
 /// disagree about the column.
 struct DocumentMeasurement {
   Size size{0, 0};
+  /// Both platforms emit rectangles in document order, hence code ordinal order.
   std::vector<HostRect> slots;
 
   /// The rectangle for `ordinal`, or nullptr when this document hosts no
   /// child there, which is what a stale slot from a lagging render gets.
   const Rect *slotFor(uint32_t ordinal) const {
-    for (const auto &slot : slots) {
-      if (slot.ordinal == ordinal) {
-        return &slot.rect;
-      }
-    }
-    return nullptr;
+    const auto it = std::lower_bound(slots.begin(), slots.end(), ordinal,
+                                    [](const HostRect &slot, uint32_t value) { return slot.ordinal < value; });
+    return it != slots.end() && it->ordinal == ordinal ? &it->rect : nullptr;
   }
 };
 

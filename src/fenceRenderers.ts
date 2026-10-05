@@ -166,12 +166,7 @@ function sessionModule(): typeof NativeDownstreamSession | null {
   }
 }
 
-/**
- * Two empty lists, so a view with no renderers reuses one value at each of the
- * two stages: the engine's answer, and the joined list its children are built
- * from.
- */
-const NO_RAW: readonly FenceSlot[] = Object.freeze([]);
+/** A shared empty list for documents with no mounted fence renderers. */
 const NO_SLOTS: readonly MountedSlot[] = Object.freeze([]);
 /** An answer native gave in full: nothing to wait for. */
 const ANSWERED: Readonly<{ slots: readonly MountedSlot[]; pending: boolean }> =
@@ -197,13 +192,13 @@ const UNANSWERED: Readonly<{
  * card: the child that failed is not mounted, and native draws the fallback for
  * a fence with no child.
  *
- * It resets when the fence's text or its completeness changes, so a renderer
- * that failed on a half-streamed spec gets another chance on the next snapshot.
+ * It resets when the fence's text, completeness or renderer component changes,
+ * so a renderer that failed on a half-streamed spec gets another chance.
  * The reset is also what stops it firing per token: once the spec settles, a
  * renderer that throws again throws against the same text and is reported once.
  */
 type FenceBoundaryProps = Readonly<{
-  resetKey: string;
+  slot: MountedSlot;
   onFailure: (error: unknown) => void;
   children?: ReactNode;
 }>;
@@ -219,7 +214,12 @@ class FenceBoundary extends Component<FenceBoundaryProps, { failed: boolean }> {
   }
 
   override componentDidUpdate(previous: FenceBoundaryProps): void {
-    if (this.state.failed && previous.resetKey !== this.props.resetKey) {
+    if (
+      this.state.failed &&
+      (previous.slot.code !== this.props.slot.code ||
+        previous.slot.incomplete !== this.props.slot.incomplete ||
+        previous.slot.component !== this.props.slot.component)
+    ) {
       this.setState({ failed: false });
     }
   }
@@ -242,7 +242,7 @@ type MountedSlot = Readonly<{
   incomplete: boolean;
   /** Memoized: the renderer sees only these four, so only they re-render it. */
   props: CustomRendererProps;
-  render: (props: CustomRendererProps) => ReactNode;
+  component: CustomRenderer['component'];
 }>;
 
 /** The four props a renderer sees, taken straight from the engine's slot. */
@@ -255,32 +255,25 @@ function rendererProps(slot: FenceSlot): CustomRendererProps {
   };
 }
 
-function sameProps(
-  previous: Readonly<{ slot: MountedSlot }>,
-  next: Readonly<{ slot: MountedSlot }>
-): boolean {
+/** The whole slot can skip reconciliation when its renderer inputs are unchanged. */
+function sameSlot(previous: MountedSlot, next: MountedSlot): boolean {
   return (
-    previous.slot.code === next.slot.code &&
-    previous.slot.language === next.slot.language &&
-    previous.slot.meta === next.slot.meta &&
-    previous.slot.incomplete === next.slot.incomplete
+    previous.ordinal === next.ordinal &&
+    previous.component === next.component &&
+    previous.code === next.code &&
+    previous.language === next.language &&
+    previous.meta === next.meta &&
+    previous.incomplete === next.incomplete
   );
 }
 
-/**
- * One mounted renderer, named for React's devtools as the thing it is.
- *
- * The memo compares the four props and nothing else, which is what keeps a
- * settled fence's component from re-rendering for every later snapshot of a
- * streaming message: the spec did not change, so React skips the render even
- * though the snapshot did.
- */
-const Renderer = memo(function MountedRenderer({
-  slot,
-}: Readonly<{ slot: MountedSlot }>) {
-  return slot.render(slot.props);
-},
-sameProps);
+/** Refreshing the boundary's error handler does not rerender an unchanged chart. */
+const Renderer = memo(
+  function FenceRenderer({ slot }: Readonly<{ slot: MountedSlot }>) {
+    return createElement(slot.component, slot.props);
+  },
+  (previous, next) => sameSlot(previous.slot, next.slot)
+);
 
 /** What `useFenceSlots` needs to know about the document being read. */
 export type FenceQuery = Readonly<{
@@ -326,23 +319,13 @@ export function useFenceSlots(query: FenceQuery): readonly MountedSlot[] {
     resolved,
   } = query;
   const languages = resolved.languages;
-  // One value per source and registered list, so a re-render of an unchanged
-  // message does not ask again. Keyed by the languages as well as the source,
-  // because the same message with a new renderer is a different question.
-  const key = `${
-    sessionId ?? ''
-  }\u0000${generation}\u0000${sequence}\u0000${parseFlags}\u0000${
-    source ?? ''
-  }\u0000${languages.join('\u0000')}`;
-  const [asyncSlots, setAsyncSlots] = useState<readonly FenceSlot[]>(NO_RAW);
-
-  // Read once per document rather than once per render: the answer is a pure
-  // read of an engine that does not change under it, and a message that
-  // re-renders for an unrelated reason has nothing to ask again. `resolved` is
-  // stable by value, so the object it hands back is too.
-  const answer = useMemo(
-    () =>
-      readSlots({
+  // A small identity token names this exact query without copying the source
+  // into a serialized key. Results are accepted during render, before effects
+  // can clean up a previous query, so a replacement never mounts stale slots.
+  const current = useMemo(
+    () => ({
+      token: {},
+      answer: readSlots({
         source,
         sessionId,
         generation,
@@ -350,24 +333,19 @@ export function useFenceSlots(query: FenceQuery): readonly MountedSlot[] {
         parseFlags,
         resolved,
       }),
-    // `revision` is not read, only depended on: it is what says the snapshot
-    // under an unchanged sequence was replaced by a settled one.
+    }),
+    // `revision` names a settled snapshot even when its sequence is unchanged.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [source, sessionId, generation, sequence, revision, parseFlags, resolved]
   );
-  const slots = answer.slots;
+  const [asyncResult, setAsyncResult] = useState<Readonly<{
+    token: object;
+    slots: readonly MountedSlot[];
+  }> | null>(null);
 
+  // Only a declined synchronous answer is asked again on the worker pool.
   useEffect(() => {
-    setAsyncSlots(NO_RAW);
-  }, [key]);
-
-  // Only an answer that said `pending` is worth asking again for: a source the
-  // synchronous path already read has its answer, and asking the worker pool for
-  // a second one would parse the same source twice for nothing. Until the
-  // asynchronous answer lands the fences draw as cards, which is the same thing
-  // a large source already shows while its own preparation runs.
-  useEffect(() => {
-    if (!answer.pending || source === undefined) {
+    if (!current.answer.pending || source === undefined) {
       return;
     }
     const module = sessionModule();
@@ -379,18 +357,21 @@ export function useFenceSlots(query: FenceQuery): readonly MountedSlot[] {
       .fenceSlotsAsync(source, parseFlags, languages)
       .then((raw) => {
         if (live) {
-          setAsyncSlots(raw);
+          setAsyncResult({
+            token: current.token,
+            slots: joinComponents(raw, resolved),
+          });
         }
       })
       .catch(() => undefined);
     return () => {
       live = false;
     };
-    // `answer.pending` rather than the key: the key is the whole document, and
-    // this asks about one question inside it.
-  }, [answer.pending, languages, parseFlags, source]);
+  }, [current, languages, parseFlags, resolved, source]);
 
-  return slots.length > 0 ? slots : joinComponents(asyncSlots, resolved);
+  return current.answer.pending && asyncResult?.token === current.token
+    ? asyncResult.slots
+    : current.answer.slots;
 }
 
 /**
@@ -476,7 +457,7 @@ function joinComponents(
       meta: slot.meta === '' ? undefined : slot.meta,
       incomplete: slot.incomplete,
       props: rendererProps(slot),
-      render: (props) => createElement(component, props),
+      component,
     });
   }
   return joined.length === 0 ? NO_SLOTS : joined;
@@ -535,41 +516,24 @@ export type RendererFailure = (
   message: string
 ) => void;
 
+type MountedFenceProps = Readonly<{
+  slot: MountedSlot;
+  scope: string;
+  onFailure: RendererFailure;
+}>;
+
 /**
- * The slot children for a document, ready to hand to the native view.
- *
- * Each slot is `boundary › suspense › slot › memo(renderer)`. The `Suspense`
- * sits *outside* the slot so a lazy renderer that has not resolved mounts no
- * slot at all and its fence keeps drawing as a code card, which is the fallback
- * for every case where a component is not up yet.
+ * Memoize the boundary, suspense and native slot as well as the renderer. A
+ * settled fence then avoids reconciling its Fabric child on every stream token.
+ * React still processes local updates, including lazy resolution and retries.
  */
-export function FenceSlots(
-  props: Readonly<{
-    slots: readonly MountedSlot[];
-    /** The document these slots belong to, as `useRendererErrors` names it. */
-    scope: string;
-    onFailure: RendererFailure;
-  }>
-): ReactNode {
-  const { slots, scope, onFailure } = props;
-  if (slots.length === 0) {
-    return null;
-  }
-  return slots.map((slot) =>
-    createElement(
+const MountedFence = memo(
+  function MountedFenceChild({ slot, scope, onFailure }: MountedFenceProps) {
+    return createElement(
       FenceBoundary,
       {
-        // Keyed by document and ordinal: a growing fence keeps its component
-        // from snapshot to snapshot, and `reset()` — a new generation — or a new
-        // stream gives every renderer fresh state rather than the previous
-        // message's.
-        key: `${scope}\u0000${slot.ordinal}`,
-        resetKey: `${slot.code}\u0000${slot.incomplete ? '1' : '0'}`,
+        slot,
         onFailure: (error: unknown) => {
-          // A throw while the fence is still growing is not a failure the app
-          // can act on: a half-written chart is expected to fail, and the
-          // renderer gets another chance on the next snapshot. This is the rule
-          // `onMathError` already follows for a formula that is still arriving.
           if (slot.incomplete) {
             return;
           }
@@ -590,6 +554,33 @@ export function FenceSlots(
           createElement(Renderer, { slot })
         )
       )
-    )
+    );
+  },
+  (previous, next) =>
+    previous.scope === next.scope &&
+    previous.onFailure === next.onFailure &&
+    sameSlot(previous.slot, next.slot)
+);
+
+/**
+ * The slot children for a document. Suspense sits outside the native slot so a
+ * lazy renderer that has not resolved leaves the native code card visible.
+ */
+export function FenceSlots(
+  props: Readonly<{
+    slots: readonly MountedSlot[];
+    scope: string;
+    onFailure: RendererFailure;
+  }>
+): ReactNode {
+  const { slots, scope, onFailure } = props;
+  return slots.map((slot) =>
+    createElement(MountedFence, {
+      // A new session or generation mounts fresh renderer state.
+      key: `${scope}\u0000${slot.ordinal}`,
+      slot,
+      scope,
+      onFailure,
+    })
   );
 }

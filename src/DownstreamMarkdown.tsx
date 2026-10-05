@@ -588,13 +588,8 @@ function useStableRenderers(resolved: ResolvedRenderers): ResolvedRenderers {
   if (
     previous.languages.length !== resolved.languages.length ||
     previous.languages.some(
-      (language, index) => language !== resolved.languages[index]
-    ) ||
-    // The components compared one language at a time rather than as a map:
-    // resolving builds a fresh map for the same components whenever `plugins`
-    // is a new object literal, which is every render of most apps.
-    previous.languages.some(
-      (language) =>
+      (language, index) =>
+        language !== resolved.languages[index] ||
         previous.components.get(language) !== resolved.components.get(language)
     )
   ) {
@@ -705,7 +700,11 @@ function ControlledMarkdown({
     onError,
     generationRef
   );
-  const images = useMathAndImages(mathAndImages, () => generationRef.current);
+  const currentGeneration = useCallback(
+    () => generationRef.current,
+    [generationRef]
+  );
+  const images = useMathAndImages(mathAndImages, currentGeneration);
   const resolvedTheme = useStableTheme(
     useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
   );
@@ -750,7 +749,7 @@ function ControlledMarkdown({
     plugins,
     { source: current.source, generation, parseFlags: images.parseFlags },
     onError,
-    () => generationRef.current
+    currentGeneration
   );
 
   return (
@@ -837,10 +836,11 @@ function StreamMarkdown({
     onError,
     generationRef
   );
-  const images = useMathAndImages(
-    mathAndImages,
-    () => state.binding().generation
+  const currentGeneration = useCallback(
+    () => state.binding().generation,
+    [state]
   );
+  const images = useMathAndImages(mathAndImages, currentGeneration);
   // A stream keeps its theme across a rebind, so a theme that has not changed
   // sends nothing however often a snapshot arrives.
   const resolvedTheme = useStableTheme(
@@ -900,7 +900,7 @@ function StreamMarkdown({
       parseFlags: images.parseFlags,
     },
     onError,
-    () => state.binding().generation
+    currentGeneration
   );
 
   return (

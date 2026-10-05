@@ -849,26 +849,29 @@ internal class RenderedDocument(
       // the component owns its height, and the block's margins stay a code
       // block's, so the space around it does not change when a fence becomes a
       // chart. The height arrives in pixels, converted where the map is read.
-      is CodeSegment -> if (hosts.hosts(segment.codeOrdinal)) {
-        ceil(hosts.heightFor(segment.codeOrdinal).toDouble()).toInt()
-      } else {
-        // The one definition: the props, the reader's choices, and this block's
-        // own fence meta all meet in `resolveCodeBlock`, and `codeCardHeight` is
-        // the only function that turns that into a height. The view calls the
-        // same two, which is what keeps a measured card and a drawn card the same
-        // size.
-        val layout = resolveCodeBlock(code, segment.codeOrdinal, segment.fenceMeta)
-        val gutter = segment.gutterWidth(layout)
-        val body = segment.bodyHeight(
-          paint, width, layout.wraps, gutter,
-        )
-        codeCardHeight(
-          layout,
-          if (chrome and CHROME_CODE_HEADER != 0) style.chromeRowHeight else 0,
-          segment.padding,
-          body,
-          segment.lineHeight(),
-        )
+      is CodeSegment -> {
+        val hosted = hosts.find(segment.codeOrdinal)
+        if (hosted != null) {
+          ceil(hosted.height.toDouble()).toInt()
+        } else {
+          // The one definition: the props, the reader's choices, and this block's
+          // own fence meta all meet in `resolveCodeBlock`, and `codeCardHeight` is
+          // the only function that turns that into a height. The view calls the
+          // same two, which is what keeps a measured card and a drawn card the same
+          // size.
+          val layout = resolveCodeBlock(code, segment.codeOrdinal, segment.fenceMeta)
+          val gutter = segment.gutterWidth(layout)
+          val body = segment.bodyHeight(
+            paint, width, layout.wraps, gutter,
+          )
+          codeCardHeight(
+            layout,
+            if (chrome and CHROME_CODE_HEADER != 0) style.chromeRowHeight else 0,
+            segment.padding,
+            body,
+            segment.lineHeight(),
+          )
+        }
       }
       is TableSegment ->
         segment.tableHeight + (if (chrome and CHROME_TABLE_TOOLBAR != 0) style.chromeRowHeight else 0)
@@ -951,7 +954,8 @@ internal class RenderedDocument(
       return IntArray(0)
     }
     val frames = frames(width, chrome, code, images, hosts)
-    val out = ArrayList<Int>(hosts.entries.size * 5)
+    val out = IntArray(hosts.entries.size * 5)
+    var count = 0
     segments.forEachIndexed { index, segment ->
       if (segment !is CodeSegment || !hosts.hosts(segment.codeOrdinal)) {
         return@forEachIndexed
@@ -963,13 +967,14 @@ internal class RenderedDocument(
       // A right-to-left block mirrors its indent to the trailing edge, the same
       // way the container bars and the list marker are mirrored.
       val left = if (segment.rtl) width - leading - column else leading
-      out.add(segment.codeOrdinal)
-      out.add(left)
-      out.add(top)
-      out.add(left + column)
-      out.add(top + height)
+      out[count++] = segment.codeOrdinal
+      out[count++] = left
+      out[count++] = top
+      out[count++] = left + column
+      out[count++] = top + height
     }
-    return out.toIntArray()
+    // A streamed replacement can remove fences before their host state arrives.
+    return if (count == out.size) out else out.copyOf(count)
   }
 
   /**

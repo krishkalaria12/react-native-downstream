@@ -247,6 +247,52 @@ static void checkHostedFenceLayout() {
   require(std::fabs(tallerHeight - (measured.size.height + 80)) < 0.001,
           @"a hosted fence's height did not follow its component");
   require(tallerHeight > cardHeight, @"a tall component did not raise the document");
+  const CGFloat narrowWidth = 180;
+  const DSMeasurement narrow = [rendered measureForWidth:narrowWidth chrome:0 code:code images:images hosts:hosts];
+  require(narrow.hosts[0].second.size.width == narrowWidth, @"a cached hosted rectangle kept the old width");
+  require(narrow.hosts[1].second.size.width == narrowWidth - narrow.hosts[1].second.origin.x,
+          @"a nested hosted rectangle lost its content column");
+  const auto indentedTheme = downstream::ThemeRegistry::intern({downstream::theme::kSlotListMarginLeft}, {48}, {});
+  DSRenderedDocument *themed = [DSRenderedDocument renderedDocumentFor:document fontScale:1 syntaxHighlighting:NO
+                                                               theme:indentedTheme caret:downstream::PlacedCaret{}];
+  const DSMeasurement themedMeasure = [themed measureForWidth:width chrome:0 code:code images:images hosts:hosts];
+  const CGFloat indentDelta = 48 - downstream::Theme::defaultTheme()->number(downstream::theme::kSlotListMarginLeft);
+  require(themedMeasure.hosts[1].second.origin.x == measured.hosts[1].second.origin.x + indentDelta,
+          @"a themed hosted rectangle kept the default list indent");
+  require(CGRectGetMaxX(themedMeasure.hosts[1].second) == width &&
+              themedMeasure.hosts[1].second.size.height == measured.hosts[1].second.size.height,
+          @"a theme changed hosted height or placed its content outside the column");
+  downstream::HostLayout blank;
+  blank.entries = {{0, 0}, {99, 100}};
+  const DSMeasurement zero = [rendered measureForWidth:width chrome:0 code:code images:images hosts:blank];
+  require(zero.hosts.size() == 1 && zero.hosts[0].first == 0,
+          @"an absent fence produced a rectangle or a zero-height fence lost its rectangle");
+  require(zero.hosts[0].second.size.height == 0, @"a zero-height hosted fence drew a code card");
+  const DSMeasurement restored = [rendered measureForWidth:width chrome:0 code:code images:images hosts:hosts];
+  require(restored.size.height == measured.size.height && restored.hosts.size() == measured.hosts.size(),
+          @"changing hosted ordinals reused stale geometry");
+#ifndef BASELINE
+  // Each result must describe its own inputs even while another thread replaces
+  // the shared one-entry cache with different heights and widths.
+  std::atomic<bool> consistent{true};
+  auto *consistentResult = &consistent;
+  dispatch_apply(1024, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^(size_t index) {
+    @autoreleasepool {
+      downstream::HostLayout localHosts;
+      const CGFloat localHeight = 40 + index % 17;
+      const CGFloat localWidth = 180 + index % 31;
+      localHosts.entries = {{0, static_cast<float>(localHeight)}, {1, 80}};
+      const DSMeasurement result = [rendered measureForWidth:localWidth chrome:0 code:code images:images
+                                                   hosts:localHosts];
+      if (result.hosts.size() != 2 || result.hosts[0].second.size.height != localHeight ||
+          result.hosts[0].second.size.width != localWidth ||
+          result.size.height != CGRectGetMaxY(result.hosts.back().second)) {
+        consistentResult->store(false);
+      }
+    }
+  });
+  require(consistent.load(), @"concurrent document measurement mixed size and rectangles from different inputs");
+#endif
   // An empty host layout is the measurement this view made before fence
   // renderers existed: same size, same frames.
   const NSArray<NSValue *> *plainFrames =
@@ -260,6 +306,49 @@ static void checkHostedFenceLayout() {
   }
   printf("ios_hosted_fence hosted_height=%.1f card_height=%.1f rectangles=%zu\n", measured.size.height, cardHeight,
          measured.hosts.size());
+}
+
+static void benchmarkHostedMeasurements() {
+  constexpr uint32_t fences = 512;
+  constexpr size_t iterations = 5000;
+  auto document = std::make_shared<downstream::Document>();
+  document->id = 9102;
+  downstream::HostLayout hosts;
+  for (uint32_t ordinal = 0; ordinal < fences; ++ordinal) {
+    document->blocks.push_back(makeBlock(downstream::BlockKind::CodeBlock, "graph TD;"));
+    hosts.entries.push_back({ordinal, 50});
+  }
+  document->settledBlocks = fences;
+  DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:document fontScale:1
+                                                  syntaxHighlighting:NO theme:downstream::Theme::defaultTheme()
+                                                               caret:downstream::PlacedCaret{}];
+  const downstream::CodeLayout code;
+  const downstream::ImageStateLayout images;
+  (void)[rendered measureForWidth:320 chrome:0 code:code images:images hosts:hosts];
+  CGFloat checksum = 0;
+  const auto sizeStart = std::chrono::steady_clock::now();
+  for (size_t index = 0; index < iterations; ++index) {
+    checksum += [rendered sizeForWidth:320 chrome:0 code:code images:images hosts:hosts].height;
+  }
+  const auto measureStart = std::chrono::steady_clock::now();
+  for (size_t index = 0; index < iterations; ++index) {
+    const DSMeasurement result = [rendered measureForWidth:320 chrome:0 code:code images:images hosts:hosts];
+    checksum += result.size.height + result.hosts.size();
+  }
+  const auto alternatingStart = std::chrono::steady_clock::now();
+  for (size_t index = 0; index < iterations; ++index) {
+    const DSMeasurement result = [rendered measureForWidth:index % 2 ? 240 : 320 chrome:0 code:code images:images
+                                                   hosts:hosts];
+    checksum += result.size.height + result.hosts.size();
+  }
+  const auto end = std::chrono::steady_clock::now();
+  const auto micros = [](auto start, auto finish) {
+    return std::chrono::duration<double, std::micro>(finish - start).count() / iterations;
+  };
+  require(checksum > 0, @"hosted measurement benchmark produced no geometry");
+  printf("ios_host_measurement fences=%u iterations=%zu size_hit_us=%.3f measure_hit_us=%.3f "
+         "measure_alternating_us=%.3f checksum=%.0f\n", fences, iterations,
+         micros(sizeStart, measureStart), micros(measureStart, alternatingStart), micros(alternatingStart, end), checksum);
 }
 
 /// A paragraph holding a script run against the same prose without one.
@@ -424,6 +513,11 @@ static void checkCellBreakHeight() {
 
 int main() {
   @autoreleasepool {
+    if (getenv("DOWNSTREAM_IOS_HOST_BENCH_ONLY") != nullptr) {
+      benchmarkHostedMeasurements();
+      printf("native TextKit checks passed\n");
+      return 0;
+    }
     NSMutableString *source = [NSMutableString stringWithString:@"😀\n\nvalue\n"];
     for (NSUInteger line = 0; line < 4096; ++line) {
       [source appendFormat:@"line-%lu xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n", (unsigned long)line];
@@ -500,6 +594,7 @@ int main() {
     require(layoutCalls >= 2, @"measurement cache exceeded its three-width bound");
     method_setImplementation(ensureMethod, originalEnsureLayout);
     checkHostedFenceLayout();
+    benchmarkHostedMeasurements();
     printf("native TextKit checks passed\n");
   }
   return 0;

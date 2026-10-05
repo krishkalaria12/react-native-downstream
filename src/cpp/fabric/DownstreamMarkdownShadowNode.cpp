@@ -431,7 +431,9 @@ void DownstreamMarkdownShadowNode::imagesChanged(const std::shared_ptr<const Sha
 
 std::vector<DownstreamMarkdownShadowNode::SlotChild> DownstreamMarkdownShadowNode::slotChildren() const {
   std::vector<SlotChild> slots;
-  for (const auto &child : getChildren()) {
+  const auto &children = getChildren();
+  for (size_t index = 0; index < children.size(); index++) {
+    const auto &child = children[index];
     // The dedicated component rather than an app's own view carrying the
     // ordinal some other way: a renderer can only ever be hosted through this,
     // so nothing an app renders itself can be mistaken for a slot.
@@ -448,42 +450,9 @@ std::vector<DownstreamMarkdownShadowNode::SlotChild> DownstreamMarkdownShadowNod
     if (slot->getConcreteProps().yogaStyle.display() == yoga::Display::None) {
       continue;
     }
-    slots.push_back({static_cast<uint32_t>(std::max(slot->getConcreteProps().ordinal, 0)), child});
+    slots.push_back({static_cast<uint32_t>(std::max(slot->getConcreteProps().ordinal, 0)), child, index});
   }
   return slots;
-}
-
-const downstream::Block *DownstreamMarkdownShadowNode::blockForOrdinal(const downstream::DocumentHandle &document,
-                                                                       uint32_t ordinal) {
-  if (!document) {
-    return nullptr;
-  }
-  uint32_t found = 0;
-  for (size_t index = 0; index < document->blocks.size(); index++) {
-    if (document->blocks[index].kind != downstream::BlockKind::CodeBlock) {
-      continue;
-    }
-    if (found++ == ordinal) {
-      return &document->blocks[index];
-    }
-  }
-  return nullptr;
-}
-
-float DownstreamMarkdownShadowNode::slotColumn(const downstream::DocumentHandle &document, uint32_t ordinal,
-                                               Float width, Float fontSizeMultiplier) const {
-  const downstream::Block *block = blockForOrdinal(document, ordinal);
-  const downstream::Theme::Handle theme = resolveTheme();
-  if (block == nullptr || theme == nullptr || !std::isfinite(width)) {
-    return static_cast<float>(width);
-  }
-  // The same font scale and the same `contentLeading` both platforms draw their
-  // container chrome with, so the column a component is measured at is the column
-  // it is drawn in. `theme_` rather than the default: a child inside a quote has
-  // the same indent whether or not the app passed a theme.
-  const double scale = downstream::theme_layout::fontScale(*theme, fontSizeMultiplier);
-  const double leading = downstream::theme_layout::contentLeading(*theme, block->containers, scale);
-  return static_cast<float>(std::max(0.0, static_cast<double>(width) - leading));
 }
 
 downstream::HostLayout DownstreamMarkdownShadowNode::measureSlots(const LayoutContext &layoutContext,
@@ -498,6 +467,26 @@ downstream::HostLayout DownstreamMarkdownShadowNode::measureSlots(const LayoutCo
     return hosts;
   }
   const downstream::DocumentHandle &document = getDocument();
+  // Index code blocks once for every mounted child, including indented blocks
+  // that consume an ordinal but cannot be hosted. The old per-child walk grew
+  // quadratically with the number of fences in a message.
+  std::vector<const downstream::Block *> codeBlocks;
+  if (document) {
+    uint32_t lastOrdinal = 0;
+    for (const auto &slot : slots) {
+      lastOrdinal = std::max(lastOrdinal, slot.ordinal);
+    }
+    for (const auto &block : document->blocks) {
+      if (block.kind == downstream::BlockKind::CodeBlock) {
+        codeBlocks.push_back(&block);
+        if (codeBlocks.size() > lastOrdinal) {
+          break;
+        }
+      }
+    }
+  }
+  const auto &theme = theme_;
+  const double scale = theme ? downstream::theme_layout::fontScale(*theme, layoutContext.fontSizeMultiplier) : 1;
   hosts.entries.reserve(slots.size());
   for (const SlotChild &slot : slots) {
     const auto *layoutable = dynamic_cast<const LayoutableShadowNode *>(slot.node.get());
@@ -507,7 +496,11 @@ downstream::HostLayout DownstreamMarkdownShadowNode::measureSlots(const LayoutCo
     // The exact column and an unbounded height, as Paragraph measures an
     // inline view: the child is a component of the message, and nothing below
     // it may constrain it.
-    const float column = slotColumn(document, slot.ordinal, maximumWidth, layoutContext.fontSizeMultiplier);
+    float column = static_cast<float>(maximumWidth);
+    if (slot.ordinal < codeBlocks.size() && theme && std::isfinite(maximumWidth)) {
+      const double leading = downstream::theme_layout::contentLeading(*theme, codeBlocks[slot.ordinal]->containers, scale);
+      column = static_cast<float>(std::max(0.0, static_cast<double>(maximumWidth) - leading));
+    }
     LayoutConstraints constraints{Size{column, 0}, Size{column, std::numeric_limits<Float>::infinity()},
                                  layoutConstraints.layoutDirection};
     const Size size = layoutable->measure(layoutContext, constraints);
@@ -522,6 +515,7 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
                                                   const LayoutConstraints &layoutConstraints) const {
   const auto &props = getConcreteProps();
   const auto &state = getStateData();
+  const auto &document = getDocument();
   const uint32_t chrome = chromeFor(state);
   // The layout is the props' defaults plus the reader's own choices, so a hint
   // carries both. Measuring reads the props rather than the state's copy of them,
@@ -529,7 +523,7 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
   // that records it does. The hint carries the theme too, so the worker builds
   // the rendering this measurement will mount rather than one Fabric discards.
   const downstream::LayoutHint hint =
-      layoutHint(layoutContext.fontSizeMultiplier, layoutConstraints.maximumSize.width, getDocument());
+      layoutHint(layoutContext.fontSizeMultiplier, layoutConstraints.maximumSize.width, document);
   downstream::RenderPreparer::noteLayout(hint);
   if (!props.sessionId.empty()) {
     downstream::SessionRegistry::noteLayout(props.sessionId, hint);
@@ -539,8 +533,8 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
   // the document's, exactly as a loaded image's box is.
   measuredHosts_ = measureSlots(layoutContext, layoutConstraints);
   return layoutManager_
-      ->measure(getDocument(), layoutContext.fontSizeMultiplier, layoutConstraints, getSurfaceId(), chrome,
-                codeLayout(state), caretFor(getDocument()), imageLayout(getDocument()), measuredHosts_, theme_)
+      ->measure(document, layoutContext.fontSizeMultiplier, layoutConstraints, getSurfaceId(), chrome,
+                codeLayout(state), caretFor(document), imageLayout(document), measuredHosts_, theme_)
       .size;
 }
 
@@ -573,17 +567,7 @@ void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
   // child while walking the list would otherwise invalidate the walk.
   auto children = std::make_shared<std::vector<std::shared_ptr<const ShadowNode>>>(*children_);
   for (const SlotChild &slot : slots) {
-    size_t index = 0;
-    bool found = false;
-    for (; index < children->size(); index++) {
-      if (children->at(index) == slot.node) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      continue;
-    }
+    const size_t index = slot.childIndex;
     // A leaf Yoga node lays its own children out, exactly as the text shadow
     // node lays its inline views out: the child is cloned, laid out at the size
     // the document gave it, and given the origin the document put it at.

@@ -75,6 +75,7 @@ private:
   struct SlotChild {
     uint32_t ordinal{0};
     std::shared_ptr<const ShadowNode> node;
+    size_t childIndex{0};
   };
 
   /// The slot children a measurement or a layout has to consider, in child
@@ -98,16 +99,6 @@ private:
   /// node is a Yoga leaf, so Yoga ignores its children and the node lays them
   /// out itself.
   void layoutSlots(LayoutContext layoutContext);
-
-  /// The column a hosted block's content takes at `width`: the width less the
-  /// block's container path, through the engine's own `contentLeading`, which is
-  /// the same number both platforms draw their bars and markers with.
-  float slotColumn(const downstream::DocumentHandle &document, uint32_t ordinal, Float width,
-                   Float fontSizeMultiplier) const;
-
-  /// The block a code ordinal names, or null when the document has no such
-  /// block, which is the case for a stale slot from a lagging render.
-  static const downstream::Block *blockForOrdinal(const downstream::DocumentHandle &document, uint32_t ordinal);
 
   /// One controlled source's preparation, shared by every clone of the node
   /// that shows that source.

@@ -18,7 +18,7 @@ inline constexpr size_t kSyncSlotBytes = 16 * 1024;
 
 /// The answer to a controlled query: the slots when the source could be read
 /// here and now, and `pending` when it was too large to parse on this thread
-/// and the caller has to ask again through `parsedFenceSlots` on a worker.
+/// and the caller has to ask again through `resolvedFenceSlots` on a worker.
 struct ControlledSlots {
   bool pending{false};
   std::vector<FenceSlot> slots;
@@ -38,10 +38,15 @@ struct ControlledSlots {
 ControlledSlots controlledFenceSlots(const std::string &source, ParseOptions parse,
                                      const std::vector<std::string> &languages);
 
-/// The same answer for a source of any size, parsed here without a bound or a
-/// cache: what a worker runs once a controlled query has said `pending`.
+/// A bare parse without a bound or cache, useful when no preparation exists.
 std::vector<FenceSlot> parsedFenceSlots(const std::string &source, ParseOptions parse,
                                         const std::vector<std::string> &languages);
+
+/// Resolves a source of any size on a worker, reusing a cached answer or a
+/// completed preparation before parsing. Stores the resolved answer for later
+/// synchronous and worker queries, including answers with no matching fences.
+std::vector<FenceSlot> resolvedFenceSlots(const std::string &source, ParseOptions parse,
+                                          const std::vector<std::string> &languages);
 
 /// Drops cached answers. For tests.
 void clearControlledSlotCache();

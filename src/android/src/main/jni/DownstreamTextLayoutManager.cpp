@@ -49,14 +49,7 @@ folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontSc
   for (const auto &prefix : images.allowedPrefixes) {
     prefixes.push_back(prefix);
   }
-  // The hosted React children, in the same shape as the image entries: one
-  // object per fence that a component replaced, with the height it measured at.
-  auto hostEntries = folly::dynamic::array();
-  for (const auto &entry : hosts.entries) {
-    hostEntries.push_back(folly::dynamic::object("ordinal", static_cast<double>(entry.ordinal))(
-        "height", static_cast<double>(entry.height)));
-  }
-  return folly::dynamic::object("documentId", static_cast<double>(documentId))(
+  folly::dynamic data = folly::dynamic::object("documentId", static_cast<double>(documentId))(
       "fontScale", static_cast<double>(fontScale))("chrome", static_cast<double>(chrome))(
       // The width the worker is preparing for. Zero for the `measure` path, which
       // already has Yoga's constraint and does not need it here.
@@ -72,9 +65,21 @@ folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontSc
       // Images: whether they are on, each image's answer, and the prefixes that
       // produced them. The view only ever sees the answers.
       "imagesEnabled", images.state.enabled ? 1.0 : 0.0)("imageEntries", imageEntries)(
-      "allowedImagePrefixes", prefixes)("hostEntries", hostEntries)(
+      "allowedImagePrefixes", prefixes)(
       // By id, as the document is: no slot value is copied on every measurement.
       "themeId", static_cast<double>(theme ? theme->id() : 0));
+  // An absent key is the empty HostLayout on Kotlin's side. Ordinary markdown
+  // needs no host array allocation or JNI map entry.
+  if (!hosts.empty()) {
+    // One object per hosted fence, with the height its component measured at.
+    auto hostEntries = folly::dynamic::array();
+    for (const auto &entry : hosts.entries) {
+      hostEntries.push_back(folly::dynamic::object("ordinal", static_cast<double>(entry.ordinal))(
+          "height", static_cast<double>(entry.height)));
+    }
+    data["hostEntries"] = std::move(hostEntries);
+  }
+  return data;
 }
 
 // DownstreamNative.prepare, resolved on a Java thread by nativeInstallPreparer.

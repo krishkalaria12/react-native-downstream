@@ -74,7 +74,20 @@ internal data class ImageStateLayout(
   val entries: List<ImageEntry> = emptyList(),
 ) {
   /** The entry for [ordinal], or null when this view has no answer for it. */
-  fun find(ordinal: Int): ImageEntry? = entries.firstOrNull { it.ordinal == ordinal }
+  fun find(ordinal: Int): ImageEntry? {
+    var low = 0
+    var high = entries.size - 1
+    while (low <= high) {
+      val middle = low + (high - low) / 2
+      val entry = entries[middle]
+      when {
+        entry.ordinal < ordinal -> low = middle + 1
+        entry.ordinal > ordinal -> high = middle - 1
+        else -> return entry
+      }
+    }
+    return null
+  }
 }
 
 /**

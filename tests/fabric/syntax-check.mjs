@@ -68,11 +68,17 @@ const appleStubs = join(repo, 'tests', 'fabric', 'stubs-apple');
  */
 const platforms = {
   ios: {
-    renderer: ['renderer/graphics/platform/ios', 'renderer/components/view/platform/cxx'],
+    renderer: [
+      'renderer/graphics/platform/ios',
+      'renderer/components/view/platform/cxx',
+    ],
     extra: process.platform === 'darwin' ? [] : [appleStubs],
   },
   android: {
-    renderer: ['renderer/graphics/platform/android', 'renderer/components/view/platform/android'],
+    renderer: [
+      'renderer/graphics/platform/android',
+      'renderer/components/view/platform/android',
+    ],
     extra: [],
   },
 };
@@ -116,10 +122,14 @@ function generateCodegen(output) {
   // spec paths against, and a library has none: it reports that and exits
   // nonzero, having already written every header this check reads. So the exit
   // status is ignored and the artifacts are what decide.
-  spawnSync('node', [script, '--path', repo, '--outputPath', output, '--targetPlatform', 'ios'], {
-    cwd: repo,
-    stdio: 'ignore',
-  });
+  spawnSync(
+    'node',
+    [script, '--path', repo, '--outputPath', output, '--targetPlatform', 'ios'],
+    {
+      cwd: repo,
+      stdio: 'ignore',
+    }
+  );
   const root = join(output, 'build', 'generated', 'ios');
   if (!existsSync(join(root, 'ReactCodegen', 'DownstreamSpecJSI.h'))) {
     return skip(`codegen produced no DownstreamSpecJSI.h under ${output}`);
@@ -130,9 +140,18 @@ function generateCodegen(output) {
 function includes(generatedRoot, platform) {
   // Every directory the engine's own headers include each other by, the React
   // Native trees, and the platform's own header roots ahead of the shared ones.
-  const engine = ['', 'downstream', 'fabric', 'highlight', 'lexilla', 'math', 'md4c', 'remend', 'session', 'theme'].map(
-    (directory) => join(repo, 'src', 'cpp', directory)
-  );
+  const engine = [
+    '',
+    'downstream',
+    'fabric',
+    'highlight',
+    'lexilla',
+    'math',
+    'md4c',
+    'remend',
+    'session',
+    'theme',
+  ].map((directory) => join(repo, 'src', 'cpp', directory));
   const renderer = [
     ...platform.renderer,
     'renderer',
@@ -157,7 +176,10 @@ function includes(generatedRoot, platform) {
     generatedRoot,
     join(generatedRoot, 'ReactCodegen'),
   ];
-  return [...new Set([...engine, ...renderer, ...rest])].flatMap((path) => ['-I', path]);
+  return [...new Set([...engine, ...renderer, ...rest])].flatMap((path) => [
+    '-I',
+    path,
+  ]);
 }
 
 const cc = compiler();
@@ -166,10 +188,19 @@ try {
   const generatedRoot = generateCodegen(output);
   let failures = 0;
   for (const [name, platform] of Object.entries(platforms)) {
-    const flags = ['-std=c++20', '-fsyntax-only', '-fexceptions', '-Wall', ...includes(generatedRoot, platform)];
+    const flags = [
+      '-std=c++20',
+      '-fsyntax-only',
+      '-fexceptions',
+      '-Wall',
+      ...includes(generatedRoot, platform),
+    ];
     for (const source of sources) {
       const relative = source.slice(repo.length + 1);
-      const result = spawnSync(cc, [...flags, source], { cwd: repo, encoding: 'utf8' });
+      const result = spawnSync(cc, [...flags, source], {
+        cwd: repo,
+        encoding: 'utf8',
+      });
       if (result.status === 0) {
         console.log(`ok ${name} ${relative}`);
         continue;
@@ -177,6 +208,28 @@ try {
       failures += 1;
       console.log(`FAIL ${name} ${relative}`);
       console.log((result.stderr ?? '').trim());
+    }
+    const binary = join(output, `host-rects-${name}`);
+    const build = spawnSync(
+      cc,
+      [
+        '-std=c++20',
+        '-O2',
+        ...includes(generatedRoot, platform),
+        join(repo, 'tests/fabric/host-rects.cpp'),
+        '-o',
+        binary,
+      ],
+      { cwd: repo, encoding: 'utf8' }
+    );
+    const run =
+      build.status === 0 ? spawnSync(binary, [], { encoding: 'utf8' }) : build;
+    if (run.status !== 0) {
+      failures += 1;
+      console.log(`FAIL ${name} host rectangle lookup`);
+      console.log((run.stderr ?? '').trim());
+    } else {
+      console.log(`ok ${name} ${(run.stdout ?? '').trim()}`);
     }
   }
   if (failures > 0) {
