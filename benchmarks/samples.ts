@@ -90,6 +90,30 @@ const playback = [
     chunks: ['Do not open ', '[trap](', 'javascript:alert', '(1))', '.\n'], // eslint-disable-line no-script-url -- the target a renderer must refuse
   },
   {
+    id: 'inline-html',
+    description:
+      'br, sub and sup recognized while every other tag stays escaped text',
+    // The chunks split tags, which is the case the side-by-side comparison has
+    // to show: a stream that stops mid-tag must not flash the fragment, and the
+    // tags that are recognized must land as formatting rather than as text.
+    chunks: [
+      'Water is H',
+      '<sub>2',
+      '</sub',
+      '>O and E=mc',
+      '<sup',
+      '>2',
+      '</sup>',
+      '.\n',
+      '\n| Step | Notes |\n| --- | --- |\n| 1 | Mix ',
+      '<br>Then bake |\n',
+      '\n<sub>Only a </sub>',
+      '<br>',
+      '<br>',
+      '\n',
+    ],
+  },
+  {
     id: 'code-streaming',
     description: 'A long fence arriving in small chunks, the highlighting case',
     chunks: codeChunks(),
