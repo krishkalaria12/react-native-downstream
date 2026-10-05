@@ -8,6 +8,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 import type { NativeSyntheticEvent } from 'react-native';
+import type { ReactNode } from 'react';
 
 import {
   acceptControlledSource,
@@ -16,6 +17,13 @@ import {
 import { resolveControls, type ResolvedControls } from './controls';
 import NativeDownstreamMarkdownView from './DownstreamMarkdownViewNativeComponent';
 import { getStreamState } from './createMarkdownStream';
+import {
+  FenceSlots,
+  resolveRenderers,
+  useFenceSlots,
+  useRendererErrors,
+  type ResolvedRenderers,
+} from './fenceRenderers';
 import { mathAvailable, resolveMath, warnAboutMissingMathEngine } from './math';
 import { resolveTheme, type ResolvedTheme } from './theme';
 import type {
@@ -435,6 +443,78 @@ function useMathAndImages(
 }
 
 /**
+ * The registered fence renderers, kept by value rather than by identity.
+ *
+ * `plugins` is an inline object literal in every real call, so its identity
+ * changes on every render of the parent. Memoizing on that identity would ask
+ * the engine for the same fences again and again and would re-join every slot
+ * with its component each time. Comparing the resolved language list means an
+ * unchanged configuration asks nothing and re-renders nothing, which is what
+ * lets a chat's messages keep their mounted renderers while an unrelated state
+ * change re-renders the list.
+ */
+function useStableRenderers(resolved: ResolvedRenderers): ResolvedRenderers {
+  const stable = useRef(resolved);
+  const previous = stable.current;
+  if (
+    previous.languages.length !== resolved.languages.length ||
+    previous.languages.some(
+      (language, index) => language !== resolved.languages[index]
+    ) ||
+    // The components compared one language at a time rather than as a map:
+    // resolving builds a fresh map for the same components whenever `plugins`
+    // is a new object literal, which is every render of most apps.
+    previous.languages.some(
+      (language) =>
+        previous.components.get(language) !== resolved.components.get(language)
+    )
+  ) {
+    stable.current = resolved;
+  }
+  return stable.current;
+}
+
+/**
+ * Resolves `plugins`, queries the engine for this document's fences, and
+ * returns the slot children for the native view.
+ *
+ * The query is a synchronous TurboModule call made during render, which is the
+ * whole design: the slot children and the document they belong to arrive in
+ * the same commit, so a fence becomes a component in the frame it should, and
+ * not a frame later. A view with no registered renderers asks nothing, sends
+ * nothing and renders no children, so its behaviour and its cost are exactly
+ * what they were before renderers existed.
+ */
+function useFenceRenderers(
+  plugins: MarkdownViewProps['plugins'],
+  document: {
+    source?: string;
+    sessionId?: string;
+    generation: number;
+    sequence?: number;
+    mathFlags: number;
+  },
+  onError: ((error: MarkdownErrorEvent) => void) | undefined,
+  currentGeneration: () => number
+): ReactNode {
+  const resolved = useStableRenderers(
+    useMemo(() => resolveRenderers(plugins), [plugins])
+  );
+  const slots = useFenceSlots({ ...document, resolved });
+  const onFailure = useRendererErrors({ onError, currentGeneration });
+  if (slots.length === 0) {
+    return null;
+  }
+  return (
+    <FenceSlots
+      slots={slots}
+      generation={document.generation}
+      onFailure={onFailure}
+    />
+  );
+}
+
+/**
  * Renders Markdown with native text layout. Parsing and measurement happen in
  * native code; no parse tree crosses into JavaScript.
  */
@@ -460,6 +540,7 @@ function ControlledMarkdown({
   translations,
   theme,
   markdownStyle,
+  plugins,
   onLinkPress,
   onError,
   ...mathAndImages
@@ -521,6 +602,16 @@ function ControlledMarkdown({
     [controlError, generation, onError]
   );
 
+  // A controlled source is the whole message, so the engine reads its fences
+  // from that string: one synchronous call during this render, which is what
+  // puts the components and the document they belong to in the same commit.
+  const fences = useFenceRenderers(
+    plugins,
+    { source: current.source, generation, mathFlags: images.mathFlags },
+    onError,
+    () => generationRef.current
+  );
+
   return (
     <NativeDownstreamMarkdownView
       style={style}
@@ -548,7 +639,9 @@ function ControlledMarkdown({
       onMathError={images.onMathError}
       onMarkdownError={handleError}
       onControlAction={handleControlAction}
-    />
+    >
+      {fences}
+    </NativeDownstreamMarkdownView>
   );
 }
 
@@ -564,6 +657,7 @@ function StreamMarkdown({
   translations,
   theme,
   markdownStyle,
+  plugins,
   onLinkPress,
   onError,
   ...mathAndImages
@@ -624,6 +718,21 @@ function StreamMarkdown({
     [controlError, onError, state]
   );
 
+  // The stream's answer reads the published snapshot the view is about to mount
+  // and never parses, so asking on every render — which is every snapshot — is
+  // one walk of blocks and nothing more.
+  const fences = useFenceRenderers(
+    plugins,
+    {
+      sessionId: binding.sessionId,
+      generation: binding.generation,
+      sequence: binding.readySequence,
+      mathFlags: images.mathFlags,
+    },
+    onError,
+    () => state.binding().generation
+  );
+
   return (
     <NativeDownstreamMarkdownView
       style={style}
@@ -654,6 +763,8 @@ function StreamMarkdown({
       onMathError={images.onMathError}
       onMarkdownError={handleError}
       onControlAction={handleControlAction}
-    />
+    >
+      {fences}
+    </NativeDownstreamMarkdownView>
   );
 }

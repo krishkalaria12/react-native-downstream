@@ -125,13 +125,32 @@ export function createNativeView(): NativeView {
           : typeof props.markdown === 'string'
           ? props.markdown
           : '';
+      // The slot children are rendered after the document, exactly as Fabric
+      // mounts them: they are the view's children, positioned over the blocks
+      // they replace, so a test can see what a renderer mounted and that a
+      // fenced block still carries its text.
+      // The slot children live in their own element, which is what Fabric does:
+      // a slot is a child of the view, not of whichever block happens to precede
+      // it. Without this wrapper a growing document would shift the slot array's
+      // position among its siblings and every renderer would remount with it.
+      const children = props.children as ReactNode | undefined;
       return createElement(
         'div',
         { 'data-native-view': 'true' },
         ...renderModel(parse(markdown)),
         ...parse(markdown).links.map((link, index) =>
           createElement('a', { key: `link-${index}`, href: link.url })
-        )
+        ),
+        children === undefined
+          ? null
+          : // Keyed, so it keeps its place among its siblings however many blocks
+            // the document grows by: Fabric mounts a slot by its own index in the
+            // host layer, not by its position after the document's blocks.
+            createElement(
+              'div',
+              { 'data-slots': 'true', 'key': 'slots' },
+              children
+            )
       );
     },
     records,

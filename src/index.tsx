@@ -8,6 +8,8 @@ export type { DownstreamMarkdownProps } from './DownstreamMarkdown';
 export type { ResolvedMath } from './math';
 export type { SyntaxColorsFromTheme } from './syntaxTheme';
 export type {
+  CustomRenderer,
+  CustomRendererProps,
   EnrichedSyntaxKey,
   MarkdownColor,
   MarkdownControlAction,
@@ -24,6 +26,7 @@ export type {
   MarkdownMathErrorEvent,
   MarkdownMathOptions,
   MarkdownOperationError,
+  MarkdownPlugins,
   MarkdownPreset,
   MarkdownPreviewOptions,
   MarkdownSourceRange,

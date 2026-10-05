@@ -1,4 +1,5 @@
 /** Public API types. The stream controller types describe the planned session API. */
+import type { ComponentType } from 'react';
 import type { ColorValue, StyleProp, TextStyle, ViewStyle } from 'react-native';
 
 /** Half-open offsets in the canonical JavaScript UTF-16 source string. */
@@ -14,7 +15,8 @@ export type MarkdownErrorCode =
   | 'session_bound'
   | 'parse_failed'
   | 'render_failed'
-  | 'control_failed';
+  | 'control_failed'
+  | 'renderer_failed';
 
 export type MarkdownErrorEvent = Readonly<{
   code: MarkdownErrorCode;
@@ -30,6 +32,29 @@ export type MarkdownErrorEvent = Readonly<{
   block?: MarkdownControlKind;
   /** The action that failed; present only alongside `block`. */
   action?: MarkdownControlAction;
+  /** The fence language a `renderer_failed` names; present only for that code. */
+  language?: string;
+}>;
+
+export type CustomRendererProps = Readonly<{
+  /** The fence's text, exactly what the code block's copy button copies. */
+  code: string;
+  /** The info string's first word as written, cut at ':'. Compare case-insensitively. */
+  language: string;
+  /** The info string after the language, trimmed. Undefined when there is none. */
+  meta?: string;
+  /** True until the fence is settled; see the Streaming section for the exact rule. */
+  isIncomplete: boolean;
+}>;
+
+export type CustomRenderer = Readonly<{
+  /** Matched case-insensitively against the normalized fence language. */
+  language: string | readonly string[];
+  component: ComponentType<CustomRendererProps>;
+}>;
+
+export type MarkdownPlugins = Readonly<{
+  renderers?: readonly CustomRenderer[];
 }>;
 
 /** Thrown by rejected synchronous stream operations. */
@@ -684,6 +709,12 @@ type MarkdownViewBaseProps = Readonly<{
    * default. Keys this renderer does not draw are reported once in development.
    */
   markdownStyle?: Composable<MarkdownStyle>;
+  /**
+   * Fence-language renderers. A fence whose normalized language matches one
+   * mounts its component where the code card would be; any other fence, and
+   * every case where the component is not up, keeps the native code card.
+   */
+  plugins?: MarkdownPlugins;
   /**
    * Typeset math. On when `react-native-downstream-math` is installed and off
    * otherwise; `false` keeps every formula literal, which is exactly today's
