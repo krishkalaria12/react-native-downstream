@@ -10,6 +10,7 @@
 // with a test suite behind it, so it is the one that moved here first.
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string_view>
 
