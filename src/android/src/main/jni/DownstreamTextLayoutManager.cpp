@@ -31,6 +31,7 @@ folly::dynamic ordinalArray(const std::vector<uint32_t> &ordinals) {
 folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontScale, uint32_t chrome,
                               const downstream::CodeLayout &code, const downstream::ImageLayout &images,
                               const downstream::Theme::Handle &theme = nullptr,
+                              const downstream::HostLayout &hosts = {},
                               facebook::react::Float width = 0) {
   // One array of five numbers per image rather than five parallel arrays: a
   // measurement copies this map, and parallel arrays make "which array is one
@@ -46,6 +47,13 @@ folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontSc
   for (const auto &prefix : images.allowedPrefixes) {
     prefixes.push_back(prefix);
   }
+  // The hosted React children, in the same shape as the image entries: one
+  // object per fence that a component replaced, with the height it measured at.
+  auto hostEntries = folly::dynamic::array();
+  for (const auto &entry : hosts.entries) {
+    hostEntries.push_back(folly::dynamic::object("ordinal", static_cast<double>(entry.ordinal))(
+        "height", static_cast<double>(entry.height)));
+  }
   return folly::dynamic::object("documentId", static_cast<double>(documentId))(
       "fontScale", static_cast<double>(fontScale))("chrome", static_cast<double>(chrome))(
       // The width the worker is preparing for. Zero for the `measure` path, which
@@ -58,7 +66,7 @@ folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontSc
       // Images: whether they are on, each image's answer, and the prefixes that
       // produced them. The view only ever sees the answers.
       "imagesEnabled", images.state.enabled ? 1.0 : 0.0)("imageEntries", imageEntries)(
-      "allowedImagePrefixes", prefixes)(
+      "allowedImagePrefixes", prefixes)("hostEntries", hostEntries)(
       // By id, as the document is: no slot value is copied on every measurement.
       "themeId", static_cast<double>(theme ? theme->id() : 0));
 }
@@ -70,6 +78,7 @@ std::mutex installMutex;
 JavaVM *javaVm = nullptr;
 jclass nativeClass = nullptr;
 jmethodID prepareMethod = nullptr;
+jmethodID hostFramesMethod = nullptr;
 std::atomic<bool> javaReady{false};
 
 /// The JNIEnv for a pool thread, attaching it for the rest of its life.
@@ -106,6 +115,39 @@ void *resolveAppImageLoader() {
   return appImageLoader.load(std::memory_order_acquire);
 }
 
+/// The rectangles of the hosted React children, as `[ordinal, x, y, w, h]`
+/// groups, or null when Java cannot be asked.
+///
+/// Reads the `RenderedDocument` that the measurement just filled rather than
+/// laying anything out again: the document is cached by id and width, so this is
+/// the same object the view is about to draw, and the rectangles it returns are
+/// the ones its frames are stacked from. Nothing here parses or measures.
+std::shared_ptr<std::vector<jfloat>> hostFrames(jlong documentId, jobject layoutMap, jfloat widthPx) {
+  if (!javaReady.load(std::memory_order_acquire) || hostFramesMethod == nullptr) {
+    return nullptr;
+  }
+  JNIEnv *env = attachedEnv();
+  if (env == nullptr || layoutMap == nullptr) {
+    return nullptr;
+  }
+  auto array = static_cast<jfloatArray>(env->CallStaticObjectMethod(
+      nativeClass, hostFramesMethod, documentId, layoutMap, static_cast<jfloat>(widthPx)));
+  if (env->ExceptionCheck()) {
+    env->ExceptionClear();
+    return nullptr;
+  }
+  if (array == nullptr) {
+    return nullptr;
+  }
+  const jsize length = env->GetArrayLength(array);
+  auto frames = std::make_shared<std::vector<jfloat>>(length);
+  if (length > 0) {
+    env->GetFloatArrayRegion(array, 0, length, frames->data());
+  }
+  env->DeleteLocalRef(array);
+  return frames;
+}
+
 } // namespace
 
 extern "C" JNIEXPORT void JNICALL
@@ -135,12 +177,22 @@ Java_com_downstream_DownstreamNative_nativeInstallPreparer(JNIEnv *env, jclass c
   // rather than a near copy of it that a fourth positional argument could make
   // disagree.
   const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JLjava/util/Map;)V");
-  if (method == nullptr || env->GetJavaVM(&javaVm) != JNI_OK) {
+  // Resolved with the preparer rather than lazily at the first measurement: a
+  // measurement runs on Fabric's layout thread, and a `GetStaticMethodID` there
+  // would race the class loader. A null here means the app runs a build without
+  // this method, and hosted children are not placed rather than crashing.
+  const jmethodID frames = env->GetStaticMethodID(clazz, "hostFrames", "(JLjava/util/Map;F)[F");
+  if (env->GetJavaVM(&javaVm) != JNI_OK) {
     env->ExceptionClear();
+    return;
+  }
+  env->ExceptionClear();
+  if (method == nullptr) {
     return;
   }
   nativeClass = static_cast<jclass>(env->NewGlobalRef(clazz));
   prepareMethod = method;
+  hostFramesMethod = frames;
   javaReady.store(true, std::memory_order_release);
 }
 
@@ -162,12 +214,10 @@ void DownstreamTextLayoutManager::installPlatformServices(const facebook::react:
 // DownstreamMarkdownViewManager.measure on the calling thread. The view
 // manager reads the document from the registry and lays it out with the same
 // StaticLayout configuration the view draws with.
-Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHandle &document,
-                                                  Float fontSizeMultiplier, Float maximumWidth,
-                                                  SurfaceId surfaceId, uint32_t chrome,
-                                                  const downstream::CodeLayout &code,
-                                                  const downstream::ImageLayout &images,
-                                                  const downstream::Theme::Handle &theme) const {
+DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
+    const downstream::DocumentHandle &document, Float fontSizeMultiplier, Float maximumWidth, SurfaceId surfaceId,
+    uint32_t chrome, const downstream::CodeLayout &code, const downstream::ImageLayout &images,
+    const downstream::HostLayout &hosts, const downstream::Theme::Handle &theme) const {
   // Java resolves the theme through the registry by id, the way it resolves the
   // document, so no slot value is copied across JNI on a measurement. Zero is
   // the default theme's own id.
@@ -189,7 +239,7 @@ Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHand
   // The same map shape is what the view manager reads in `updateState` and in
   // `measure`, so all three resolve one layout rather than three.
   auto localDataMap = ReadableNativeMap::newObjectCxxArgs(
-      codeLayoutData(document->id, fontSizeMultiplier, chrome, code, images, theme));
+      codeLayoutData(document->id, fontSizeMultiplier, chrome, code, images, theme, hosts));
 
   auto propsMap = ReadableNativeMap::newObjectCxxArgs(folly::dynamic::object());
   auto componentName = make_jstring("DownstreamMarkdownView");
@@ -198,7 +248,37 @@ Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHand
                                reinterpret_cast<ReadableMap::javaobject>(localDataMap.get()),
                                reinterpret_cast<ReadableMap::javaobject>(propsMap.get()), nullptr, 0.0f,
                                maximumWidth, 0.0f, std::numeric_limits<Float>::infinity());
-  return yogaMeassureToSize(packed);
+
+  DocumentMeasurement measurement;
+  measurement.size = yogaMeassureToSize(packed);
+  if (hosts.entries.empty()) {
+    // A view with no renderers pays nothing: no second crossing into Java, and
+    // the same measurement it has always made.
+    return measurement;
+  }
+  // `FabricUIManager.measure` returns a packed size and nothing else: only
+  // `measureText` reports attachment positions, and a hosted child is not text.
+  // So the rectangles come from the `RenderedDocument` that measurement just
+  // filled, read back through one more static call, in the same `[ordinal, x, y,
+  // w, h]` layout every Android layout map uses.
+  const jfloat framesWidth = static_cast<jfloat>(maximumWidth);
+  const auto frames = hostFrames(document->id, reinterpret_cast<ReadableMap::javaobject>(localDataMap.get()),
+                                 framesWidth);
+  if (frames != nullptr) {
+    // Five floats per host: the ordinal, then the two edges of its rectangle,
+    // which is what Android's `hostFrames` reports. The edges become the
+    // origin and the size a shadow node places a child at, so the subtraction
+    // happens here rather than on either side guessing.
+    for (size_t index = 0; index + 4 < frames->size(); index += 5) {
+      const float left = frames->at(index + 1);
+      const float top = frames->at(index + 2);
+      const float right = frames->at(index + 3);
+      const float bottom = frames->at(index + 4);
+      measurement.slots.push_back({static_cast<uint32_t>(frames->at(index)),
+                                   Rect{Point{left, top}, Size{std::max(0.0f, right - left), std::max(0.0f, bottom - top)}}});
+    }
+  }
+  return measurement;
 }
 
 // Builds the spans and precomputed text on the worker through
@@ -219,7 +299,8 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
     // because a prepared height is only the height of the layout the reader
     // actually has.
     auto map = ReadableNativeMap::newObjectCxxArgs(
-        codeLayoutData(document->id, hint.fontScale, hint.chrome, hint.code, hint.images, hint.theme, hint.width));
+        codeLayoutData(document->id, hint.fontScale, hint.chrome, hint.code, hint.images, hint.theme,
+                       downstream::HostLayout{}, hint.width));
     env->CallStaticVoidMethod(nativeClass, prepareMethod, static_cast<jlong>(document->id),
                               reinterpret_cast<ReadableMap::javaobject>(map.get()));
     if (env->ExceptionCheck()) {

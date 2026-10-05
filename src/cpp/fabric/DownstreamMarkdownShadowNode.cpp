@@ -4,12 +4,16 @@
 #include "ImageSizeCache.h"
 #include "MarkdownParser.h"
 #include "RenderPreparer.h"
+#include "SegmentPlan.h"
 #include "SessionRegistry.h"
+#include "theme/ThemeLayout.h"
 
 #include <algorithm>
 
+#include <react/renderer/components/DownstreamSpec/ShadowNodes.h>
 #include <react/renderer/core/LayoutContext.h>
 #include <react/renderer/core/StateUpdate.h>
+#include <react/renderer/graphics/Rect.h>
 
 #include <utility>
 
@@ -381,6 +385,92 @@ void DownstreamMarkdownShadowNode::imagesChanged(const std::shared_ptr<const Sha
   concrete->relayoutWhenImagesChange(answers);
 }
 
+std::vector<DownstreamMarkdownShadowNode::SlotChild> DownstreamMarkdownShadowNode::slotChildren() const {
+  std::vector<SlotChild> slots;
+  for (const auto &child : getChildren()) {
+    // The dedicated component rather than an app's own view carrying the
+    // ordinal some other way: a renderer can only ever be hosted through this,
+    // so nothing an app renders itself can be mistaken for a slot.
+    const auto *slot = dynamic_cast<const DownstreamFenceSlotShadowNode *>(child.get());
+    if (slot == nullptr) {
+      continue;
+    }
+    // React hides a suspended subtree with `display: none`, and a hidden child
+    // is not a renderer any more: its fence draws as the code card, which is
+    // what the fallback is for.
+    if (slot->getLayoutMetrics().displayType == DisplayType::None) {
+      continue;
+    }
+    slots.push_back({static_cast<uint32_t>(std::max(slot->getConcreteProps().ordinal, 0)), child});
+  }
+  return slots;
+}
+
+const downstream::Block *DownstreamMarkdownShadowNode::blockForOrdinal(const downstream::DocumentHandle &document,
+                                                                       uint32_t ordinal) {
+  if (!document) {
+    return nullptr;
+  }
+  uint32_t found = 0;
+  for (size_t index = 0; index < document->blocks.size(); index++) {
+    if (document->blocks[index].kind != downstream::BlockKind::CodeBlock) {
+      continue;
+    }
+    if (found++ == ordinal) {
+      return &document->blocks[index];
+    }
+  }
+  return nullptr;
+}
+
+float DownstreamMarkdownShadowNode::slotColumn(const downstream::DocumentHandle &document, uint32_t ordinal,
+                                               Float width, Float fontSizeMultiplier) const {
+  const downstream::Block *block = blockForOrdinal(document, ordinal);
+  const downstream::Theme::Handle theme = resolveTheme();
+  if (block == nullptr || theme == nullptr || !std::isfinite(width)) {
+    return static_cast<float>(width);
+  }
+  // The same font scale and the same `contentLeading` both platforms draw their
+  // container chrome with, so the column a component is measured at is the column
+  // it is drawn in. `theme_` rather than the default: a child inside a quote has
+  // the same indent whether or not the app passed a theme.
+  const double scale = downstream::theme_layout::fontScale(*theme, fontSizeMultiplier);
+  const double leading = downstream::theme_layout::contentLeading(*theme, block->containers, scale);
+  return static_cast<float>(std::max(0.0, static_cast<double>(width) - leading));
+}
+
+downstream::HostLayout DownstreamMarkdownShadowNode::measureSlots(const LayoutContext &layoutContext,
+                                                                  const LayoutConstraints &layoutConstraints) const {
+  const Float maximumWidth = layoutConstraints.maximumSize.width;
+  downstream::HostLayout hosts;
+  const std::vector<SlotChild> slots = slotChildren();
+  if (slots.empty()) {
+    // No renderer is mounted: the measurement is the one a view with no
+    // renderers has always made, and the cache key is the same empty host
+    // layout it was before this existed.
+    return hosts;
+  }
+  const downstream::DocumentHandle &document = getDocument();
+  hosts.entries.reserve(slots.size());
+  for (const SlotChild &slot : slots) {
+    const auto *layoutable = dynamic_cast<const LayoutableShadowNode *>(slot.node.get());
+    if (layoutable == nullptr) {
+      continue;
+    }
+    // The exact column and an unbounded height, as Paragraph measures an
+    // inline view: the child is a component of the message, and nothing below
+    // it may constrain it.
+    const float column = slotColumn(document, slot.ordinal, maximumWidth, layoutContext.fontSizeMultiplier);
+    LayoutConstraints constraints{Size{column, 0}, Size{column, std::numeric_limits<Float>::infinity()},
+                                 layoutConstraints.layoutDirection};
+    const Size size = layoutable->measure(layoutContext, constraints);
+    hosts.entries.push_back({slot.ordinal, size.height});
+  }
+  std::sort(hosts.entries.begin(), hosts.entries.end(),
+            [](const downstream::HostEntry &a, const downstream::HostEntry &b) { return a.ordinal < b.ordinal; });
+  return hosts;
+}
+
 Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutContext,
                                                   const LayoutConstraints &layoutConstraints) const {
   const auto &props = getConcreteProps();
@@ -397,8 +487,77 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
   if (!props.sessionId.empty()) {
     downstream::SessionRegistry::noteLayout(props.sessionId, hint);
   }
-  return layoutManager_->measure(getDocument(), layoutContext.fontSizeMultiplier, layoutConstraints,
-                                 getSurfaceId(), chrome, codeLayout(state), imageLayout(getDocument()), theme_);
+  // Each mounted renderer is measured before the document is, because a hosted
+  // fence is as tall as its component: the component's height is an input to
+  // the document's, exactly as a loaded image's box is.
+  measuredHosts_ = measureSlots(layoutContext, layoutConstraints);
+  return layoutManager_->measure(getDocument(), layoutContext.fontSizeMultiplier, layoutConstraints, getSurfaceId(),
+                                 chrome, codeLayout(state), imageLayout(getDocument()), measuredHosts_, theme_)
+      .size;
+}
+
+void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
+  const std::vector<SlotChild> slots = slotChildren();
+  if (slots.empty()) {
+    return;
+  }
+  const downstream::DocumentHandle &document = getDocument();
+  const auto &state = getStateData();
+  const Float width = getLayoutMetrics().frame.size.width;
+  // The rectangles come from the measurement that sized this frame, so a child
+  // cannot be placed where the document was not measured to put it.
+  const DocumentMeasurement measurement =
+      layoutManager_->cachedMeasurement(document, layoutContext.fontSizeMultiplier, width, chromeFor(state),
+                                        codeLayout(state), imageLayout(document), state.hosts, theme_);
+  if (measurement.slots.empty()) {
+    return;
+  }
+  if (children_ == nullptr) {
+    return;
+  }
+  // A copy of the child list, written back once every slot is placed: cloning a
+  // child while walking the list would otherwise invalidate the walk.
+  auto children = std::make_shared<std::vector<std::shared_ptr<const ShadowNode>>>(*children_);
+  for (const SlotChild &slot : slots) {
+    size_t index = 0;
+    bool found = false;
+    for (; index < children->size(); index++) {
+      if (children->at(index) == slot.node) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      continue;
+    }
+    // A leaf Yoga node lays its own children out, exactly as the text shadow
+    // node lays its inline views out: the child is cloned, laid out at the size
+    // the document gave it, and given the origin the document put it at.
+    std::shared_ptr<ShadowNode> cloned = slot.node->clone({});
+    auto *layoutable = dynamic_cast<LayoutableShadowNode *>(cloned.get());
+    if (layoutable == nullptr) {
+      continue;
+    }
+    const Rect *rect = measurement.slotFor(slot.ordinal);
+    if (rect == nullptr) {
+      // A slot whose ordinal has no hosted block in this document: a stale
+      // child from a lagging render, or one that arrived while the source was
+      // still being prepared. Nothing is drawn for it, which is what a clipped
+      // inline view does.
+      layoutable->setLayoutMetrics(LayoutMetrics{.frame = {}, .displayType = DisplayType::None});
+      (*children)[index] = std::move(cloned);
+      continue;
+    }
+    const Size size{rect->size.width, rect->size.height};
+    LayoutConstraints constraints{size, size, getLayoutMetrics().layoutDirection};
+    layoutable->layoutTree(layoutContext, constraints);
+    LayoutMetrics metrics = layoutable->getLayoutMetrics();
+    metrics.frame.size = size;
+    metrics.frame.origin = rect->origin;
+    layoutable->setLayoutMetrics(std::move(metrics));
+    (*children)[index] = std::move(cloned);
+  }
+  children_ = std::move(children);
 }
 
 void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
@@ -418,20 +577,29 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   // layout is: the node measured with one set and would otherwise mount with
   // another, which is a picture that draws at a height it was not measured at.
   const downstream::ImageStateLayout images = imageState(imageLayout(document));
+  // The hosted children are part of it for the same reason again: a fence drawn
+  // by a React component takes that component's height, so the view has to
+  // mount with the same set the node measured. The measurement's own answers,
+  // not a second measurement: a child measured twice at two widths would put
+  // the document and the view at two different heights.
+  const downstream::HostLayout hosts = measuredHosts_;
   if (document && state.document != document) {
     reportMathErrors(document, state.document);
   }
   if (state.document != document || state.fontSizeMultiplier != layoutContext.fontSizeMultiplier ||
-      state.chrome != chrome || state.code != code || state.images != images || state.themeId() != themeId()) {
+      state.chrome != chrome || state.code != code || state.images != images || state.hosts != hosts ||
+      state.themeId() != themeId()) {
     DownstreamMarkdownState next{state};
     next.document = document;
     next.fontSizeMultiplier = layoutContext.fontSizeMultiplier;
     next.chrome = chrome;
     next.code = code;
     next.images = images;
+    next.hosts = hosts;
     next.theme = theme_;
     setStateData(std::move(next));
   }
+  layoutSlots(layoutContext);
 
   if (pendingError_) {
     getConcreteEventEmitter().onMarkdownError({

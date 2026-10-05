@@ -13,11 +13,18 @@ constexpr size_t kMeasurementCacheCapacity = 64;
 
 } // namespace
 
-Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
-                                          const LayoutConstraints &layoutConstraints, SurfaceId surfaceId,
-                                          uint32_t chrome, const downstream::CodeLayout &code,
-                                          const downstream::ImageLayout &images,
-                                          const downstream::Theme::Handle &theme) const {
+uint64_t DownstreamTextLayoutManager::themeKey(const downstream::Theme::Handle &theme) {
+  return theme ? theme->layoutKey() : 0;
+}
+
+DocumentMeasurement DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &document,
+                                                         Float fontSizeMultiplier,
+                                                         const LayoutConstraints &layoutConstraints,
+                                                         SurfaceId surfaceId, uint32_t chrome,
+                                                         const downstream::CodeLayout &code,
+                                                         const downstream::ImageLayout &images,
+                                                         const downstream::HostLayout &hosts,
+                                                         const downstream::Theme::Handle &theme) const {
   const Float maximumWidth = layoutConstraints.maximumSize.width;
   // The theme can cap the platform's font scale, and the cap is applied before
   // the scale reaches either the cache key or the platform, so a measurement and
@@ -25,8 +32,8 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
   const Float scale = static_cast<Float>(
       downstream::theme_layout::fontScale(theme ? *theme : *downstream::Theme::defaultTheme(),
                                           fontSizeMultiplier));
-  const uint64_t themeLayoutKey = theme ? theme->layoutKey() : 0;
-  Size size{0, 0};
+  const uint64_t themeLayoutKey = themeKey(theme);
+  DocumentMeasurement measurement;
   if (document) downstream::SessionTrace::recordDocument(document->id, "measure_start");
 
   if (document && !document->blocks.empty()) {
@@ -36,8 +43,8 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
       for (const auto &entry : cache_) {
         if (entry.documentId == document->id && entry.fontSizeMultiplier == scale &&
             entry.maximumWidth == maximumWidth && entry.chrome == chrome && entry.code == code &&
-            entry.images == images && entry.themeLayoutKey == themeLayoutKey) {
-          size = entry.size;
+            entry.images == images && entry.hosts == hosts && entry.themeLayoutKey == themeLayoutKey) {
+          measurement = entry.measurement;
           cached = true;
           break;
         }
@@ -45,12 +52,13 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
     }
 
     if (!cached) {
-      size = measurePlatform(document, scale, maximumWidth, surfaceId, chrome, code, images, theme);
+      measurement = measurePlatform(document, scale, maximumWidth, surfaceId, chrome, code, images, hosts, theme);
       std::lock_guard<std::mutex> lock(cacheMutex_);
       if (cache_.size() >= kMeasurementCacheCapacity) {
         cache_.erase(cache_.begin());
       }
-      cache_.push_back({document->id, scale, maximumWidth, chrome, code, images, themeLayoutKey, size});
+      cache_.push_back(
+          {document->id, scale, maximumWidth, chrome, code, images, hosts, themeLayoutKey, measurement});
     } else {
       downstream::SessionTrace::recordDocument(document->id, "measure_cache_hit");
     }
@@ -58,15 +66,41 @@ Size DownstreamTextLayoutManager::measure(const downstream::DocumentHandle &docu
 
   // Block content fills the available width, like a paragraph on the web.
   if (std::isfinite(maximumWidth)) {
-    size.width = maximumWidth;
+    measurement.size.width = maximumWidth;
   }
-  size.width = std::max(size.width, layoutConstraints.minimumSize.width);
-  size.height = std::max(size.height, layoutConstraints.minimumSize.height);
+  measurement.size.width = std::max(measurement.size.width, layoutConstraints.minimumSize.width);
+  measurement.size.height = std::max(measurement.size.height, layoutConstraints.minimumSize.height);
   if (std::isfinite(layoutConstraints.maximumSize.height)) {
-    size.height = std::min(size.height, layoutConstraints.maximumSize.height);
+    measurement.size.height = std::min(measurement.size.height, layoutConstraints.maximumSize.height);
   }
   if (document) downstream::SessionTrace::recordDocument(document->id, "measure_end");
-  return size;
+  return measurement;
+}
+
+DocumentMeasurement DownstreamTextLayoutManager::cachedMeasurement(
+    const downstream::DocumentHandle &document, Float fontSizeMultiplier, Float maximumWidth, uint32_t chrome,
+    const downstream::CodeLayout &code, const downstream::ImageLayout &images,
+    const downstream::HostLayout &hosts, const downstream::Theme::Handle &theme) const {
+  DocumentMeasurement measurement;
+  if (!document) {
+    return measurement;
+  }
+  // The same key `measure` writes under, including the theme's font scale: the
+  // entry that sized this document was written at the scale measurement
+  // resolved, and layout reads the same resolved scale.
+  const Float scale = static_cast<Float>(downstream::theme_layout::fontScale(
+      theme ? *theme : *downstream::Theme::defaultTheme(), fontSizeMultiplier));
+  const uint64_t themeLayoutKey = themeKey(theme);
+  std::lock_guard<std::mutex> lock(cacheMutex_);
+  for (const auto &entry : cache_) {
+    if (entry.documentId == document->id && entry.fontSizeMultiplier == scale &&
+        entry.maximumWidth == maximumWidth && entry.chrome == chrome && entry.code == code &&
+        entry.images == images && entry.hosts == hosts && entry.themeLayoutKey == themeLayoutKey) {
+      measurement = entry.measurement;
+      break;
+    }
+  }
+  return measurement;
 }
 
 } // namespace facebook::react

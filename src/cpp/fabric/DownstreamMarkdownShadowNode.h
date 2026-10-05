@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace facebook::react {
 
@@ -68,6 +69,45 @@ private:
     std::string code;
     std::string message;
   };
+
+  /// A mounted `DownstreamFenceSlot` child: the code block it hosts and the
+  /// child itself.
+  struct SlotChild {
+    uint32_t ordinal{0};
+    std::shared_ptr<const ShadowNode> node;
+  };
+
+  /// The slot children a measurement or a layout has to consider, in child
+  /// order. A child whose `display` is `none` — which is what React gives a
+  /// suspended subtree — is not in the list, so it hosts nothing and its fence
+  /// draws as a code card.
+  ///
+  /// Native decides this from the children it actually has rather than from a
+  /// language list JavaScript sent, so the two cannot disagree about which
+  /// fences are hosted.
+  std::vector<SlotChild> slotChildren() const;
+
+  /// What each slot child measures at, as the input both platforms lay the
+  /// document out with. Empty when there are no slot children, so a view with
+  /// no renderers measures and mounts exactly as it did before this existed.
+  downstream::HostLayout measureSlots(const LayoutContext &layoutContext,
+                                      const LayoutConstraints &layoutConstraints) const;
+
+  /// Gives each mounted slot child the rectangle the measurement reserved for
+  /// it, which is `ParagraphShadowNode::layout`'s loop over inline views: this
+  /// node is a Yoga leaf, so Yoga ignores its children and the node lays them
+  /// out itself.
+  void layoutSlots(LayoutContext layoutContext);
+
+  /// The column a hosted block's content takes at `width`: the width less the
+  /// block's container path, through the engine's own `contentLeading`, which is
+  /// the same number both platforms draw their bars and markers with.
+  float slotColumn(const downstream::DocumentHandle &document, uint32_t ordinal, Float width,
+                   Float fontSizeMultiplier) const;
+
+  /// The block a code ordinal names, or null when the document has no such
+  /// block, which is the case for a stale slot from a lagging render.
+  static const downstream::Block *blockForOrdinal(const downstream::DocumentHandle &document, uint32_t ordinal);
 
   /// One controlled source's preparation, shared by every clone of the node
   /// that shows that source.
@@ -144,6 +184,10 @@ private:
   /// prepared; the next revision collects the result.
   mutable bool awaitingPrepared_{false};
   mutable std::optional<PendingError> pendingError_;
+  /// What the slot children measured at during the measurement this revision
+  /// took, so `layout()` mounts the view with the same heights rather than
+  /// measuring a second time at whatever width layout ended up with.
+  mutable downstream::HostLayout measuredHosts_;
 };
 
 } // namespace facebook::react
