@@ -34,6 +34,7 @@ import com.facebook.react.uimanager.PixelUtil
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * Marks a link's text. Taps are hit-tested by the views; accessibility
@@ -57,24 +58,30 @@ internal class LinkSpan(val index: Int, val color: Int, val underlined: Boolean 
   }
 }
 
-/** Raises text by a fraction of its size, for footnote references. */
-private class BaselineShiftSpan(private val fraction: Float) : MetricAffectingSpan() {
+/**
+ * Raises text by [pixels], or lowers it for a negative value, for footnote
+ * references and scripts. Pixels rather than a share of the paint's size,
+ * because the size span applied before this one has already shrunk the paint
+ * and the shift is a share of the block's size, not the script's.
+ */
+private class BaselineShiftSpan(private val pixels: Int) : MetricAffectingSpan() {
   // A positive baseline shift moves text down.
   override fun updateDrawState(paint: TextPaint) {
-    paint.baselineShift -= (paint.textSize * fraction).toInt()
+    paint.baselineShift -= pixels
   }
 
   override fun updateMeasureState(paint: TextPaint) {
-    paint.baselineShift -= (paint.textSize * fraction).toInt()
+    paint.baselineShift -= pixels
   }
 }
 
 /**
- * Holds a line with inline code to the surrounding text's metrics. Android's
- * monospace font has taller metrics than the body font, which would open a
- * gap above the line. Runs before BlockSpan, which adds block spacing.
+ * Holds a line to the surrounding text's metrics. Android's monospace font has
+ * taller metrics than the body font, which would open a gap above a line with
+ * inline code, and a raised or lowered run would open its line the same way.
+ * Runs before BlockSpan, which adds block spacing.
  */
-private class InlineCodeLineSpan(private val ascent: Int, private val descent: Int) : LineHeightSpan {
+private class HeldLineSpan(private val ascent: Int, private val descent: Int) : LineHeightSpan {
   override fun chooseHeight(
     text: CharSequence,
     lineStart: Int,
@@ -93,7 +100,7 @@ private class InlineCodeLineSpan(private val ascent: Int, private val descent: I
 /**
  * A themed line height, as a minimum: a line the face needs more room for keeps
  * it, so no glyph is clipped, and the extra sits above the text, as iOS places
- * it. Runs after InlineCodeLineSpan, which sets absolute metrics, and before
+ * it. Runs after HeldLineSpan, which sets absolute metrics, and before
  * BlockSpan, which adds block spacing on top of the line.
  */
 private class BlockLineHeightSpan(private val height: Int) : LineHeightSpan {
@@ -1394,6 +1401,8 @@ internal class RenderedDocument(
         )
       }
 
+      // Blocks whose inline formula has a layout, whose box its line must hold.
+      val formulaBlocks = document.formulas.filter { it.list != null }.mapTo(HashSet()) { it.block }
       for (run in 0 until document.runCount) {
         val styles = document.runStyles(run)
         val link = document.runLink(run)
@@ -1403,6 +1412,12 @@ internal class RenderedDocument(
         val italic = styles and NativeDocument.STYLE_EMPHASIS != 0
         val isCode = styles and NativeDocument.STYLE_CODE != 0
         val linked = link >= 0
+        // The block's own paint, which inline code's metrics and a script's
+        // shift are measured against.
+        val blockPaint by lazy {
+          val size = text.getSpans(start, end, AbsoluteSizeSpan::class.java).firstOrNull()?.size?.toFloat()
+          TextPaint(paint).apply { if (size != null) textSize = size }
+        }
 
         // The run's face starts as the block's own and takes the inline kind's
         // slots on top, so a `strong` in a themed heading is a heavier heading
@@ -1485,10 +1500,9 @@ internal class RenderedDocument(
           )
         }
         if (isCode) {
-          val size = text.getSpans(start, end, AbsoluteSizeSpan::class.java).firstOrNull()?.size?.toFloat()
-          val metrics = TextPaint(paint).apply { if (size != null) textSize = size }.fontMetricsInt
+          val metrics = blockPaint.fontMetricsInt
           text.setSpan(
-            InlineCodeLineSpan(metrics.ascent, metrics.descent),
+            HeldLineSpan(metrics.ascent, metrics.descent),
             start,
             end,
             flags or (1 shl Spanned.SPAN_PRIORITY_SHIFT),
@@ -1525,53 +1539,38 @@ internal class RenderedDocument(
             flags,
           )
         }
-        if (styles and NativeDocument.STYLE_SUPERSCRIPT != 0) {
-          // A fraction of the block's size, so the script keeps its proportions
-          // when a theme changes the body size.
-          text.setSpan(
-            RelativeSizeSpan(theme.number(ThemeSlots.SLOT_SUPERSCRIPT_FONT_SCALE)),
-            start,
-            end,
-            flags,
-          )
-          text.setSpan(
-            BaselineShiftSpan(theme.number(ThemeSlots.SLOT_SUPERSCRIPT_BASELINE_OFFSET_SCALE)),
-            start,
-            end,
-            flags,
-          )
+        // A raised or lowered run: a <sup>, a <sub>, or a footnote reference.
+        // The size and the shift are both shares of the block's own size, as
+        // iOS and the web measure them, so the shift is fixed here rather than
+        // read off a paint the size span has already shrunk.
+        val superscript = styles and NativeDocument.STYLE_SUPERSCRIPT != 0
+        val subscript = styles and NativeDocument.STYLE_SUBSCRIPT != 0
+        val footnote = styles and NativeDocument.STYLE_FOOTNOTE != 0
+        if (superscript || subscript || footnote) {
+          val (sizeScale, raise) = when {
+            footnote -> theme.number(ThemeSlots.SLOT_FOOTNOTE_SIZE_SCALE) to theme.number(ThemeSlots.SLOT_FOOTNOTE_RAISE)
+            superscript -> theme.number(ThemeSlots.SLOT_SUPERSCRIPT_FONT_SCALE) to
+              theme.number(ThemeSlots.SLOT_SUPERSCRIPT_BASELINE_OFFSET_SCALE)
+            // A subscript lowers.
+            else -> theme.number(ThemeSlots.SLOT_SUBSCRIPT_FONT_SCALE) to
+              -theme.number(ThemeSlots.SLOT_SUBSCRIPT_BASELINE_OFFSET_SCALE)
+          }
+          text.setSpan(RelativeSizeSpan(sizeScale), start, end, flags)
+          text.setSpan(BaselineShiftSpan((blockPaint.textSize * raise).roundToInt()), start, end, flags)
+          // The web's `sub` and `sup` have `line-height: 0`, so a shifted run
+          // never opens its line. A formula's box is what its line has to hold,
+          // so a block with one keeps its natural height, as on iOS.
+          if (blockIndex !in formulaBlocks) {
+            val metrics = blockPaint.fontMetricsInt
+            text.setSpan(
+              HeldLineSpan(metrics.ascent, metrics.descent),
+              start,
+              end,
+              flags or (1 shl Spanned.SPAN_PRIORITY_SHIFT),
+            )
+          }
         }
-        if (styles and NativeDocument.STYLE_SUBSCRIPT != 0) {
-          text.setSpan(
-            RelativeSizeSpan(theme.number(ThemeSlots.SLOT_SUBSCRIPT_FONT_SCALE)),
-            start,
-            end,
-            flags,
-          )
-          // BaselineShiftSpan raises for a positive fraction, so a subscript
-          // negates: it lowers.
-          text.setSpan(
-            BaselineShiftSpan(-theme.number(ThemeSlots.SLOT_SUBSCRIPT_BASELINE_OFFSET_SCALE)),
-            start,
-            end,
-            flags,
-          )
-        }
-        if (styles and NativeDocument.STYLE_FOOTNOTE != 0) {
-          // A fraction of the block's size, so the reference keeps its
-          // proportions when a theme changes the body size.
-          text.setSpan(
-            RelativeSizeSpan(theme.number(ThemeSlots.SLOT_FOOTNOTE_SIZE_SCALE)),
-            start,
-            end,
-            flags,
-          )
-          text.setSpan(
-            BaselineShiftSpan(theme.number(ThemeSlots.SLOT_FOOTNOTE_RAISE)),
-            start,
-            end,
-            flags,
-          )
+        if (footnote) {
           text.setSpan(
             ForegroundColorSpan(
               theme.color(ThemeSlots.SLOT_FOOTNOTE_COLOR, colors.night) ?: colors.link,
