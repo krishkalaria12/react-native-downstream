@@ -7,9 +7,9 @@ This is the Phase 0 contract for the native Markdown component. `src/types.ts` h
 | Feature                             | First release                                                                  | Later release                                                          | Unsupported                                                |
 | ----------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------- |
 | CommonMark blocks and inline syntax | Paragraphs, headings, lists, quotes, rules, emphasis, code, and escapes        | None planned                                                           | Raw HTML execution                                         |
-| GFM tables                          | Progressive rows after a valid separator; horizontal overflow                  | Rich cell content if native layout cannot preserve it at launch        | Raw HTML in cells                                          |
+| GFM tables                          | Progressive rows after a valid separator; horizontal overflow                  | Rich cell content if native layout cannot preserve it at launch        | Raw HTML in cells, except `<br>`                             |
 | GFM task lists                      | Readable checkbox state and accessibility label; display only                  | Interactive toggling                                                   | Mutation of Markdown by tapping                            |
-| Raw HTML                            | Escaped, visible source text                                                   | None planned                                                           | HTML rendering, scripts, embedded content                  |
+| Raw HTML                            | Escaped, visible source text, except `<br>`, `<sub>` and `<sup>`              | `<b>`, `<i>`, `<code>` and the rest of the allowlisted inline tags      | HTML rendering, scripts, embedded content                  |
 | Images                              | HTTPS images after complete URL validation, with placeholders, alt-text fallback, cancellation, a save control, and `onImagePress` | Images inside text, headings and table cells            | `data:`, `file:`, relative, and custom schemes; SVG; over 8 KiB destinations |
 | Code                                | Inline code, progressively visible fenced/indented blocks, syntax highlighting by the fence's language, line numbers, fence titles, a header with copy, download, wrap, and expand controls, and a capped height that scrolls inside the card | Drawing line marks; a theme that can override token colors | Executing code, and highlighting above 64 KiB of code       |
 | Math                                | `math` is off by default, so a document without it is byte-for-byte unchanged. With it on: `$$…$$`, a `$$` line fence and a ` ```math ` fence are display math, `singleDollarTextMath` is off as in Streamdown, `\(…\)` and `\[…\]` are on and can be turned off, and a formula that cannot be laid out keeps its literal and reports `onMathError`. Typesetting itself needs the opt-in engine package. | Macros, images inside a formula, and a display formula wider than its column | Executing macros or loading remote math content            |
@@ -67,6 +67,15 @@ previewed.append('hello **wor');
 // `selectable` is on by default. An app that opens its own message menu on a
 // long press turns it off, or the platform's selection menu wins the gesture.
 <DownstreamMarkdown markdown={message} selectable={false} />;
+
+// `<br>`, `<sub>` and `<sup>` render by default. `false` shows every tag as
+// the source text it was, which is what a document that relies on reading the
+// tags needs.
+<DownstreamMarkdown markdown={message} inlineHtml={false} />;
+
+// md4c's own `^x^` and `~x~`, each of which turns prose into a script, so both
+// are opt-in.
+<DownstreamMarkdown markdown={message} syntax={{ superscript: true }} />;
 ```
 
 The examples describe the runtime API. A view receives exactly one of `markdown` or `stream`. TypeScript rejects both or neither. A controlled string replacement starts a new generation when its value changes. An unchanged value, including a React rerender, does not reset work. `stream` identity changes unbind the previous controller and bind the new one; they do not copy source between controllers.
@@ -79,7 +88,19 @@ A block that is still growing may be colored only in part while it streams, and 
 
 A stream controller owns its source and native session even when its view unmounts. Remounting with the same live controller rebinds and shows the newest snapshot. At most one view may bind a controller at a time; a second binding reports `session_bound`. Unmount does not call `finish()` or `dispose()`; the app disposes when the message is no longer needed. Completed sessions remain bindable until disposal. Controlled views own no stream controller.
 
-`preview` is off by default, so an open span renders as the literal text the writer sent. `true` enables every repair and `{ emphasis, inlineCode, links, images, math }` enables the ones named, as remend's options do. An unfinished link or image previews as its text with the partial target dropped, so it is never tappable before its own `)` arrives. The policy applies only to the stream's unstable tail, is proven by reparsing before it takes effect, never touches `getSource()` or source ranges, and is dropped entirely by `finish()`. `setPreview(options)` changes it mid-stream and restyles the current tail without waiting for new input. The settled document is always a parse of the canonical source; see [provisional styling](streaming-semantics.md#provisional-styling).
+`preview` is off by default, so an open span renders as the literal text the writer sent. `true` enables every repair and `{ emphasis, inlineCode, links, images, math, htmlTags }` enables the ones named, as remend's options do. An unfinished link or image previews as its text with the partial target dropped, so it is never tappable before its own `)` arrives. `htmlTags` hides a half-arrived allowlisted tag, so a stream that stops after `Mix<br` shows a line rather than the fragment; a fragment that a reparse cannot prove was a tag comes back, which is why a comparison such as `a<b` is hidden for at most one chunk. The policy applies only to the stream's unstable tail, is proven by reparsing before it takes effect, never touches `getSource()` or source ranges, and is dropped entirely by `finish()`. `setPreview(options)` changes it mid-stream and restyles the current tail without waiting for new input. The settled document is always a parse of the canonical source; see [provisional styling](streaming-semantics.md#provisional-styling).
+
+## Inline HTML
+
+Three inline tags are rendered rather than shown as source: `<br>` as a line break, and `<sub>` and `<sup>` as a lowered or raised run. This is on by default, and `inlineHtml={false}` restores the output of the release that showed every tag as visible text. Nothing else is ever interpreted: every other tag, and every tag inside code, math, or an HTML block, stays literal, and the contract's rule that nothing is ever executed is unchanged. A tag's attributes are ignored, as the web's sanitize schema drops them, so `<sup class="x">` is a superscript.
+
+The tags match case-insensitively, in every self-closing form, and `<sub/>` is swallowed rather than opening a script, because a writer who means a superscript does not write that. A close tag with nothing open is swallowed too, which is what a browser does and what keeps an escaped `\<sub>` from showing a dangling `</sub>`. An unclosed tag runs to the end of its block or cell, as it would inside a `<p>`. Markdown inside the tags keeps working, so `<sup>**y**</sup>` is bold and raised. `<sup>[^1]</sup>` reads as the footnote reference it imitates: raised once, by the reference's own rule.
+
+A `<br>` beside a source line break is still one break, because this renderer shows soft line breaks as breaks. Each `<br>` and each hard break counts one, and soft breaks in a stretch that has neither are counted as they always were. Spaces directly around a `<br>` are dropped, as HTML's collapsing drops them. A cell can hold a `<br>`, which is what makes it the way a table row breaks a line, and the toolbar copies it back as one.
+
+`syntax={{ superscript, subscript }}` adds md4c's own `^x^` and `~x~`. Both are off by default and each is worth turning on deliberately: `^x^` makes `2^10 and 3^5` a superscript, and `~x~` takes `~strike~` away from strikethrough, which is what remark reads it as. The style bits they produce are the same ones the tags produce, so `markdownStyle.superscript` and `markdownStyle.subscript` theme both.
+
+A stream's `inlineHtml` and `syntax` are read once, with `math`, at `createMarkdownStream`, because parse options are part of a source's identity. Changing them later would parse the same string two ways.
 
 ## Controls
 
@@ -297,9 +318,9 @@ Parsing and platform text preparation run on one shared pool of worker threads: 
 | Area | Current behavior | Planned |
 | --- | --- | --- |
 | Input | Controlled `markdown` and `createMarkdownStream` with a `stream` prop. Streams use incremental parsing, share completed blocks, and fall back to a full parse at unproven boundaries. The stream buffers up to 64 KiB per native append and 256 KiB of unacknowledged input. Lone surrogates and sources over 1 MiB are rejected in JavaScript. | Real-device performance measurements. |
-| Line breaks | Soft line breaks display as line breaks, as the fixture contract requires. | None |
+| Line breaks | Soft line breaks display as line breaks, as the fixture contract requires. `<br>` is one break too: a `<br>` next to a source line break still shows one break, and a stretch of soft breaks, hard breaks, and tags is counted once per hard mark, with the spaces around a `<br>` dropped. A cell can hold a `<br>`, and it is written back as one in Markdown and HTML exports. | None |
 | Tables | Columns take their widest cell, clamped to 56–280 points plus padding, with md4c's column alignment. Wide tables scroll horizontally. Cells keep inline styles and links. Completed rows appear during streaming without resetting the scroll position. A toolbar copies the table as HTML, Markdown, CSV, or TSV and saves it as CSV or Markdown. | None |
-| Admonitions and footnotes | Admonitions render as a quote with a colored bar and title. Footnote references are superscript numbers; definitions follow a rule at the end. | None |
+| Admonitions and footnotes | Admonitions render as a quote with a colored bar and title. Footnote references are superscript numbers; definitions follow a rule at the end. A `<sup>1</sup>` a model writes looks the same as the `[^1]` it writes, and `superscript` and `subscript` in `markdownStyle` set each script's size and baseline shift. | None |
 | Links | Tap hit testing emits `onLinkPress` with a validated URL and the UTF-16 range of its Markdown occurrence, in text and table cells. VoiceOver and TalkBack expose each link as a focusable link role. | Long press actions in a later release. |
 | Selection | `selectable` enables native selection and copy in text segments. **It is on by default**, applied per settled segment, so text that is still streaming is never selectable. Copy is plain visible text; `getSource()` returns the complete canonical stream source. Selection cannot span a table or completed segment boundary. `controls` adds a per-block copy and download, described under [controls](#controls). | An app that opens its own message menu on a long press must pass `selectable={false}`. |
 | Accessibility | VoiceOver and TalkBack expose reading stops for text blocks, table rows, and links, with heading and link roles and spoken task state. | Rich table navigation if needed. |
