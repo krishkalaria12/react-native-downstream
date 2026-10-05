@@ -53,6 +53,7 @@
     "test:ios:layout": "bash tests/ios/run-native-harness.sh",
     "test:ios:math": "bash tests/ios/run-math-harness.sh",
     "typecheck:android": "node tests/android/typecheck.mjs",
+    "test:fabric": "node tests/fabric/syntax-check.mjs",
     "bench": "vitest bench --run",
     "bench:native": "node benchmarks/native-highlight.mjs",
     "bench:math": "node benchmarks/native-math.mjs",

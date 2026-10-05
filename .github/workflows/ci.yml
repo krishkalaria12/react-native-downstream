@@ -29,6 +29,13 @@ jobs:
       - name: Typecheck files
         run: pnpm typecheck
 
+      # The fabric and session C++ is compiled by Xcode and Gradle inside React
+      # Native's build, against headers that exist only there. This parses them
+      # against the headers in node_modules, which is where a signature React
+      # Native's bridging cannot call gets caught.
+      - name: Check the fabric and session C++
+        run: pnpm test:fabric
+
   test:
     runs-on: ubuntu-latest
     env:
