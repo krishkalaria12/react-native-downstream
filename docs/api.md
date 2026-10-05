@@ -14,7 +14,7 @@ This is the Phase 0 contract for the native Markdown component. `src/types.ts` h
 | Code                                | Inline code, progressively visible fenced/indented blocks, syntax highlighting by the fence's language, line numbers, fence titles, a header with copy, download, wrap, and expand controls, and a capped height that scrolls inside the card | Drawing line marks; a theme that can override token colors | Executing code, and highlighting above 64 KiB of code       |
 | Math                                | `math` is off by default, so a document without it is byte-for-byte unchanged. With it on: `$$…$$`, a `$$` line fence and a ` ```math ` fence are display math, `singleDollarTextMath` is off as in Streamdown, `\(…\)` and `\[…\]` are on and can be turned off, and a formula that cannot be laid out keeps its literal and reports `onMathError`. Typesetting itself needs the opt-in engine package. | Macros, images inside a formula, and a display formula wider than its column | Executing macros or loading remote math content            |
 | Links                               | Valid complete `https:`, `http:`, and `mailto:` links; press callback          | Long press actions                                                     | Automatic opening of custom schemes                        |
-| Custom renderers                    | None                                                                           | None planned                                                           | Per-node React render callbacks in the native display path |
+| Custom renderers                    | Fence-language renderers through `plugins.renderers`, with a code card fallback  | Native card chrome around a renderer                                | Per-node React render callbacks, and renderers for inline code, indented code, or `math` fences while math is on |
 | Theming                             | `theme` and `markdownStyle`, per-element precision, both presets, and a VS Code converter | Per-node themes inside one document                             | Style objects, stylesheet context, and cascading selectors  |
 | Selection                           | Select/copy visible text and complete canonical source, plus per-block copy and download on code and table blocks | Long press actions                                            | Editing inside the display view                            |
 | Accessibility                       | Text reading order, heading and link roles, task state, font scaling, RTL text | Rich table navigation if needed                                        | Platform-specific semantics that change source meaning     |
@@ -151,11 +151,61 @@ type MarkdownControlEvent = {
 
 A control that fails reports `control_failed` to that control's own `onError`, and to the view's `onError` when the control has none, so an app can watch every failure in one place without giving up per-control handling. The error carries `block` and `action` naming the control that failed, so nothing has to be parsed out of the message.
 
+## Fence renderers
+
+A fenced block whose language the app registered is drawn by the app's own React component instead of the code card. The block stays part of the one native view: the component is a real child that the view measures and places where the card would have been, in the same commit that draws the message. There is no second frame, no overlay, and no change for a view that registers nothing.
+
+```tsx
+<DownstreamMarkdown
+  markdown={message}
+  plugins={{
+    renderers: [
+      { language: ['vega', 'vega-lite'], component: VegaLiteChart },
+      { language: 'mermaid', component: MermaidDiagram },
+    ],
+  }}
+  onError={(e) => e.code === 'renderer_failed' && log(e.language, e.message)}
+/>
+```
+
+Each renderer is a component of four props:
+
+```ts
+type CustomRendererProps = {
+  /** The fence's text, exactly what the code block's copy button copies. */
+  code: string;
+  /** The info string's first word as written, cut at `:`. */
+  language: string;
+  /** The info string after the language, trimmed, or `undefined`. */
+  meta?: string;
+  /** True until the fence is settled. */
+  isIncomplete: boolean;
+};
+```
+
+**Matching.** The language is normalized as ASCII lower case, cut at the first space and at `:`, and matched against the registered list. So ` ```Mermaid `, ` ```mermaid title="flow" `, and ` ```mermaid:src/x.mmd ` all match a `mermaid` renderer, and a renderer's `language` may be a string or an array of them. When two entries name the same language the first wins, so an app can override whatever it registered earlier. `language` reaches the component as written, so a renderer that wants the author's exact casing has it.
+
+**What is a candidate.** A fenced code block with a registered language. An indented code block has no language and is never one. A ` ```math ` fence is a formula block while math is on and never one, exactly as in Streamdown, where remark-math claims the language before the code component runs. A fence whose info line has not ended yet is not a candidate: ` ```merm ` is still growing into ` ```mermaid `, so it draws as a card until its newline arrives.
+
+**Sizing and nesting.** A component is measured at the content column's width — the message width less whatever quote or list margin its block sits in — and the block takes the height the component measured, with a code block's own margins, so the space around a fence does not change when it becomes a chart. It works inside lists, quotes, admonitions, and footnotes: the native side still draws the marker and the bars beside it. `codeBlockMaxHeight`, `lineNumbers`, wrap, expand, and the code controls do not apply to a hosted block, because the component owns its own height and its own chrome.
+
+**Completeness.** `isIncomplete` is true while the fence's content is not final: a stream's unclosed last fence, and — before a controlled view has its own `isAnimating` — an open final fence in a growing string, which is Streamdown's rule for the same case. After `finish()` a fence the model never closed reads complete, because the stream is settled and there is nothing more coming. A renderer that guards `isIncomplete` and shows a placeholder until the spec is whole gets a stable render.
+
+**The code card is the fallback.** While a lazy renderer loads, after a renderer throws, and for any fence with no mounted component, the native code card is what the reader sees: themed, selectable, with copy and download. A component that returns `null` is an empty slot rather than a failure — that is the app's choice — and a component that throws is reported once as `renderer_failed` on the view's `onError`, with `language` naming the fence, only after the fence settles. The boundary resets when the fence's text or completeness changes, so a renderer that failed on a half-streamed spec gets another chance on the next snapshot.
+
+**Cost.** A view with no registered renderers sends no fence query, mounts no children, and measures exactly as it did before this feature existed. A stream's query reads the published snapshot the view is mounting and never parses. A controlled source up to 16 KiB is parsed synchronously, once per distinct source, math setting and registered language list, and a larger one is read on the worker pool while the fences draw as cards — the same thing a large source already does while its own preparation runs.
+
+**Accessibility.** A hosted component is in the reading order where its fence is, between the text above it and the text below it, on both platforms.
+
+**Security.** Fence text is model output and is untrusted. Never `eval` it. A renderer that embeds HTML should set `originWhitelist` and block navigation, and one that calls a server must not let a spec name an arbitrary URL. Downstream itself never executes fence content.
+
 ## Events and failures
 
 `onLinkPress` receives the complete validated URL and the range of its Markdown occurrence, including delimiters. A reference link's range covers its use, not its definition. The library does not open a URL itself. Only absolute `http:`, `https:`, and `mailto:` targets without control characters are actionable. Scheme matching is case-insensitive. Relative, incomplete, and disallowed targets are plain text and never emit link events. `onError` on the controller receives session failures even while no view is mounted. `onError` on the view receives controlled-source or view/layout failures. An event carries `code`, `message`, `generation`, `sequence`, and `recoverable`; errors from an old generation are discarded. Invalid synchronous calls throw a typed error with the same code. Failed append or reset calls leave source, generation, and last valid snapshot unchanged. Asynchronous parse/render failures retain the last valid snapshot and report one error for the failed sequence. A later append or reset may recover.
 
 No parser model or AST is sent to JavaScript for display. The stream controller is a source/session handle, and the view binds by session identity. Native parse and view application both reject stale generation or sequence results.
+
+The one documented exception is a fence renderer's props: for a fenced block whose language the app registered, the engine sends that block's `code`, `language`, `meta`, and completeness to JavaScript. Nothing else crosses — no ranges, no block kinds, no parse tree — and it is exactly what Streamdown's `CustomRendererProps` carries.
 
 ## Theming
 
@@ -306,3 +356,6 @@ Parsing and platform text preparation run on one shared pool of worker threads: 
 | RTL | Text uses natural writing direction. List markers, quote bars, code backgrounds, rules, and table columns mirror for RTL content. | None |
 | Code blocks | Fenced blocks are colored from a shared token palette modeled on GitHub's light and dark code themes, so iOS and Android agree. A streaming block is colored from the text it has, and its settled tokens are the same whether it arrived in one piece or a thousand. Selection and copy return the plain code text. Each fenced block gets a header with copy, download, a per-block wrap button, and an expand button that appears only on a block past the cap; `codeBlockWrap` sets the starting state for all of them. `lineNumbers` is on by default and draws a gutter that stays put while the code scrolls sideways, numbered from the fence's `startLine` and widened when the last number gains a digit. `codeBlockMaxHeight` caps a block's body at 400 points and lets it scroll inside its card, which follows its newest line while it streams. A fence's `title=` replaces the language in the header, truncating in the middle so a path keeps its file name. None of this changes copied text, selection, or what a screen reader reads. | Drawing `meta.marks` as line backgrounds. A theme that can override token colors. |
 | Colors | System colors follow light and dark appearance on both platforms. | Style customization after the feature set is fixed. |
+| Fence renderers | A fenced block whose language the app registered is drawn by that component, measured at the content column and placed where the card would have been, in the same commit. Any fence without a mounted component draws the code card, including while a lazy renderer loads and after one throws. Streaming passes `isIncomplete` until the fence settles, and a settled component does not re-render for later snapshots. | Native card chrome around a component, so the code card's header, copy, and download surround it. |
+
+The rules that hold across every feature: no fence renderer means no query, no children, and the same measurement as before; a document with no lexer for a language never loads one; a formula with no engine installed keeps its literal; and a source over 1 MiB or with an unpaired surrogate is rejected in JavaScript before it reaches the engine.

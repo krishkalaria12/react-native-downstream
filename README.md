@@ -162,6 +162,28 @@ A download opens the platform's own save dialog and the user picks the location,
 
 `selectable` is on by default: a long press on settled text starts a text selection, and text that is still streaming is never selectable. An app that opens its own message menu on a long press — react, reply, delete — passes `selectable={false}`.
 
+### Fence renderers
+
+A fenced block whose language you register is drawn by your own React component instead of the code card, inside the same native view and in the same commit. `plugins.renderers` is Streamdown's shape, so a configuration written for the web needs only its components rewritten:
+
+```tsx
+<DownstreamMarkdown
+  markdown={message}
+  plugins={{
+    renderers: [
+      { language: ['vega', 'vega-lite'], component: VegaLiteChart },
+      { language: 'mermaid', component: MermaidDiagram },
+    ],
+  }}
+/>
+```
+
+A renderer receives four props: `code` (exactly what the block's copy button copies), `language` as the writer wrote it, `meta` from the rest of the info string, and `isIncomplete` while the fence is still streaming. Guard `isIncomplete` and show a placeholder: a component that renders half a chart looks broken, and one that renders a whole chart for a spec that is still arriving flickers as it grows.
+
+The code card is the fallback, and it is the reason this is safe to ship: a lazy component that has not loaded yet, one that throws, and any fence you did not register all draw the card you already have, with copy and download. A throw is reported once as `renderer_failed` on `onError`, only after the fence settles, and the fence draws its card. Nothing executes a fence: a renderer that embeds HTML must sandbox it itself, because the text it receives is model output.
+
+See [fence renderers](docs/api.md#fence-renderers) for matching, sizing, streaming, and accessibility, and [the plan](docs/fence-renderers-plan.html) for how it is built.
+
 ## Contributing
 
 - [Development workflow](CONTRIBUTING.md#development-workflow)
@@ -170,10 +192,12 @@ A download opens the platform's own save dialog and the user picks the location,
 
 ## Example app
 
-`example/` has five screens behind a drawer, opened from the app bar or by
+`example/` has six screens behind a drawer, opened from the app bar or by
 dragging in from the left edge. Example streams a live Markdown chat reply from
-OpenAI. Controls exercises copy, download, and wrap on code blocks and tables,
-and logs what every press reports. Testing replays one source through
+OpenAI, with a chart renderer registered. Controls exercises copy, download, and
+wrap on code blocks and tables, and logs what every press reports. Renderers
+draws fences with app components, including one that throws and one that loads
+lazily, in controlled and streamed modes. Testing replays one source through
 Streamdown and then Downstream and shows the comparison once both runs finish.
 Bench replays a source through Downstream alone and exports a trace for the
 [performance method](docs/performance-methodology.md). Stress streams several
@@ -193,7 +217,7 @@ cp example/.env.example example/.env
 
 Expo compiles `EXPO_PUBLIC_` variables into the bundle, so use a key you can
 revoke and never ship that build. Clear the bundler cache after changing the
-value. The other four screens need no key.
+value. The other five screens need no key.
 
 ## Markdown implementation plan
 
@@ -290,6 +314,20 @@ pnpm typecheck:android
 Gradle cache, and skips with a message when one is missing. It resolves
 `react-android` out of that cache and runs React Native's own codegen, so the view
 manager interface it checks against is the generated one.
+
+### The C++ React Native builds
+
+Three C++ files reach a device through React Native's own build rather than
+through this repository's, so no test here compiled them until this check:
+
+```sh
+pnpm test:fabric
+```
+
+It runs the compiler in syntax-only mode over the fabric shadow node, the layout
+manager it calls, and the session TurboModule, against React Native's real
+headers and its real codegen output from `node_modules`. It needs a C++ compiler
+and nothing else.
 
 The Android build compiles C++ with `-Werror`, so a deprecation warning that iOS
 lets through fails here. `example/ios` and `example/android` are generated and
