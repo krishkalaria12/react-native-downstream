@@ -148,6 +148,24 @@ describe('line breaks', () => {
       assertStreamingMatchesFullParse(source.split(/(?<=\n)/));
     }
   });
+
+  it('clips only trailing styled whitespace while preserving earlier runs', () => {
+    const prefix = 'H<sub>2</sub>O **bold** <br> '.repeat(128);
+    const model = parse(
+      `${prefix}<sup>😀e\u0301 \t</sup><sub> \t</sub><br>終`,
+      ON
+    );
+    const block = model.blocks[0]!;
+    expect(block.text).toBe(`${'H2O bold\n'.repeat(128)}😀e\u0301\n終`);
+    expect(block.runs).toHaveLength(257);
+    expect(stylesOf(block, '😀e\u0301')[0]![2]).toBe(STYLE.superscript);
+    for (const [index, run] of block.runs.entries()) {
+      expect(run[0]).toBeLessThan(run[1]);
+      expect(run[1]).toBeLessThanOrEqual(block.text.length);
+      if (index > 0)
+        expect(block.runs[index - 1]![1]).toBeLessThanOrEqual(run[0]);
+    }
+  });
 });
 
 describe('the opt-in syntaxes', () => {

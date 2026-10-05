@@ -831,6 +831,12 @@ bool htmlTagFragments() {
   CHECK(shown("H<sub>2</sub") == "H2", "a half-arrived subscript is hidden");
   CHECK(shown("x<sup>2</sup") == "x2", "a half-arrived superscript is hidden");
 
+  const PreviewResult nested = kPreview.apply("**bold<su", 0, 0, inlineHtml);
+  CHECK(visible(*nested.parsed.document) == "bold", "tag removal updates the emphasis insertion offset");
+  CHECK((styles(*nested.parsed.document) & kStrong) != 0, "emphasis still repairs after a partial tag");
+  const PreviewResult link = kPreview.apply("[label<su", 0, 0, inlineHtml);
+  CHECK(visible(*link.parsed.document) == "label", "tag removal updates unfinished-link offsets");
+
   // A prefix of no allowlisted tag is text, and the proof says so rather than
   // the shape of the fragment deciding it.
   CHECK(shown("a<b and 2<3") == "a<b and 2<3", "a comparison stays");
@@ -903,6 +909,7 @@ bool sharedScanner() {
   CHECK(matchInlineTag("<supplier>") == InlineTag::None, "and neither is this one");
   CHECK(matchInlineTag("<brx>") == InlineTag::None, "a name that runs past br is not a br");
   CHECK(matchInlineTag("a < b") == InlineTag::None, "prose is never a tag");
+  CHECK(matchInlineTag("<" + std::string(65536, 'a') + ">") == InlineTag::None, "a long unsupported name stays literal");
 
   // The prefix rule the preview pass asks, on the same table.
   CHECK(isInlineTagPrefix("<"), "a lone opener could still become a tag");

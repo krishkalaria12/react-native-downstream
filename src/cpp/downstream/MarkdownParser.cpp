@@ -483,9 +483,7 @@ public:
           }
         }
         // Any other tag, and every tag while inline HTML is off, stays text.
-        std::u16string piece;
-        appendUtf8(piece, std::string_view(text, size));
-        appendStretchFlushed(piece, currentStyles(), currentLink());
+        appendUtf8Text(std::string_view(text, size), currentStyles(), currentLink());
         return done();
       }
       case MD_TEXT_NULLCHAR: {
@@ -503,14 +501,13 @@ public:
       case MD_TEXT_LATEXMATH:
         break;
       default: {
-        std::u16string piece;
-        appendUtf8(piece, std::string_view(text, size));
+        std::string_view piece(text, size);
         if (dropNextSpace_) {
           size_t skip = 0;
-          while (skip < piece.size() && (piece[skip] == u' ' || piece[skip] == u'\t')) {
+          while (skip < piece.size() && (piece[skip] == ' ' || piece[skip] == '\t')) {
             skip++;
           }
-          piece.erase(0, skip);
+          piece.remove_prefix(skip);
           if (piece.empty()) {
             // A whitespace-only piece between a <br> and the next text is
             // dropped: the break that will flush the stretch stands in its
@@ -519,7 +516,7 @@ public:
           }
           dropNextSpace_ = false;
         }
-        appendStretchFlushed(piece, currentStyles(), currentLink());
+        appendUtf8Text(piece, currentStyles(), currentLink());
         return done();
       }
     }
@@ -950,8 +947,22 @@ private:
     auto &block = *current_;
     const auto start = static_cast<uint32_t>(block.text.size());
     block.text.append(piece);
+    recordRun(start, styles, link);
+  }
+
+  // Decode directly into the leaf instead of allocating and copying a UTF-16
+  // string for every md4c callback, including every fragment between tags.
+  void appendUtf8Text(std::string_view piece, uint32_t styles, int32_t link) {
+    flushStretch(false);
+    const auto start = static_cast<uint32_t>(current_->text.size());
+    appendUtf8(current_->text, piece);
+    recordRun(start, styles, link);
+  }
+
+  void recordRun(uint32_t start, uint32_t styles, int32_t link) {
+    auto &block = *current_;
     const auto end = static_cast<uint32_t>(block.text.size());
-    if (styles == 0 && link < 0) {
+    if (start == end || (styles == 0 && link < 0)) {
       return;
     }
     if (!block.runs.empty()) {
@@ -1007,15 +1018,14 @@ private:
       return;
     }
     text.resize(n);
-    for (auto &run : current_->runs) {
-      run.end = std::min<uint32_t>(run.end, static_cast<uint32_t>(n));
+    // Runs are sorted and disjoint. Only the suffix can overlap the trimmed
+    // whitespace; visiting the prefix for every <br> makes a rich leaf quadratic.
+    auto &runs = current_->runs;
+    while (!runs.empty() && runs.back().start >= n) {
+      runs.pop_back();
     }
-    for (auto it = current_->runs.begin(); it != current_->runs.end();) {
-      if (it->start >= it->end) {
-        it = current_->runs.erase(it);
-      } else {
-        ++it;
-      }
+    if (!runs.empty()) {
+      runs.back().end = std::min<uint32_t>(runs.back().end, static_cast<uint32_t>(n));
     }
   }
 

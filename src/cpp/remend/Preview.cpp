@@ -45,15 +45,6 @@ bool carriesInlineSpans(const Block &block) {
       block.kind == BlockKind::TableRow || block.kind == BlockKind::Image;
 }
 
-bool inCodeSpan(const Block &block, size_t index) {
-  for (const InlineRun &run : block.runs) {
-    if (run.start <= index && index < run.end && (run.styles & InlineStyle::Code) != 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /// Every literal marker run in `block` that could be an opener md4c has not
 /// closed yet, last first. The last is the innermost, so `**bold *ital` offers
 /// the `*` before the `**`, and closers are appended in the order that nests.
@@ -66,6 +57,7 @@ std::vector<OpenSpan> findOpenSpans(const Block &block) {
   const std::u16string &text = block.text;
   std::vector<OpenSpan> found;
   size_t index = 0;
+  size_t runIndex = 0;
   while (index < text.size()) {
     const char16_t marker = text[index];
     if (marker != u'*' && marker != u'_' && marker != u'~' && marker != u'`') {
@@ -79,7 +71,12 @@ std::vector<OpenSpan> findOpenSpans(const Block &block) {
     const size_t length = end - index;
 
     // A marker inside a completed code span is content, not syntax.
-    if (!inCodeSpan(block, index) && length >= 1 && length <= 3 && end < text.size()) {
+    while (runIndex < block.runs.size() && block.runs[runIndex].end <= index) {
+      runIndex++;
+    }
+    const bool inCode = runIndex < block.runs.size() && block.runs[runIndex].start <= index &&
+        (block.runs[runIndex].styles & InlineStyle::Code) != 0;
+    if (!inCode && length >= 1 && length <= 3 && end < text.size()) {
       // A single tilde is never an opener. md4c's GitHub dialect reads `~x~`
       // as strikethrough, so closing one would invent a span the writer did not
       // type; `~~` is the delimiter the writer has to mean.
@@ -690,7 +687,7 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
     return result;
   }
   ParseResult current = baseline;
-  std::string text(region);
+  std::string &text = result.text;
 
   // A half-arrived tag first, because it is the one fragment the writer cannot
   // have meant as content: the tag bytes have no text between them and no
@@ -708,6 +705,7 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
         result.stats.applied++;
         text = std::move(probe);
         current = std::move(probed);
+        trailing = trailingWhitespace(text);
       }
     }
   }
@@ -735,7 +733,6 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
       // A formula now exists, and its contents are verbatim, so a link or a
       // span repair after it would act on TeX. The pass is done.
       result.repaired = true;
-      result.text = std::move(text);
       result.parsed = std::move(current);
       return result;
     }
@@ -810,7 +807,6 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
     return result;
   }
   result.repaired = true;
-  result.text = std::move(text);
   result.parsed = std::move(current);
   return result;
 }

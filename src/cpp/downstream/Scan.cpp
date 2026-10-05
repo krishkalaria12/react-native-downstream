@@ -1,5 +1,6 @@
 #include "Scan.h"
 
+#include <algorithm>
 #include <string>
 
 namespace downstream::scan {
@@ -271,6 +272,9 @@ InlineTag matchInlineTag(std::string_view piece) {
   const size_t nameStart = i;
   while (i < piece.size() && isTagNameChar(piece[i])) {
     i++;
+    if (i - nameStart > 3) {
+      return InlineTag::None;
+    }
   }
   const size_t nameEnd = i;
   if (nameEnd == nameStart) {
@@ -281,16 +285,14 @@ InlineTag matchInlineTag(std::string_view piece) {
     // match, and a prefix is never accepted.
     return InlineTag::None;
   }
-  std::string name;
-  for (size_t k = nameStart; k < nameEnd; k++) {
-    name.push_back(asciiLower(piece[k]));
-  }
-  if (name == "br") {
+  const size_t length = nameEnd - nameStart;
+  if (length == 2 && asciiLower(piece[nameStart]) == 'b' && asciiLower(piece[nameStart + 1]) == 'r') {
     // A stray `</br>` is a break, because HTML parsers read it that way and
     // models write it.
     return InlineTag::Break;
   }
-  if (name == "sub" || name == "sup") {
+  if (length == 3 && asciiLower(piece[nameStart]) == 's' && asciiLower(piece[nameStart + 1]) == 'u' &&
+      (asciiLower(piece[nameStart + 2]) == 'b' || asciiLower(piece[nameStart + 2]) == 'p')) {
     // Self-closing is a slash before the closing `>`, which may carry trailing
     // space: `<sub/>` and `<sup />` are both written.
     const std::string_view rest = piece.substr(i);
@@ -299,7 +301,7 @@ InlineTag matchInlineTag(std::string_view piece) {
       end--;
     }
     const bool selfClosing = end > 1 && rest[end - 1] == '>' && rest[end - 2] == '/';
-    if (name == "sub") {
+    if (asciiLower(piece[nameStart + 2]) == 'b') {
       return closing ? InlineTag::SubClose : (selfClosing ? InlineTag::SubVoid : InlineTag::SubOpen);
     }
     return closing ? InlineTag::SupClose : (selfClosing ? InlineTag::SupVoid : InlineTag::SupOpen);
@@ -354,13 +356,12 @@ bool isInlineTagPrefix(std::string_view fragment) {
   // The prefix letters so far must still be able to complete to br, sub or sup.
   // Anything else, including a longer word that starts like one of them, is
   // already prose.
-  std::string letters;
-  for (size_t k = nameStart; k < i; k++) {
-    letters.push_back(asciiLower(fragment[k]));
-  }
+  const size_t length = i - nameStart;
   const std::string_view names[] = {"br", "sub", "sup"};
   for (const std::string_view candidate : names) {
-    if (candidate.substr(0, letters.size()) == letters) {
+    if (length <= candidate.size() &&
+        std::equal(fragment.begin() + nameStart, fragment.begin() + i, candidate.begin(),
+                   [](char actual, char expected) { return asciiLower(actual) == expected; })) {
       return true;
     }
   }
