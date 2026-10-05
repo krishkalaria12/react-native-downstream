@@ -313,6 +313,71 @@ void applyTokens(NSMutableAttributedString *text, const Block &block, DSThemeCol
 @implementation DSDecorationMetrics
 @end
 
+/// Keeps a lowered run from lifting its line.
+///
+/// A paragraph holding a script is capped at its own line height, but TextKit
+/// sets a capped line's baseline from the line's deepest descent, so a subscript
+/// moved the whole line up toward the block above. The web's `line-height: 0`
+/// lets the script hang below instead, which is what this restores: the baseline
+/// goes back down by the descent the lowered runs added. Stateless, so one
+/// instance serves every stack on every thread.
+@interface DSScriptLineDelegate : NSObject <NSLayoutManagerDelegate>
+@end
+
+@implementation DSScriptLineDelegate
+
++ (instancetype)shared {
+  static DSScriptLineDelegate *shared;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    shared = [DSScriptLineDelegate new];
+  });
+  return shared;
+}
+
+- (BOOL)layoutManager:(NSLayoutManager *)layoutManager
+    shouldSetLineFragmentRect:(inout CGRect *)lineFragmentRect
+         lineFragmentUsedRect:(inout CGRect *)lineFragmentUsedRect
+               baselineOffset:(inout CGFloat *)baselineOffset
+              inTextContainer:(NSTextContainer *)textContainer
+                forGlyphRange:(NSRange)glyphRange {
+  NSTextStorage *storage = layoutManager.textStorage;
+  const NSRange characters = [layoutManager characterRangeForGlyphRange:glyphRange actualGlyphRange:NULL];
+  if (characters.length == 0) {
+    return NO;
+  }
+  // Only a capped paragraph: one that is not keeps the height a lowered run
+  // asks for, and its baseline is already where the text above put it.
+  NSParagraphStyle *style = [storage attribute:NSParagraphStyleAttributeName
+                                       atIndex:characters.location
+                                effectiveRange:NULL];
+  if (style.maximumLineHeight <= 0) {
+    return NO;
+  }
+  __block CGFloat plain = 0;
+  __block CGFloat lowered = 0;
+  [storage enumerateAttributesInRange:characters
+                              options:0
+                           usingBlock:^(NSDictionary<NSAttributedStringKey, id> *attributes, NSRange, BOOL *) {
+                             UIFont *font = attributes[NSFontAttributeName];
+                             if (font == nil) {
+                               return;
+                             }
+                             const CGFloat descent = -font.descender;
+                             const CGFloat offset = [attributes[NSBaselineOffsetAttributeName] doubleValue];
+                             plain = MAX(plain, descent);
+                             lowered = MAX(lowered, descent - offset);
+                           }];
+  const CGFloat lift = lowered - plain;
+  if (lift <= 0) {
+    return NO;
+  }
+  *baselineOffset += lift;
+  return YES;
+}
+
+@end
+
 @implementation DSTextKitStack
 
 - (instancetype)initWithLayoutManager:(NSLayoutManager *)layoutManager {
@@ -320,6 +385,7 @@ void applyTokens(NSMutableAttributedString *text, const Block &block, DSThemeCol
     _textStorage = [NSTextStorage new];
     _layoutManager = layoutManager;
     _layoutManager.usesFontLeading = YES;
+    _layoutManager.delegate = [DSScriptLineDelegate shared];
     _textContainer = [[NSTextContainer alloc] initWithSize:CGSizeMake(0, CGFLOAT_MAX)];
     _textContainer.lineFragmentPadding = 0;
     _textContainer.maximumNumberOfLines = 0;

@@ -209,6 +209,57 @@ static void checkScriptLineHeight() {
   }
 }
 
+/// Each line's baseline in a two-line paragraph whose first line holds a script,
+/// against the same paragraph without one.
+///
+/// The cap above holds a paragraph's height, but TextKit sets a capped line's
+/// baseline from its deepest descent, so a lowered run used to lift its own line
+/// toward the block above and leave a wider gap below. Heights alone cannot see
+/// that; baselines can.
+static void checkScriptBaselines() {
+  const std::u16string prose = u"Sub y2 sup x2\nnext line";
+  const auto baselinesFor = [&](const std::vector<downstream::InlineRun> &runs) {
+    static uint64_t nextId = 9600;
+    auto document = std::make_shared<downstream::Document>();
+    document->id = nextId++;
+    downstream::Block block;
+    block.kind = downstream::BlockKind::Paragraph;
+    block.text = prose;
+    block.runs = runs;
+    document->blocks.push_back(std::move(block));
+    DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:document
+                                                                  fontScale:1
+                                                         syntaxHighlighting:NO
+                                                                      theme:downstream::Theme::defaultTheme()
+                                                                      caret:downstream::PlacedCaret{}];
+    DSTextSegment *segment = (DSTextSegment *)rendered.segments.firstObject;
+    require(segment != nil, @"paragraph did not produce a text segment");
+    DSTextKitStack *stack = [[DSTextKitStack alloc] initWithLayoutManager:[NSLayoutManager new]];
+    stack.textContainer.size = CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX);
+    [stack.textStorage setAttributedString:segment.attributedString];
+    [stack.layoutManager ensureLayoutForTextContainer:stack.textContainer];
+    std::vector<CGFloat> baselines;
+    for (const NSUInteger character : {NSUInteger{0}, NSUInteger{14}}) {
+      const NSUInteger glyph = [stack.layoutManager glyphIndexForCharacterAtIndex:character];
+      const CGRect fragment = [stack.layoutManager lineFragmentRectForGlyphAtIndex:glyph effectiveRange:NULL];
+      baselines.push_back(CGRectGetMinY(fragment) + [stack.layoutManager locationForGlyphAtIndex:glyph].y);
+    }
+    return baselines;
+  };
+  const auto plain = baselinesFor({});
+  const auto scripted = baselinesFor({{5, 6, downstream::InlineStyle::Subscript},
+                                      {12, 13, downstream::InlineStyle::Superscript}});
+  printf("ios_script_baselines plain=%.1f,%.1f with_scripts=%.1f,%.1f\n", plain[0], plain[1], scripted[0],
+         scripted[1]);
+  for (size_t line = 0; line < plain.size(); line++) {
+    if (fabs(plain[line] - scripted[line]) > 0.5) {
+      fprintf(stderr, "FAIL: a script moved line %zu's baseline by %.2f\n", line + 1,
+              scripted[line] - plain[line]);
+      exit(1);
+    }
+  }
+}
+
 /// A cell holding a `<br>` measures two lines, which is what makes a table row the
 /// only place a model can break a line.
 static void checkCellBreakHeight() {
@@ -297,6 +348,7 @@ int main() {
     checkEmojiGlyphMapping();
     checkBlankSuffixDraw();
     checkScriptLineHeight();
+    checkScriptBaselines();
     checkCellBreakHeight();
 #ifndef BASELINE
     checkGutterOwnerLifetime();
