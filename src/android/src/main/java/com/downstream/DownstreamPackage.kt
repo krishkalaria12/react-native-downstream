@@ -15,5 +15,11 @@ class DownstreamPackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> = emptyList()
 
   override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> =
-    listOf(DownstreamMarkdownViewManager())
+    listOf(
+      DownstreamMarkdownViewManager(),
+      // The slot a hosted fence's component lives in. A plain view manager: the
+      // slot carries only the code block's ordinal, and the Markdown view's own
+      // manager is what mounts it.
+      FenceSlotViewManager(),
+    )
 }

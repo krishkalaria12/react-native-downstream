@@ -165,6 +165,28 @@ private fun linkAt(layout: Layout, x: Float, y: Float): Int {
  * view never parses.
  */
 class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost {
+  /**
+   * The layer the segment views live in.
+   *
+   * React mounts this view's children — one `DownstreamFenceSlot` per hosted
+   * fence — directly on the view, in React's own order, which is the order
+   * Fabric addressed them in. Segments therefore cannot live there too: the
+   * index-reconciling loop below would delete a slot it did not recognize and
+   * lose the reader's scroll position every time a renderer mounted. One layer
+   * for each keeps the two reconciliations apart, and the segment layer is
+   * always index 0 so a stray child cannot be mistaken for a segment.
+   */
+  private val segmentLayer = SegmentLayer(context)
+
+  /**
+   * Where Fabric puts a hosted child, above the segments.
+   *
+   * Its own `onLayout` does nothing, as `ReactViewGroup`'s does: Fabric has
+   * already given each child its frame from the shadow node, which is the frame
+   * the document's measurement reserved for it.
+   */
+  internal val hostLayer = HostLayer(context)
+
   internal var onLinkPress: ((view: DownstreamMarkdownView, url: String, start: Int, end: Int) -> Unit)? = null
   internal var onControl:
     ((view: DownstreamMarkdownView, block: String, action: String, format: String, language: String,
@@ -209,10 +231,58 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   private var mathFlags = 0
   private var allowedImagePrefixes: List<String> = emptyList()
   private var exporter = DocumentExporter(context)
+  /**
+   * Which fenced blocks a React child replaced, and how tall each child is.
+   *
+   * Carried here rather than read from props because a height belongs to the
+   * measurement rather than to a prop, and because the shadow node is what knows
+   * a child mounted: a fence with no child is drawn as the code card, and this is
+   * how the view finds out.
+   */
+  private var hostLayout = HostLayout()
   private var generation = 0
   private var sessionId: String? = null
   private var sourceEpoch = 0
   private var pendingTraceDocumentId = 0L
+
+  init {
+    // The segment layer is always the first child, so the document's own drawing
+    // is under anything Fabric mounts for a slot and a stale child can never be
+    // mistaken for a segment.
+    addView(segmentLayer, 0, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+    addView(hostLayer, 1, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+  }
+
+  /**
+   * The segments and the hosted children, in the order a reader meets them.
+   *
+   * A slot's own elements come after the paragraph above it and before the one
+   * below it, which is the order they are drawn in and the order a screen reader
+   * must read them in: the segment layer's virtual nodes are the text, so
+   * without the sort below every chart would be announced after the whole
+   * message.
+   */
+  override fun addChildrenForAccessibility(out: ArrayList<View>) {
+    if (out == null) {
+      throw UnsupportedOperationException("DownstreamMarkdownView does not support null arguments")
+    }
+    for (index in 0 until segmentLayer.childCount) {
+      out.add(segmentLayer.getChildAt(index))
+    }
+    for (index in 0 until hostLayer.childCount) {
+      val child = hostLayer.getChildAt(index)
+      // A hidden child is one whose block has gone from this document; it is not
+      // drawn, so it is not read.
+      if (child.visibility == View.VISIBLE) {
+        out.add(child)
+      }
+    }
+    // Ordered by frame, which is the order the shadow node placed them in: a
+    // sorted-by-frame list is the order the reader sees, and the order the two
+    // layers produce it in is document order for the segments and React order
+    // for the slots.
+    out.sortBy { it.top }
+  }
 
   fun setGeneration(value: Int) {
     if (value != generation) {
@@ -232,8 +302,8 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     sourceEpoch++
     // A new generation has nothing left to pin and no offsets worth keeping, so
     // every reader scroll position goes, tables' and code cards' alike.
-    for (index in 0 until childCount) {
-      when (val child = getChildAt(index)) {
+    for (child in segmentViews) {
+      when (child) {
         is TableSegmentView -> child.resetScroll()
         is CodeSegmentView -> child.resetScroll()
       }
@@ -316,8 +386,8 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   fun setControlLabels(value: List<String>) {
     controlLabels = if (value.size >= DEFAULT_LABELS.size) value else DEFAULT_LABELS
-    for (index in 0 until childCount) {
-      when (val child = getChildAt(index)) {
+    for (child in segmentViews) {
+      when (child) {
         is CodeSegmentView -> child.setControlLabels(controlLabels)
         is TableSegmentView -> child.setControlLabels(controlLabels)
         is ImageSegmentView -> child.setStatusLabels(
@@ -425,10 +495,10 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    */
   private fun applySettledState() {
     val plan = rendered?.plan ?: return
-    for (index in 0 until minOf(childCount, plan.size)) {
+    for (index in 0 until minOf(segmentViews.size, plan.size)) {
       val planned = plan[index]
       val settled = planned.from + 1 <= planned.settledBlocks
-      when (val child = getChildAt(index)) {
+      when (val child = segmentViews[index]) {
         is TextSegmentView -> child.setSelectable(selectable && settled)
         is CodeSegmentView -> {
           // The same two calls the measurement used, so the frame this card is
@@ -756,13 +826,18 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     onLinkPress?.invoke(this, link.url, link.start, link.end)
   }
 
+  // The segment views this view is currently holding, in document order. Every
+  // reconciliation below walks this list rather than the view group's children,
+  // because the group also holds the React children mounted over the slots.
+  private var segmentViews = mutableListOf<View>()
+
   // Reuse views of the same kind in place, so unchanged segments keep their
   // selection and scroll position across updates.
   private fun syncSegmentViews() {
     val document = rendered
     val segments = document?.segments.orEmpty()
     segments.forEachIndexed { index, segment ->
-      var view = if (index < childCount) getChildAt(index) else null
+      var view = segmentViews.getOrNull(index)
       val reusable = when (segment) {
         is TextSegment -> view is TextSegmentView
         is CodeSegment -> view is CodeSegmentView
@@ -771,7 +846,10 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
         is MathSegment -> view is MathSegmentView
       }
       if (!reusable) {
-        if (view != null) removeViewAt(index)
+        if (view != null) {
+          segmentLayer.removeView(view)
+          segmentViews.removeAt(index)
+        }
         view = when (segment) {
           is TextSegment -> TextSegmentView(context)
           is CodeSegment -> CodeSegmentView(context).apply { setControlHost(this@DownstreamMarkdownView) }
@@ -787,11 +865,18 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
           }
           is MathSegment -> MathSegmentView(context)
         }
-        addView(view, index)
+        segmentLayer.addView(view)
+        segmentViews.add(index, view)
       }
       when (segment) {
         is TextSegment -> (view as TextSegmentView).setSegment(segment, document!!)
-        is CodeSegment -> (view as CodeSegmentView).setSegment(segment, document!!)
+        is CodeSegment -> (view as CodeSegmentView).apply {
+          // Whether this block is a host segment comes from the state, not from
+          // the segment: the segment is the same card either way, and only the
+          // view knows whether a React child mounted for it.
+          setHosted(hostLayout.hosts(segment.codeOrdinal))
+          setSegment(segment, document!!)
+        }
         is TableSegment -> (view as TableSegmentView).setSegment(segment, sourceEpoch, document!!.style.chromeRowHeight)
         // Read once into the local rather than off `rendered` per field: it is a
         // mutable property, so the compiler will not smart-cast it, and five reads
@@ -818,8 +903,9 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
         }
       }
     }
-    while (childCount > segments.size) {
-      removeViewAt(childCount - 1)
+    while (segmentViews.size > segments.size) {
+      val extra = segmentViews.removeAt(segmentViews.size - 1)
+      segmentLayer.removeView(extra)
     }
     applySettledState()
     layoutSegments()
@@ -850,6 +936,37 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     }
     imageLayout = value
     syncSegmentViews()
+  }
+
+  /**
+   * The hosted children, from the state the shadow node wrote.
+   *
+   * A change here is a change to which fences draw as cards, so the segments are
+   * restacked: a hosted block is as tall as its component, and an unhosted one
+   * is as tall as its card.
+   */
+  internal fun setHostLayout(value: HostLayout) {
+    if (hostLayout == value) {
+      return
+    }
+    hostLayout = value
+    syncSegmentViews()
+    layoutHostChildren()
+  }
+
+  /**
+   * Lets the host layer lay out after a document change.
+   *
+   * A host child's frame comes from Fabric, from the rectangle the shadow node's
+   * measurement reserved for its block, so there is nothing to position here: a
+   * child whose block has gone from the new document is hidden and one that is
+   * back is shown by the same state update that reached the shadow node. All this
+   * does is ask the layer for a pass, so the change is not a frame late.
+   */
+  internal fun layoutHostChildren() {
+    if (hostLayer.childCount > 0) {
+      hostLayer.requestLayout()
+    }
   }
 
   /**
@@ -914,9 +1031,9 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     if (width <= 0) {
       return
     }
-    val frames = document.frames(width, chrome, codeLayout, imageLayout)
-    for (index in 0 until minOf(childCount, frames.size / 2)) {
-      val child = getChildAt(index)
+    val frames = document.frames(width, chrome, codeLayout, imageLayout, hostLayout)
+    for (index in 0 until minOf(segmentViews.size, frames.size / 2)) {
+      val child = segmentViews[index]
       val top = paddingTop + frames[index * 2]
       val height = frames[index * 2 + 1]
       child.measure(
@@ -928,10 +1045,30 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   }
 
   override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-    setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.getSize(heightMeasureSpec))
+    val width = MeasureSpec.getSize(widthMeasureSpec)
+    val height = MeasureSpec.getSize(heightMeasureSpec)
+    // The segment layer spans the view, and the host layer spans it too: Fabric
+    // has already given every hosted child its own frame, so neither layer lays
+    // its children out. Only the document's own height is measured here, which is
+    // what Fabric asked for.
+    segmentLayer.measure(
+      MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+      MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY),
+    )
+    hostLayer.measure(
+      MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+      MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY),
+    )
+    setMeasuredDimension(width, height)
   }
 
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+    // The segment layer fills the view, and the host layer fills it above the
+    // segments. A touch no hosted child takes falls through to the segments
+    // below, because a ViewGroup offers an unhandled event to the next child
+    // down rather than swallowing it.
+    segmentLayer.layout(paddingLeft, paddingTop, right - paddingRight, bottom - paddingBottom)
+    hostLayer.layout(0, 0, right - left, bottom - top)
     layoutSegments()
   }
 
@@ -1494,6 +1631,8 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   private val body = TextSegmentView(context)
   private val host = Handler(Looper.getMainLooper())
   private val cardBackground = GradientDrawable()
+  /** True while a React child draws this block instead of the card. */
+  private var hosted = false
   private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
   private var segment: CodeSegment? = null
@@ -1701,6 +1840,26 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     requestLayout()
   }
 
+  /**
+   * Draw this block as a host segment: its container chrome and nothing else.
+   *
+   * A React child sits on top of it, sized by the measurement, so the card's
+   * background, header, gutter and body would be a second drawing of the same
+   * space. What stays is what the child cannot draw: the quote and admonition
+   * bars beside it and the list marker on its first line, over the full height
+   * the child measured.
+   */
+  fun setHosted(hosted: Boolean) {
+    if (this.hosted == hosted) return
+    this.hosted = hosted
+    header.visibility = if (hosted) View.GONE else header.visibility
+    viewport.visibility = if (hosted) View.GONE else View.VISIBLE
+    gutter.visibility = if (hosted) View.GONE else View.VISIBLE
+    cardBackground.setColor(if (hosted) android.graphics.Color.TRANSPARENT else segment?.colors?.codeBlockBackground ?: 0)
+    requestLayout()
+    invalidate()
+  }
+
   fun setHeaderVisible(visible: Boolean) {
     val next = if (visible) View.VISIBLE else View.GONE
     if (header.visibility == next) return
@@ -1868,18 +2027,22 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
     val segment = this.segment ?: return
-    val headerHeight = headerHeight()
-    // The card starts below the header, which sits on the page, as on iOS.
-    cardBackground.setBounds(segment.contentLeading, headerHeight, width, height)
-    cardBackground.draw(canvas)
-    // The header row's own fill and rule, drawn under its buttons and label.
-    segment.colors.headerBackground?.let { fill ->
-      barPaint.color = fill
-      canvas.drawRect(0f, 0f, width.toFloat(), headerHeight.toFloat(), barPaint)
-    }
-    if (segment.colors.headerBorderColor != null) {
-      barPaint.color = segment.colors.headerBorderColor
-      canvas.drawRect(0f, headerHeight - 1f, width.toFloat(), headerHeight.toFloat(), barPaint)
+    // A host segment has no header, so its chrome starts at the top of its own
+    // frame and spans the height the React component measured.
+    val headerTop = if (hosted) 0f else headerHeight().toFloat()
+    if (!hosted) {
+      // The card starts below the header, which sits on the page, as on iOS.
+      cardBackground.setBounds(segment.contentLeading, headerTop.toInt(), width, height)
+      cardBackground.draw(canvas)
+      // The header row's own fill and rule, drawn under its buttons and label.
+      segment.colors.headerBackground?.let { fill ->
+        barPaint.color = fill
+        canvas.drawRect(0f, 0f, width.toFloat(), headerTop, barPaint)
+      }
+      if (segment.colors.headerBorderColor != null) {
+        barPaint.color = segment.colors.headerBorderColor
+        canvas.drawRect(0f, headerTop - 1f, width.toFloat(), headerTop, barPaint)
+      }
     }
     val firstLine = segment.accessibleBlocks.firstOrNull()
     for (container in segment.containers) {
@@ -1887,8 +2050,8 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
       // A zero-width bar is a bar the theme removed.
       if (bar != null && container.barWidth > 0f) {
         barPaint.color = bar
-        val x = container.leading + 2f
-        canvas.drawRect(x, headerHeight.toFloat(), x + container.barWidth, height.toFloat(), barPaint)
+        val x = if (segment.rtl) width - container.leading - container.barWidth - 2f else container.leading + 2f
+        canvas.drawRect(x, headerTop, x + container.barWidth, height.toFloat(), barPaint)
       }
       val marker = container.marker
       if (marker != null && firstLine != null) {
@@ -1897,8 +2060,14 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
           typeface = segment.markerFace
           textSize = segment.markerSize
         }
-        val baseline = headerHeight + segment.padding + markerPaint.fontMetrics.ascent
-        val x = container.leading + container.width - container.markerGap - markerPaint.measureText(marker)
+        // A hosted block's marker sits at the top of its own height, beside the
+        // component, rather than beside the first line of code that is not there.
+        val baseline = headerTop + (if (hosted) 0f else segment.padding.toFloat()) + markerPaint.fontMetrics.ascent
+        val x = if (segment.rtl) {
+          container.leading + container.markerGap + markerPaint.measureText(marker)
+        } else {
+          container.leading + container.width - container.markerGap - markerPaint.measureText(marker)
+        }
         canvas.drawText(marker, x, baseline.toFloat(), markerPaint)
       }
     }
@@ -2301,4 +2470,54 @@ private class TableGridView(context: Context) : View(context) {
     }
     return pressedLink >= 0
   }
+}
+
+/**
+ * The layer the segment views live in.
+ *
+ * It exists so the two child reconciliations in this view stay apart: this one
+ * reconciles by document index, Fabric's reconciles the host children in React's
+ * order. Sharing one list of children would have each deleting the other's views.
+ */
+internal class SegmentLayer(context: Context) : ViewGroup(context) {
+  override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.getSize(heightMeasureSpec))
+  }
+
+  override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+    // Every child is laid out by the view that owns the document, at the frame
+    // the measurement stacked, so this layer only has to hand them through.
+    for (index in 0 until childCount) {
+      val child = getChildAt(index)
+      child.layout(child.left, child.top, child.right, child.bottom)
+    }
+  }
+
+  override fun shouldDelayChildPressedState(): Boolean = false
+}
+
+/**
+ * Where Fabric mounts a hosted React child, above the segments.
+ *
+ * Its `onLayout` does nothing, as `ReactViewGroup`'s does: the child's frame came
+ * from the shadow node's measurement, and re-laying it out here would put it
+ * somewhere the document was not measured for.
+ */
+internal class HostLayer(context: Context) : ViewGroup(context) {
+  init {
+    // A layer with no children must not swallow touches meant for the document
+    // beneath it, and one with children must not clip them.
+    clipChildren = false
+    clipToPadding = false
+  }
+
+  override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.getSize(heightMeasureSpec))
+  }
+
+  override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+    // Nothing: every child's frame was set by Fabric.
+  }
+
+  override fun shouldDelayChildPressedState(): Boolean = false
 }

@@ -75,6 +75,15 @@ char16_t resolveSeparator(NSString *configured) {
   return [NSLocale.currentLocale.decimalSeparator isEqualToString:@","] ? u';' : u',';
 }
 
+/// Whether `element` sits above `view`, treating an element with no frame of
+/// its own as the start of the message.
+bool frameIsAbove(CGRect element, UIView *view) {
+  if (CGRectIsEmpty(element)) {
+    return false;
+  }
+  return CGRectGetMaxY(element) <= CGRectGetMinY(view.frame);
+}
+
 NSString *nameForFormat(NSString *format) {
   if ([format isEqualToString:@"csv"]) {
     return @"csv";
@@ -98,6 +107,10 @@ NSString *nameForFormat(NSString *format) {
 
 @implementation DownstreamMarkdownView {
   DSDocumentView *_documentView;
+  /// Where a hosted React child lives: a plain container above the document view
+  /// that neither draws nor lays anything out, so Fabric's frame is the child's
+  /// own and the document's own children are untouched.
+  UIView *_hostContainer;
   DSFileExporter *_exporter;
   DownstreamMarkdownShadowNode::ConcreteState::Shared _state;
   downstream::DocumentHandle _document;
@@ -114,6 +127,10 @@ NSString *nameForFormat(NSString *format) {
   /// and the frames are stacked with. A load changes an entry, and that is the
   /// whole path from a picture arriving to the document being taller.
   downstream::ImageStateLayout _imageState;
+  /// Which fenced blocks a React child replaced, and how tall each one is. Read
+  /// from the state beside the image answers, because both are properties of
+  /// this view at this moment rather than of the document.
+  downstream::HostLayout _hostLayout;
   std::string _codeFilename;
   std::string _tableFilename;
   std::string _imageFilename;
@@ -166,6 +183,10 @@ NSString *nameForFormat(NSString *format) {
     _documentView.selectable = _selectable;
     _documentView.controls = _controls;
     self.contentView = _documentView;
+    // Above the document, never inside it: see `mountChildComponentView:`.
+    _hostContainer = [[UIView alloc] initWithFrame:self.bounds];
+    _hostContainer.userInteractionEnabled = YES;
+    [self addSubview:_hostContainer];
 
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap:)];
     tap.cancelsTouchesInView = NO;
@@ -185,7 +206,8 @@ NSString *nameForFormat(NSString *format) {
   // here rebuilds anything.
   const BOOL themeChanged = [self applyTheme];
   if (!themeChanged && data.document == _document && data.fontSizeMultiplier == _fontScale &&
-      data.chrome == _chrome && data.code == _codeLayout && data.images == _imageState) {
+      data.chrome == _chrome && data.code == _codeLayout && data.images == _imageState &&
+      data.hosts == _hostLayout) {
     return;
   }
   _document = data.document;
@@ -193,8 +215,10 @@ NSString *nameForFormat(NSString *format) {
   _chrome = data.chrome;
   _codeLayout = data.code;
   _imageState = data.images;
+  _hostLayout = data.hosts;
   _documentView.codeLayout = _codeLayout;
   _documentView.imageState = _imageState;
+  _documentView.hostLayout = _hostLayout;
   const uint64_t documentId = _document ? _document->id : 0;
   const BOOL tracing = documentId && downstream::SessionTrace::enabledDocument(documentId);
   if (tracing) downstream::SessionTrace::recordDocument(documentId, "apply_start");
@@ -343,6 +367,105 @@ NSString *nameForFormat(NSString *format) {
     [self applyRendering];
   }
   [super updateProps:props oldProps:oldProps];
+}
+
+#pragma mark - Hosted children
+
+- (void)layoutSubviews {
+  [super layoutSubviews];
+  // The container holds nothing of its own, so it takes the document's frame and
+  // every child inside it is positioned by Fabric relative to this view, which is
+  // the same origin the document draws from.
+  _hostContainer.frame = _documentView.frame;
+}
+
+/**
+ * The document's elements and the hosted children's, in reading order.
+ *
+ * A container's accessibility elements come after its own elements, so a hosted
+ * child appended here would be read after the whole message: VoiceOver would
+ * reach the chart a reader can see in the middle of the answer only at the end.
+ * This interleaves them by frame instead, which is the order the shadow node
+ * placed the children in and therefore the order they are drawn in.
+ *
+ * The document's own elements carry no frames of their own — they are its
+ * virtual text nodes — so a hosted child is spliced in before the first
+ * document element that lies below it. That is the same comparison the drawing
+ * makes, and it needs no new information from the engine.
+ */
+- (NSArray<id> *)accessibilityElements {
+  NSArray *documentElements = _documentView.accessibilityElements ?: @[];
+  NSArray<UIView *> *hosted = _hostContainer.subviews;
+  if (hosted.count == 0) {
+    return documentElements;
+  }
+  NSMutableArray<UIView *> *ordered = [hosted mutableCopy];
+  [ordered sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
+    const CGFloat ay = CGRectGetMinY(a.frame);
+    const CGFloat by = CGRectGetMinY(b.frame);
+    if (ay == by) {
+      return NSOrderedSame;
+    }
+    return ay < by ? NSOrderedAscending : NSOrderedDescending;
+  }];
+
+  NSMutableArray<id> *interleaved = [NSMutableArray arrayWithCapacity:documentElements.count + ordered.count];
+  NSUInteger next = 0;
+  for (id element in documentElements) {
+    // The element's own frame is in the document view's coordinates, which are
+    // this view's too, so the comparison is a comparison of like with like.
+    const CGRect frame = [element isKindOfClass:UIView.class]
+                             ? ((UIView *)element).frame
+                             : CGRectZero;
+    while (next < ordered.count && frameIsAbove(frame, ordered[next])) {
+      [interleaved addObject:ordered[next]];
+      next++;
+    }
+    [interleaved addObject:element];
+  }
+  while (next < ordered.count) {
+    [interleaved addObject:ordered[next]];
+    next++;
+  }
+  return interleaved;
+}
+
+/**
+ * Mounts a hosted React child, in React's order, above the document view.
+ *
+ * Neither superclass method is called: `RCTViewComponentView` mounts into
+ * `currentContainerView`, which for this view is `_documentView`, and a child
+ * inside the document would be laid out in the document's coordinate space,
+ * clipped by its bounds, and would hand touches to a text view rather than to
+ * itself. The host container is a sibling of the document view instead, so the
+ * frame Fabric computes — in this view's coordinates, which are the document
+ * view's — is the frame the child draws at.
+ *
+ * The container exists rather than mounting into `self` directly because
+ * `self` also holds the document view, and Fabric addresses children by index:
+ * inserting a slot at index 1 would otherwise push the document to index 1 and
+ * every subsequent mount and unmount would be one out of step.
+ */
+- (void)mountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView index:(NSInteger)index {
+  RCTAssert(
+      childComponentView.superview == nil,
+      @"Attempt to mount already mounted component view. (parent: %@, child: %@, index: %@)",
+      self,
+      childComponentView,
+      @(index));
+  _hostContainer.frame = _documentView.frame;
+  [_hostContainer insertSubview:childComponentView atIndex:index];
+}
+
+- (void)unmountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView index:(NSInteger)index {
+  RCTAssert(
+      (_hostContainer.subviews.count > index) &&
+          [_hostContainer.subviews objectAtIndex:index] == childComponentView,
+      @"Attempt to unmount a view which has a different index. (parent: %@, child: %@, index: %@)",
+      self,
+      childComponentView,
+      @(index));
+  [childComponentView removeFromSuperview];
 }
 
 - (void)prepareForRecycle {

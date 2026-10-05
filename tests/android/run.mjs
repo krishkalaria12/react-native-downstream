@@ -1,7 +1,8 @@
 // Compiles and runs the Kotlin mirrors against their C++ tables.
 //
 // `CodeLayout.kt` mirrors `src/cpp/downstream/CodeLayout.h`,
-// `ImageLayout.kt` mirrors `src/cpp/downstream/ImageLayout.h`, and `MathLayout.kt`
+// `ImageLayout.kt` mirrors `src/cpp/downstream/ImageLayout.h`,
+// `HostLayout.kt` mirrors `src/cpp/downstream/HostLayout.h`, and `MathLayout.kt`
 // mirrors the sizing in `src/cpp/math/MathLayout.h`. The C++ tables in
 // `src/cpp/tests/test_export.cpp`, `test_images.cpp`, and `test_math.cpp` are the
 // contracts those copies answer. This runs those same tables against the Kotlin
@@ -26,6 +27,7 @@ const kotlin = (...names) =>
 const suites = [
   { jar: 'code_layout', sources: [kotlin('CodeLayout.kt'), join(here, 'CodeLayoutCheck.kt')] },
   { jar: 'image_layout', sources: [kotlin('ImageLayout.kt'), join(here, 'ImageLayoutCheck.kt')] },
+  { jar: 'host_layout', sources: [kotlin('HostLayout.kt'), join(here, 'HostLayoutCheck.kt')] },
   { jar: 'math_layout', sources: [kotlin('MathLayout.kt'), join(here, 'MathLayoutCheck.kt')] },
   {
     jar: 'math_render',

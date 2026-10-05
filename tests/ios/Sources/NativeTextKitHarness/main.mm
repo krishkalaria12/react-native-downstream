@@ -4,6 +4,7 @@
 #import "DSSegmentViews.h"
 #import <objc/runtime.h>
 #include "Document.h"
+#include "HostLayout.h"
 #include "theme/Theme.h"
 #include <chrono>
 #include <atomic>
@@ -157,6 +158,104 @@ static void checkGutterOwnerLifetime() {
 }
 #endif
 
+/**
+ * A hosted fence: a React child replaced the block, and the document is as tall
+ * as the child measured with the child's rectangle at the block's own column.
+ *
+ * The shadow node's half of this contract is a C++ layout pass, which this
+ * standalone executable cannot run, so what is pinned here is the half the
+ * platform owns: that a host layout replaces the card's height rather than
+ * adding to it, that the rectangle is the content column rather than the full
+ * width, and that an empty host layout measures exactly what it did before
+ * fence renderers existed.
+ */
+static downstream::Block makeBlock(downstream::BlockKind kind, const char *utf8) {
+  downstream::Block block;
+  block.kind = kind;
+  block.language = kind == downstream::BlockKind::CodeBlock ? "mermaid" : "";
+  const std::string text(utf8);
+  block.text = std::u16string(reinterpret_cast<const char16_t *>(text.data()), text.size());
+  block.fenceMarker = kind == downstream::BlockKind::CodeBlock ? '`' : 0;
+  block.fenceLength = 3;
+  block.fenceClosed = true;
+  return block;
+}
+
+static downstream::Container listItem(uint32_t id) {
+  downstream::Container container;
+  container.kind = downstream::ContainerKind::ListItem;
+  container.id = id;
+  container.showsMarker = true;
+  container.marker = u"•";
+  return container;
+}
+
+static void checkHostedFenceLayout() {
+  // One paragraph, a hosted fence, and a hosted fence inside a list item: the
+  // second is the case where the rectangle is not the whole column.
+  auto document = std::make_shared<downstream::Document>();
+  document->id = 9101;
+  document->blocks.push_back(makeBlock(downstream::BlockKind::Paragraph, "Intro paragraph."));
+  document->blocks.push_back(makeBlock(downstream::BlockKind::CodeBlock, "graph TD;"));
+  auto inList = makeBlock(downstream::BlockKind::CodeBlock, "graph TD;");
+  inList.containers.push_back(listItem(1));
+  document->blocks.push_back(std::move(inList));
+  document->settledBlocks = 3;
+
+  DSRenderedDocument *rendered =
+      [DSRenderedDocument renderedDocumentFor:document
+                                      fontScale:1
+                             syntaxHighlighting:NO
+                                      theme:downstream::Theme::defaultTheme()];
+  downstream::CodeLayout code;
+  code.props.wrap = NO;
+  code.props.lineNumbers = YES;
+  code.props.maxHeight = 0;
+  downstream::ImageStateLayout images;
+  const CGFloat width = 320;
+  downstream::HostLayout empty;
+  const CGFloat cardHeight = [rendered sizeForWidth:width chrome:0 code:code images:images hosts:empty].height;
+  // Two hosted fences, at the heights a fixed-size component measured at.
+  downstream::HostLayout hosts;
+  hosts.entries = {{0, 120}, {1, 80}};
+  const DSMeasurement measured = [rendered measureForWidth:width chrome:0 code:code images:images hosts:hosts];
+  require(measured.hosts.size() == 2, @"a hosted fence produced no rectangle");
+  require(std::fabs(measured.size.height - [rendered sizeForWidth:width chrome:0 code:code images:images
+                                                                              hosts:hosts]
+                                             .height) < 0.001,
+          @"measure and size disagree about a hosted document");
+  require(measured.hosts[0].second.size.height == 120, @"a hosted fence did not take its component's height");
+  require(measured.hosts[1].second.size.height == 80, @"the second hosted fence did not take its component's height");
+  require(measured.hosts[0].second.origin.x == 0, @"a top-level fence's rectangle is not at the column's edge");
+  require(measured.hosts[0].second.size.width == width, @"a top-level fence did not get the whole column");
+  require(measured.hosts[1].second.origin.x > 0, @"a fence in a list did not move in by the list margin");
+  require(measured.hosts[1].second.size.width < width, @"a fence in a list did not get the narrower column");
+  // The document is shorter with the fences hosted than as two cards, because a
+  // component is not a code card's height. That difference is the feature.
+  // The height is the component's, not the card's: hosting the same fence with
+  // a taller component makes the document taller by exactly that difference,
+  // and a card would not move at all.
+  downstream::HostLayout taller;
+  taller.entries = {{0, 200}, {1, 80}};
+  const CGFloat tallerHeight = [rendered sizeForWidth:width chrome:0 code:code images:images hosts:taller].height;
+  require(std::fabs(tallerHeight - (measured.size.height + 80)) < 0.001,
+          @"a hosted fence's height did not follow its component");
+  require(tallerHeight > cardHeight, @"a tall component did not raise the document");
+  // An empty host layout is the measurement this view made before fence
+  // renderers existed: same size, same frames.
+  const NSArray<NSValue *> *plainFrames =
+      [rendered segmentFramesForWidth:width chrome:0 code:code images:images hosts:empty];
+  const NSArray<NSValue *> *emptyFrames = [rendered segmentFramesForWidth:width chrome:0 code:code images:images
+                                                                    hosts:downstream::HostLayout{}];
+  require(plainFrames.count == emptyFrames.count, @"an empty host layout changed the frame count");
+  for (NSUInteger index = 0; index < plainFrames.count; index++) {
+    require(CGRectEqualToRect(plainFrames[index].CGRectValue, emptyFrames[index].CGRectValue),
+            @"an empty host layout changed a segment frame");
+  }
+  printf("ios_hosted_fence hosted_height=%.1f card_height=%.1f rectangles=%zu\n", measured.size.height, cardHeight,
+         measured.hosts.size());
+}
+
 int main() {
   @autoreleasepool {
     NSMutableString *source = [NSMutableString stringWithString:@"😀\n\nvalue\n"];
@@ -230,6 +329,7 @@ int main() {
     (void)[segment.text heightForWidth:CGFLOAT_MAX];
     require(layoutCalls >= 2, @"measurement cache exceeded its three-width bound");
     method_setImplementation(ensureMethod, originalEnsureLayout);
+    checkHostedFenceLayout();
     printf("native TextKit checks passed\n");
   }
   return 0;

@@ -58,6 +58,28 @@ internal fun ReadableMap.toImageLayout(): ImageLayout = ImageLayout(
 )
 
 /**
+ * The hosted React children from the map, as [HostLayout] expects them.
+ *
+ * Heights cross as points, as the shadow node measures them, and are converted
+ * to pixels here once, the same place the image sizes are converted, so nothing
+ * downstream in this view has to know which unit it is holding.
+ */
+internal fun ReadableMap.toHostLayout(): HostLayout = HostLayout(
+  entries = hostEntriesAt("hostEntries"),
+)
+
+internal fun ReadableMap.hostEntriesAt(key: String): List<HostEntry> {
+  val array = (if (hasKey(key)) getArray(key) else null) ?: return emptyList()
+  return List(array.size()) { index ->
+    val entry = array.getMap(index) ?: Arguments.createMap()
+    HostEntry(
+      ordinal = entry.numberAt("ordinal", 0.0).toInt(),
+      height = PixelUtil.toPixelFromDIP(entry.numberAt("height", 0.0)).toFloat(),
+    )
+  }
+}
+
+/**
  * One sorted choice set from the map.
  *
  * Sorted here rather than trusted, because the shadow node builds these from the

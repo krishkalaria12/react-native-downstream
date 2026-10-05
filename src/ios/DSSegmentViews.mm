@@ -425,6 +425,13 @@ constexpr CGFloat kPinThreshold = 8;
 /// False once the block's fence has closed, which stops a capped card following
 /// its newest line.
 @property (nonatomic) BOOL streaming;
+/// True while a React child draws this block instead of the card.
+///
+/// The card's background, header, gutter and body all belong to a fallback that
+/// is not being shown, and a hosted block draws only what the child cannot: the
+/// quote and admonition bars beside it and the list marker on its first line,
+/// over the full height the child measured.
+@property (nonatomic) BOOL hosted;
 @end
 
 @interface DSCodeGutterView : UIView
@@ -888,6 +895,23 @@ constexpr CGFloat kPinThreshold = 8;
   return _segmentStorage;
 }
 
+- (void)setHosted:(BOOL)hosted {
+  if (_hosted == hosted) {
+    return;
+  }
+  _hosted = hosted;
+  // The header, the body and the gutter all belong to the card, which is the
+  // fallback: a hosted block shows none of them, because the React child above
+  // this view is what the reader sees. Hiding them rather than skipping the draw
+  // also means the view has no text of its own to select.
+  _header.hidden = hosted;
+  _viewport.hidden = hosted;
+  _gutter.hidden = hosted;
+  if (!hosted) {
+    [self setNeedsDisplay];
+  }
+}
+
 - (void)setSegment:(DSCodeSegment *)segment {
   if (segment == _segmentStorage) {
     return;
@@ -1259,46 +1283,66 @@ constexpr CGFloat kPinThreshold = 8;
     return;
   }
   const CGFloat leading = _segmentStorage.contentLeading;
-  const CGFloat headerHeight = self.showsHeader ? kChromeRowHeight : 0;
-  // A rule under the header row, when the theme asked for one. Its color
-  // defaults to clear, so a theme that says nothing draws nothing.
-  UIColor *headerBorder = _segmentStorage.headerBorderColor;
-  if (headerBorder != nil && self.showsHeader) {
-    [headerBorder setFill];
-    UIRectFill(CGRectMake(0, headerHeight - 1, self.bounds.size.width, 1));
-  }
-  const CGRect card = CGRectMake(leading, headerHeight, self.bounds.size.width - leading,
-                                 self.bounds.size.height - headerHeight);
-  // The card's fill, radius and border are all the theme's, and the border is
-  // drawn rather than filled because it sits inside the card's bounds, which is
-  // what keeps a themed card the height the measurement gave it.
-  UIColor *fill = [_segmentStorage.theme colorForSlot:kSlotCodeBlockBackgroundColor
-                                           fallback:UIColor.tertiarySystemFillColor];
-  UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:card cornerRadius:_segmentStorage.borderRadius];
-  [fill setFill];
-  [path fill];
-  if (_segmentStorage.borderWidth > 0) {
-    [[_segmentStorage.theme colorForSlot:kSlotCodeBlockBorderColor fallback:nil] setStroke];
-    path.lineWidth = _segmentStorage.borderWidth;
-    [path stroke];
+  // A host segment has no header, so its chrome starts at the top of its own
+  // frame and spans the height the React component measured.
+  const CGFloat headerHeight = self.hosted ? 0 : (self.showsHeader ? kChromeRowHeight : 0);
+  if (!self.hosted) {
+    // A rule under the header row, when the theme asked for one. Its color
+    // defaults to clear, so a theme that says nothing draws nothing.
+    UIColor *headerBorder = _segmentStorage.headerBorderColor;
+    if (headerBorder != nil && self.showsHeader) {
+      [headerBorder setFill];
+      UIRectFill(CGRectMake(0, headerHeight - 1, self.bounds.size.width, 1));
+    }
+    const CGRect card = CGRectMake(leading, headerHeight, self.bounds.size.width - leading,
+                                   self.bounds.size.height - headerHeight);
+    // The card's fill, radius and border are all the theme's, and the border is
+    // drawn rather than filled because it sits inside the card's bounds, which is
+    // what keeps a themed card the height the measurement gave it.
+    UIColor *fill = [_segmentStorage.theme colorForSlot:kSlotCodeBlockBackgroundColor
+                                             fallback:UIColor.tertiarySystemFillColor];
+    UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:card cornerRadius:_segmentStorage.borderRadius];
+    [fill setFill];
+    [path fill];
+    if (_segmentStorage.borderWidth > 0) {
+      [[_segmentStorage.theme colorForSlot:kSlotCodeBlockBorderColor fallback:nil] setStroke];
+      path.lineWidth = _segmentStorage.borderWidth;
+      [path stroke];
+    }
   }
 
   for (DSContainerInfo *container in _segmentStorage.containers) {
     if (container.barColor != nil && container.barWidth > 0) {
       [container.barColor setFill];
-      const CGFloat x = container.leading + 2;
+      // Mirrored for a right-to-left block, the same way the marker is.
+      const CGFloat x = _segmentStorage.rightToLeft
+                            ? self.bounds.size.width - container.leading - container.barWidth - 2
+                            : container.leading + 2;
       UIRectFill(CGRectMake(x, headerHeight, container.barWidth, self.bounds.size.height - headerHeight));
     }
     if (container.marker != nil) {
       UIFont *font = [container.marker attribute:NSFontAttributeName atIndex:0 effectiveRange:NULL];
-      const CGFloat baseline = headerHeight + _segmentStorage.padding + font.ascender;
-      const CGFloat x = container.leading + container.width - container.markerGap - container.marker.size.width;
+      // A hosted block's marker sits at the top of its own height, beside the
+      // component, rather than beside the first line of code that is not there.
+      const CGFloat top = self.hosted ? 0 : _segmentStorage.padding;
+      const CGFloat baseline = headerHeight + top + font.ascender;
+      const CGFloat x = _segmentStorage.rightToLeft
+                            ? container.leading + container.markerGap
+                            : container.leading + container.width - container.markerGap -
+                                  container.marker.size.width;
       [container.marker drawAtPoint:CGPointMake(x, baseline - font.ascender)];
     }
+  }
+  if (self.hosted) {
+    // Nothing else: a hosted block has no card to fade, no header row and no
+    // scrolling viewport.
+    return;
   }
 
   // The fade says there is more below without covering the last line's text: it
   // is short, and it sits inside the card's own bottom padding.
+  const CGRect card = CGRectMake(leading, headerHeight, self.bounds.size.width - leading,
+                                 self.bounds.size.height - headerHeight);
   if (_viewport.scrollEnabled && _viewport.contentOffset.y < _viewport.contentSize.height - CGRectGetHeight(_viewport.bounds) - 0.5) {
     const CGFloat height = std::min<CGFloat>(kBottomFade, CGRectGetHeight(card) / 2);
     CGContextRef context = UIGraphicsGetCurrentContext();
@@ -1913,6 +1957,10 @@ constexpr CGFloat kPinThreshold = 8;
   /// What each image is, which the image views draw from and the frame stack is
   /// keyed by. A load changes an entry, which re-stacks the frames.
   downstream::ImageStateLayout _imageState;
+  /// Which fenced blocks a React child replaced, and how tall each one is. A
+  /// code segment whose ordinal is in here draws as a host segment: its
+  /// container chrome and nothing else, with the child drawn above it.
+  downstream::HostLayout _hostLayout;
   /// Whether the document's blocks are all settled, which turns an image
   /// block's controls on and stops a pending box from being a control's target.
   BOOL _settled;
@@ -1968,6 +2016,22 @@ static Class segmentViewClassFor(id segment) {
   return [indexes[index] unsignedIntegerValue] + 1 <= _rendered.settledBlocks;
 }
 
+/// Whether the code segment at `index` is drawn by a React child.
+///
+/// Asked through the segment's own ordinal rather than its index, because an
+/// ordinal names the block across every snapshot and an index moves as blocks
+/// stream in.
+- (BOOL)hostsCodeOrdinalAtIndex:(NSUInteger)index {
+  if (index >= _codeOrdinals.count) {
+    return NO;
+  }
+  const uint32_t ordinal = (uint32_t)_codeOrdinals[index].unsignedIntValue;
+  if (ordinal == UINT32_MAX) {
+    return NO;
+  }
+  return _hostLayout.hosts(ordinal);
+}
+
 - (void)applyStateToSegmentView:(UIView<DSSegmentView> *)view atIndex:(NSUInteger)index {
   if ([view isKindOfClass:DSTextSegmentView.class]) {
     ((DSTextSegmentView *)view).selectable = _selectable && [self isSegmentSettledAtIndex:index];
@@ -1975,6 +2039,10 @@ static Class segmentViewClassFor(id segment) {
   }
   if ([view isKindOfClass:DSCodeSegmentView.class]) {
     DSCodeSegmentView *code = (DSCodeSegmentView *)view;
+    // Whether this block is a host segment comes from the state, not from the
+    // segment: the segment is the same card either way, and only the view knows
+    // whether a React child mounted for it.
+    code.hosted = [self hostsCodeOrdinalAtIndex:index];
     code.showsHeader = (_chrome & downstream::kChromeCodeHeader) != 0;
     code.controls = _controls;
     code.controlsEnabled = [self isSegmentSettledAtIndex:index];
@@ -2129,6 +2197,17 @@ static Class segmentViewClassFor(id segment) {
   [self reapplyState];
 }
 
+- (void)setHostLayout:(downstream::HostLayout)hostLayout {
+  if (_hostLayout == hostLayout) {
+    return;
+  }
+  _hostLayout = std::move(hostLayout);
+  for (NSUInteger index = 0; index < _segmentViews.count; index++) {
+    [self applyStateToSegmentView:_segmentViews[index] atIndex:index];
+  }
+  [self setNeedsLayout];
+}
+
 - (void)setChrome:(uint32_t)chrome {
   if (chrome == _chrome) {
     return;
@@ -2254,7 +2333,8 @@ static Class segmentViewClassFor(id segment) {
   NSArray<NSValue *> *frames = [_rendered segmentFramesForWidth:self.bounds.size.width
                                                           chrome:_chrome
                                                              code:_codeLayout
-                                                           images:_imageState];
+                                                           images:_imageState
+                                                              hosts:_hostLayout];
   for (NSUInteger index = 0; index < _segmentViews.count && index < frames.count; index++) {
     _segmentViews[index].frame = frames[index].CGRectValue;
   }

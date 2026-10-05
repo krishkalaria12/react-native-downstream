@@ -92,12 +92,11 @@ void DownstreamTextLayoutManager::installPlatformServices(
 
 // TextKit objects that are not attached to views are safe to use off the main
 // thread, so measurement runs on the layout thread without blocking UIKit.
-Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHandle &document,
-                                                  Float fontSizeMultiplier, Float maximumWidth,
-                                                  SurfaceId /*surfaceId*/, uint32_t chrome,
-                                                  const downstream::CodeLayout &code,
-                                                  const downstream::ImageLayout &images,
-                                                  const downstream::Theme::Handle &theme) const {
+DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
+    const downstream::DocumentHandle &document, Float fontSizeMultiplier, Float maximumWidth,
+    SurfaceId /*surfaceId*/, uint32_t chrome, const downstream::CodeLayout &code,
+    const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
+    const downstream::Theme::Handle &theme) const {
   @autoreleasepool {
     // The view's own theme, so a themed measure and a themed draw are the same
     // numbers. Colors do not change metrics, so this is valid whether or not the
@@ -110,12 +109,25 @@ Size DownstreamTextLayoutManager::measurePlatform(const downstream::DocumentHand
     // card's height is in it: wrapping, the cap, the gutter, and the reader's
     // per-block choices. A document can hold every combination at once. The image
     // answers come along for the same reason: a picture's height is its state,
-    // and a document can hold a loaded image and a placeholder at once.
-    const CGSize size = [rendered sizeForWidth:maximumWidth
-                                         chrome:chrome
-                                            code:code
-                                          images:images.state];
-    return {static_cast<Float>(size.width), static_cast<Float>(size.height)};
+    // and a document can hold a loaded image and a placeholder at once. The
+    // hosted children's heights come along for the same reason once more: a
+    // fence drawn by a React component is as tall as that component.
+    const DSMeasurement measured =
+        [rendered measureForWidth:maximumWidth
+                           chrome:chrome
+                              code:code
+                           images:images.state
+                            hosts:hosts];
+    DocumentMeasurement measurement;
+    measurement.size = Size{static_cast<Float>(measured.size.width), static_cast<Float>(measured.size.height)};
+    for (const auto &host : measured.hosts) {
+      measurement.slots.push_back({host.first,
+                                   Rect{Point{static_cast<Float>(host.second.origin.x),
+                                              static_cast<Float>(host.second.origin.y)},
+                                        Size{static_cast<Float>(host.second.size.width),
+                                             static_cast<Float>(host.second.size.height)}}});
+    }
+    return measurement;
   }
 }
 
@@ -130,7 +142,8 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
       [rendered sizeForWidth:hint.width
                        chrome:hint.chrome
                           code:hint.code
-                        images:hint.images.state];
+                        images:hint.images.state
+                         hosts:downstream::HostLayout{}];
     }
   }
 }
