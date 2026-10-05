@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Caret.h"
 #include "CodeLayout.h"
 #include "Document.h"
 #include "HostLayout.h"
@@ -99,8 +100,9 @@ public:
   /// objects are rebuilt, but no measurement is.
   DocumentMeasurement measure(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
                               const LayoutConstraints &layoutConstraints, SurfaceId surfaceId, uint32_t chrome,
-                              const downstream::CodeLayout &code, const downstream::ImageLayout &images,
-                              const downstream::HostLayout &hosts, const downstream::Theme::Handle &theme) const;
+                              const downstream::CodeLayout &code, const downstream::PlacedCaret &caret,
+                              const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
+                              const downstream::Theme::Handle &theme) const;
 
   /// The cached measurement for exactly the layout `measure` would use, so
   /// `layout()` can place the children that measurement sized without
@@ -111,6 +113,7 @@ public:
   /// which is the same answer as a view with no renderers.
   DocumentMeasurement cachedMeasurement(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
                                         Float maximumWidth, uint32_t chrome, const downstream::CodeLayout &code,
+                                        const downstream::PlacedCaret &caret,
                                         const downstream::ImageLayout &images,
                                         const downstream::HostLayout &hosts,
                                         const downstream::Theme::Handle &theme) const;
@@ -118,8 +121,8 @@ public:
 private:
   DocumentMeasurement measurePlatform(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
                                       Float maximumWidth, SurfaceId surfaceId, uint32_t chrome,
-                                      const downstream::CodeLayout &code, const downstream::ImageLayout &images,
-                                      const downstream::HostLayout &hosts,
+                                      const downstream::CodeLayout &code, const downstream::PlacedCaret &caret,
+                                      const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
                                       const downstream::Theme::Handle &theme) const;
 
   /// The theme's id, or 0 for the default theme, which is its id too.
@@ -131,6 +134,9 @@ private:
     Float maximumWidth;
     uint32_t chrome;
     downstream::CodeLayout code;
+    /// The caret, resolved. A caret after the last block is in the measured
+    /// text, so two layouts that differ only in the caret are two layouts.
+    downstream::PlacedCaret caret;
     downstream::ImageLayout images;
     downstream::HostLayout hosts;
     /// The theme's layout key, which is 0 for the default theme.

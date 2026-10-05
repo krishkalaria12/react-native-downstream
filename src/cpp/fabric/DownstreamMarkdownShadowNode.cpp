@@ -67,14 +67,14 @@ DownstreamMarkdownShadowNode::DownstreamMarkdownShadowNode(const ShadowNode &sou
     requestControlledSource();
   } else if (previous.markdown == props.markdown && previous.generation == props.generation &&
              previous.sessionSequence == props.sessionSequence && previous.sessionRevision == props.sessionRevision &&
-             previous.mathFlags == props.mathFlags) {
+             previous.parseFlags == props.parseFlags) {
     controlled_ = source.controlled_;
     // A revision that showed a fallback while its source was being prepared
     // collects the result in the next revision.
     needsDocument_ = source.needsDocument_ || source.awaitingPrepared_;
     pendingError_ = source.pendingError_;
   } else if (props.sessionId.empty() && previous.markdown == props.markdown &&
-             previous.mathFlags == props.mathFlags) {
+             previous.parseFlags == props.parseFlags) {
     // A generation change without a new source, after a rejected value.
     controlled_ = source.controlled_;
   } else {
@@ -127,8 +127,52 @@ downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale,
                                 static_cast<float>(width),
                                 chromeFor(state),
                                 codeLayout(state),
+                                state.caret,
                                 imageLayout(document),
                                 theme_};
+}
+
+/// The two small enums, mapped from the codegen ones.
+///
+/// The wire names are parsed once, by codegen's own `fromRawValue`, so this is a
+/// table rather than a set of string comparisons: there is no string to compare
+/// against by the time the node sees the prop, and a table keeps the two
+/// vocabularies from drifting apart silently.
+downstream::CaretKind caretKind(DownstreamMarkdownViewCaret value) {
+  switch (value) {
+    case DownstreamMarkdownViewCaret::Block:
+      return downstream::CaretKind::Block;
+    case DownstreamMarkdownViewCaret::Circle:
+      return downstream::CaretKind::Circle;
+    case DownstreamMarkdownViewCaret::None:
+      break;
+  }
+  return downstream::CaretKind::None;
+}
+
+downstream::Animating animatingFor(DownstreamMarkdownViewAnimating value) {
+  switch (value) {
+    case DownstreamMarkdownViewAnimating::Auto:
+      return downstream::Animating::Auto;
+    case DownstreamMarkdownViewAnimating::On:
+      return downstream::Animating::On;
+    case DownstreamMarkdownViewAnimating::Off:
+      break;
+  }
+  return downstream::Animating::Off;
+}
+
+downstream::PlacedCaret DownstreamMarkdownShadowNode::caretFor(const downstream::DocumentHandle &document) const {
+  const auto &props = getConcreteProps();
+  downstream::CaretSpec spec;
+  spec.kind = caretKind(props.caret);
+  spec.animating = animatingFor(props.animating);
+  // A stream's own `streaming` flag is set by the session that published the
+  // snapshot, so an `auto` caret follows the stream without JavaScript knowing.
+  if (!document) {
+    return downstream::PlacedCaret{};
+  }
+  return downstream::resolveCaret(*document, spec);
 }
 
 void DownstreamMarkdownShadowNode::requestControlledSource() {
@@ -145,9 +189,9 @@ void DownstreamMarkdownShadowNode::requestControlledSource() {
   // The view's math options are parse options: the same string parses to a
   // different document with math on, so they travel with the request and are
   // part of what the preparation cache keys on.
-  downstream::MathOptions math;
-  math.flags = static_cast<uint32_t>(props.mathFlags);
-  controlled_->prepared = downstream::PreparedDocument::request(props.markdown, layoutHint(1, 0, document_), math);
+  downstream::ParseOptions parse;
+  parse.flags = static_cast<uint32_t>(props.parseFlags);
+  controlled_->prepared = downstream::PreparedDocument::request(props.markdown, layoutHint(1, 0, document_), parse);
 }
 
 void DownstreamMarkdownShadowNode::setLayoutManager(
@@ -491,8 +535,9 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
   // fence is as tall as its component: the component's height is an input to
   // the document's, exactly as a loaded image's box is.
   measuredHosts_ = measureSlots(layoutContext, layoutConstraints);
-  return layoutManager_->measure(getDocument(), layoutContext.fontSizeMultiplier, layoutConstraints, getSurfaceId(),
-                                 chrome, codeLayout(state), imageLayout(getDocument()), measuredHosts_, theme_)
+  return layoutManager_
+      ->measure(getDocument(), layoutContext.fontSizeMultiplier, layoutConstraints, getSurfaceId(), chrome,
+                codeLayout(state), caretFor(getDocument()), imageLayout(getDocument()), measuredHosts_, theme_)
       .size;
 }
 
@@ -508,7 +553,8 @@ void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
   // cannot be placed where the document was not measured to put it.
   const DocumentMeasurement measurement =
       layoutManager_->cachedMeasurement(document, layoutContext.fontSizeMultiplier, width, chromeFor(state),
-                                        codeLayout(state), imageLayout(document), state.hosts, theme_);
+                                        codeLayout(state), caretFor(document), imageLayout(document), state.hosts,
+                                        theme_);
   if (measurement.slots.empty()) {
     return;
   }
@@ -558,6 +604,7 @@ void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
     (*children)[index] = std::move(cloned);
   }
   children_ = std::move(children);
+
 }
 
 void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
@@ -573,9 +620,11 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   // The theme is compared by id rather than by pointer, so a view whose theme
   // resolved to an equal value it already had does not ask for a state update.
   const downstream::CodeLayout code = codeLayout(state);
-  // The image answers are part of this comparison for the same reason the code
-  // layout is: the node measured with one set and would otherwise mount with
-  // another, which is a picture that draws at a height it was not measured at.
+  // The caret and the image answers are both part of this comparison for the
+  // same reason the code layout is: the node measured with one set and would
+  // otherwise mount with another, which is a caret or a picture drawn at a
+  // height it was not measured at.
+  const downstream::PlacedCaret caret = caretFor(document);
   const downstream::ImageStateLayout images = imageState(imageLayout(document));
   // The hosted children are part of it for the same reason again: a fence drawn
   // by a React component takes that component's height, so the view has to
@@ -587,13 +636,15 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
     reportMathErrors(document, state.document);
   }
   if (state.document != document || state.fontSizeMultiplier != layoutContext.fontSizeMultiplier ||
-      state.chrome != chrome || state.code != code || state.images != images || state.hosts != hosts ||
+      state.chrome != chrome || state.code != code || state.caret != caret || state.images != images ||
+      state.hosts != hosts ||
       state.themeId() != themeId()) {
     DownstreamMarkdownState next{state};
     next.document = document;
     next.fontSizeMultiplier = layoutContext.fontSizeMultiplier;
     next.chrome = chrome;
     next.code = code;
+    next.caret = caret;
     next.images = images;
     next.hosts = hosts;
     next.theme = theme_;

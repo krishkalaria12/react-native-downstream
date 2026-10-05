@@ -212,6 +212,14 @@ double tableBorderRadius(const Theme &theme);
 double footnoteSizeScale(const Theme &theme);
 double footnoteRaise(const Theme &theme);
 
+/// A script run's size and baseline shift, as fractions of its block's size.
+/// The offset is applied with the sign the script carries: up for a
+/// superscript, down for a subscript.
+double superscriptFontScale(const Theme &theme);
+double superscriptBaselineOffset(const Theme &theme);
+double subscriptFontScale(const Theme &theme);
+double subscriptBaselineOffset(const Theme &theme);
+
 /// Inline code's size, in one of two forms, and the flag that says which.
 ///
 /// A caller reads `inlineCodeIsAbsolute` and then exactly one of the other two:

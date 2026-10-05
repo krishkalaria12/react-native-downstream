@@ -41,25 +41,25 @@ Cache &cache() {
  * them has formulas in it and the other does not. Equal sources with equal
  * options share a result, so the common case is unchanged.
  */
-bool sameRequest(std::string_view source, const MathOptions &math, const PreparedDocument &prepared) {
-  return prepared.source() == source && prepared.math() == math;
+bool sameRequest(std::string_view source, const ParseOptions &options, const PreparedDocument &prepared) {
+  return prepared.source() == source && prepared.options() == options;
 }
 
 } // namespace
 
-std::shared_ptr<const PreparedDocument> PreparedDocument::completed(std::string_view source, MathOptions math) {
+std::shared_ptr<const PreparedDocument> PreparedDocument::completed(std::string_view source, ParseOptions parse) {
   Cache &shared = cache();
   std::lock_guard<std::mutex> lock(shared.mutex);
   for (const auto &entry : shared.entries) {
-    if (sameRequest(source, math, *entry) && entry->done()) {
+    if (sameRequest(source, parse, *entry) && entry->done()) {
       return entry;
     }
   }
   return nullptr;
 }
 
-DocumentHandle PreparedDocument::blocksFor(std::string_view source, MathOptions math) {
-  const auto prepared = completed(source, math);
+DocumentHandle PreparedDocument::blocksFor(std::string_view source, ParseOptions parse) {
+  const auto prepared = completed(source, parse);
   if (!prepared) {
     return nullptr;
   }
@@ -67,8 +67,8 @@ DocumentHandle PreparedDocument::blocksFor(std::string_view source, MathOptions 
   return result.status == ParseStatus::Ok ? result.document : nullptr;
 }
 
-PreparedDocument::PreparedDocument(std::string source, MathOptions math)
-    : source_(std::move(source)), math_(math) {}
+PreparedDocument::PreparedDocument(std::string source, ParseOptions parse)
+    : source_(std::move(source)), parse_(parse) {}
 
 void PreparedDocument::noteHint(const LayoutHint &hint) {
   std::lock_guard<std::mutex> lock(hintMutex_);
@@ -118,7 +118,7 @@ std::vector<LayoutHint> PreparedDocument::hintsForPrepare() const {
 }
 
 void PreparedDocument::prepare() {
-  result_ = parseMarkdown(source_, math_);
+  result_ = parseMarkdown(source_, parse_);
   if (result_.status == ParseStatus::Ok) {
     // Highlighting runs here, on the same worker job and so inside the
     // synchronous-layout budget, so the platform text work that follows sees
@@ -143,20 +143,20 @@ void PreparedDocument::prepare() {
 }
 
 std::shared_ptr<PreparedDocument> PreparedDocument::request(std::string_view source, const LayoutHint &hint,
-                                                            MathOptions math) {
+                                                            ParseOptions parse) {
   Cache &shared = cache();
   std::shared_ptr<PreparedDocument> prepared;
   {
     std::lock_guard<std::mutex> lock(shared.mutex);
     for (auto it = shared.entries.begin(); it != shared.entries.end(); ++it) {
-      if (sameRequest(source, math, **it)) {
+      if (sameRequest(source, parse, **it)) {
         prepared = *it;
         shared.entries.splice(shared.entries.begin(), shared.entries, it);
         break;
       }
     }
     if (prepared == nullptr) {
-      prepared = std::make_shared<PreparedDocument>(std::string(source), math);
+      prepared = std::make_shared<PreparedDocument>(std::string(source), parse);
       // A preparation nobody holds any more is skipped rather than run.
       prepared->task_ = std::make_shared<Task>([weak = std::weak_ptr<PreparedDocument>(prepared)] {
         if (const auto self = weak.lock()) {

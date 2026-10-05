@@ -440,6 +440,10 @@ bool linkUnderlined(const Theme &theme) { return theme.flag(kSlotLinkUnderline);
 double footnoteSizeScale(const Theme &theme) { return theme.number(kSlotFootnoteSizeScale); }
 double footnoteRaise(const Theme &theme) { return theme.number(kSlotFootnoteRaise); }
 double inlineCodeScale(const Theme &theme) { return theme.number(kSlotCodeSizeScale); }
+double superscriptFontScale(const Theme &theme) { return theme.number(kSlotSuperscriptFontScale); }
+double superscriptBaselineOffset(const Theme &theme) { return theme.number(kSlotSuperscriptBaselineOffsetScale); }
+double subscriptFontScale(const Theme &theme) { return theme.number(kSlotSubscriptFontScale); }
+double subscriptBaselineOffset(const Theme &theme) { return theme.number(kSlotSubscriptBaselineOffsetScale); }
 bool inlineCodeIsAbsolute(const Theme &theme) { return theme.flag(kSlotCodeAbsoluteSize); }
 double inlineCodeSize(const Theme &theme) { return theme.number(kSlotCodeFontSize); }
 

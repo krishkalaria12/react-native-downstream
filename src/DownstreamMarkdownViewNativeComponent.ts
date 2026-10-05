@@ -113,7 +113,7 @@ export interface NativeProps extends ViewProps {
    * the first thing that reads them, and a formula that is never recognized can
    * never be laid out.
    */
-  mathFlags?: CodegenTypes.WithDefault<CodegenTypes.Int32, 0>;
+  parseFlags?: CodegenTypes.WithDefault<CodegenTypes.Int32, 0>;
   /**
    * Load images. Off shows alt text and makes no request, which is also what a
    * document with no image does whatever this says.
@@ -150,6 +150,29 @@ export interface NativeProps extends ViewProps {
    * 32-bit ARGB value exactly.
    */
   themeFonts?: ReadonlyArray<string>;
+  /**
+   * What a newly revealed unit does as it appears. `none` is the default, which
+   * is a draw pass that costs one nil check per glyph range.
+   */
+  animation?: CodegenTypes.WithDefault<'none' | 'fadeIn' | 'slideUp', 'none'>;
+  /** Whether a new word or a new character is one reveal unit. */
+  animationSplit?: CodegenTypes.WithDefault<'word' | 'char', 'word'>;
+  /**
+   * `[duration, stagger, maxBacklogMs, x1, y1, x2, y2]`, all in the same units
+   * `src/animation.ts` resolves.
+   *
+   * One array rather than a struct of fields: it compares as a vector, so an
+   * unchanged configuration sends nothing, which is the same reason the theme
+   * travels as three parallel arrays. It is empty when there is no animation.
+   */
+  animationTiming?: ReadonlyArray<CodegenTypes.Double>;
+  /**
+   * Whether text is still arriving. `auto` follows the stream's own flag, which
+   * is what a stream view sends; a controlled view sends `on` or `off`.
+   */
+  animating?: CodegenTypes.WithDefault<'auto' | 'on' | 'off', 'off'>;
+  /** The shape drawn after the newest text while animating. */
+  caret?: CodegenTypes.WithDefault<'none' | 'block' | 'circle', 'none'>;
   onLinkPress?: CodegenTypes.DirectEventHandler<NativeLinkPressEvent>;
   onImagePress?: CodegenTypes.DirectEventHandler<NativeImagePressEvent>;
   onMathError?: CodegenTypes.DirectEventHandler<NativeMathErrorEvent>;

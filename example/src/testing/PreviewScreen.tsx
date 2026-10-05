@@ -34,6 +34,9 @@ export const PREVIEW_CASES: readonly { source: string; note: string }[] = [
   { source: 'Check the [documentation', note: 'link text still open' },
   { source: 'See ![diagram](https://exa', note: 'an unfinished image' },
   { source: 'see [note](which is long', note: 'prose that is not a link' },
+  { source: 'Mix steps<br', note: 'a half-arrived br' },
+  { source: 'Water is H<sub>2', note: 'an open subscript' },
+  { source: 'a<b and 2<3', note: 'a comparison is not a tag' },
 ];
 
 type Preview = 'on' | 'off';

@@ -67,6 +67,9 @@ public:
     finished_ = false;
     SessionTrace::record(id_, generation, 0, "reset_received");
     snapshot_.reset();
+    // The new source has shown nothing, so a view that binds to it fades from
+    // its first word rather than starting from the previous one's tail.
+    shown_.reset();
     readyGeneration_ = 0;
     readySequence_ = 0;
     markDirty();
@@ -127,12 +130,12 @@ public:
   /// the only thing that reads the flags and the worker is the only thread that
   /// touches it. Set once, right after `create`, so there is at most one queued
   /// pass between a session existing and its flags being right.
-  void setMath(MathOptions math) {
+  void setParse(ParseOptions parse) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (stopped_) {
       return;
     }
-    math_ = math;
+    parse_ = parse;
     if (!finished_) {
       markDirty();
     }
@@ -141,6 +144,16 @@ public:
   void noteLayout(LayoutHint hint) {
     std::lock_guard<std::mutex> lock(mutex_);
     layout_ = hint;
+  }
+
+  void noteShown(const DocumentHandle &document) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    shown_ = document;
+  }
+
+  DocumentHandle shown() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return shown_;
   }
 
 private:
@@ -169,7 +182,7 @@ private:
     // The flags travel the same way the preview options do, and for the same
     // reason: only the worker may set them on the parser, and both have to be in
     // place before the parse they change rather than after it.
-    std::optional<MathOptions> math;
+    std::optional<ParseOptions> parse;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (stopped_ || !dirty_) {
@@ -179,7 +192,7 @@ private:
       replacement.swap(replacement_);
       pending.swap(pending_);
       preview.swap(preview_);
-      math.swap(math_);
+      parse.swap(parse_);
       generation = generation_;
       sequence = sequence_;
       finished = finished_;
@@ -192,8 +205,8 @@ private:
     if (preview) {
       parser_.setPreview(*preview);
     }
-    if (math) {
-      parser_.setMath(*math);
+    if (parse) {
+      parser_.setParse(*parse);
     }
     SessionTrace::record(id_, generation, sequence, "parse_start");
     if (replacement) {
@@ -255,9 +268,12 @@ private:
   uint64_t readyGeneration_{0};
   uint64_t readySequence_{0};
   DocumentHandle snapshot_;
+  // The last document a view showed for this session. Not the snapshot: a view
+  // may be showing a snapshot that has since been superseded.
+  DocumentHandle shown_;
   std::optional<LayoutHint> layout_;
   std::optional<remend::PreviewOptions> preview_;
-  std::optional<MathOptions> math_;
+  std::optional<ParseOptions> parse_;
   bool dirty_{false};
   bool scheduled_{false};
   bool finished_{false};
@@ -335,6 +351,17 @@ void SessionRegistry::noteLayout(const std::string &id, LayoutHint hint) {
   }
 }
 
+void SessionRegistry::noteShown(const std::string &id, const DocumentHandle &document) {
+  if (const auto session = findSession(id)) {
+    session->noteShown(document);
+  }
+}
+
+DocumentHandle SessionRegistry::shown(const std::string &id) {
+  const auto session = findSession(id);
+  return session ? session->shown() : nullptr;
+}
+
 bool SessionRegistry::setPreview(const std::string &id, remend::PreviewOptions options) {
   const auto session = findSession(id);
   if (!session) {
@@ -344,12 +371,12 @@ bool SessionRegistry::setPreview(const std::string &id, remend::PreviewOptions o
   return true;
 }
 
-bool SessionRegistry::setMath(const std::string &id, MathOptions math) {
+bool SessionRegistry::setParse(const std::string &id, ParseOptions parse) {
   const auto session = findSession(id);
   if (!session) {
     return false;
   }
-  session->setMath(math);
+  session->setParse(parse);
   return true;
 }
 

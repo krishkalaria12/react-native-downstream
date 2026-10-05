@@ -106,7 +106,7 @@ void DownstreamSessionModule::reportError(const std::string &sessionId, const st
 }
 
 void DownstreamSessionModule::create(jsi::Runtime & /*rt*/, std::string sessionId, std::string mode,
-                                     double mathFlags) {
+                                     double parseFlags) {
   if (sessionId.empty() || (mode != "full" && mode != "incremental")) {
     reportError(sessionId, "invalid_session", "A nonempty session ID and valid parse mode are required", 0, 0);
     return;
@@ -114,8 +114,8 @@ void DownstreamSessionModule::create(jsi::Runtime & /*rt*/, std::string sessionI
   // A bitmask crosses the bridge as a number. Anything negative or above 2^32 is a
   // caller that is not this library, and an unset parse is the safe answer: every
   // formula stays literal rather than one being read as a flag it was not.
-  const double validated = std::clamp(mathFlags, 0.0, 4294967295.0);
-  const auto mathOptions = downstream::MathOptions{static_cast<uint32_t>(validated)};
+  const double validated = std::clamp(parseFlags, 0.0, 4294967295.0);
+  const auto mathOptions = downstream::ParseOptions{static_cast<uint32_t>(validated)};
   const auto parseMode =
       mode == "incremental" ? downstream::ParseMode::IncrementalTail : downstream::ParseMode::FullParse;
   try {
@@ -141,7 +141,7 @@ void DownstreamSessionModule::create(jsi::Runtime & /*rt*/, std::string sessionI
     // Applied after the session exists, which is the only order that works: a
     // parse queued before this would read the default flags and lay the same
     // source out two different ways.
-    downstream::SessionRegistry::setMath(sessionId, mathOptions);
+    downstream::SessionRegistry::setParse(sessionId, mathOptions);
   } catch (const std::exception &error) {
     reportError(sessionId, "create_failed", error.what(), 0, 0);
   }
@@ -317,19 +317,19 @@ jsi::Array toJs(jsi::Runtime &rt, const std::vector<Slot> &slots) {
 /// string is the whole message, so a fence the writer never closed reads as
 /// incomplete until the app settles it, which is Streamdown's rule for a
 /// streaming string that has not been finished yet.
-std::vector<Slot> controlledSlots(const std::string &source, downstream::MathOptions math,
+std::vector<Slot> controlledSlots(const std::string &source, downstream::ParseOptions parse,
                                   const std::vector<std::string> &languages) {
   SlotCache &cache = slotCache();
   {
     std::lock_guard<std::mutex> lock(cache.mutex);
     for (const CachedSlots &entry : cache.entries) {
-      if (entry.source == source && entry.mathFlags == math.flags && entry.languages == languages) {
+      if (entry.source == source && entry.mathFlags == parse.flags && entry.languages == languages) {
         return entry.slots;
       }
     }
   }
   std::vector<Slot> slots;
-  if (const auto prepared = downstream::PreparedDocument::completed(source, math)) {
+  if (const auto prepared = downstream::PreparedDocument::completed(source, parse)) {
     if (prepared->result().status == downstream::ParseStatus::Ok) {
       slots = slotsFor(prepared->result().document, languages, true);
     }
@@ -337,7 +337,7 @@ std::vector<Slot> controlledSlots(const std::string &source, downstream::MathOpt
     // A bare parse: no highlighting, no math layout, no platform preparation,
     // because none of those can change which fences a document has. The
     // platform rendering belongs to the node, which asks for its own hint.
-    const downstream::ParseResult result = downstream::parseMarkdown(source, math);
+    const downstream::ParseResult result = downstream::parseMarkdown(source, parse);
     if (result.status == downstream::ParseStatus::Ok && result.document) {
       // A controlled source is complete the moment it is parsed, so every block
       // settles — the same rule `PreparedDocument` applies.
@@ -352,7 +352,7 @@ std::vector<Slot> controlledSlots(const std::string &source, downstream::MathOpt
     if (cache.entries.size() >= SlotCache::kCapacity) {
       cache.entries.erase(cache.entries.begin());
     }
-    cache.entries.push_back(CachedSlots{source, math.flags, languages, std::move(slots)});
+    cache.entries.push_back(CachedSlots{source, parse.flags, languages, std::move(slots)});
   }
   return slots;
 }
@@ -361,11 +361,11 @@ std::vector<Slot> controlledSlots(const std::string &source, downstream::MathOpt
 
 jsi::Object DownstreamSessionModule::fenceSlots(jsi::Runtime &rt, std::string source, double mathFlags,
                                                 std::vector<std::string> languages) {
-  const downstream::MathOptions math{static_cast<uint32_t>(std::clamp(mathFlags, 0.0, 4294967295.0))};
+  const downstream::ParseOptions parse{static_cast<uint32_t>(std::clamp(mathFlags, 0.0, 4294967295.0))};
   bool pending = false;
   std::vector<Slot> slots;
   try {
-    slots = controlledSlots(source, math, languages);
+    slots = controlledSlots(source, parse, languages);
   } catch (const std::exception &) {
     slots.clear();
   }
@@ -384,7 +384,7 @@ jsi::Object DownstreamSessionModule::fenceSlots(jsi::Runtime &rt, std::string so
 AsyncPromise<std::vector<Slot>> DownstreamSessionModule::fenceSlotsAsync(jsi::Runtime &rt, std::string source,
                                                                           double mathFlags,
                                                                           std::vector<std::string> languages) {
-  const downstream::MathOptions math{static_cast<std::uint32_t>(std::clamp(mathFlags, 0.0, 4294967295.0))};
+  const downstream::ParseOptions parse{static_cast<std::uint32_t>(std::clamp(mathFlags, 0.0, 4294967295.0))};
   // The promise is made here, on the JavaScript thread, and settled from the
   // worker that did the parse: `resolve` and `reject` here cross to the
   // JavaScript thread through the call invoker themselves, so nothing about the
@@ -395,12 +395,12 @@ AsyncPromise<std::vector<Slot>> DownstreamSessionModule::fenceSlotsAsync(jsi::Ru
     // The same pool a preparation uses: a big message's fences are read while
     // the rest of the app keeps working, which is the whole reason a large
     // source does not parse here.
-    downstream::WorkerPool::shared().post([promise, source = std::move(source), math,
+    downstream::WorkerPool::shared().post([promise, source = std::move(source), parse,
                                           languages = std::move(languages)]() mutable {
       std::vector<Slot> slots;
       std::string message;
       try {
-        const downstream::ParseResult result = downstream::parseMarkdown(source, math);
+        const downstream::ParseResult result = downstream::parseMarkdown(source, parse);
         if (result.status == downstream::ParseStatus::Ok && result.document) {
           // A controlled source is complete the moment it is parsed, so every
           // block settles, exactly as the synchronous form settles them.

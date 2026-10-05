@@ -34,6 +34,7 @@ import com.facebook.react.uimanager.PixelUtil
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * Marks a link's text. Taps are hit-tested by the views; accessibility
@@ -57,24 +58,30 @@ internal class LinkSpan(val index: Int, val color: Int, val underlined: Boolean 
   }
 }
 
-/** Raises text by a fraction of its size, for footnote references. */
-private class BaselineShiftSpan(private val fraction: Float) : MetricAffectingSpan() {
+/**
+ * Raises text by [pixels], or lowers it for a negative value, for footnote
+ * references and scripts. Pixels rather than a share of the paint's size,
+ * because the size span applied before this one has already shrunk the paint
+ * and the shift is a share of the block's size, not the script's.
+ */
+private class BaselineShiftSpan(private val pixels: Int) : MetricAffectingSpan() {
   // A positive baseline shift moves text down.
   override fun updateDrawState(paint: TextPaint) {
-    paint.baselineShift -= (paint.textSize * fraction).toInt()
+    paint.baselineShift -= pixels
   }
 
   override fun updateMeasureState(paint: TextPaint) {
-    paint.baselineShift -= (paint.textSize * fraction).toInt()
+    paint.baselineShift -= pixels
   }
 }
 
 /**
- * Holds a line with inline code to the surrounding text's metrics. Android's
- * monospace font has taller metrics than the body font, which would open a
- * gap above the line. Runs before BlockSpan, which adds block spacing.
+ * Holds a line to the surrounding text's metrics. Android's monospace font has
+ * taller metrics than the body font, which would open a gap above a line with
+ * inline code, and a raised or lowered run would open its line the same way.
+ * Runs before BlockSpan, which adds block spacing.
  */
-private class InlineCodeLineSpan(private val ascent: Int, private val descent: Int) : LineHeightSpan {
+private class HeldLineSpan(private val ascent: Int, private val descent: Int) : LineHeightSpan {
   override fun chooseHeight(
     text: CharSequence,
     lineStart: Int,
@@ -93,7 +100,7 @@ private class InlineCodeLineSpan(private val ascent: Int, private val descent: I
 /**
  * A themed line height, as a minimum: a line the face needs more room for keeps
  * it, so no glyph is clipped, and the extra sits above the text, as iOS places
- * it. Runs after InlineCodeLineSpan, which sets absolute metrics, and before
+ * it. Runs after HeldLineSpan, which sets absolute metrics, and before
  * BlockSpan, which adds block spacing on top of the line.
  */
 private class BlockLineHeightSpan(private val height: Int) : LineHeightSpan {
@@ -517,7 +524,19 @@ internal class MathSegment(
  * later [text] is a PrecomputedText, built off the UI thread, so a TextView
  * showing it only breaks lines instead of measuring every glyph again.
  */
-internal class TextSegment(val text: Spanned, val accessibleBlocks: List<AccessibleBlock>, gapBefore: Int) : Segment(gapBefore) {
+internal class TextSegment(
+  val text: Spanned,
+  val accessibleBlocks: List<AccessibleBlock>,
+  gapBefore: Int,
+  /**
+   * Where the caret's placeholder sits in [text], or -1 when this segment has
+   * none. Carried here so a draw pass does not search for the span on every
+   * frame.
+   */
+  val caretOffset: Int,
+  /** The caret's shape, or 0 for none. */
+  val caretKind: Int,
+) : Segment(gapBefore) {
   private var heightWidth = -1
   private var height = 0
 
@@ -599,6 +618,14 @@ internal class CodeSegment(
   val markerFace: Typeface,
   val markerSize: Float,
   val markerGap: Float,
+  /**
+   * Where the caret's placeholder sits in the body text, or -1. A caret inside
+   * an open fence belongs to the body rather than the card, so the body view is
+   * what draws it.
+   */
+  val caretOffset: Int,
+  /** The caret's shape, or 0 for none. */
+  val caretKind: Int,
   gapBefore: Int,
 ) : Segment(gapBefore) {
   private val digitAdvance: Float
@@ -722,6 +749,15 @@ internal class TableSegment(
   /** The segment's first block, which is what a copy or a download reads. */
   val blockIndex: Int,
   val blockCount: Int,
+  /**
+   * The caret's shape, or 0 for none.
+   *
+   * A caret after a table takes a line of its own below it, and the grid view is
+   * what has both the table's height and the space under it, so the shape is
+   * carried here rather than in any cell's text. Its width comes from the body's
+   * font, which is [RenderedDocument.Style]'s `bodySize` at draw time.
+   */
+  val caretKind: Int,
   gapBefore: Int,
 ) : Segment(gapBefore) {
   // One border width for the closing grid line, so the outer edge the view draws
@@ -1034,6 +1070,12 @@ internal class RenderedDocument(
      * `themeId` is the interned theme the caller draws with. It is in both keys
      * so a themed rendering is never handed to an unthemed view, and it resolves
      * the theme's cap on the platform font scale here rather than at every draw.
+     *
+     * `caret` is already resolved against the document, and it is in the keys for
+     * the same reason the chrome is: its placeholder is a real character in the
+     * measured text, so a rendering built without one and a rendering built with
+     * one have different heights. Only the last segment changes, so a pause
+     * between blocks builds one variant rather than the whole document.
      */
     fun obtain(
       context: Context,
@@ -1041,10 +1083,11 @@ internal class RenderedDocument(
       fontScale: Float,
       syntaxHighlighting: Boolean = true,
       themeId: Long = 0L,
+      caret: PlacedCaret = PlacedCaret.NONE,
     ): RenderedDocument? {
       val night = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
         Configuration.UI_MODE_NIGHT_YES
-      val key = "$documentId:$fontScale:$night:$syntaxHighlighting:$themeId"
+      val key = "$documentId:$fontScale:$night:$syntaxHighlighting:$themeId:${caret.kind}:${caret.place}"
       cache.get(key)?.let { return it }
       // Inline formulas draw from text spans, which have no context of their own.
       MathFonts.attach(context)
@@ -1074,8 +1117,14 @@ internal class RenderedDocument(
         // Only the uncommitted tail and newly committed chunks cross JNI. The
         // ordinal is in the key because a cached segment is reused only where it
         // would be built identically.
+        val isLast = planned.to == plan.last().to
+        // Only the document's own last segment carries the caret, so the key only
+        // varies there and every earlier segment keeps being shared between
+        // snapshots.
+        val caretKey = if (isLast) "${caret.kind}:${caret.place}" else "0:0"
         val segmentKey =
-          "${planned.identity}:${planned.to - planned.from}:$ordinal:$scaled:$night:$syntaxHighlighting:$themeId"
+          "${planned.identity}:${planned.to - planned.from}:$ordinal:$scaled:$night:" +
+            "$syntaxHighlighting:$themeId:$caretKey"
         val segment = (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
           // The theme id goes with the read, because each block's typography is
           // resolved against it in C++; without it every block reads the default.
@@ -1083,6 +1132,7 @@ internal class RenderedDocument(
             ?.let {
               buildSegment(
                 it, images, style, planned, ordinal, syntaxHighlighting, style.px(it.previousBottomMargin),
+                if (isLast) caret else PlacedCaret.NONE,
               )
             }
             ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
@@ -1277,6 +1327,7 @@ internal class RenderedDocument(
       codeOrdinal: Int,
       syntaxHighlighting: Boolean,
       previousBottom: Float,
+      caret: PlacedCaret = PlacedCaret.NONE,
     ): Segment {
       val from = planned.from
       val isCode = planned.kind == SEGMENT_CODE
@@ -1442,6 +1493,29 @@ internal class RenderedDocument(
         )
       }
 
+      // Blocks whose inline formula has a layout, whose box its line must hold.
+      val formulaBlocks = document.formulas.filter { it.list != null }.mapTo(HashSet()) { it.block }
+      // Scripts and inline code use the block's size before their own size spans.
+      // Read the same integer size written above instead of searching the growing
+      // span tree for every run. Table rows have no block size span.
+      var metricBlock = -1
+      var metricPaint = paint
+      var metricAscent = 0
+      var metricDescent = 0
+      fun blockPaintFor(block: Int): TextPaint {
+        if (metricBlock != block) {
+          metricBlock = block
+          metricPaint = TextPaint(paint).apply {
+            if (document.blockKind(block) != NativeDocument.KIND_TABLE_ROW) {
+              textSize = px(document.blockFontSize(block)).toInt().toFloat()
+            }
+          }
+          val metrics = metricPaint.fontMetricsInt
+          metricAscent = metrics.ascent
+          metricDescent = metrics.descent
+        }
+        return metricPaint
+      }
       for (run in 0 until document.runCount) {
         val styles = document.runStyles(run)
         val link = document.runLink(run)
@@ -1451,7 +1525,6 @@ internal class RenderedDocument(
         val italic = styles and NativeDocument.STYLE_EMPHASIS != 0
         val isCode = styles and NativeDocument.STYLE_CODE != 0
         val linked = link >= 0
-
         // The run's face starts as the block's own and takes the inline kind's
         // slots on top, so a `strong` in a themed heading is a heavier heading
         // rather than a heading that drops back to the body face. A face rather
@@ -1533,10 +1606,9 @@ internal class RenderedDocument(
           )
         }
         if (isCode) {
-          val size = text.getSpans(start, end, AbsoluteSizeSpan::class.java).firstOrNull()?.size?.toFloat()
-          val metrics = TextPaint(paint).apply { if (size != null) textSize = size }.fontMetricsInt
+          blockPaintFor(blockIndex)
           text.setSpan(
-            InlineCodeLineSpan(metrics.ascent, metrics.descent),
+            HeldLineSpan(metricAscent, metricDescent),
             start,
             end,
             flags or (1 shl Spanned.SPAN_PRIORITY_SHIFT),
@@ -1554,7 +1626,7 @@ internal class RenderedDocument(
             if (isTable) {
               BackgroundColorSpan(colors.codeBackground)
             } else {
-              InlineCodeBackgroundSpan(colors.codeBackground, metrics.ascent, metrics.descent)
+              InlineCodeBackgroundSpan(colors.codeBackground, metricAscent, metricDescent)
             },
             start,
             end,
@@ -1573,21 +1645,37 @@ internal class RenderedDocument(
             flags,
           )
         }
-        if (styles and NativeDocument.STYLE_FOOTNOTE != 0) {
-          // A fraction of the block's size, so the reference keeps its
-          // proportions when a theme changes the body size.
-          text.setSpan(
-            RelativeSizeSpan(theme.number(ThemeSlots.SLOT_FOOTNOTE_SIZE_SCALE)),
-            start,
-            end,
-            flags,
-          )
-          text.setSpan(
-            BaselineShiftSpan(theme.number(ThemeSlots.SLOT_FOOTNOTE_RAISE)),
-            start,
-            end,
-            flags,
-          )
+        // A raised or lowered run: a <sup>, a <sub>, or a footnote reference.
+        // The size and the shift are both shares of the block's own size, as
+        // iOS and the web measure them, so the shift is fixed here rather than
+        // read off a paint the size span has already shrunk.
+        val superscript = styles and NativeDocument.STYLE_SUPERSCRIPT != 0
+        val subscript = styles and NativeDocument.STYLE_SUBSCRIPT != 0
+        val footnote = styles and NativeDocument.STYLE_FOOTNOTE != 0
+        if (superscript || subscript || footnote) {
+          val (sizeScale, raise) = when {
+            footnote -> theme.number(ThemeSlots.SLOT_FOOTNOTE_SIZE_SCALE) to theme.number(ThemeSlots.SLOT_FOOTNOTE_RAISE)
+            superscript -> theme.number(ThemeSlots.SLOT_SUPERSCRIPT_FONT_SCALE) to
+              theme.number(ThemeSlots.SLOT_SUPERSCRIPT_BASELINE_OFFSET_SCALE)
+            // A subscript lowers.
+            else -> theme.number(ThemeSlots.SLOT_SUBSCRIPT_FONT_SCALE) to
+              -theme.number(ThemeSlots.SLOT_SUBSCRIPT_BASELINE_OFFSET_SCALE)
+          }
+          text.setSpan(RelativeSizeSpan(sizeScale), start, end, flags)
+          text.setSpan(BaselineShiftSpan((blockPaintFor(blockIndex).textSize * raise).roundToInt()), start, end, flags)
+          // The web's `sub` and `sup` have `line-height: 0`, so a shifted run
+          // never opens its line. A formula's box is what its line has to hold,
+          // so a block with one keeps its natural height, as on iOS.
+          if (!isCode && blockIndex !in formulaBlocks) {
+            text.setSpan(
+              HeldLineSpan(metricAscent, metricDescent),
+              start,
+              end,
+              flags or (1 shl Spanned.SPAN_PRIORITY_SHIFT),
+            )
+          }
+        }
+        if (footnote) {
           text.setSpan(
             ForegroundColorSpan(
               theme.color(ThemeSlots.SLOT_FOOTNOTE_COLOR, colors.night) ?: colors.link,
@@ -1642,16 +1730,31 @@ internal class RenderedDocument(
         }
       }
 
+      // The caret's placeholder goes in before the text is precomputed, because
+      // the placeholder's advance is part of what was measured and a layout built
+      // without it would put the last line somewhere else.
+      //
+      // A breaking space first, so a full last line wraps the caret to the next
+      // line the way Streamdown's `::after` does rather than overlapping the last
+      // word. A caret that takes its own line gets the space too: it is a
+      // paragraph of its own inside this segment, so it needs the block's own
+      // spacing.
+      // A table's caret is not in its text, so nothing is appended before this
+      // returns. The grid view draws the shape from the kind it carries.
+      if (isTable) {
+        // The block above the segment is not in this slice, so the caller passes
+        // its bottom margin in; zero at the very top of the document.
+        return buildTable(
+          document, text, 0, document.blockCount, style, containersOf(0, -1),
+          style.gapAbove(document, 0, previousBottom).toInt(), identity, from, caret,
+        )
+      }
+      val caretOffset = appendCaret(text, document, style, caret)
       // A text segment that a committed chunk split off gets the gap it would
       // have inside one segment, so both stack to the same height.
       // The block above the segment is not in this slice, so the caller passes
       // its bottom margin in; zero at the very top of the document.
       val gapBefore = style.gapAbove(document, 0, previousBottom).toInt()
-      if (isTable) {
-        return buildTable(
-          document, text, 0, document.blockCount, style, containersOf(0, -1), gapBefore, identity, from,
-        )
-      }
       val displayText = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
         PrecomputedTexts.create(text, paint)
       } else {
@@ -1684,9 +1787,48 @@ internal class RenderedDocument(
             false,
             true,
           ),
+          caretOffset,
+          caret.kind,
         )
       }
-      return TextSegment(displayText, accessibleBlocks, gapBefore)
+      return TextSegment(displayText, accessibleBlocks, gapBefore, caretOffset, caret.kind)
+    }
+
+    /**
+     * Appends the caret's placeholder and answers the offset it sits at, or -1.
+     *
+     * [document] and [style] are read for the body's font metrics only; the
+     * placeholder has no metrics of its own.
+     *
+     * The offset is carried on the segment rather than recomputed at draw time,
+     * because a table's own grid view and a code card's body draw the caret and
+     * neither has the text this was appended to.
+     */
+    private fun appendCaret(
+      text: SpannableStringBuilder,
+      document: NativeDocument,
+      style: Style,
+      caret: PlacedCaret,
+    ): Int {
+      if (caret.kind == 0) {
+        return -1
+      }
+      val em = style.bodySize
+      // Half an em wide, as the bar is, and no taller than the font, so the line
+      // height is unchanged whatever the appearance or the text size.
+      val width = ceil(em * 0.5f).toInt()
+      val height = ceil(em * 1.2f).toInt()
+      if (caret.place == PlacedCaret.PLACE_OWN_LINE) {
+        // Its own line: two newlines open it, which is what puts the caret where
+        // the next block's first line will be rather than at the end of this one.
+        text.append("\n\n")
+      } else if (text.isNotEmpty() && !text.endsWith("\n")) {
+        text.append(' ')
+      }
+      val offset = text.length
+      text.append('\uFFFC')
+      text.setSpan(CaretSpan(width, height), offset, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+      return offset
     }
 
     /**
@@ -1780,6 +1922,8 @@ internal class RenderedDocument(
       fenceMeta: FenceMeta = FenceMeta(),
       codeTextSize: Int,
       codeFace: Typeface,
+      caretOffset: Int = -1,
+      caretKind: Int = 0,
     ): CodeSegment {
       val newline = text.indexOfFirst { it == '\n' }
       val firstLine = text.substring(0, if (newline < 0) text.length else newline).toString()
@@ -1815,6 +1959,8 @@ internal class RenderedDocument(
         markerFace = style.markerPaint.typeface,
         markerSize = style.markerSize,
         markerGap = style.markerGap,
+        caretOffset = caretOffset,
+        caretKind = caretKind,
         gapBefore = gapBefore,
       )
     }
@@ -1829,6 +1975,7 @@ internal class RenderedDocument(
       gapBefore: Int,
       identity: Long,
       blockIndex: Int,
+      caret: PlacedCaret = PlacedCaret.NONE,
     ): TableSegment {
       val paint = style.paint
       val markerPaint = style.markerPaint
@@ -1903,6 +2050,7 @@ internal class RenderedDocument(
         identity = identity,
         blockIndex = blockIndex,
         blockCount = to - from,
+        caretKind = caret.kind,
         gapBefore = gapBefore,
       )
     }

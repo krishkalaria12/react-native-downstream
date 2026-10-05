@@ -3,7 +3,9 @@
 #include "IncrementalParser.h"
 #include "SegmentPlan.h"
 #include "check.h"
+#include "tests/dump_model.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <cstdint>
@@ -156,9 +158,11 @@ bool fullParseOracleSettles() {
       equal(*colored(parsed, 0.0), *actual.document);
 }
 
-bool check(const std::vector<std::string> &chunks, const char *label) {
-  IncrementalParser incremental(ParseMode::IncrementalTail);
-  IncrementalParser full(ParseMode::FullParse);
+/// `parse` is the parse options every parse in this case runs under, so a
+/// corpus can be swept with inline HTML or an opt-in syntax on as well as off.
+bool check(const std::vector<std::string> &chunks, const char *label, ParseOptions parse = ParseOptions()) {
+  IncrementalParser incremental(ParseMode::IncrementalTail, parse);
+  IncrementalParser full(ParseMode::FullParse, parse);
   std::string source;
   std::map<uint64_t, std::pair<size_t, Block>> identities;
   std::map<uint64_t, std::pair<size_t, Block>> fullIdentities;
@@ -178,7 +182,7 @@ bool check(const std::vector<std::string> &chunks, const char *label) {
     if (expected.status == ParseStatus::Ok) {
       // The oracle is a raw parse, so it is colored the way the full-mode
       // parser colors before it compares anything.
-      const auto oracle = colored(parseMarkdown(source));
+      const auto oracle = colored(parseMarkdown(source, parse));
       if (!equal(*expected.document, *oracle) ||
           !carriedIdentities(*expected.document, fullIdentities)) {
         std::cerr << "Full-mode identity broke in " << label << " at " << source.size() << " bytes\n";
@@ -187,7 +191,7 @@ bool check(const std::vector<std::string> &chunks, const char *label) {
     }
   }
   const auto actual = feed(incremental, source, true);
-  const auto expected = colored(parseMarkdown(source));
+  const auto expected = colored(parseMarkdown(source, parse));
   if (actual.status != ParseStatus::Ok || !equal(*actual.document, *expected)) {
     std::cerr << "Finish mismatch in " << label << "\n";
     return false;
@@ -577,7 +581,7 @@ static bool readDocument(std::vector<std::string> &chunks, bool *truncated) {
    than the per-run budget of a single document, and spawning a process per
    case would dominate the suite. Every document is checked, so one run reports
    every regression rather than only the first. */
-static int batchedCorpus() {
+static int batchedCorpus(ParseOptions parse) {
   std::vector<std::string> chunks;
   bool truncated = false;
   size_t documents = 0;
@@ -591,16 +595,52 @@ static int batchedCorpus() {
     // identifies which corpus entry needs fixing.
     char label[64];
     snprintf(label, sizeof(label), "corpus[%zu]", index);
-    CHECK(check(chunks, label), "batched corpus streams match a full parse");
+    CHECK(check(chunks, label, parse), "batched corpus streams match a full parse");
     if (ds_check_failures > 0) return ds_check_result();
   }
   return ds_check_result();
 }
 
+// What a pass returns is what a session hands every view, so it has to be the
+// snapshot the parser recorded, carrying both of its flags: a stream still
+// arriving, and how many leading blocks have settled. Each path is fed in turn:
+// the first full parse, a tail parse after a commit, the open-fence fast path,
+// and the finishing parse.
+bool snapshotsCarryTheirFlags(ParseMode mode) {
+  IncrementalParser parser(mode);
+  const std::string prose = std::string(200, 'a') + "\n\n# Heading\n\nactive";
+  const std::vector<std::string> sources = {
+      prose,
+      prose + " tail",
+      prose + " tail\n\n```ts\nconst a = 1;\n",
+      prose + " tail\n\n```ts\nconst a = 1;\nconst b = 2;\n",
+  };
+  bool ok = true;
+  uint32_t settled = 0;
+  for (const std::string &source : sources) {
+    const ParseResult result = feed(parser, source, false);
+    ok = ok && result.status == ParseStatus::Ok && result.document == parser.document() &&
+        result.document->streaming;
+    if (ok) settled = std::max(settled, result.document->settledBlocks);
+  }
+  const ParseResult last = feed(parser, sources.back() + "```\n", true);
+  ok = ok && last.status == ParseStatus::Ok && last.document == parser.document() && !last.document->streaming &&
+      last.document->settledBlocks == last.document->blocks.size();
+  // The incremental parser commits the leading paragraph and heading, which is
+  // what a control may act on before the stream finishes.
+  return ok && (mode == ParseMode::FullParse || settled > 0);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
-  if (argc > 1 && std::string(argv[1]) == "--batch") return batchedCorpus();
+  if (argc > 1 && std::string(argv[1]) == "--batch") {
+    // `--batch <parseFlags>` sweeps the corpus under named parse options, which
+    // is how a document with the opt-in tags on is held to the same
+    // incremental-equals-full rule as every other source.
+    ParseOptions parse = testdump::parseFlagsFromArg(argc, argv, 2);
+    return batchedCorpus(parse);
+  }
   std::vector<std::string> chunks;
   bool truncated = false;
   readDocument(chunks, &truncated);
@@ -625,6 +665,8 @@ int main(int argc, char **argv) {
   CHECK(realisticAnswer(), "realistic answer");
   CHECK(unchangedTailCodeIsCached(), "unchanged tail code is cached in both parse modes");
   CHECK(fullModeKeepsIdentities(), "full mode keeps identities");
+  CHECK(snapshotsCarryTheirFlags(ParseMode::IncrementalTail), "a pass returns the snapshot it flagged (incremental)");
+  CHECK(snapshotsCarryTheirFlags(ParseMode::FullParse), "a pass returns the snapshot it flagged (full)");
   CHECK(fullParseOracleSettles(), "the full-parse oracle settles code with a zero highlight budget");
   return ds_check_result();
 }

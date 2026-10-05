@@ -218,6 +218,10 @@ const SLOTS = {
   'image.marginTop': { id: 248, kind: 'metric', layout: true },
   'image.marginBottom': { id: 249, kind: 'metric', layout: true },
   'image.placeholderColor': { id: 250, kind: 'color', layout: false, darkId: 251 },
+  'superscript.fontScale': { id: 252, kind: 'metric', layout: true },
+  'superscript.baselineOffsetScale': { id: 253, kind: 'metric', layout: true },
+  'subscript.fontScale': { id: 254, kind: 'metric', layout: true },
+  'subscript.baselineOffsetScale': { id: 255, kind: 'metric', layout: true },
 } as const satisfies Readonly<Record<string, ThemeSlot>>;
 
 export const THEME_SLOTS: Readonly<Record<string, ThemeSlot>> = SLOTS;
@@ -412,10 +416,14 @@ export const THEME_SLOT_NAMES = [
   'image.marginTop',
   'image.marginBottom',
   'image.placeholderColor',
+  'superscript.fontScale',
+  'superscript.baselineOffsetScale',
+  'subscript.fontScale',
+  'subscript.baselineOffsetScale',
 ] as const satisfies readonly ThemeSlotName[];
 
 /** One past the highest id in use. */
-export const THEME_SLOT_COUNT = 252;
+export const THEME_SLOT_COUNT = 256;
 
 const BY_NAME: ReadonlyMap<string, ThemeSlot> = new Map<string, ThemeSlot>(
   (Object.keys(SLOTS) as ThemeSlotName[]).map((name) => [name, SLOTS[name]])

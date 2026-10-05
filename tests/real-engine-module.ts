@@ -37,7 +37,7 @@ interface Session {
   /** Provisional-styling features, as the native bitmask. */
   preview: number;
   /** Math parse options, as the native bitmask, fixed at creation. */
-  mathFlags: number;
+  parseFlags: number;
   /**
    * Everything the worker has applied to this session's parser, in order.
    * Each pass replays it through the real `IncrementalParser`, so what the
@@ -72,8 +72,8 @@ export function previewFeaturesOf(sessionId: string): number {
 }
 
 /** The math parse options a session was created with. */
-export function mathFlagsOf(sessionId: string): number {
-  return sessions.get(sessionId)?.mathFlags ?? 0;
+export function parseFlagsOf(sessionId: string): number {
+  return sessions.get(sessionId)?.parseFlags ?? 0;
 }
 
 function nowNs(): string {
@@ -104,7 +104,7 @@ function publish(session: Session, sessionId: string): void {
   emitTrace(sessionId, session.generation, session.sequence, 'append_received');
   nativeWork.parses += 1;
   session.steps.push({ op: 'parse', finished: session.finished });
-  const model = replaySession(session.mode, session.steps);
+  const model = replaySession(session.mode, session.steps, session.parseFlags);
   session.model = model;
   emitTrace(sessionId, session.generation, session.sequence, 'parse_start');
   emitTrace(sessionId, session.generation, session.sequence, 'parse_end');
@@ -140,7 +140,7 @@ export const slotWork = { queries: 0, async: 0 };
 /** The slots a controlled source holds, as the TurboModule answers them. */
 function controlledSlots(
   source: string,
-  mathFlags: number,
+  parseFlags: number,
   languages: readonly string[]
 ): { pending: boolean; slots: readonly FenceSlot[] } {
   slotWork.queries += 1;
@@ -152,7 +152,7 @@ function controlledSlots(
   }
   return {
     pending: false,
-    slots: fenceSlots(source, languages, mathFlags, true),
+    slots: fenceSlots(source, languages, parseFlags, true),
   };
 }
 
@@ -161,7 +161,7 @@ export const realEngineModule = {
   default: {
     mathAvailable: () => true,
 
-    create(sessionId: string, mode: string, mathFlags = 0) {
+    create(sessionId: string, mode: string, parseFlags = 0) {
       sessions.set(sessionId, {
         // The TurboModule treats anything but `incremental` as full mode.
         mode: mode === 'incremental' ? 'incremental' : 'full',
@@ -171,7 +171,7 @@ export const realEngineModule = {
         finished: false,
         model: undefined,
         preview: 0,
-        mathFlags,
+        parseFlags,
         steps: [],
       });
     },
@@ -222,21 +222,21 @@ export const realEngineModule = {
 
     fenceSlots(
       source: string,
-      mathFlags: number,
+      parseFlags: number,
       languages: readonly string[]
     ): { pending: boolean; slots: readonly FenceSlot[] } {
-      return controlledSlots(source, mathFlags, languages);
+      return controlledSlots(source, parseFlags, languages);
     },
 
     async fenceSlotsAsync(
       source: string,
-      mathFlags: number,
+      parseFlags: number,
       languages: readonly string[]
     ): Promise<readonly FenceSlot[]> {
       slotWork.async += 1;
       // The worker parses the same source with the same rule; only the thread
       // differs, and a test cannot see which thread ran it.
-      return fenceSlots(source, languages, mathFlags, true);
+      return fenceSlots(source, languages, parseFlags, true);
     },
 
     sessionFenceSlots(
@@ -260,7 +260,7 @@ export const realEngineModule = {
       return fenceSlots(
         session.source,
         languages,
-        session.mathFlags,
+        session.parseFlags,
         !session.finished
       );
     },

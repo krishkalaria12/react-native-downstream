@@ -13,14 +13,15 @@ namespace downstream {
 constexpr size_t kMaxSourceBytes = 1024 * 1024;
 
 /**
- * Which math delimiters the parse recognizes.
+ * Which syntax the parse recognizes: math delimiters, the inline tags it
+ * renders, and md4c's own script syntaxes.
  *
  * Parse options rather than a resolved boolean, because whether `$x$` is math
  * has to be decided before anything is laid out. The bits match the native
- * `mathFlags` prop in `src/math.ts`, so the same number travels from JavaScript
+ * `parseFlags` prop in `src/parseFlags.ts`, so the same number travels from JavaScript
  * to here without a translation step.
  */
-namespace MathParseFlags {
+namespace ParseFlags {
 
 /// A document may contain math at all. Off means every formula stays literal
 /// and the parse is byte-for-byte what it was before math existed.
@@ -29,27 +30,38 @@ constexpr uint32_t Enabled = 1u << 0;
 constexpr uint32_t SingleDollar = 1u << 1;
 /// `\(…\)` and `\[…\]` are math. On by default; Streamdown does not parse them.
 constexpr uint32_t Brackets = 1u << 2;
+/// `<br>`, `<sub>` and `<sup>` are recognized in inline HTML pieces. On by
+/// default at the resolver level; off means every piece stays literal, exactly
+/// today's parse.
+constexpr uint32_t InlineHtml = 1u << 3;
+/// md4c's `^x^` superscripts. Off by default.
+constexpr uint32_t SuperscriptSyntax = 1u << 4;
+/// md4c's `~x~` subscripts. Off by default.
+constexpr uint32_t SubscriptSyntax = 1u << 5;
 
 /// What `undefined` resolves to, and therefore what the codegen default is.
 constexpr uint32_t Default = Enabled | Brackets;
 
-constexpr uint32_t All = Enabled | SingleDollar | Brackets;
+constexpr uint32_t All = Enabled | SingleDollar | Brackets | InlineHtml | SuperscriptSyntax | SubscriptSyntax;
 
-} // namespace MathParseFlags
+} // namespace ParseFlags
 
-/// A parse's math options, as the props and a stream's options resolve to.
-struct MathOptions {
-  uint32_t flags{MathParseFlags::Default};
+/// A parse's options, as the props and a stream's options resolve to.
+struct ParseOptions {
+  uint32_t flags{ParseFlags::Default};
 
-  bool enabled() const { return (flags & MathParseFlags::Enabled) != 0; }
-  bool singleDollar() const { return (flags & MathParseFlags::SingleDollar) != 0; }
-  bool brackets() const { return (flags & MathParseFlags::Brackets) != 0; }
+  bool enabled() const { return (flags & ParseFlags::Enabled) != 0; }
+  bool singleDollar() const { return (flags & ParseFlags::SingleDollar) != 0; }
+  bool brackets() const { return (flags & ParseFlags::Brackets) != 0; }
+  bool inlineHtml() const { return (flags & ParseFlags::InlineHtml) != 0; }
+  bool superscriptSyntax() const { return (flags & ParseFlags::SuperscriptSyntax) != 0; }
+  bool subscriptSyntax() const { return (flags & ParseFlags::SubscriptSyntax) != 0; }
   /// True when a document under these options parses exactly as it did before
   /// math existed. The flag is the only thing that has to be off, because every
   /// other bit is read through it.
   bool inert() const { return !enabled(); }
 
-  bool operator==(const MathOptions &) const = default;
+  bool operator==(const ParseOptions &) const = default;
 };
 
 enum class ParseStatus : uint8_t {
@@ -78,9 +90,9 @@ struct ParseResult {
   /// Source text that produced each block's visible text, parallel to
   /// document->blocks. A block without source text has an empty range.
   std::vector<ByteRange> blockSource;
-  /// The math options this parse ran under. Parse options are part of a
-  /// source's identity, so a caller caching parses keys on it as well.
-  MathOptions math;
+  /// The options this parse ran under. Parse options are part of a source's
+  /// identity, so a caller caching parses keys on it as well.
+  ParseOptions parse;
 };
 
 /// Parses a complete document with md4c's GitHub dialect, the same parser
@@ -90,14 +102,14 @@ struct ParseResult {
 /// `options` defaults to the same default the `math` prop resolves to, so a
 /// caller that says nothing gets bracket math. A parse with math disabled
 /// produces exactly the document it produced before math existed.
-ParseResult parseMarkdown(std::string_view source, MathOptions options = MathOptions());
+ParseResult parseMarkdown(std::string_view source, ParseOptions options = ParseOptions());
 
 /// Parses a region of a larger document, as a stream's unstable tail is. The
 /// result matches a full parse of the same bytes at the same offset, because
 /// md4c's check that a list item cannot begin with two blank lines reads the
 /// last line record as a block record and so depends on each line's byte offset
 /// modulo 256. Returns ranges relative to the region, not the document.
-ParseResult parseMarkdownAt(std::string_view region, size_t origin, MathOptions options = MathOptions());
+ParseResult parseMarkdownAt(std::string_view region, size_t origin, ParseOptions options = ParseOptions());
 
 /// Allocates an ID for a derived immutable snapshot without reparsing it.
 uint64_t allocateDocumentId();

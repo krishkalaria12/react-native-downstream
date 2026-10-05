@@ -159,9 +159,9 @@
                 <td>Streamdown loads the image, shows a placeholder while the URL is still streaming, falls back to "Image not available" on error, and offers a download control. The contract already fixes the rules: HTTPS only, four concurrent requests, cancellation. See <a href="math-and-images-plan.html">the math and images plan</a>.</td>
               </tr>
               <tr>
-                <td>Streaming animation and caret<br /><span class="tag new">not planned</span></td>
+                <td>Streaming animation and caret<br /><span class="tag done">shipped</span></td>
                 <td>None</td>
-                <td><code>animated</code> (fadeIn, blurIn or slideUp, per word or per character, <code>stagger</code>, <code>maxBacklogMs</code>), <code>caret</code> (<code>▋</code> or <code>●</code>), <code>isAnimating</code>, <code>onAnimationStart</code> and <code>onAnimationEnd</code>. This is the most visible difference in a chat UI. Natively it would be alpha keyed to each character's distance from the snapshot tail, with the already-visible count carried across snapshots.</td>
+                <td><code>animated</code> (fadeIn, blurIn or slideUp, per word or per character, <code>stagger</code>, <code>maxBacklogMs</code>), <code>caret</code> (<code>▋</code> or <code>●</code>), <code>isAnimating</code>, <code>onAnimationStart</code> and <code>onAnimationEnd</code>. This is the most visible difference in a chat UI. Natively each word gets a start time on Streamdown's shared timeline, the engine works out which characters are new by aligning each snapshot's visible text with the one last shown, and the platforms apply the alpha in their existing draw pass. See <a href="streaming-animation-plan.html">the streaming caret and fade-in plan</a>.</td>
               </tr>
               <tr>
                 <td>Styling and theming<br /><span class="tag planned">planned</span></td>
@@ -208,9 +208,9 @@
                 <td>For example, stop bare emails from becoming <code>mailto:</code> links. md4c runs with <code>MD_DIALECT_GITHUB</code>, so permissive autolinking cannot be switched off.</td>
               </tr>
               <tr>
-                <td>Safe raw HTML subset<br /><span class="tag scope">contract change</span></td>
-                <td>All HTML shown as source</td>
-                <td>rehype-raw and rehype-sanitize render tags such as <code>&lt;sub&gt;</code>, <code>&lt;sup&gt;</code>, <code>&lt;br&gt;</code>, <code>&lt;details&gt;</code> and <code>&lt;kbd&gt;</code>, plus <code>allowedTags</code>, <code>literalTagContent</code> for mention tags, <code>fallbackComponent</code> and <code>normalizeHtmlIndentation</code>. Rendering <code>&lt;br&gt;</code>, <code>&lt;sub&gt;</code> and <code>&lt;sup&gt;</code> alone would clean up a lot of model output. md4c's <code>MD_FLAG_SUPERSCRIPTS</code>, <code>MD_FLAG_SUBSCRIPTS</code> and <code>MD_FLAG_HIGHLIGHT</code> are a syntax-based alternative.</td>
+                <td>Safe raw HTML subset<br /><span class="tag done">shipped</span></td>
+                <td><code>&lt;br&gt;</code>, <code>&lt;sub&gt;</code> and <code>&lt;sup&gt;</code> rendered; every other tag still shown as source</td>
+                <td>Shipped for the three tags a model actually writes, behind <code>inlineHtml</code> (on by default) and with md4c's <code>MD_FLAG_SUPERSCRIPTS</code> and <code>MD_FLAG_SUBSCRIPTS</code> as an opt-in <code>syntax</code>. <code>&lt;details&gt;</code>, <code>&lt;summary&gt;</code>, <code>&lt;kbd&gt;</code>, <code>&lt;mark&gt;</code>, <code>allowedTags</code>, <code>literalTagContent</code>, <code>fallbackComponent</code> and <code>normalizeHtmlIndentation</code> are still out. See <a href="sub-sup-line-breaks-plan.html">the sub, sup and line breaks plan</a>.</td>
               </tr>
               <tr>
                 <td>Table height and full screen<br /><span class="tag new">not planned</span></td>
@@ -268,7 +268,7 @@
           <li><b>Fence-language renderers</b><span>Needs a contract change and a React-hosting segment; opens the door to diagrams without core dependencies.</span></li>
           <li><b>Images</b><span>Already specified in the contract.</span></li>
           <li><b>Math</b><span>Parsing is available in md4c; layout needs its own review.</span></li>
-          <li><b>Sub, sup and line breaks</b><span>Through the safe HTML subset or md4c's syntax flags.</span></li>
+          <li><b>Sub, sup and line breaks</b><span>Shipped through the safe HTML subset, with md4c's syntax flags as an opt-in. See <a href="sub-sup-line-breaks-plan.html">the plan</a>.</span><span class="tag done">shipped</span></li>
         </ol>
         <div class="callout">
           <p>This keeps the rule from <a href="feature-matrix.md">the feature matrix</a>: plain prose stays independent of the heavier paths. Highlighting, images, math and diagrams must load only when a document uses them, and a document with no fenced code never loads a lexer.</p>

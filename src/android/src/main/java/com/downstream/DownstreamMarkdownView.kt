@@ -43,6 +43,11 @@ import com.facebook.react.uimanager.PixelUtil
 import com.facebook.react.uimanager.StateWrapper
 
 private const val HIT_SLOP = 8f
+
+/// The clipboard's label for a selection copied out of a text segment. A label
+/// rather than a resource because it is never shown: the platform uses it to
+/// describe the clip to another app, and there is nothing to localize in it.
+private const val COPIED_LABEL = "Downstream"
 private val controlHandler = Handler(Looper.getMainLooper())
 
 private class ControlExportRequest(
@@ -88,6 +93,19 @@ private val DEFAULT_LABELS = listOf(
   "Markdown", "CSV", "TSV",
   "Image not available", "Download image", "Image", "Image blocked",
 )
+/// `RevealEffect`'s values, as the flat timing array's first number.
+private const val EFFECT_NONE = 0
+private const val EFFECT_FADE = 1
+private const val EFFECT_RISE = 2
+
+/// The seven numbers `src/animation.ts` resolves: `[duration, stagger,
+/// maxBacklog, x1, y1, x2, y2]`.
+private const val JS_TIMING_LENGTH = 7
+
+/// The array the engine reads: `[effect, split]`, the seven numbers above, and
+/// the animator scale last.
+private const val TIMING_LENGTH = 10
+
 private const val LABEL_COPY_CODE = 0
 private const val LABEL_DOWNLOAD_FILE = 1
 private const val LABEL_COPIED = 2
@@ -228,7 +246,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   private var codeFilename = "file"
   private var tableFilename = "table"
   private var imageFilename = "image"
-  private var mathFlags = 0
+  private var parseFlags = 0
   private var allowedImagePrefixes: List<String> = emptyList()
   private var exporter = DocumentExporter(context)
   /**
@@ -284,6 +302,90 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     out.sortBy { it.top }
   }
 
+  // ------------------------------------------------------------- the fade and the caret
+
+  /**
+   * The engine's tracker for this view, as a handle into the JNI layer's table.
+   *
+   * A tracker is per view and nothing else: it holds the document this view last
+   * showed, so two views of the same controlled source each fade their own copy.
+   * It is created on the first document and disposed when the view is recycled.
+   */
+  private var revealHandle = 0L
+
+  /** The resolved timeline, as the flat array the native side reads. */
+  private var animationTiming: DoubleArray? = null
+
+  /**
+   * The three props the array is built from. They arrive as separate setters in
+   * any order within one update, so each is kept and the array rebuilt from all
+   * three, rather than any one setter assuming the others have landed.
+   */
+  private var animationEffect = EFFECT_NONE
+  private var animationSplitValue = 0
+  private var animationValues: DoubleArray? = null
+
+  /**
+   * The caret the engine resolved for the document on screen.
+   *
+   * It is part of the rendering rather than of the props, because its placeholder
+   * is measured with the text, so the view only ever draws what the layout already
+   * reserved room for.
+   */
+  private var caret = PlacedCaret.NONE
+
+  /**
+   * The units still fading, as `[block, start, end]` triples with a start time
+   * each, in the order the engine scheduled them.
+   *
+   * Held here rather than asked for per frame: the engine's units are the ones
+   * every draw pass reads, and asking again per segment per frame would be a
+   * crossing per segment.
+   */
+  private var revealRanges = LongArray(0)
+  private var revealStarts = DoubleArray(0)
+  private val revealTargets = RevealTargets()
+  private var revealSegmentEnds = IntArray(0)
+
+  /**
+   * Takes the engine's units and rebuilds the frame the segments draw from.
+   *
+   * The frame is rebuilt here as well as on every tick, so the draw that follows a
+   * new snapshot already has the new units at alpha zero rather than showing
+   * them for a frame at full alpha before the first tick.
+   */
+  private fun setRevealUnits(ranges: LongArray, starts: DoubleArray) {
+    // Previously fading roots also need a redraw when their last unit finishes.
+    invalidateReveal()
+    revealRanges = ranges
+    revealStarts = starts
+    buildRevealFrame()
+    revealTargets.build(ranges, revealSegmentEnds)
+    invalidateReveal()
+  }
+
+  /** The frame at this instant, or an empty one when nothing is fading. */
+  private fun buildRevealFrame() {
+    val timing = animationTiming ?: return
+    val current = frame ?: RevealFrame(timing, resources.displayMetrics.density, revealRises).also { frame = it }
+    current.build(revealRanges, revealStarts, uptimeMillis())
+  }
+
+  /** The tick currently queued, so a second apply does not queue a second loop. */
+  private var revealTickQueued = false
+  private val revealTickCallback = Runnable { revealTick() }
+
+  /** The animator scale, which multiplies every duration and can turn the fade off. */
+  private var animatorScale = 1f
+
+  /**
+   * Whether this view has taken the session's "already shown" record yet.
+   *
+   * Once, because seeding again after the tracker has shown something would reset
+   * the very history the tracker is keeping.
+   */
+  private var revealSeeded = false
+
   fun setGeneration(value: Int) {
     if (value != generation) {
       generation = value
@@ -300,6 +402,15 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   private fun sourceChanged() {
     sourceEpoch++
+    // A new generation, a rebind or a new session has nothing to do with what this
+    // view last showed, so the tracker forgets it. The next source animates from
+    // its first word rather than resuming this one's timing.
+    if (revealHandle != 0L) {
+      DownstreamNative.revealClear(revealHandle)
+      setRevealUnits(LongArray(0), DoubleArray(0))
+      revealSeeded = false
+      stopRevealTick()
+    }
     // A new generation has nothing left to pin and no offsets worth keeping, so
     // every reader scroll position goes, tables' and code cards' alike.
     for (child in segmentViews) {
@@ -338,11 +449,15 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     val tracing = documentId != 0L && DownstreamNative.isTracingDocument(documentId)
     if (tracing) DownstreamNative.traceDocument(documentId, "apply_start")
     rendered = if (documentId != 0L) {
-      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, resolved)
+      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, resolved, caret)
     } else {
       null
     }
     syncSegmentViews()
+    // The fade is decided after the rendering exists, because the tracker aligns
+    // the document it was given against the one this view last showed, and the
+    // segment views have to be there for the tick to invalidate.
+    applyReveal()
     if (tracing) {
       DownstreamNative.traceDocument(documentId, "apply_end")
       pendingTraceDocumentId = documentId
@@ -371,6 +486,14 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
     scheduleTraceFrame()
+    buildRevealFrame()
+    invalidateReveal()
+    startRevealTick()
+  }
+
+  override fun onDetachedFromWindow() {
+    stopRevealTick()
+    super.onDetachedFromWindow()
   }
 
   fun setSelectable(selectable: Boolean) {
@@ -418,15 +541,16 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   }
 
   /**
-   * The math flags, as the engine's bitmask.
+   * The parse flags, as the engine's bitmask.
    *
    * Held so an unresolved formula can be told apart from one that was never meant to
-   * be laid out: with the flag off the engine leaves the literal alone and this view
-   * has nothing to do, and with it on an unresolved formula draws in the theme's
-   * error color. Both answers are otherwise in the state.
+   * be laid out: with the math flag off the engine leaves the literal alone and this
+   * view has nothing to do, and with it on an unresolved formula draws in the theme's
+   * error color. The inline HTML and script-syntax bits are the parser's business and
+   * are already in the state. Both answers are otherwise in the state.
    */
-  fun setMathFlags(value: Int) {
-    mathFlags = value
+  fun setParseFlags(value: Int) {
+    parseFlags = value
   }
 
   /** Whether pictures are fetched at all. The state says so per picture as well. */
@@ -485,7 +609,95 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     applySettledState()
   }
 
+  /** `animation`: `none`, `fadeIn` or `slideUp`, already resolved in JavaScript. */
+  internal fun setAnimationEffect(value: String?) {
+    animationEffect = when (value) {
+      "fadeIn" -> EFFECT_FADE
+      "slideUp" -> EFFECT_RISE
+      else -> EFFECT_NONE
+    }
+    updateAnimationTiming()
+  }
 
+  /** `animationSplit`: `word` or `char`. */
+  internal fun setAnimationSplit(value: String?) {
+    animationSplitValue = if (value == "char") 1 else 0
+    updateAnimationTiming()
+  }
+
+  /** `animationTiming`: the seven numbers, or null when the fade is off. */
+  internal fun setAnimationValues(values: DoubleArray?) {
+    animationValues = values
+    updateAnimationTiming()
+  }
+
+  /**
+   * The fade's options, as the flat array the native side reads.
+   *
+   * Null turns the fade off, which is the default and costs nothing: no tracker
+   * is created, no tick is posted, and every draw pass answers an empty set.
+   */
+  private fun updateAnimationTiming() {
+    val values = animationValues
+    val timing = if (animationEffect == EFFECT_NONE || values == null || values.size < JS_TIMING_LENGTH) {
+      null
+    } else {
+      animatorScale = readAnimatorScale()
+      // The scale rides at the end of the same flat array rather than as a prop of
+      // its own: the engine applies it, so there is one place that multiplies a
+      // duration rather than two that each think they do.
+      DoubleArray(TIMING_LENGTH).also {
+        it[0] = animationEffect.toDouble()
+        it[1] = animationSplitValue.toDouble()
+        values.copyInto(it, 2, 0, JS_TIMING_LENGTH)
+        it[TIMING_LENGTH - 1] = animatorScale.toDouble()
+      }
+    }
+    if (timing == null) {
+      if (animationTiming == null) return
+      animationTiming = null
+      frame = null
+      revealRises = false
+      // An explicit "off" finishes what is running rather than letting it
+      // continue: this was a request, so the text snaps.
+      finishReveal()
+      return
+    }
+    if (animationTiming?.contentEquals(timing) == true) return
+    animationTiming = timing
+    // The effect is the first number, and it is the only thing that changes what a
+    // draw pass does: a rise translates, a fade does not.
+    revealRises = animationEffect == EFFECT_RISE
+    // A new curve invalidates the cached interpolator, so the frame is rebuilt
+    // rather than reused with the old one.
+    frame = null
+    if (animatorScale <= 0f) {
+      // A reader who has turned animations off gets the text at once and a static
+      // caret, which is what every other animation in the platform does.
+      finishReveal()
+    } else if (documentId != 0L) {
+      applyReveal()
+    }
+  }
+
+  /**
+   * The caret the engine resolved for this document, already in the state's data.
+   *
+   * A change here rebuilds the rendering rather than redrawing: the placeholder
+   * moves, so the measured text is a different one.
+   */
+  internal fun setCaret(value: PlacedCaret) {
+    if (value == caret) return
+    caret = value
+    val id = documentId
+    val scale = fontScale
+    rendered = if (id != 0L) {
+      RenderedDocument.obtain(context, id, scale, syntaxHighlighting, themeId, value)
+    } else {
+      null
+    }
+    syncSegmentViews()
+  }
 
   /**
    * Turns on a segment's controls and its selection once every block it covers
@@ -521,6 +733,190 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
           child.setToolbarVisible(chrome and RenderedDocument.CHROME_TABLE_TOOLBAR != 0)
         }
         is ImageSegmentView -> child.setDownloadControl(controls, settled, controlLabels[LABEL_IMAGE_DOWNLOAD])
+      }
+    }
+  }
+
+  // ------------------------------------------------------------- the fade
+
+  /**
+   * Aligns the document on screen against the one this view last showed, takes
+   * the units that are still fading, and starts the tick if any are left.
+   *
+   * The engine holds every decision: which characters are new, where the unit
+   * boundaries fall, and when each unit starts. Nothing here parses, aligns or
+   * times anything of its own.
+   */
+  private fun applyReveal() {
+    val timing = animationTiming
+    val id = documentId
+    if (timing == null || id == 0L || animatorScale <= 0f) {
+      stopRevealTick()
+      if (id != 0L && timing == null) {
+        // With the fade off the tracker still records what was shown, so turning
+        // it on later does not reveal a document that has been on screen all
+        // along.
+        DownstreamNative.revealNoteShown(revealHandle(), id, sessionId)
+      }
+      return
+    }
+    val handle = revealHandle()
+    // A view bound to a live stream starts from what the session has already put
+    // on screen, so a message scrolled back into view does not fade all of itself
+    // again. A controlled view has no session and fades its first document.
+    if (handle != 0L && !revealSeeded) {
+      revealSeeded = true
+      DownstreamNative.revealSeed(handle, sessionId)
+    }
+    val units = DownstreamNative.revealApply(handle, id, uptimeMillis(), timing)
+    if (units == null) {
+      setRevealUnits(LongArray(0), DoubleArray(0))
+      stopRevealTick()
+      return
+    }
+    setRevealUnits(units[0] as? LongArray ?: LongArray(0), units[1] as? DoubleArray ?: DoubleArray(0))
+    startRevealTick()
+  }
+
+  /** The tracker's handle, created on first use so an unanimated view has none. */
+  private fun revealHandle(): Long {
+    if (revealHandle == 0L) {
+      revealHandle = DownstreamNative.revealCreate()
+    }
+    return revealHandle
+  }
+
+  /**
+   * The tick, one per view.
+   *
+   * The same runnable is posted and canceled, so a stop followed by a restart
+   * cannot leave an older callback driving a second animation loop.
+   */
+  private fun startRevealTick() {
+    if (revealTickQueued || revealRanges.isEmpty() || !isAttachedToWindow) return
+    revealTickQueued = true
+    postOnAnimation(revealTickCallback)
+  }
+
+  private fun stopRevealTick() {
+    removeCallbacks(revealTickCallback)
+    revealTickQueued = false
+  }
+
+  /**
+   * One frame of the fade.
+   *
+   * The cost is a prune on the native side and an invalidate per affected
+   * segment: no parse, no relayout, and no change to any cached text, which is
+   * what a frame of animation has to avoid.
+   */
+  private fun revealTick() {
+    revealTickQueued = false
+    val timing = animationTiming
+    val handle = revealHandle
+    if (timing == null || handle == 0L || !isAttachedToWindow) {
+      stopRevealTick()
+      return
+    }
+    // The alphas move with the clock, so the frame is rebuilt before the redraw
+    // that reads it.
+    buildRevealFrame()
+    invalidateReveal()
+    if (DownstreamNative.revealPrune(handle, uptimeMillis(), timing)) {
+      // The prune dropped what finished, so this frame draws it at full alpha and
+      // the next has nothing left to do.
+      startRevealTick()
+    } else {
+      setRevealUnits(LongArray(0), DoubleArray(0))
+    }
+  }
+
+  /**
+   * Finishes every fade at once and redraws.
+   *
+   * A scale of zero or an explicit `animated: false` shows all text at once.
+   * Detaching only pauses callbacks and retains the timeline for reattachment.
+   */
+  private fun finishReveal() {
+    stopRevealTick()
+    val handle = revealHandle
+    if (handle == 0L) return
+    DownstreamNative.revealClear(handle)
+    setRevealUnits(LongArray(0), DoubleArray(0))
+    revealSeeded = false
+    invalidateReveal()
+  }
+
+  /**
+   * The animator duration scale, which multiplies every duration in the timeline
+   * and turns the fade off at zero.
+   *
+   * Read on the UI thread once per apply rather than observed: it changes only
+   * from Settings, and a fade already running is finished when it does.
+   */
+  private fun readAnimatorScale(): Float = DownstreamNative.animatorDurationScale(context)
+
+  private fun uptimeMillis(): Double = android.os.SystemClock.uptimeMillis().toDouble()
+
+  // ------------------------------------------------------ the draw side of the fade
+
+  /**
+   * The frame every segment under this view draws from, or null when nothing is
+   * fading.
+   *
+   * Built once per tick from the engine's flat arrays and then read by each
+   * segment's draw pass, so a frame costs one parse rather than one per segment.
+   */
+  private var frame: RevealFrame? = null
+
+  /** The fade's effect, so a `slideUp` knows to translate and a `fadeIn` does not. */
+  private var revealRises = false
+
+  /** The units fading right now, or null when the fade is off or finished. */
+  internal fun revealFrame(): RevealFrame? = frame
+
+  /**
+   * The alpha at the first character of a document block, 1 for anything that is
+   * not fading.
+   *
+   * For the views that draw beside a text layout rather than inside one: a table
+   * row's fill, a code card's chrome, a list marker. Each of those is one unit of
+   * its block, so the block's first unit's alpha is the whole answer.
+   */
+  internal fun blockAlpha(block: Int): Float {
+    val current = frame ?: return 1f
+    var best = 1f
+    for (index in current.firstUnitForBlock(block) until current.size) {
+      val unit = current.unitAt(index)
+      if (unit.block != block) break
+      if (unit.start > 0) continue
+      if (unit.alpha < best) best = unit.alpha
+    }
+    return best
+  }
+
+  /** Redraws whatever the fade touched. */
+  internal fun invalidateReveal() {
+    // Targets come from the retained JNI ranges, so they include units that
+    // became opaque this tick. Settled siblings keep their display lists.
+    for (index in 0 until revealTargets.size) {
+      val child = getChildAt(revealTargets.indexAt(index)) ?: continue
+      invalidateTree(child)
+    }
+  }
+
+  /**
+   * Invalidates a segment and everything under it.
+   *
+   * A parent's `invalidate` does not redraw its children's display lists, and a
+   * code card's body and gutter and a table's grid are children that read the
+   * alpha themselves, so each one is asked.
+   */
+  private fun invalidateTree(view: View) {
+    view.invalidate()
+    if (view is ViewGroup) {
+      for (index in 0 until view.childCount) {
+        invalidateTree(view.getChildAt(index))
       }
     }
   }
@@ -658,6 +1054,14 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   }
 
   fun reset() {
+    disposeReveal()
+    animationEffect = EFFECT_NONE
+    animationSplitValue = 0
+    animationValues = null
+    animationTiming = null
+    animatorScale = 1f
+    revealRises = false
+    caret = PlacedCaret.NONE
     if (pendingTraceDocumentId != 0L) {
       DownstreamNative.traceDocument(pendingTraceDocumentId, "frame_unavailable")
       pendingTraceDocumentId = 0L
@@ -690,8 +1094,20 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   /** Invalidates pending exports and picker results when the view goes away. */
   fun release() {
+    disposeReveal()
     sourceEpoch++
     exporter.release()
+  }
+
+  private fun disposeReveal() {
+    stopRevealTick()
+    if (revealHandle != 0L) DownstreamNative.revealDispose(revealHandle)
+    revealHandle = 0L
+    revealRanges = LongArray(0)
+    revealStarts = DoubleArray(0)
+    revealSeeded = false
+    frame = null
+    revealTargets.build(revealRanges, revealSegmentEnds)
   }
 
   /**
@@ -819,8 +1235,6 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     }
   }
 
-
-
   internal fun pressLink(index: Int) {
     val link = DownstreamNative.readLink(documentId, index) ?: return
     onLinkPress?.invoke(this, link.url, link.start, link.end)
@@ -836,6 +1250,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   private fun syncSegmentViews() {
     val document = rendered
     val segments = document?.segments.orEmpty()
+    revealSegmentEnds = IntArray(document?.plan?.size ?: 0) { document!!.plan[it].to }
     segments.forEachIndexed { index, segment ->
       var view = segmentViews.getOrNull(index)
       val reusable = when (segment) {
@@ -869,13 +1284,13 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
         segmentViews.add(index, view)
       }
       when (segment) {
-        is TextSegment -> (view as TextSegmentView).setSegment(segment, document!!)
+        is TextSegment -> (view as TextSegmentView).setSegment(segment, document!!, document!!.plan[index].from)
         is CodeSegment -> (view as CodeSegmentView).apply {
           // Whether this block is a host segment comes from the state, not from
           // the segment: the segment is the same card either way, and only the
           // view knows whether a React child mounted for it.
           setHosted(hostLayout.hosts(segment.codeOrdinal))
-          setSegment(segment, document!!)
+          setSegment(segment, document!!, document!!.plan[index].from)
         }
         is TableSegment -> (view as TableSegmentView).setSegment(segment, sourceEpoch, document!!.style.chromeRowHeight)
         // Read once into the local rather than off `rendered` per field: it is a
@@ -907,6 +1322,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       val extra = segmentViews.removeAt(segmentViews.size - 1)
       segmentLayer.removeView(extra)
     }
+    revealTargets.build(revealRanges, revealSegmentEnds)
     applySettledState()
     layoutSegments()
   }
@@ -1097,9 +1513,26 @@ private class TextReadingPart(val piece: AccessibleTextPiece, val heading: Boole
 @SuppressLint("ViewConstructor")
 internal class TextSegmentView(context: Context) : TextView(context) {
   private var segment: TextSegment? = null
+
+  /**
+   * The document block this view's first block is, which is what maps a reveal
+   * unit's block-and-offset pair into this view's own text.
+   */
+  private var blockOffset = 0
   private var pressedLink = -1
   private val codePaint = Paint()
   private val decorationPaint = TextPaint()
+
+  /**
+   * The caret's own paint.
+   *
+   * A separate one from the decoration pass's, so drawing a caret between two
+   * decorations cannot change what they draw.
+   */
+  private val caretPaint = TextPaint()
+  private val caretBounds = RectF()
+  private val caretMetrics = Paint.FontMetrics()
+  private val revealClipBounds = Rect()
   private val codePath = Path()
   private val codeBounds = RectF()
   private var readingParts = emptyList<TextReadingPart>()
@@ -1143,15 +1576,34 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   }
 
   override fun onTextContextMenuItem(id: Int): Boolean {
+    // A copy that would take the caret's placeholder is written here instead,
+    // because the platform's own copy reads the text verbatim and the placeholder
+    // is a space the caret reserved rather than content. A selection that does not
+    // touch it goes through the platform, so the common case is unchanged.
+    if (id == android.R.id.copy && selectionStart != selectionEnd) {
+      val start = minOf(selectionStart, selectionEnd)
+      val end = maxOf(selectionStart, selectionEnd)
+      val selected = text.subSequence(start, end)
+      if (selected.indexOf(CARET_PLACEHOLDER) >= 0) {
+        val copied = copyTextWithoutCaret(text, start, end)
+        ControlDelivery.copyText(context, COPIED_LABEL, copied)
+        ControlDelivery.beginCopy()
+        return true
+      }
+    }
     val handled = super.onTextContextMenuItem(id)
     if (handled && (id == android.R.id.copy || id == android.R.id.cut)) ControlDelivery.beginCopy()
     return handled
   }
 
-  fun setSegment(segment: TextSegment, rendered: RenderedDocument) {
-    if (segment === this.segment) {
+  fun setSegment(segment: TextSegment, rendered: RenderedDocument, firstBlock: Int) {
+    if (segment === this.segment && firstBlock == blockOffset) {
       return
     }
+    // The plan is what knows which document blocks this segment covers; the
+    // segment itself only knows its own text, and a reveal unit names a document
+    // block.
+    blockOffset = firstBlock
     setContent(segment.text, segment.accessibleBlocks, rendered)
     // setContent also serves code bodies and clears this field. Retain the
     // identity afterwards so settled text keeps its layout and selection.
@@ -1163,7 +1615,14 @@ internal class TextSegmentView(context: Context) : TextView(context) {
    * same spans, precomputed text, and reading order, without a throwaway
    * segment object standing in for the real one.
    */
+  /** The document block this view's text starts at, for a body shown with [setContent]. */
+  fun setBlockOffset(firstBlock: Int) {
+    bandFrame = null
+    blockOffset = firstBlock
+  }
+
   fun setContent(text: Spanned, accessibleBlocks: List<AccessibleBlock>, rendered: RenderedDocument) {
+    bandFrame = null
     segment = null
     readingBlocks = accessibleBlocks
     val precomputed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
@@ -1241,11 +1700,249 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   }
 
   override fun onDraw(canvas: Canvas) {
+    val band = findHost()?.revealFrame()?.let { bandFor(it) }
+    if (band == null || band.count == 0) {
+      drawContent(canvas)
+      drawCaret(canvas, null)
+      return
+    }
+    // A `TextView` draws its whole layout in one call, and the text is a shared
+    // `SpannableStringBuilder` or `PrecomputedText`, so alpha cannot come from a
+    // span: adding one would mean copying the tail. It comes from clipping
+    // instead, by running this same draw once for the text outside the fading band
+    // and once per alpha bucket inside it. Nothing shared is touched, and nothing
+    // is laid out.
+    //
+    // The paths are in the layout's own coordinates, which sit inside the view's
+    // padding, so they are offset once here rather than the canvas being
+    // translated: `super.onDraw` applies the padding itself and must not see it
+    // twice.
+    val paddingLeft = totalPaddingLeft.toFloat()
+    val paddingTop = totalPaddingTop.toFloat()
+    val layout = layout ?: return
+    val paths = revealPaths ?: RevealClipPaths().also { revealPaths = it }
+    // Exclude only active ranges, preserving settled gaps and trailing text.
+    val buckets = paths.build(layout, band, paddingLeft, paddingTop)
+    val hidden = paths.hidden
+    canvas.save()
+    clipOut(canvas, hidden)
+    drawContent(canvas)
+    canvas.restore()
+
+    // One layer per alpha bucket, so a compressed burst of forty words at forty
+    // different alphas costs eight layers rather than forty. A bucket's path holds
+    // every unit whose alpha rounds to it, so the passes are disjoint and nothing
+    // is drawn twice.
+    // `getSelectionPath` resets the path it fills, so each unit is drawn into a
+    // scratch path and added to its bucket's.
+    for (bucket in 1..MAX_ALPHA_BUCKETS) {
+      if (buckets and (1 shl bucket) == 0) continue
+      val path = paths.buckets[bucket - 1]
+      val bounds = paths.bounds
+      path.computeBounds(bounds, true)
+      if (bounds.isEmpty()) continue
+      // `saveLayerAlpha` rather than a paint alpha, because the draw below is the
+      // TextView's own, which sets its paint alpha for every span it draws. The
+      // layer is bounded to the bucket's own bounds, so a 40-word burst does not
+      // allocate a screen-sized layer eight times.
+      val checkpoint = canvas.saveLayerAlpha(bounds, (bucketAlpha(bucket) * 255f).toInt())
+      canvas.clipPath(path)
+      // One translation for the whole bucket, from its first unit, rather than one
+      // per unit: the rise is the same fraction of four points for every unit in a
+      // bucket, and a bucket is a rounding of the alpha, so the difference is below
+      // a pixel.
+      canvas.save()
+      val rise = paths.rises[bucket - 1]
+      if (rise != 0f) {
+        canvas.translate(0f, rise)
+      }
+      drawContent(canvas)
+      canvas.restore()
+      canvas.restoreToCount(checkpoint)
+    }
+    // The caret sits at the reveal frontier, which is inside the clipped-out band,
+    // so it is drawn once outside every pass rather than clipped away with the
+    // text that has not appeared yet.
+    drawCaret(canvas, band)
+  }
+
+  private var revealPaths: RevealClipPaths? = null
+
+  /** Everything the segment draws: the one call the clipped passes repeat. */
+  private fun drawContent(canvas: Canvas) {
     drawInlineCodeBackgrounds(canvas)
     super.onDraw(canvas)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && text is PrecomputedText) {
       drawDecorations(canvas)
     }
+  }
+
+  /**
+   * Removes [path] from the canvas's clip.
+   *
+   * `clipOutPath` is the direct way from API 26. Below that the difference has to
+   * be spelled as a region, which means the clip has to be a rectangle first: the
+   * current bounds are saved and re-clipped so the result is exactly the clip that
+   * was already in force with [path] taken out of it.
+   */
+  private fun clipOut(canvas: Canvas, path: Path) {
+    if (path.isEmpty) return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      canvas.clipOutPath(path)
+      return
+    }
+    @Suppress("DEPRECATION")
+    val bounds = revealClipBounds
+    canvas.getClipBounds(bounds)
+    @Suppress("DEPRECATION")
+    canvas.clipRect(bounds)
+    @Suppress("DEPRECATION")
+    canvas.clipPath(path, android.graphics.Region.Op.DIFFERENCE)
+  }
+
+  /**
+   * Draws the caret, at the reveal frontier while a fade is running.
+   *
+   * The frontier is the end of the last unit that has started, not the end of the
+   * layout: a caret at the end of the layout would sit after words that are still
+   * invisible, which reads as a gap rather than as a cursor.
+   */
+  private fun drawCaret(canvas: Canvas, band: RevealBand?) {
+    val current = segment ?: return
+    if (current.caretKind == 0) return
+    val layout = layout ?: return
+    // The frontier is where the first unit that has not started begins, which is
+    // the end of the last one that has. With nothing fading it is the placeholder.
+    // [band] is this frame's, sorted by offset, so the first unstarted unit in it
+    // is the answer.
+    var frontier = current.caretOffset
+    if (band != null) {
+      for (index in 0 until band.count) {
+        if (band.alphas[index] <= 0f) {
+          frontier = band.offsets[index * 2]
+          break
+        }
+      }
+    }
+    if (frontier < 0) return
+    val x = CaretShape.xFor(layout, frontier) ?: return
+    // The placeholder's own line, so the caret draws where the space it reserved
+    // is rather than where the layout's last line happens to end.
+    val line = layout.getLineForOffset(frontier.coerceAtMost(layout.text.length))
+    if (line < 0) return
+    val baseline = layout.getLineBaseline(line) + totalPaddingTop
+    val rect = when (current.caretKind) {
+      2 -> CaretShape.dotRect(paint, x + totalPaddingLeft, baseline.toFloat(), caretBounds)
+      else -> CaretShape.barRect(paint, x + totalPaddingLeft, baseline.toFloat(), caretBounds, caretMetrics)
+    }
+    val shape = caretPaint
+    shape.set(paint)
+    // The foreground at the last shown character, resolved for the current
+    // appearance, which is what Streamdown's inherited color amounts to.
+    shape.color = currentTextColor
+    shape.style = Paint.Style.FILL
+    if (current.caretKind == 2) {
+      canvas.drawOval(rect, shape)
+    } else {
+      canvas.drawRoundRect(rect, rect.height() / 2f, rect.height() / 2f, shape)
+    }
+  }
+
+  /**
+   * The units of this view's blocks that are still fading, mapped into this
+   * view's own text.
+   *
+   * A reveal unit names a document block and an offset inside it, and this view
+   * knows where each of its blocks starts in its text, so the translation is one
+   * addition per end. The answer is the text the passes need and nothing else:
+   * the units that are still at full alpha are dropped, because an unaffected
+   * range is drawn by the first pass exactly as it always was.
+   */
+  private var revealBand: RevealBand? = null
+  private var bandFrame: RevealFrame? = null
+  private var bandRevision = -1L
+  private var cachedBand: RevealBand? = null
+
+  /**
+   * The fading characters of this view, or null when nothing is fading.
+   *
+   * Public within the package so the code gutter can ask for its own numbers'
+   * alphas: the gutter draws beside the body rather than inside it, and it is the
+   * body that knows where its blocks are.
+   */
+  private fun bandForReveal(): RevealBand? = findHost()?.revealFrame()?.let { bandFor(it) }
+
+  /**
+   * The alpha at one character of this view's own text, 1 for anything that is not
+   * fading.
+   *
+   * Used where a single value is wanted rather than a clipped pass: a gutter
+   * number, a card's chrome, a table row's fill.
+   */
+  internal fun alphaAt(offset: Int): Float {
+    val band = bandForReveal() ?: return 1f
+    for (index in 0 until band.count) {
+      if (offset >= band.offsets[index * 2] && offset < band.offsets[index * 2 + 1]) {
+        return band.alphas[index]
+      }
+    }
+    return 1f
+  }
+
+  private fun bandFor(hostFrame: RevealFrame): RevealBand? {
+    if (bandFrame === hostFrame && bandRevision == hostFrame.revision) return cachedBand
+    bandFrame = hostFrame
+    bandRevision = hostFrame.revision
+    cachedBand = buildBand(hostFrame)
+    return cachedBand
+  }
+
+  private fun buildBand(hostFrame: RevealFrame): RevealBand? {
+    // The blocks this view shows, which a code body has without a text segment of
+    // its own: `setContent` records them for both.
+    val blocks = readingBlocks
+    if (blocks.isEmpty()) return null
+    val length = text?.length ?: return null
+    val first = hostFrame.firstUnitForBlock(blockOffset)
+    val last = hostFrame.firstUnitForBlock(blockOffset + blocks.size)
+    val count = last - first
+    if (count == 0) return null
+
+    val band = revealBand ?: RevealBand(count).also { revealBand = it }
+    band.begin(count)
+    for (index in first until last) {
+      // Past the cap a unit draws at full alpha rather than overflowing the band.
+      if (band.isFull) break
+      val unit = hostFrame.unitAt(index)
+      if (unit.alpha >= 1f) continue
+      val block = blockAt(blocks, unit.block) ?: continue
+      // The caret's own placeholder is never a reveal target, and a unit cannot
+      // reach past it: the placeholder is the last character and the text before
+      // it is all that fades.
+      val from = (block.start + unit.start).coerceIn(0, length)
+      val to = (block.start + unit.end).coerceIn(from, length)
+      if (from >= to) continue
+      val slot = band.count++
+      band.offsets[slot * 2] = from
+      band.offsets[slot * 2 + 1] = to
+      band.alphas[slot] = unit.alpha
+      band.rises[slot] = unit.rise
+    }
+    if (band.count == 0) return null
+    // The engine schedules in text order within a block and the blocks are in
+    // order, so the mapped ranges already ascend. One insertion sort makes that a
+    // guarantee rather than an assumption, and it is a no-op when it already holds.
+    band.sortByOffset()
+    return band
+  }
+
+  /** The accessible block for a document block, or null when this view has none. */
+  private fun blockAt(blocks: List<AccessibleBlock>, documentBlock: Int): AccessibleBlock? {
+    // The plan hands every segment the document blocks it covers, in order, so the
+    // index within this view is the document index less the first one it covers.
+    val first = blockOffset
+    val index = documentBlock - first
+    return blocks.getOrNull(index)
   }
 
   // A TextView drawing PrecomputedText leaves out underline and
@@ -1369,7 +2066,6 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   }
 }
 
-
 /**
  * The line numbers beside a code block, drawn rather than typed.
  *
@@ -1441,11 +2137,21 @@ internal class CodeGutterView(context: Context) : View(context) {
     val dirty = canvas.clipBounds
     val visibleLine = textLayout.getLineForVertical(dirty.top)
     val first = codeLineForOffset(starts, textLayout.getLineStart(visibleLine))
+    // A number fades with its line's first characters, so a code block whose words
+    // arrive one at a time has its numbers arrive with them rather than all at
+    // once beside text that is still invisible. The band is asked once rather than
+    // per line: it is the same answer for every number, and a fence with two
+    // thousand lines must not walk it two thousand times.
+    val baseAlpha = numberPaint.alpha
     for (index in first until starts.size) {
-      val line = textLayout.getLineForOffset(starts[index].coerceAtMost(textLayout.text.length))
+      val offset = starts[index].coerceAtMost(textLayout.text.length)
+      val line = textLayout.getLineForOffset(offset)
       val baseline = textLayout.getLineBaseline(line)
       if (textLayout.getLineTop(line) > dirty.bottom) break
       val number = (layout.firstNumber + index).toString()
+      // One alpha for the whole number, so a line's number is a single value rather
+      // than a gradient, which is what a reader would expect of a number.
+      numberPaint.alpha = (baseAlpha * body.alphaAt(offset)).toInt().coerceIn(0, 255)
       // Right-aligned against the gap, so the numbers line up on their last digit
       // as they do in GitHub and VS Code.
       canvas.drawText(
@@ -1455,6 +2161,7 @@ internal class CodeGutterView(context: Context) : View(context) {
         numberPaint,
       )
     }
+    numberPaint.alpha = baseAlpha
   }
 }
 
@@ -1740,8 +2447,11 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     updateButtons()
   }
 
-  fun setSegment(segment: CodeSegment, rendered: RenderedDocument) {
+  fun setSegment(segment: CodeSegment, rendered: RenderedDocument, firstBlock: Int) {
     this.rendered = rendered
+    // The body's reveal units name a document block, and a card is reused as its
+    // block moves, so the offset is set on every snapshot, not only a new segment.
+    body.setBlockOffset(firstBlock)
     if (segment === this.segment) return
     // The tail block is rebuilt on every snapshot while its fence is open, so both
     // offsets are kept only while the block still looks like the same one.
@@ -2030,6 +2740,15 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     // A host segment has no header, so its chrome starts at the top of its own
     // frame and spans the height the React component measured.
     val headerTop = if (hosted) 0f else headerHeight().toFloat()
+    // The card's fill, border, header and list marker fade with the block's first
+    // unit, so a card arrives with its code rather than appearing around text that
+    // is still invisible. The body fades through its own units, so the card does
+    // not multiply them: the two are read separately and neither is a multiple of
+    // the other.
+    val chrome = body.alphaAt(0)
+    val checkpoint = if (chrome < 1f) canvas.saveLayerAlpha(null, (chrome * 255f).toInt()) else -1
+    // A hosted fence draws no card: the component owns its own chrome, and a card
+    // behind it would be a second answer to the same block.
     if (!hosted) {
       // The card starts below the header, which sits on the page, as on iOS.
       cardBackground.setBounds(segment.contentLeading, headerTop.toInt(), width, height)
@@ -2070,6 +2789,9 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
         }
         canvas.drawText(marker, x, baseline.toFloat(), markerPaint)
       }
+    }
+    if (checkpoint >= 0) {
+      canvas.restoreToCount(checkpoint)
     }
   }
 }
@@ -2296,6 +3018,22 @@ private class TableReadingPart(
 )
 
 private class TableGridView(context: Context) : View(context) {
+  /**
+   * A table row is one reveal unit, and the grid draws cells rather than a text
+   * layout, so the row's alpha comes from the host rather than from a band in this
+   * view's own text. One lookup per row, on a table with a few dozen rows, is
+   * cheaper than mapping offsets into a layout this view does not have.
+   */
+  private fun host(): DownstreamMarkdownView? {
+    var parent = parent
+    while (parent != null && parent !is DownstreamMarkdownView) {
+      parent = parent.parent
+    }
+    return parent as? DownstreamMarkdownView
+  }
+
+  /** The alpha of one row, or 1 when the fade is off. */
+  private fun rowAlpha(block: Int): Float = host()?.blockAlpha(block) ?: 1f
   private var readingParts = emptyList<TableReadingPart>()
   private val accessibility = MarkdownAccessibility(this, { readingParts.size }) { accessiblePart(it) }
   private var segment: TableSegment? = null
@@ -2396,19 +3134,24 @@ private class TableGridView(context: Context) : View(context) {
       canvas.drawRect(0f, 0f, width, segment.rowHeights[0].toFloat(), paint)
     }
     segment.cells.forEachIndexed { row, cells ->
+      // A new row fades as one unit, so the fill, the cells and the cell text all
+      // share one alpha. The layer is bounded to the row's own height, so a table
+      // with fifty rows does not allocate fifty screen-sized layers.
+      val alpha = rowAlpha(segment.blockIndex + row)
+      val top = segment.rowTops[row].toFloat()
+      val bottom = segment.rowTops[row + 1].toFloat()
+      val checkpoint = if (alpha < 1f) {
+        canvas.saveLayerAlpha(android.graphics.RectF(0f, top, width, bottom), (alpha * 255f).toInt())
+      } else {
+        -1
+      }
       // The zebra fill is drawn under the cells, per row rather than per cell,
       // so an empty trailing cell in a short row still gets the row's fill.
       if (row >= if (segment.hasHeader) 1 else 0) {
         val stripe = segment.colors.rowStripe(row - if (segment.hasHeader) 1 else 0)
         if (stripe != null) {
           paint.color = stripe
-          canvas.drawRect(
-            0f,
-            segment.rowTops[row].toFloat(),
-            width,
-            segment.rowTops[row + 1].toFloat(),
-            paint,
-          )
+          canvas.drawRect(0f, top, width, bottom, paint)
         }
       }
       cells.forEachIndexed { column, cell ->
@@ -2417,6 +3160,9 @@ private class TableGridView(context: Context) : View(context) {
         canvas.translate(x.toFloat(), y.toFloat())
         cell.draw(canvas)
         canvas.restore()
+      }
+      if (checkpoint >= 0) {
+        canvas.restoreToCount(checkpoint)
       }
     }
     paint.color = segment.colors.separator

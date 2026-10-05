@@ -16,9 +16,11 @@ using scan::isMarkdownSpace;
 using scan::isWordish;
 using scan::sameBlock;
 
-/// Probes one tail may cost: each is a parse of the whole tail. One for an
-/// unfinished link and four for spans covers remend's deepest nesting case,
-/// `**bold *italic `code ~~strike`, and bounds a tail of markers that all fail.
+/// Span probes one tail may cost: each is a parse of the whole tail. Five
+/// covers remend's deepest nesting case, `**bold *italic `code ~~strike`, with
+/// room for one more, and bounds a tail of markers that all fail. The fragment
+/// and link repairs are counted apart from this, because each of them is a
+/// single decision rather than a walk over candidates.
 constexpr uint64_t kMaxProbes = 5;
 
 /// A run of marker characters that md4c left as literal text, which is what an
@@ -43,15 +45,6 @@ bool carriesInlineSpans(const Block &block) {
       block.kind == BlockKind::TableRow || block.kind == BlockKind::Image;
 }
 
-bool inCodeSpan(const Block &block, size_t index) {
-  for (const InlineRun &run : block.runs) {
-    if (run.start <= index && index < run.end && (run.styles & InlineStyle::Code) != 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /// Every literal marker run in `block` that could be an opener md4c has not
 /// closed yet, last first. The last is the innermost, so `**bold *ital` offers
 /// the `*` before the `**`, and closers are appended in the order that nests.
@@ -64,6 +57,7 @@ std::vector<OpenSpan> findOpenSpans(const Block &block) {
   const std::u16string &text = block.text;
   std::vector<OpenSpan> found;
   size_t index = 0;
+  size_t runIndex = 0;
   while (index < text.size()) {
     const char16_t marker = text[index];
     if (marker != u'*' && marker != u'_' && marker != u'~' && marker != u'`') {
@@ -77,7 +71,12 @@ std::vector<OpenSpan> findOpenSpans(const Block &block) {
     const size_t length = end - index;
 
     // A marker inside a completed code span is content, not syntax.
-    if (!inCodeSpan(block, index) && length >= 1 && length <= 3 && end < text.size()) {
+    while (runIndex < block.runs.size() && block.runs[runIndex].end <= index) {
+      runIndex++;
+    }
+    const bool inCode = runIndex < block.runs.size() && block.runs[runIndex].start <= index &&
+        (block.runs[runIndex].styles & InlineStyle::Code) != 0;
+    if (!inCode && length >= 1 && length <= 3 && end < text.size()) {
       // A single tilde is never an opener. md4c's GitHub dialect reads `~x~`
       // as strikethrough, so closing one would invent a span the writer did not
       // type; `~~` is the delimiter the writer has to mean.
@@ -497,7 +496,7 @@ bool provesLinkRepair(const ParseResult &before, const ParseResult &after, bool 
  * so an unfinished `\(` is still the CommonMark escape it would be in a
  * finished document, which is the correct answer for both.
  */
-size_t openMathRun(std::string_view content, const MathOptions &math) {
+size_t openMathRun(std::string_view content, const ParseOptions &math) {
   // The last line, because that is the only one a closer appended at the end of
   // the region can reach.
   const size_t lastBreak = content.rfind('\n');
@@ -597,12 +596,77 @@ bool provesMathRepair(const ParseResult &before, const ParseResult &after) {
       repaired.text[span.start + (doubled ? 1 : 0)] == '$';
 }
 
+/**
+ * A half-arrived allowlisted tag at the end of the tail, if there is one.
+ *
+ * Found in the source rather than the block text, because the fragment is
+ * syntax rather than content, and a candidate has to be the tail itself: text
+ * after it has already been decided. The prefix rule is the one the matcher
+ * enforces, so the two can never disagree about which tags exist.
+ */
+std::string_view openTagFragment(std::string_view content) {
+  const size_t open = content.rfind('<');
+  if (open == std::string_view::npos) {
+    return {};
+  }
+  const std::string_view fragment = content.substr(open);
+  if (!scan::isInlineTagPrefix(fragment)) {
+    return {};
+  }
+  return fragment;
+}
+
+/**
+ * Whether hiding the fragment changed nothing but that fragment.
+ *
+ * The same shape as the link proof: the block count is unchanged, every block
+ * before the last is byte-identical, the last block's text is the old text
+ * minus exactly the fragment and nothing else, and the fragment sat in no code
+ * or math run, so it was syntax the parser had not finished rather than content
+ * it would now swallow.
+ */
+bool provesTagRepair(const ParseResult &before, const ParseResult &after, std::string_view fragment) {
+  if (!sameShape(before, after)) {
+    return false;
+  }
+  if (after.document->images.size() != before.document->images.size()) {
+    return false;
+  }
+  const Block &last = before.document->blocks.back();
+  const Block &repaired = after.document->blocks.back();
+  const size_t fragmentUnits = fragment.size();
+  if (fragmentUnits == 0 || last.text.size() != repaired.text.size() + fragmentUnits ||
+      fragmentUnits > last.text.size()) {
+    return false;
+  }
+  // The fragment is the tail of the old text, and everything before it is the
+  // text the repair kept.
+  const size_t at = repaired.text.size();
+  if (std::u16string_view(last.text).substr(at, fragmentUnits) != std::u16string(fragment.begin(), fragment.end())) {
+    return false;
+  }
+  for (size_t i = 0; i < at; i++) {
+    if (last.text[i] != repaired.text[i]) {
+      return false;
+    }
+  }
+  // The fragment is where the tag bytes landed, so a code span or a formula
+  // covering it means the writer had already typed content, not syntax.
+  for (const InlineRun &run : last.runs) {
+    if (run.start < last.text.size() && run.end >= at &&
+        (run.styles & (InlineStyle::Code | InlineStyle::Math)) != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 } // namespace
 
-PreviewResult Preview::apply(std::string_view region, size_t origin, size_t frozenBlocks, MathOptions math) const {
+PreviewResult Preview::apply(std::string_view region, size_t origin, size_t frozenBlocks, ParseOptions parse) const {
   PreviewResult result;
   result.text.assign(region);
-  const ParseResult baseline = parseMarkdownAt(region, origin, math);
+  const ParseResult baseline = parseMarkdownAt(region, origin, parse);
   result.parsed = baseline;
   result.bytesParsed = region.size();
   if (!options_.enabled() || baseline.status != ParseStatus::Ok ||
@@ -623,13 +687,34 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
     return result;
   }
   ParseResult current = baseline;
-  std::string text(region);
+  std::string &text = result.text;
+
+  // A half-arrived tag first, because it is the one fragment the writer cannot
+  // have meant as content: the tag bytes have no text between them and no
+  // closing `>`, so nothing after this repair can be decided from a tail that
+  // still contains them. A candidate that fails its proof is not hidden, which
+  // is what keeps `a<b` visible.
+  if (options_.has(PreviewFeature::HtmlTags)) {
+    const std::string_view fragment = openTagFragment(std::string_view(text));
+    if (!fragment.empty()) {
+      std::string probe(text.substr(0, text.size() - fragment.size()));
+      result.stats.probes++;
+      result.bytesParsed += probe.size();
+      ParseResult probed = parseMarkdownAt(probe, origin, parse);
+      if (provesTagRepair(current, probed, fragment)) {
+        result.stats.applied++;
+        text = std::move(probe);
+        current = std::move(probed);
+        trailing = trailingWhitespace(text);
+      }
+    }
+  }
 
   // An unfinished formula before the spans, because its contents are verbatim:
   // a `*` or a `[` inside `$$x + ` is TeX and must not be styled by a later
   // repair. One probe, and only when the math feature is on.
   const size_t openRun =
-      math.enabled() && options_.has(PreviewFeature::Math) ? openMathRun(std::string_view(text), math) : 0;
+      parse.enabled() && options_.has(PreviewFeature::Math) ? openMathRun(std::string_view(text), parse) : 0;
   if (openRun != 0) {
     // The closer goes at the very end of the region, not next to the opener: it
     // is the end of the last line that is the only place md4c can pair it from,
@@ -640,7 +725,7 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
     probe.append(openRun, '$');
     result.stats.probes++;
     result.bytesParsed += probe.size();
-    ParseResult probed = parseMarkdownAt(probe, origin, math);
+    ParseResult probed = parseMarkdownAt(probe, origin, parse);
     if (provesMathRepair(current, probed)) {
       result.stats.applied++;
       text = std::move(probe);
@@ -648,7 +733,6 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
       // A formula now exists, and its contents are verbatim, so a link or a
       // span repair after it would act on TeX. The pass is done.
       result.repaired = true;
-      result.text = std::move(text);
       result.parsed = std::move(current);
       return result;
     }
@@ -672,7 +756,7 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
       probe.append(text, trailing.start, std::string::npos);
       result.stats.probes++;
       result.bytesParsed += probe.size();
-      ParseResult probed = parseMarkdownAt(probe, origin, math);
+      ParseResult probed = parseMarkdownAt(probe, origin, parse);
       size_t textStart = 0;
       if (provesLinkRepair(current, probed, link->image, textStart)) {
         result.stats.applied++;
@@ -690,8 +774,9 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
   // opener before it. Each proven closer becomes the baseline for the next, so
   // `~~strike **bold` closes both spans, and a candidate before the one just
   // closed keeps its offset because only text after it moved.
+  uint64_t spanProbes = 0;
   for (const OpenSpan &span : findOpenSpans(current.document->blocks.back())) {
-    if (result.stats.probes == kMaxProbes) {
+    if (spanProbes >= kMaxProbes) {
       break;
     }
     const bool isCode = span.marker == u'`';
@@ -701,9 +786,10 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
     const bool inside = linkTextStart != std::u16string::npos && span.start >= linkTextStart;
     std::string probe(text);
     probe.insert(inside ? innerAt : outerAt, span.length, static_cast<char>(span.marker));
+    spanProbes++;
     result.stats.probes++;
     result.bytesParsed += probe.size();
-    ParseResult probed = parseMarkdownAt(probe, origin, math);
+    ParseResult probed = parseMarkdownAt(probe, origin, parse);
     if (!provesRepair(current, probed, span)) {
       continue;
     }
@@ -721,7 +807,6 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
     return result;
   }
   result.repaired = true;
-  result.text = std::move(text);
   result.parsed = std::move(current);
   return result;
 }

@@ -1333,6 +1333,34 @@
       "kind": "color",
       "layout": false,
       "default": "tertiaryFill"
+    },
+    {
+      "id": 252,
+      "name": "superscript.fontScale",
+      "kind": "metric",
+      "layout": true,
+      "default": 0.75
+    },
+    {
+      "id": 253,
+      "name": "superscript.baselineOffsetScale",
+      "kind": "metric",
+      "layout": true,
+      "default": 0.35
+    },
+    {
+      "id": 254,
+      "name": "subscript.fontScale",
+      "kind": "metric",
+      "layout": true,
+      "default": 0.75
+    },
+    {
+      "id": 255,
+      "name": "subscript.baselineOffsetScale",
+      "kind": "metric",
+      "layout": true,
+      "default": 0.2
     }
   ]
 }

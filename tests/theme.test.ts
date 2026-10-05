@@ -461,6 +461,8 @@ describe('markdownStyle', () => {
         admonition: { note: '#cccccc' },
         footnote: { color: '#dddddd' },
         imageAlt: { color: '#eeeeee' },
+        superscript: { fontScale: 0.8, baselineOffsetScale: 0.4 },
+        subscript: { fontScale: 0.7, baselineOffsetScale: 0.3 },
       }
     );
     expect(valueOf(resolved, 'paragraph.fontSize')).toBe(18);
@@ -498,6 +500,12 @@ describe('markdownStyle', () => {
     expect(valueOf(resolved, 'admonition.note')).toBe(0xffcccccc);
     expect(valueOf(resolved, 'footnote.color')).toBe(0xffdddddd);
     expect(valueOf(resolved, 'imageAlt.color')).toBe(0xffeeeeee);
+    // enriched-markdown's own keys, so a value written for it carries over:
+    // a script's size and shift are fractions of the block's size.
+    expect(valueOf(resolved, 'superscript.fontScale')).toBe(0.8);
+    expect(valueOf(resolved, 'superscript.baselineOffsetScale')).toBe(0.4);
+    expect(valueOf(resolved, 'subscript.fontScale')).toBe(0.7);
+    expect(valueOf(resolved, 'subscript.baselineOffsetScale')).toBe(0.3);
   });
 
   it('maps every admonition alert type this renderer draws', () => {

@@ -149,6 +149,28 @@ export type MarkdownPreviewOptions = Readonly<{
    * other repair. Streamdown closes it unconditionally; this does not.
    */
   math?: boolean;
+  /**
+   * Hide a half-arrived allowlisted tag (`<br`, `</su`) at the stream tail.
+   * Off by default, as every preview feature.
+   */
+  htmlTags?: boolean;
+}>;
+
+/**
+ * Which inline tag syntaxes the parser recognizes beyond the three raw tags.
+ *
+ * Both forms are off by default, because enabling either makes text that was
+ * prose into a styled span.
+ */
+export type MarkdownSyntaxOptions = Readonly<{
+  /**
+   * `^x^` is a superscript. Off: `2^10 and 3^5` would pair the carets.
+   */
+  superscript?: boolean;
+  /**
+   * `~x~` is a subscript instead of strikethrough. Off, as in Streamdown.
+   */
+  subscript?: boolean;
 }>;
 
 export type MarkdownStreamOptions = Readonly<{
@@ -170,6 +192,13 @@ export type MarkdownStreamOptions = Readonly<{
    * whether parsed formulas are typeset.
    */
   math?: boolean | MarkdownMathOptions;
+  /**
+   * Render `<br>`, `<sub>` and `<sup>`. Every other tag stays text. On by
+   * default; `false` restores the release that showed every tag as source.
+   */
+  inlineHtml?: boolean;
+  /** md4c's `^x^` and `~x~` syntaxes, both off by default. */
+  syntax?: MarkdownSyntaxOptions;
 }>;
 
 /** Created by createMarkdownStream(options), planned for the native session phase. */
@@ -593,6 +622,8 @@ export type MarkdownStyle = Readonly<{
   >;
   footnote?: { color?: MarkdownColor };
   imageAlt?: { color?: MarkdownColor };
+  superscript?: { fontScale?: number; baselineOffsetScale?: number };
+  subscript?: { fontScale?: number; baselineOffsetScale?: number };
   /** A display formula's own box. enriched-markdown's `latex` keys. */
   math?: {
     fontSize?: number;
@@ -640,6 +671,41 @@ type Composable<T> = T | ReadonlyArray<T | null | false | undefined>;
 export type MarkdownPreset = Readonly<{
   theme: MarkdownTheme;
   markdownStyle: MarkdownStyle;
+}>;
+
+/**
+ * Streamdown's `animated` options, so a value written for its web component is
+ * reused as it is.
+ *
+ * Every field has a default, and a value the platforms cannot draw falls back to
+ * it with one warning rather than being rejected: an app that asks for a blur
+ * should still see the fade rather than nothing.
+ */
+export type MarkdownAnimateOptions = Readonly<{
+  /** What a newly revealed unit does as it appears. `fadeIn` by default. */
+  animation?: 'fadeIn' | 'slideUp' | 'blurIn' | (string & {});
+  /** How long one unit takes to appear, in ms. 150 by default. */
+  duration?: number;
+  /**
+   * A CSS timing keyword or `cubic-bezier()`. `ease` by default.
+   *
+   * `steps()` and `linear()` with stops draw as `ease`: a native draw pass can
+   * only interpolate continuously, and neither has a meaning to it.
+   */
+  easing?: string;
+  /** Whether a new word or a new character is one unit. `word` by default. */
+  sep?: 'word' | 'char';
+  /** The delay between units, in ms. 40 by default; 0 turns the cascade off. */
+  stagger?: number;
+  /**
+   * How far ahead of now a burst of new text may be scheduled, in ms. 320 by
+   * default.
+   *
+   * A fast stream would otherwise queue seconds of invisible words; this
+   * compresses the cascade into the budget instead. A larger value favours a
+   * longer, stricter cascade, a smaller one keeps a fast stream caught up.
+   */
+  maxBacklogMs?: number;
 }>;
 
 type MarkdownViewBaseProps = Readonly<{
@@ -729,6 +795,13 @@ type MarkdownViewBaseProps = Readonly<{
   /** A formula that could not be typeset, once per distinct source per view. */
   onMathError?: (event: MarkdownMathErrorEvent) => void;
   /**
+   * Render `<br>`, `<sub>` and `<sup>`. Every other tag stays text. On by
+   * default; `false` restores the release that showed every tag as source.
+   */
+  inlineHtml?: boolean;
+  /** md4c's `^x^` and `~x~` syntaxes, both off by default. */
+  syntax?: MarkdownSyntaxOptions;
+  /**
    * Load images. On by default, as in Streamdown.
    *
    * `false` shows alt text and makes no request. Images are HTTPS only, at most
@@ -746,6 +819,50 @@ type MarkdownViewBaseProps = Readonly<{
   allowedImagePrefixes?: readonly string[];
   /** A press on a loaded image that is not inside a link. */
   onImagePress?: (event: MarkdownImageEvent) => void;
+  /**
+   * Fade newly arriving text in, word by word, while the view is animating. Off
+   * by default, as in Streamdown.
+   *
+   * It changes drawing only. The text is in the layout from the first frame, so
+   * nothing reflows, and a copy, a selection, an export, and a screen reader all
+   * see the whole message. Text that has not appeared yet stays in the
+   * accessibility tree, at most one backlog — about half a second — ahead of what
+   * is drawn.
+   *
+   * Under Reduce Motion, and where Android's animator scale is 0, the text
+   * appears at once instead.
+   */
+  animated?: boolean | MarkdownAnimateOptions;
+  /**
+   * Whether text is still arriving.
+   *
+   * A controlled view has to say so, as in Streamdown. A stream view follows its
+   * own controller instead: on from the first append of a generation until
+   * `finish()`, with an explicit value overriding that.
+   *
+   * This decides the fade and the caret and nothing else. A complete document
+   * rendered with `animated` on is what `isAnimating: false` already describes,
+   * so it appears at once rather than animating text the reader was handed whole.
+   */
+  isAnimating?: boolean;
+  /**
+   * A caret after the newest text, drawn while animating. None by default.
+   *
+   * It takes the color of the last character, sits after the last block of prose
+   * or inside a fence that is still open, and takes a line of its own after a
+   * table, a closed fence, or a rule, which is where the next block will start.
+   * It is never copied, selected, exported, or read aloud.
+   */
+  caret?: 'block' | 'circle';
+  /** `isAnimating` turned on, including on mount. */
+  onAnimationStart?: () => void;
+  /**
+   * `isAnimating` turned off.
+   *
+   * As in Streamdown this fires when the flag turns off rather than when the last
+   * fade finishes, which can be up to about half a second later.
+   */
+  onAnimationEnd?: () => void;
   onLinkPress?: (event: MarkdownLinkPressEvent) => void;
   onError?: (error: MarkdownErrorEvent) => void;
 }>;

@@ -7,6 +7,7 @@ export type RouteId =
   | 'controls'
   | 'math'
   | 'renderers'
+  | 'animation'
   | 'testing'
   | 'preview'
   | 'bench'
@@ -63,6 +64,13 @@ export const ROUTES: readonly Route[] = [
     title: 'Fence renderers',
     summary: 'App components drawn in place of a code card.',
     icon: 'grid-outline',
+  },
+  {
+    id: 'animation',
+    label: 'Animation',
+    title: 'Streaming animation',
+    summary: 'A per-word fade-in and a caret, on a replayed source.',
+    icon: 'sparkles-outline',
   },
   {
     id: 'testing',

@@ -69,6 +69,8 @@ export const ENGINE = [
     'FenceMeta.cpp',
     'FenceSlots.cpp',
     'CodeLayout.cpp',
+    'Reveal.cpp',
+    'Caret.cpp',
     'ImageLayout.cpp',
     'ImageLoaderRegistry.cpp',
     'ImageSizeCache.cpp',

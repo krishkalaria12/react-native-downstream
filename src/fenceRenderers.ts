@@ -291,7 +291,7 @@ export type FenceQuery = Readonly<{
   generation: number;
   /** The snapshot a stream view is mounting; 0 for a controlled source. */
   sequence?: number;
-  mathFlags: number;
+  parseFlags: number;
   resolved: ResolvedRenderers;
 }>;
 
@@ -310,7 +310,7 @@ export type FenceQuery = Readonly<{
  * stream already does.
  */
 export function useFenceSlots(query: FenceQuery): readonly MountedSlot[] {
-  const { source, sessionId, generation, sequence, mathFlags, resolved } =
+  const { source, sessionId, generation, sequence, parseFlags, resolved } =
     query;
   const languages = resolved.languages;
   // One value per source and registered list, so a re-render of an unchanged
@@ -318,7 +318,7 @@ export function useFenceSlots(query: FenceQuery): readonly MountedSlot[] {
   // because the same message with a new renderer is a different question.
   const key = `${
     sessionId ?? ''
-  }\u0000${generation}\u0000${sequence}\u0000${mathFlags}\u0000${
+  }\u0000${generation}\u0000${sequence}\u0000${parseFlags}\u0000${
     source ?? ''
   }\u0000${languages.join('\u0000')}`;
   const [asyncSlots, setAsyncSlots] = useState<readonly FenceSlot[]>(NO_RAW);
@@ -334,10 +334,10 @@ export function useFenceSlots(query: FenceQuery): readonly MountedSlot[] {
         sessionId,
         generation,
         sequence,
-        mathFlags,
+        parseFlags,
         resolved,
       }),
-    [source, sessionId, generation, sequence, mathFlags, resolved]
+    [source, sessionId, generation, sequence, parseFlags, resolved]
   );
   const slots = answer.slots;
 
@@ -360,7 +360,7 @@ export function useFenceSlots(query: FenceQuery): readonly MountedSlot[] {
     }
     let live = true;
     module
-      .fenceSlotsAsync(source, mathFlags, languages)
+      .fenceSlotsAsync(source, parseFlags, languages)
       .then((raw) => {
         if (live) {
           setAsyncSlots(raw);
@@ -372,7 +372,7 @@ export function useFenceSlots(query: FenceQuery): readonly MountedSlot[] {
     };
     // `answer.pending` rather than the key: the key is the whole document, and
     // this asks about one question inside it.
-  }, [answer.pending, languages, mathFlags, source]);
+  }, [answer.pending, languages, parseFlags, source]);
 
   return slots.length > 0 ? slots : joinComponents(asyncSlots, resolved);
 }
@@ -388,7 +388,7 @@ export function useFenceSlots(query: FenceQuery): readonly MountedSlot[] {
 function readSlots(
   query: FenceQuery
 ): Readonly<{ slots: readonly MountedSlot[]; pending: boolean }> {
-  const { source, sessionId, generation, sequence, mathFlags, resolved } =
+  const { source, sessionId, generation, sequence, parseFlags, resolved } =
     query;
   const languages = resolved.languages;
   if (languages.length === 0) {
@@ -420,7 +420,7 @@ function readSlots(
     }
     const result: FenceSlotsResult = module.fenceSlots(
       source,
-      mathFlags,
+      parseFlags,
       languages
     );
     if (result.pending) {

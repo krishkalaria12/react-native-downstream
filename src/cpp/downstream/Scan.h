@@ -10,6 +10,7 @@
 // with a test suite behind it, so it is the one that moved here first.
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string_view>
 
@@ -68,6 +69,15 @@ bool closesFence(std::string_view line, char marker, size_t length);
 /// Whether this line is a fence delimiter of either kind, opening or closing.
 bool isFenceLine(std::string_view line);
 
+/// Whether the source ends inside a fenced code block, which is to say a writer
+/// has not typed the closing fence yet.
+///
+/// A line inside an open fence is content rather than a new fence, so this is a
+/// walk with one open fence in it rather than a search for the last opener. An
+/// indented code block can also continue, but it is not a fence and md4c will
+/// not tell a caller which it was, so this answers only for fences.
+bool endsInsideFence(std::string_view source);
+
 /// Whether this line is a `$$` display-math fence delimiter: a line that is
 /// exactly two dollars, after up to three spaces, with nothing after it.
 ///
@@ -88,5 +98,33 @@ size_t skipInlineDestination(std::string_view source, size_t open);
 /// Whether the two bytes before `at` are `](`, which means an autolink found
 /// here belongs to a link or image whose target has not been typed yet.
 bool isUnfinishedDestination(std::string_view source, size_t at);
+
+// --- inline tag allowlist ---
+
+/// What an `MD_TEXT_HTML` piece says. `None` keeps the piece literal, as
+/// every tag outside the allowlist is; `SubVoid`/`SupVoid` are swallowed,
+/// because a writer who means a superscript never writes `<sup/>`.
+enum class InlineTag : uint8_t {
+  None = 0,
+  Break,
+  SubOpen,
+  SubClose,
+  SupOpen,
+  SupClose,
+  SubVoid,
+  SupVoid,
+};
+
+/// Classifies a piece md4c already proved was one tag. The name must run out
+/// at whitespace, `/`, or `>`, so `<subtitle>` is not `sub`, and attributes
+/// are ignored, as the web's sanitize schema drops them. `</br>` is a break,
+/// because HTML parsers read it that way and models write it.
+InlineTag matchInlineTag(std::string_view piece);
+
+/// True when `fragment` could still grow into one of the allowed tags: `<`
+/// alone, or a strict prefix of one of the three names, with no closing `>`
+/// yet and ASCII only. Drives the provisional hide of a half-arrived tag at the
+/// stream tail; whether hiding it is safe is the caller's to prove.
+bool isInlineTagPrefix(std::string_view fragment);
 
 } // namespace downstream::scan

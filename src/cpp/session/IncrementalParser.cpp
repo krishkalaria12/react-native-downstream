@@ -253,10 +253,23 @@ void IncrementalParser::resetScan() {
   lineAttempted_ = 0;
 }
 
-void IncrementalParser::publish(DocumentHandle document) {
+const DocumentHandle &IncrementalParser::publish(DocumentHandle document, uint32_t settled) {
+  // The two flags a snapshot carries that its blocks do not: how many leading
+  // blocks no later input can change, and whether a stream is still arriving.
+  // The second is how an `isAnimating` prop reaches the native rendering. A pass
+  // that built its document sets both in place; only a document shared with an
+  // earlier snapshot is copied here.
+  const bool streaming = !finished_;
+  if (document && (document->settledBlocks != settled || document->streaming != streaming)) {
+    auto copy = std::make_shared<Document>(*document);
+    copy->settledBlocks = settled;
+    copy->streaming = streaming;
+    document = std::move(copy);
+  }
   document_ = std::move(document);
   parsedBytes_ = source_.size();
   replaced_ = false;
+  return document_;
 }
 
 ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable, bool settled) {
@@ -268,11 +281,11 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   // one even though this parse covers them.
   ParseResult result;
   if (previewable) {
-    const remend::PreviewResult preview = preview_.apply(source, 0, committedCount(), math_);
+    const remend::PreviewResult preview = preview_.apply(source, 0, committedCount(), parse_);
     notePreview(preview);
     result = preview.parsed;
   } else {
-    result = parseMarkdown(source, math_);
+    result = parseMarkdown(source, parse_);
     counters_.bytesParsed += source.size();
   }
   counters_.fullParses++;
@@ -311,10 +324,10 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   // is settled until the stream finishes. Only a finished stream settles; a
   // controlled document settles in PreparedDocument, the moment it is parsed.
   const uint32_t count = static_cast<uint32_t>(std::min<size_t>(result.document->blocks.size(), UINT32_MAX));
-  result.document = withSettledBlocks(result.document, settled ? count : 0);
+  const uint32_t settledCount = settled ? count : 0;
   if (mode_ == ParseMode::FullParse) {
     carryIdentities(result);
-    publish(result.document);
+    result.document = publish(result.document, settledCount);
     return result;
   }
 
@@ -355,7 +368,7 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   if (reason == ParseFallback::NonAppend) {
     resetScan();
   }
-  publish(result.document);
+  result.document = publish(result.document, settledCount);
   watchOpenFence(source, committedBytes_, committedCount());
   return result;
 }
@@ -489,7 +502,7 @@ ParseResult IncrementalParser::parseTail() {
   // rebuilds from scratch. Everything below committedBytes_ lives in storage
   // the repair cannot reach, so no repair can restyle a block a reader has
   // already seen settled.
-  const remend::PreviewResult preview = preview_.apply(tail, committedBytes_, 0, math_);
+  const remend::PreviewResult preview = preview_.apply(tail, committedBytes_, 0, parse_);
   notePreview(preview);
   ParseResult result = preview.parsed;
   counters_.tailParses++;
@@ -524,11 +537,12 @@ ParseResult IncrementalParser::parseTail() {
   // The committed prefix is exactly what md4c has proved no later input can
   // change, so it is what a control or a selection may act on.
   combined->settledBlocks = static_cast<uint32_t>(std::min<size_t>(committed, UINT32_MAX));
+  combined->streaming = !finished_;
   counters_.cacheHits += committed;
   result.document = combined;
   highlightTail(combined.get());
   layoutTail(combined.get());
-  publish(combined);
+  result.document = publish(combined, combined->settledBlocks);
   watchOpenFence(source, committedBytes_, committed);
   return result;
 }
@@ -588,7 +602,7 @@ bool IncrementalParser::commitRegion(size_t boundary) {
   const std::string_view region = std::string_view(source_).substr(committedBytes_, boundary - committedBytes_);
   counters_.commitAttempts++;
   counters_.bytesParsed += region.size();
-  const ParseResult parsed = parseMarkdownAt(region, committedBytes_, math_);
+  const ParseResult parsed = parseMarkdownAt(region, committedBytes_, parse_);
   bool closed = provesClosed(region, parsed) &&
       committedCount() + parsed.document->blocks.size() <= kMaxCommittedBlocks;
   if (closed && !parsed.document->blocks.empty()) {
@@ -598,7 +612,7 @@ bool IncrementalParser::commitRegion(size_t boundary) {
       std::string probe(region);
       probe += "x\n";
       counters_.bytesParsed += probe.size();
-      closed = splitsBefore(parsed, parseMarkdownAt(probe, committedBytes_, math_));
+      closed = splitsBefore(parsed, parseMarkdownAt(probe, committedBytes_, parse_));
     }
   }
   if (!closed) {
@@ -699,7 +713,7 @@ void IncrementalParser::watchOpenFence(std::string_view source, size_t from, siz
       if (closesFence(line, open->marker, open->length)) {
         open.reset();
       }
-    } else if (const auto candidate = fenceOpener(line, math_.enabled() && last.kind == BlockKind::MathBlock)) {
+    } else if (const auto candidate = fenceOpener(line, parse_.enabled() && last.kind == BlockKind::MathBlock)) {
       // An opener still being typed can change its info string, and a `$$` line
       // with no newline yet is not yet a fence.
       if (newline == kNoOffset) {
@@ -744,7 +758,7 @@ void IncrementalParser::watchOpenFence(std::string_view source, size_t from, siz
   std::string probe(source.substr(from));
   probe.push_back('x');
   counters_.bytesParsed += probe.size();
-  const ParseResult probed = parseMarkdownAt(probe, from, math_);
+  const ParseResult probed = parseMarkdownAt(probe, from, parse_);
   if (pendingNewline) {
     projected.push_back(u'\n');
   }
@@ -780,7 +794,7 @@ bool IncrementalParser::appendOpenFence() {
     // A `$$` line closes a math fence, so the fast path must decline whenever
     // the new bytes could be one. Otherwise a formula would keep growing past
     // the line that ended it.
-    if (math_.enabled() && (isMathFenceLine(line) || startsWith(line, '$'))) {
+    if (parse_.enabled() && (isMathFenceLine(line) || startsWith(line, '$'))) {
       return false;
     }
     if (newline == kNoOffset) {
@@ -793,6 +807,7 @@ bool IncrementalParser::appendOpenFence() {
   auto next = std::make_shared<Document>(*document_);
   next->id = allocateDocumentId();
   next->settledBlocks = static_cast<uint32_t>(std::min<size_t>(committedCount(), UINT32_MAX));
+  next->streaming = !finished_;
   std::u16string &text = next->blocks.tail().back().text;
   if (fencePendingNewline_) {
     text.push_back(u'\n');
@@ -805,13 +820,14 @@ bool IncrementalParser::appendOpenFence() {
   }
   highlightTail(next.get());
   layoutTail(next.get());
-  publish(next);
+  publish(next, next->settledBlocks);
   counters_.openFenceFastUpdates++;
   return true;
 }
 
 ParseResult IncrementalParser::parse(bool finished) {
   counters_.updates++;
+  finished_ = finished;
   if (source_.size() > kMaxSourceBytes) {
     return fullParse(ParseFallback::InvalidSource, false, false);
   }

@@ -7,9 +7,9 @@ This is the Phase 0 contract for the native Markdown component. `src/types.ts` h
 | Feature                             | First release                                                                  | Later release                                                          | Unsupported                                                |
 | ----------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------- |
 | CommonMark blocks and inline syntax | Paragraphs, headings, lists, quotes, rules, emphasis, code, and escapes        | None planned                                                           | Raw HTML execution                                         |
-| GFM tables                          | Progressive rows after a valid separator; horizontal overflow                  | Rich cell content if native layout cannot preserve it at launch        | Raw HTML in cells                                          |
+| GFM tables                          | Progressive rows after a valid separator; horizontal overflow                  | Rich cell content if native layout cannot preserve it at launch        | Raw HTML in cells, except `<br>`                             |
 | GFM task lists                      | Readable checkbox state and accessibility label; display only                  | Interactive toggling                                                   | Mutation of Markdown by tapping                            |
-| Raw HTML                            | Escaped, visible source text                                                   | None planned                                                           | HTML rendering, scripts, embedded content                  |
+| Raw HTML                            | Escaped, visible source text, except `<br>`, `<sub>` and `<sup>`              | `<b>`, `<i>`, `<code>` and the rest of the allowlisted inline tags      | HTML rendering, scripts, embedded content                  |
 | Images                              | HTTPS images after complete URL validation, with placeholders, alt-text fallback, cancellation, a save control, and `onImagePress` | Images inside text, headings and table cells            | `data:`, `file:`, relative, and custom schemes; SVG; over 8 KiB destinations |
 | Code                                | Inline code, progressively visible fenced/indented blocks, syntax highlighting by the fence's language, line numbers, fence titles, a header with copy, download, wrap, and expand controls, and a capped height that scrolls inside the card | Drawing line marks; a theme that can override token colors | Executing code, and highlighting above 64 KiB of code       |
 | Math                                | `math` is off by default, so a document without it is byte-for-byte unchanged. With it on: `$$…$$`, a `$$` line fence and a ` ```math ` fence are display math, `singleDollarTextMath` is off as in Streamdown, `\(…\)` and `\[…\]` are on and can be turned off, and a formula that cannot be laid out keeps its literal and reports `onMathError`. Typesetting itself needs the opt-in engine package. | Macros, images inside a formula, and a display formula wider than its column | Executing macros or loading remote math content            |
@@ -67,6 +67,26 @@ previewed.append('hello **wor');
 // `selectable` is on by default. An app that opens its own message menu on a
 // long press turns it off, or the platform's selection menu wins the gesture.
 <DownstreamMarkdown markdown={message} selectable={false} />;
+
+// `<br>`, `<sub>` and `<sup>` render by default. `false` shows every tag as
+// the source text it was, which is what a document that relies on reading the
+// tags needs.
+<DownstreamMarkdown markdown={message} inlineHtml={false} />;
+
+// md4c's own `^x^` and `~x~`, each of which turns prose into a script, so both
+// are opt-in.
+<DownstreamMarkdown markdown={message} syntax={{ superscript: true }} />;
+
+// Text fades in as it arrives, with a caret at the writing point. A stream works
+// `isAnimating` out for itself; a controlled view says so.
+<DownstreamMarkdown stream={stream} animated caret="block" />;
+
+<DownstreamMarkdown
+  markdown={message}
+  animated
+  isAnimating={isStreaming}
+  caret="circle"
+/>
 ```
 
 The examples describe the runtime API. A view receives exactly one of `markdown` or `stream`. TypeScript rejects both or neither. A controlled string replacement starts a new generation when its value changes. An unchanged value, including a React rerender, does not reset work. `stream` identity changes unbind the previous controller and bind the new one; they do not copy source between controllers.
@@ -79,7 +99,19 @@ A block that is still growing may be colored only in part while it streams, and 
 
 A stream controller owns its source and native session even when its view unmounts. Remounting with the same live controller rebinds and shows the newest snapshot. At most one view may bind a controller at a time; a second binding reports `session_bound`. Unmount does not call `finish()` or `dispose()`; the app disposes when the message is no longer needed. Completed sessions remain bindable until disposal. Controlled views own no stream controller.
 
-`preview` is off by default, so an open span renders as the literal text the writer sent. `true` enables every repair and `{ emphasis, inlineCode, links, images, math }` enables the ones named, as remend's options do. An unfinished link or image previews as its text with the partial target dropped, so it is never tappable before its own `)` arrives. The policy applies only to the stream's unstable tail, is proven by reparsing before it takes effect, never touches `getSource()` or source ranges, and is dropped entirely by `finish()`. `setPreview(options)` changes it mid-stream and restyles the current tail without waiting for new input. The settled document is always a parse of the canonical source; see [provisional styling](streaming-semantics.md#provisional-styling).
+`preview` is off by default, so an open span renders as the literal text the writer sent. `true` enables every repair and `{ emphasis, inlineCode, links, images, math, htmlTags }` enables the ones named, as remend's options do. An unfinished link or image previews as its text with the partial target dropped, so it is never tappable before its own `)` arrives. `htmlTags` hides a half-arrived allowlisted tag, so a stream that stops after `Mix<br` shows a line rather than the fragment; a fragment that a reparse cannot prove was a tag comes back, which is why a comparison such as `a<b` is hidden for at most one chunk. The policy applies only to the stream's unstable tail, is proven by reparsing before it takes effect, never touches `getSource()` or source ranges, and is dropped entirely by `finish()`. `setPreview(options)` changes it mid-stream and restyles the current tail without waiting for new input. The settled document is always a parse of the canonical source; see [provisional styling](streaming-semantics.md#provisional-styling).
+
+## Inline HTML
+
+Three inline tags are rendered rather than shown as source: `<br>` as a line break, and `<sub>` and `<sup>` as a lowered or raised run. This is on by default, and `inlineHtml={false}` restores the output of the release that showed every tag as visible text. Nothing else is ever interpreted: every other tag, and every tag inside code, math, or an HTML block, stays literal, and the contract's rule that nothing is ever executed is unchanged. A tag's attributes are ignored, as the web's sanitize schema drops them, so `<sup class="x">` is a superscript.
+
+The tags match case-insensitively, in every self-closing form, and `<sub/>` is swallowed rather than opening a script, because a writer who means a superscript does not write that. A close tag with nothing open is swallowed too, which is what a browser does and what keeps an escaped `\<sub>` from showing a dangling `</sub>`. An unclosed tag runs to the end of its block or cell, as it would inside a `<p>`. Markdown inside the tags keeps working, so `<sup>**y**</sup>` is bold and raised. `<sup>[^1]</sup>` reads as the footnote reference it imitates: raised once, by the reference's own rule. A script's size and baseline shift are both shares of the surrounding text's size, on both platforms, and a script never opens its line: as with the web's `line-height: 0`, a raised or lowered run leaves its line's height and baseline where they were.
+
+A `<br>` beside a source line break is still one break, because this renderer shows soft line breaks as breaks. Each `<br>` and each hard break counts one, and soft breaks in a stretch that has neither are counted as they always were. Spaces directly around a `<br>` are dropped, as HTML's collapsing drops them. A cell can hold a `<br>`, which is what makes it the way a table row breaks a line, and the toolbar copies it back as one.
+
+`syntax={{ superscript, subscript }}` adds md4c's own `^x^` and `~x~`. Both are off by default and each is worth turning on deliberately: `^x^` makes `2^10 and 3^5` a superscript, and `~x~` takes `~strike~` away from strikethrough, which is what remark reads it as. The style bits they produce are the same ones the tags produce, so `markdownStyle.superscript` and `markdownStyle.subscript` theme both.
+
+A stream's `inlineHtml` and `syntax` are read once, with `math`, at `createMarkdownStream`, because parse options are part of a source's identity. Changing them later would parse the same string two ways.
 
 ## Controls
 
@@ -199,6 +231,65 @@ type CustomRendererProps = {
 
 **Security.** Fence text is model output and is untrusted. Never `eval` it. A renderer that embeds HTML should set `originWhitelist` and block navigation, and one that calls a server must not let a spec name an arbitrary URL. Downstream itself never executes fence content.
 
+## Streaming animation and the caret
+
+A message can fade its new text in as it arrives, with a caret at the writing point. Both are off by default, and both are drawing only: they never change the canonical source, the settled parse, a source range, a selection, or the accessibility text. See [streaming semantics](streaming-semantics.md#streaming-animation-and-the-caret) for that boundary.
+
+```tsx
+// A controlled view says whether text is still arriving, as Streamdown requires.
+<DownstreamMarkdown
+  markdown={message}
+  animated
+  isAnimating={isStreaming}
+  caret="block"
+  onAnimationStart={() => setBusy(true)}
+  onAnimationEnd={() => setBusy(false)}
+/>;
+
+// A stream works `isAnimating` out from its own controller, so it needs no prop.
+const stream = createMarkdownStream();
+<DownstreamMarkdown stream={stream} animated caret="circle" />;
+
+// The whole option object, with Streamdown's names and defaults.
+<DownstreamMarkdown
+  stream={stream}
+  animated={{ animation: 'slideUp', sep: 'char', duration: 200, stagger: 20 }}
+/>;
+```
+
+```ts
+type MarkdownAnimateOptions = Readonly<{
+  /** 'fadeIn' by default. 'blurIn' and other names draw as 'fadeIn' and warn once. */
+  animation?: 'fadeIn' | 'slideUp' | 'blurIn' | (string & {});
+  /** Per unit, in ms. 150 by default. */
+  duration?: number;
+  /** A CSS timing keyword or cubic-bezier(). 'ease' by default. */
+  easing?: string;
+  /** 'word' by default. CJK text is split per character in either mode. */
+  sep?: 'word' | 'char';
+  /** Delay between units, in ms. 40 by default; 0 turns the cascade off. */
+  stagger?: number;
+  /** How far ahead of now a burst may be scheduled, in ms. 320 by default. */
+  maxBacklogMs?: number;
+}>;
+```
+
+`animated` is `false` by default, or the option object. `animation` is `fadeIn` (alpha) or `slideUp` (alpha and a four-point rise). `blurIn` draws as `fadeIn` and warns once in development: neither platform can blur one run of glyphs cheaply inside a text draw pass, and a CSS keyframe name means nothing natively. An unknown name does the same.
+
+A unit is a word by default, and takes its trailing whitespace with it, so a link's underline never shows before its word. CJK is split per syllable in either mode, because a CJK paragraph has no spaces and would otherwise fade as one block. `sep: 'char'` splits per grapheme, keeping a surrogate pair, combining marks, and a ZWJ emoji sequence whole. A rule, a table row, and an empty fence are one unit each.
+
+`stagger` is the delay between units, and a burst is compressed to fit `maxBacklogMs` rather than queued: forty words on a 40 ms stagger are scheduled across about 320 ms, not 1.6 s of invisible text. `stagger: 0` has no floor and turns the cascade off. Every time value is multiplied by Android's animator duration scale, and a scale of zero turns the fade off.
+
+`isAnimating` is required for a controlled `markdown` view, as in Streamdown: the library cannot know whether a string prop is still growing. A `stream` view works it out from its own controller — on from the first append until `finish()` — and an explicit `isAnimating` overrides that. `onAnimationStart` fires when it turns true, including on mount; `onAnimationEnd` fires when it turns false, but not on mount. Neither fires while the view is not animating at all.
+
+`caret` is `'none'` by default, or `'block'` (a bar) or `'circle'` (a dot). It is drawn, not typeset, so it looks the same in every font and cannot change a line's height. It is shown while `isAnimating` is true, so the two props are needed together.
+
+The caret sits after the last character when the last block is a paragraph, a heading, a list item at any depth, or a fence that is still open — that is where text is being written. It takes a line of its own when the document is empty, or ends with a table, a closed fence, or a rule, because that is where the next block's first line will appear. While a fade is running it is drawn at the reveal frontier, the end of the last word that has started, so it never sits after a gap of words that have not appeared yet.
+
+The caret is never copied, selected, exported, or read aloud. Copying a selection that touches it writes the selection without it. The placeholder it reserves is measured with the text, so measured height equals drawn height, and a caret that wraps to a new line moves the document by that line. The final snapshot removes it, so a view shrinks by a line when a stream finishes, as Streamdown's `::after` does.
+
+No fade is drawn when the system asks for reduced motion: `UIAccessibilityIsReduceMotionEnabled()` on iOS, and Android's Reduce Motion and animator duration scale as well. The caret is unaffected, because it does not move. With `animated` and `caret` off, a view's output is byte-identical to one built without this feature.
+
 ## Events and failures
 
 `onLinkPress` receives the complete validated URL and the range of its Markdown occurrence, including delimiters. A reference link's range covers its use, not its definition. The library does not open a URL itself. Only absolute `http:`, `https:`, and `mailto:` targets without control characters are actionable. Scheme matching is case-insensitive. Relative, incomplete, and disallowed targets are plain text and never emit link events. `onError` on the controller receives session failures even while no view is mounted. `onError` on the view receives controlled-source or view/layout failures. An event carries `code`, `message`, `generation`, `sequence`, and `recoverable`; errors from an old generation are discarded. Invalid synchronous calls throw a typed error with the same code. Failed append or reset calls leave source, generation, and last valid snapshot unchanged. Asynchronous parse/render failures retain the last valid snapshot and report one error for the failed sequence. A later append or reset may recover.
@@ -308,6 +399,8 @@ A document is a vertical stack of segments. A text segment is a run of non-table
 
 Theming is on both platforms. A theme is interned by content in the shadow node, so equal themes are one object and a theme change costs one intern rather than one per view. The interned theme travels with the mounting state as its id, the way the parsed document does, so nothing copies 232 slot values across the platform boundary on every update. A color-only change rebuilds the drawing objects and measures nothing; a size change is measured again like any other layout change.
 
+Streaming animation works the same way. What is new, where the unit boundaries fall, when each unit starts, and where the caret goes are all decided in the engine, in `src/cpp/downstream/Reveal.h` and `Caret.h`, and both renderers call those. A per-view tracker holds the document that view last showed, so a message scrolled back into view does not fade all of itself again. None of that lives in a rendering: a segment is shared and immutable, so alpha can only be applied in a draw pass. iOS splits `DSLayoutManager`'s glyph drawing into runs of equal alpha and redraws only the lines holding an active unit. Android draws a text segment in clipped passes, one outside the fading band and one per alpha bucket inside it, capped at eight layers a frame. The caret is the exception, because it takes space: its placeholder is a real character in the measured text, so it is part of the rendering and of the measurement, and of both platforms' rendering cache keys.
+
 The rules that decide what a block draws with are written once, in the engine, and both renderers call them. A document read resolves each block's typography, its element, and its two margins on the C++ side and hands the result to the platform, so a theme means one thing rather than one thing per platform. A theme slot that nothing reads is a value that resolves, interns, redraws, and never appears, which is why `pnpm test:native` fails when one is added.
 
 ### Line numbers, titles, and the height cap
@@ -347,9 +440,10 @@ Parsing and platform text preparation run on one shared pool of worker threads: 
 | Area | Current behavior | Planned |
 | --- | --- | --- |
 | Input | Controlled `markdown` and `createMarkdownStream` with a `stream` prop. Streams use incremental parsing, share completed blocks, and fall back to a full parse at unproven boundaries. The stream buffers up to 64 KiB per native append and 256 KiB of unacknowledged input. Lone surrogates and sources over 1 MiB are rejected in JavaScript. | Real-device performance measurements. |
-| Line breaks | Soft line breaks display as line breaks, as the fixture contract requires. | None |
+| Streaming animation | `animated`, `isAnimating`, `caret`, `onAnimationStart`, and `onAnimationEnd`, on both platforms. The engine decides what is new and when each unit starts; each platform's existing draw pass applies the alpha, so a frame costs no React render, no Fabric state update, no relayout, and no change to a shared segment. | `smooth` pacing for bursty providers, and effects beyond fade and rise. |
+| Line breaks | Soft line breaks display as line breaks, as the fixture contract requires. `<br>` is one break too: a `<br>` next to a source line break still shows one break, and a stretch of soft breaks, hard breaks, and tags is counted once per hard mark, with the spaces around a `<br>` dropped. A cell can hold a `<br>`, and it is written back as one in Markdown and HTML exports. | None |
 | Tables | Columns take their widest cell, clamped to 56–280 points plus padding, with md4c's column alignment. Wide tables scroll horizontally. Cells keep inline styles and links. Completed rows appear during streaming without resetting the scroll position. A toolbar copies the table as HTML, Markdown, CSV, or TSV and saves it as CSV or Markdown. | None |
-| Admonitions and footnotes | Admonitions render as a quote with a colored bar and title. Footnote references are superscript numbers; definitions follow a rule at the end. | None |
+| Admonitions and footnotes | Admonitions render as a quote with a colored bar and title. Footnote references are superscript numbers; definitions follow a rule at the end. A `<sup>1</sup>` a model writes looks the same as the `[^1]` it writes, and `superscript` and `subscript` in `markdownStyle` set each script's size and baseline shift. | None |
 | Links | Tap hit testing emits `onLinkPress` with a validated URL and the UTF-16 range of its Markdown occurrence, in text and table cells. VoiceOver and TalkBack expose each link as a focusable link role. | Long press actions in a later release. |
 | Selection | `selectable` enables native selection and copy in text segments. **It is on by default**, applied per settled segment, so text that is still streaming is never selectable. Copy is plain visible text; `getSource()` returns the complete canonical stream source. Selection cannot span a table or completed segment boundary. `controls` adds a per-block copy and download, described under [controls](#controls). | An app that opens its own message menu on a long press must pass `selectable={false}`. |
 | Accessibility | VoiceOver and TalkBack expose reading stops for text blocks, table rows, and links, with heading and link roles and spoken task state. | Rich table navigation if needed. |

@@ -41,6 +41,9 @@ export const STYLE = {
   link: 1 << 4,
   imageAlt: 1 << 5,
   footnote: 1 << 6,
+  math: 1 << 7,
+  superscript: 1 << 8,
+  subscript: 1 << 9,
 } as const;
 
 /** Container kinds, matching `Container::Kind`. */
@@ -92,6 +95,14 @@ export interface Link {
   range: [number, number];
 }
 
+/** An image the document records, as the drivers print them. */
+export interface ImageRecord {
+  url: string;
+  /** Plain alt text, as a reader would see it. */
+  alt: string;
+  loadable: boolean;
+}
+
 /** What the highlighter did over a session's passes. */
 export interface HighlightCounters {
   blocks: number;
@@ -104,6 +115,8 @@ export interface HighlightCounters {
 export interface RenderModel {
   blocks: Block[];
   links: Link[];
+  /** Every image the document records, whether or not a block names it. */
+  images: ImageRecord[];
   /** Leading blocks no later input can change, as `Document::settledBlocks`. */
   settled: number;
   error?: string;
@@ -128,6 +141,16 @@ const TARGETS = {
     join(CPP, 'downstream', 'SegmentPlan.cpp'),
     ...ENGINE,
     ...MD4C_SOURCES,
+  ],
+  'downstream-reveal': [
+    join(CPP, 'tests', 'dump_reveal.cpp'),
+    join(CPP, 'session', 'IncrementalParser.cpp'),
+    ...ENGINE,
+    ...MD4C_SOURCES,
+  ],
+  'downstream-reveal-curve': [
+    join(CPP, 'tests', 'dump_reveal_curve.cpp'),
+    join(CPP, 'downstream', 'Reveal.cpp'),
   ],
   'downstream-export': [
     join(CPP, 'tests', 'dump_export.cpp'),
@@ -169,21 +192,27 @@ export const PREVIEW_INLINE_CODE = 1 << 1;
 export const PREVIEW_LINKS = 1 << 2;
 export const PREVIEW_IMAGES = 1 << 3;
 export const PREVIEW_MATH = 1 << 4;
+export const PREVIEW_HTML_TAGS = 1 << 5;
 export const PREVIEW_ALL =
   PREVIEW_EMPHASIS |
   PREVIEW_INLINE_CODE |
   PREVIEW_LINKS |
   PREVIEW_IMAGES |
-  PREVIEW_MATH;
+  PREVIEW_MATH |
+  PREVIEW_HTML_TAGS;
 
 /**
- * Bits of the parse-level `mathFlags` prop, mirroring `src/math.ts` and
- * `downstream::MathParseFlags`.
+ * Bits of the parse-level `parseFlags` prop, mirroring `src/parseFlags.ts` and
+ * `downstream::ParseFlags`.
  */
-export const MATH_ENABLED = 1 << 0;
-export const MATH_SINGLE_DOLLAR = 1 << 1;
-export const MATH_BRACKETS = 1 << 2;
-export const MATH_FLAGS_DEFAULT = MATH_ENABLED | MATH_BRACKETS;
+export const PARSE_ENABLED = 1 << 0;
+export const PARSE_SINGLE_DOLLAR = 1 << 1;
+export const PARSE_BRACKETS = 1 << 2;
+/** `<br>`, `<sub>` and `<sup>` are recognized. On unless `inlineHtml` is false. */
+export const PARSE_INLINE_HTML = 1 << 3;
+export const PARSE_SUPERSCRIPT_SYNTAX = 1 << 4;
+export const PARSE_SUBSCRIPT_SYNTAX = 1 << 5;
+export const PARSE_FLAGS_DEFAULT = PARSE_ENABLED | PARSE_BRACKETS;
 
 function sessionBinary(): string {
   return compile(TARGETS['downstream-session'], 'downstream-session');
@@ -206,12 +235,14 @@ function frame(op: string, payload: Buffer): Buffer {
   return Buffer.concat([header, payload]);
 }
 
-function encodeOp(step: SessionOp): Buffer {
+function encodeOp(step: RevealStep): Buffer {
   switch (step.op) {
     case 'append':
       return frame('a', Buffer.from(step.chunk, 'utf8'));
     case 'replace':
       return frame('r', Buffer.from(step.source, 'utf8'));
+    case 'seed':
+      return frame('S', Buffer.from(step.source, 'utf8'));
     case 'preview': {
       const mask = Buffer.alloc(4);
       mask.writeUInt32LE(step.features >>> 0);
@@ -232,10 +263,11 @@ function encodeOp(step: SessionOp): Buffer {
  */
 export function replaySession(
   mode: SessionMode,
-  steps: readonly SessionOp[]
+  steps: readonly SessionOp[],
+  parseFlags = 0
 ): RenderModel {
   return JSON.parse(
-    execFileSync(sessionBinary(), [mode], {
+    execFileSync(sessionBinary(), [mode, String(parseFlags)], {
       input: Buffer.concat(steps.map(encodeOp)),
       maxBuffer: 256 << 20,
     }).toString('utf8')
@@ -246,26 +278,126 @@ export function replaySession(
  * The first frame of a stream that previews: `source` arrives in one chunk of
  * an unfinished full-mode session with `features` enabled.
  */
-export function preview(source: string, features: number): RenderModel {
-  return replaySession('full', [
-    { op: 'preview', features },
-    { op: 'append', chunk: source },
-    { op: 'parse', finished: false },
-  ]);
+export function preview(
+  source: string,
+  features: number,
+  parseFlags = 0
+): RenderModel {
+  return replaySession(
+    'full',
+    [
+      { op: 'preview', features },
+      { op: 'append', chunk: source },
+      { op: 'parse', finished: false },
+    ],
+    parseFlags
+  );
 }
 
 function incrementalBinary(): string {
   return compile(TARGETS['downstream-incremental'], 'downstream-incremental');
 }
 
+function revealBinary(): string {
+  return compile(TARGETS['downstream-reveal'], 'downstream-reveal');
+}
+
+/** One case of the engine's eased alpha and rise, as `dump_reveal_curve` prints it. */
+export interface RevealCurveCase {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  durationMs: number;
+  offsetMs: number;
+  alpha: number;
+  rise: number;
+}
+
+/**
+ * The engine's own alpha and rise for every curve, duration and offset the Kotlin
+ * mirror has to agree with.
+ *
+ * The mirror is what Android's draw pass evaluates on a host, where the platform's
+ * `PathInterpolator` is a stub, so these are the numbers both copies answer.
+ */
+export function revealCurveCases(): RevealCurveCase[] {
+  const output = execFileSync(
+    compile(TARGETS['downstream-reveal-curve'], 'downstream-reveal-curve'),
+    { encoding: 'utf8' }
+  );
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      // Destructured with a default rather than indexed: the C++ side prints one
+      // line per case and this reads the shape of that line, so a case that lost a
+      // column would be `undefined` here rather than a silent `NaN`.
+      const [x1, y1, x2, y2, durationMs, offsetMs, alpha, rise] = line
+        .split(' ')
+        .map(Number);
+      return { x1, y1, x2, y2, durationMs, offsetMs, alpha, rise };
+    }) as RevealCurveCase[];
+}
+
+/** One snapshot's reveals, as `dump_reveal` reports them. */
+export interface RevealPass {
+  /** Each block's visible text, in document order. */
+  blocks: string[];
+  /** Whether the snapshot was published by a stream that was still open. */
+  streaming: boolean;
+  /** `[block, start, end, startAtMs]` per scheduled unit. */
+  units: [number, number, number, number][];
+  /**
+   * Cumulative characters scheduled that were already at full alpha, as the
+   * tracker's own alignment saw them. Always zero.
+   */
+  rereveals: number;
+}
+
+/** A step a reveal replay can take, which is a session step plus one seeding. */
+export type RevealStep =
+  | SessionOp
+  | {
+      /**
+       * The document the view has already shown, as a view binding to a live
+       * stream gets from the session's own record of it. Only `replayReveal`
+       * understands it.
+       */
+      op: 'seed';
+      source: string;
+    };
+
+/**
+ * Replays a session through the real parser *and* the real reveal tracker, and
+ * returns what each pass scheduled.
+ *
+ * No test double decides what counts as new: the snapshots are the ones the app
+ * shows and the tracker is the one the platform draws with, so a property stated
+ * here is a property of the shipped engine.
+ */
+export function replayReveal(
+  mode: SessionMode,
+  steps: readonly RevealStep[]
+): RevealPass[] {
+  return JSON.parse(
+    execFileSync(revealBinary(), [mode], {
+      input: Buffer.concat(steps.map(encodeOp)),
+      maxBuffer: 256 << 20,
+    }).toString('utf8')
+  ).passes;
+}
+
 /** Parses a complete document with the engine that ships in the app. */
-export function parse(source: string | Buffer): RenderModel {
+export function parse(source: string | Buffer, parseFlags = 0): RenderModel {
   const input =
     typeof source === 'string' ? Buffer.from(source, 'utf8') : source;
   return JSON.parse(
-    execFileSync(engineBinary(), { input, maxBuffer: 256 << 20 }).toString(
-      'utf8'
-    )
+    execFileSync(engineBinary(), parseFlags ? [String(parseFlags)] : [], {
+      input,
+      maxBuffer: 256 << 20,
+    }).toString('utf8')
   );
 }
 

@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "Caret.h"
 #include "CodeLayout.h"
 #include "Document.h"
 #include "HostLayout.h"
@@ -98,10 +99,18 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 @property (nonatomic, readonly, nullable) NSString *accessibilityPrefix;
 @end
 
+/// The character attribute holding the caret's shape, on the placeholder
+/// character. The layout manager draws the shape from it rather than typesetting
+/// a glyph, so the caret looks the same in every font and cannot change a line's
+/// height.
+extern NSAttributedStringKey const DSCaretKindAttributeName;
+
 /// A run of non-code, non-table blocks laid out as one text layout.
 @interface DSTextSegment : NSObject
 @property (nonatomic, readonly) NSAttributedString *attributedString;
 @property (nonatomic, readonly) NSArray<DSBlockInfo *> *blocks;
+/// Each block's own range in `attributedString`, which is what a reveal unit's
+/// block-and-offset pair maps into.
 @property (nonatomic, readonly) NSArray<NSValue *> *blockRanges;
 /// The theme this segment was built with, so a view draws its chrome from the
 /// same theme as its text.
@@ -312,6 +321,8 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 @property (nonatomic, readonly) uint32_t settledBlocks;
 /// Which control rows the document lays out with. See `downstream::Chrome`.
 @property (nonatomic, readonly) uint32_t chrome;
+/// The caret this rendering reserved room for, or that there is none.
+@property (nonatomic, readonly) downstream::PlacedCaret caret;
 /// The theme this rendering was built with, so a view draws its chrome from the
 /// same theme as its text.
 @property (nonatomic, readonly) DSThemeColors *theme;
@@ -328,10 +339,14 @@ typedef NS_ENUM(NSInteger, DSBlockDecoration) {
 /// measure and a themed draw from being two different sets of numbers, and it is
 /// why the theme is part of the cache key: a themed rendering is not
 /// interchangeable with the default one.
+/// `caret` is already resolved against the document, because its placeholder is
+/// in the measured text: a rendering built without it and one built with it have
+/// different heights, and mixing them is what the cache key prevents.
 + (instancetype)renderedDocumentFor:(const downstream::DocumentHandle &)document
                           fontScale:(CGFloat)fontScale
                  syntaxHighlighting:(BOOL)syntaxHighlighting
-                              theme:(const downstream::Theme::Handle &)theme;
+                              theme:(const downstream::Theme::Handle &)theme
+                             caret:(const downstream::PlacedCaret &)caret;
 #endif
 
 /// Drops every cached rendering. For tests and for a caller that wants to force

@@ -127,6 +127,16 @@ void testDefaultMetrics() {
 
   CHECK(nearly(theme_layout::footnoteSizeScale(*theme), 0.75), "a footnote reference is 0.75 of its block");
   CHECK(nearly(theme_layout::footnoteRaise(*theme), 0.35), "a footnote reference is raised 0.35");
+  // A `<sup>1</sup>` a model writes and a `[^1]` it writes look the same, so the
+  // two share a size and a shift by default; a subscript is the same size and a
+  // shorter drop.
+  CHECK(nearly(theme_layout::superscriptFontScale(*theme), theme_layout::footnoteSizeScale(*theme)),
+        "a superscript is the footnote reference's size");
+  CHECK(nearly(theme_layout::superscriptBaselineOffset(*theme), theme_layout::footnoteRaise(*theme)),
+        "a superscript is the footnote reference's raise");
+  CHECK(nearly(theme_layout::subscriptFontScale(*theme), theme_layout::footnoteSizeScale(*theme)),
+        "a subscript is the same size as a superscript");
+  CHECK(nearly(theme_layout::subscriptBaselineOffset(*theme), 0.2), "a subscript drops 0.2");
 
   CHECK(nearly(theme_layout::kChromeRowHeight, 32), "a control row is 32 points");
   CHECK(nearly(theme_layout::fontScale(*theme, 1.5), 1.5), "no cap leaves the platform scale alone");

@@ -22,6 +22,7 @@ DocumentMeasurement DownstreamTextLayoutManager::measure(const downstream::Docum
                                                          const LayoutConstraints &layoutConstraints,
                                                          SurfaceId surfaceId, uint32_t chrome,
                                                          const downstream::CodeLayout &code,
+                                                         const downstream::PlacedCaret &caret,
                                                          const downstream::ImageLayout &images,
                                                          const downstream::HostLayout &hosts,
                                                          const downstream::Theme::Handle &theme) const {
@@ -43,7 +44,8 @@ DocumentMeasurement DownstreamTextLayoutManager::measure(const downstream::Docum
       for (const auto &entry : cache_) {
         if (entry.documentId == document->id && entry.fontSizeMultiplier == scale &&
             entry.maximumWidth == maximumWidth && entry.chrome == chrome && entry.code == code &&
-            entry.images == images && entry.hosts == hosts && entry.themeLayoutKey == themeLayoutKey) {
+            entry.caret == caret && entry.images == images && entry.hosts == hosts &&
+            entry.themeLayoutKey == themeLayoutKey) {
           measurement = entry.measurement;
           cached = true;
           break;
@@ -52,13 +54,14 @@ DocumentMeasurement DownstreamTextLayoutManager::measure(const downstream::Docum
     }
 
     if (!cached) {
-      measurement = measurePlatform(document, scale, maximumWidth, surfaceId, chrome, code, images, hosts, theme);
+      measurement =
+          measurePlatform(document, scale, maximumWidth, surfaceId, chrome, code, caret, images, hosts, theme);
       std::lock_guard<std::mutex> lock(cacheMutex_);
       if (cache_.size() >= kMeasurementCacheCapacity) {
         cache_.erase(cache_.begin());
       }
       cache_.push_back(
-          {document->id, scale, maximumWidth, chrome, code, images, hosts, themeLayoutKey, measurement});
+          {document->id, scale, maximumWidth, chrome, code, caret, images, hosts, themeLayoutKey, measurement});
     } else {
       downstream::SessionTrace::recordDocument(document->id, "measure_cache_hit");
     }
@@ -79,8 +82,9 @@ DocumentMeasurement DownstreamTextLayoutManager::measure(const downstream::Docum
 
 DocumentMeasurement DownstreamTextLayoutManager::cachedMeasurement(
     const downstream::DocumentHandle &document, Float fontSizeMultiplier, Float maximumWidth, uint32_t chrome,
-    const downstream::CodeLayout &code, const downstream::ImageLayout &images,
-    const downstream::HostLayout &hosts, const downstream::Theme::Handle &theme) const {
+    const downstream::CodeLayout &code, const downstream::PlacedCaret &caret,
+    const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
+    const downstream::Theme::Handle &theme) const {
   DocumentMeasurement measurement;
   if (!document) {
     return measurement;
@@ -95,7 +99,8 @@ DocumentMeasurement DownstreamTextLayoutManager::cachedMeasurement(
   for (const auto &entry : cache_) {
     if (entry.documentId == document->id && entry.fontSizeMultiplier == scale &&
         entry.maximumWidth == maximumWidth && entry.chrome == chrome && entry.code == code &&
-        entry.images == images && entry.hosts == hosts && entry.themeLayoutKey == themeLayoutKey) {
+        entry.caret == caret && entry.images == images && entry.hosts == hosts &&
+        entry.themeLayoutKey == themeLayoutKey) {
       measurement = entry.measurement;
       break;
     }

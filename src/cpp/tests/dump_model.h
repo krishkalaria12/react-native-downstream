@@ -209,16 +209,16 @@ inline bool write(const ParseResult &result) {
 }
 
 /**
- * The math parse options from a driver's argument, if it was given one.
+ * The parse options from a driver's argument, if it was given one.
  *
- * `dump_document [mathFlags]`, `dump_session <mode> [mathFlags]`, and the rest
+ * `dump_document [parseFlags]`, `dump_session <mode> [parseFlags]`, and the rest
  * all take the same number and mean the same thing, so there is one reader.
  * Absent means off, which is what makes the whole existing corpus byte-identical
  * to what it was before math existed; a case that is about a formula names its
  * flags.
  */
-inline MathOptions mathOptionsFromArg(int argc, char **argv, int at) {
-  MathOptions options;
+inline ParseOptions parseFlagsFromArg(int argc, char **argv, int at) {
+  ParseOptions options;
   options.flags = 0;
   if (argc <= at) {
     return options;

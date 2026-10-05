@@ -33,6 +33,9 @@ const TASK = { 0: null, 1: 'unchecked', 2: 'checked' };
 const [STRONG, EMPHASIS, STRIKE, CODE, LINK, IMAGE_ALT, FOOTNOTE] = [
   0, 1, 2, 3, 4, 5, 6,
 ].map((bit) => 1 << bit);
+/** Bits of the provisional pass, mirroring `src/cpp/remend/Preview.h`. */
+const PREVIEW_HTML_TAGS = 1 << 5;
+const PREVIEW_ALL = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | PREVIEW_HTML_TAGS;
 
 /**
  * RaTeX's macOS slice, which `node math/scripts/vendor-ratex.mjs` writes. The
@@ -64,6 +67,7 @@ before(async () => {
     ['dump_export', [downstream('SegmentPlan.cpp'), ...engine]],
     ['test_export', [downstream('SegmentPlan.cpp'), ...engine]],
     ['test_fence_meta', [downstream('SegmentPlan.cpp'), ...engine]],
+    ['test_reveal', [incremental, ...engine]],
     ['test_preview', [incremental, ...engine]],
     ['test_session_registry', [registry, incremental, ...pool, ...engine]],
     [
@@ -122,11 +126,11 @@ function tokens(info, source) {
 }
 
 /** Parses a string or byte buffer and returns dump_document's JSON. */
-function parse(source) {
+function parse(source, parseFlags = 0) {
   const input =
     typeof source === 'string' ? Buffer.from(source, 'utf8') : source;
   return JSON.parse(
-    execFileSync(binary('dump_document'), {
+    execFileSync(binary('dump_document'), [String(parseFlags)], {
       input,
       maxBuffer: 64 << 20,
     }).toString('utf8')
@@ -160,6 +164,8 @@ async function assertIncrementalMatches(t, allCases) {
   for (const testCase of allCases) {
     await t.test(testCase.id, () => {
       const chunks = testCase.chunks.map((chunk) => Buffer.from(chunk, 'utf8'));
+      const args = ['--batch'];
+      if (testCase.parseFlags) args.push(String(testCase.parseFlags));
       for (const sequence of [chunks, [COMMITTED_PREFIX, ...chunks]]) {
         const framed = Buffer.concat(
           sequence.flatMap((chunk) => {
@@ -170,7 +176,7 @@ async function assertIncrementalMatches(t, allCases) {
         );
         // stderr is inherited so a failing CHECK names its case; stdin stays
         // piped because the chunks arrive on it.
-        execFileSync(binary('test_incremental'), {
+        execFileSync(binary('test_incremental'), args, {
           input: framed,
           stdio: ['pipe', 'pipe', 'inherit'],
         });
@@ -283,7 +289,7 @@ describe('parse oracle', () => {
           Buffer.from(testCase.chunks.join(''), 'utf8'),
           Buffer.from(testCase.source, 'utf8')
         );
-        const document = parse(testCase.source);
+        const document = parse(testCase.source, testCase.parseFlags ?? 0);
         const blocks = document.blocks;
 
         if ('visibleText' in expected) {
@@ -377,7 +383,7 @@ describe('adversarial cases', () => {
         await t.test(
           `${testCase.id} after chunk ${checkpoint.afterChunk}`,
           () => {
-            const document = parse(checkpoint.prefix);
+            const document = parse(checkpoint.prefix, testCase.parseFlags ?? 0);
             if ('visibleText' in checkpoint) {
               assert.equal(visibleText(document), checkpoint.visibleText);
             }
@@ -905,6 +911,243 @@ describe('math', () => {
   );
 });
 
+// Parse option bits, mirroring `src/parseFlags.ts` and `downstream::ParseFlags`.
+const INLINE_HTML = 1 << 3;
+const SUPERSCRIPT_SYNTAX = 1 << 4;
+const SUBSCRIPT_SYNTAX = 1 << 5;
+
+const SUPERSCRIPT = 1 << 8;
+const SUBSCRIPT = 1 << 9;
+
+describe('inline html', () => {
+  // The three tags on the allowlist, and the proof that nothing else moved.
+  // Every case runs through the real parser with the inline HTML bit on, which
+  // is the default a view sends, and again with it off, which must be today's
+  // parse byte for byte.
+
+  /** [source, visible text, [[substring, style mask], …]] over one paragraph. */
+  const grammarCases = [
+    ['H<sub>2</sub>O', 'H2O', [['2', SUBSCRIPT]]],
+    ['x<sup>2</sup>', 'x2', [['2', SUPERSCRIPT]]],
+    ['a<br>b', 'a\nb', []],
+    ['a<br/>b', 'a\nb', []],
+    ['a<br />b', 'a\nb', []],
+    ['a<BR>b', 'a\nb', []],
+    ['a</br>b', 'a\nb', []],
+    ['a<br clear="all">b', 'a\nb', []],
+    ['<sup class="x">y</sup>', 'y', [['y', SUPERSCRIPT]]],
+    ['<sub id="y">z</sub>', 'z', [['z', SUBSCRIPT]]],
+    // A stray end tag is swallowed, which is what an HTML parser does.
+    ['a</sub>b', 'ab', []],
+    ['a</sup>b', 'ab', []],
+    // A self-closed script is swallowed, not opened: nothing means it.
+    ['a<sub/>b', 'ab', []],
+    ['a<sup />b', 'ab', []],
+    // An unclosed tag runs to the end of its block.
+    ['H<sub>2 open', 'H2 open', [['2 open', SUBSCRIPT]]],
+    // An escaped opener leaves no open script, so the stray closer is swallowed.
+    ['\\<sub>y</sub>', '<sub>y', []],
+    // The innermost opened script wins.
+    ['<sup>a<sub>b</sub>c</sup>d', 'abcd', [['a', SUPERSCRIPT], ['b', SUBSCRIPT], ['c', SUPERSCRIPT]]],
+    // Nesting the same script twice does not shift further.
+    ['<sup>a<sup>b</sup>c</sup>', 'abc', [['a', SUPERSCRIPT], ['b', SUPERSCRIPT], ['c', SUPERSCRIPT]]],
+    // Markdown inside a script keeps working.
+    ['<sup>**y**</sup>', 'y', [['y', SUPERSCRIPT | STRONG]]],
+    ['<sub>*i*</sub>', 'i', [['i', SUBSCRIPT | EMPHASIS]]],
+    // A name that merely starts with one is not one.
+    ['<subtitle>n</subtitle>', '<subtitle>n</subtitle>', []],
+    ['<supplier>n</supplier>', '<supplier>n</supplier>', []],
+    ['<brx>a</brx>', '<brx>a</brx>', []],
+    // Every other tag stays literal.
+    ['<b>bold</b>', '<b>bold</b>', []],
+    ['a <span>b</span>', 'a <span>b</span>', []],
+    ['<!-- note -->', '<!-- note -->', []],
+    // A code span is verbatim.
+    ['`<sub>x</sub>`', '<sub>x</sub>', [['<sub>x</sub>', CODE]]],
+  ];
+
+  for (const [source, expected, runs] of grammarCases) {
+    test(`grammar: ${JSON.stringify(source)}`, () => {
+      const document = parse(source, INLINE_HTML);
+      assert.equal(visibleText(document), expected);
+      const block = document.blocks[0];
+      assert.ok(block, 'one block');
+      assert.deepEqual(
+        runs.map(([substring, mask]) => [
+          substring,
+          stylesOf(block, substring).reduce((bits, run) => bits | run[2], 0) & mask,
+        ]),
+        runs
+      );
+    });
+  }
+
+  // The break table, one row per way a writer can put a `<br>` next to a source
+  // line break. Downstream shows a soft break as a break, so a `<br>` beside one
+  // must not open a blank line.
+  const breakCases = [
+    ['a<br>b', 'a\nb'],
+    ['a<br>\nb', 'a\nb'],
+    ['a\n<br>b', 'a\nb'],
+    ['a\n<br>\nb', 'a\nb'],
+    ['a<br><br>b', 'a\n\nb'],
+    ['a<br>\n<br>\nb', 'a\n\nb'],
+    ['a\n<br>\n<br>\nb', 'a\n\nb'],
+    ['a  \n<br>b', 'a\n\nb'],
+    ['a <br> b', 'a\nb'],
+    // A final break draws no empty line; two leave one.
+    ['a<br>', 'a'],
+    ['a<br><br>', 'a\n'],
+    ['a<br>\nb', 'a\nb'],
+  ];
+
+  for (const [source, expected] of breakCases) {
+    test(`break: ${JSON.stringify(source)}`, () => {
+      assert.equal(visibleText(parse(source, INLINE_HTML)), expected);
+    });
+  }
+
+  test('a table cell holds a line break, and its spaces go away', () => {
+    const source =
+      '| Step | Notes |\n| - | - |\n| 1 | Mix <br> Then bake |\n';
+    const document = parse(source, INLINE_HTML);
+    const row = document.blocks.at(-1);
+    assert.equal(row.kind, KIND.table);
+    const cell = row.text.slice(row.cells[1][0], row.cells[1][1]);
+    assert.equal(cell, 'Mix\nThen bake');
+  });
+
+  test('a block of only <br> tags is an empty paragraph, one line per tag', () => {
+    const lone = parse('before\n\n<br>\n\nnext\n', INLINE_HTML);
+    assert.equal(lone.blocks.length, 3);
+    assert.equal(lone.blocks[1].kind, KIND.paragraph);
+    // One tag is one empty line, which a paragraph with no text measures as one.
+    assert.equal(lone.blocks[1].text, '');
+    const pair = parse('before\n\n<br>\n<br>\n\nnext\n', INLINE_HTML);
+    assert.equal(pair.blocks[1].text, '\n');
+    const mixed = parse('before\n\n<br>\n<div>x</div>\n\nnext\n', INLINE_HTML);
+    // One <br> beside a real tag is not a block of <br> tags, so the html
+    // block keeps its literal text.
+    assert.equal(mixed.blocks[1].kind, KIND.html);
+    assert.ok(mixed.blocks[1].text.includes('<div>'));
+  });
+
+  test('a footnote reference keeps only its own bit inside a script', () => {
+    const document = parse('<sup>[^1]</sup>\n\n[^1]: note\n', INLINE_HTML);
+    const run = document.blocks[0].runs[0];
+    assert.equal(run[2] & FOOTNOTE, FOOTNOTE);
+    assert.equal(run[2] & SUPERSCRIPT, 0);
+  });
+
+  test('a script inside alt text keeps its text out of the alt', () => {
+    const document = parse('![a<sup>2</sup>b](https://example.com/i.png)', INLINE_HTML);
+    assert.equal(document.images[0].alt, 'a2b');
+  });
+
+  test('md4c script syntax is opt-in and off by default', () => {
+    // `^x^` is only a superscript when the caller asked for it, because
+    // `2^10 and 3^5` would otherwise pair the carets.
+    assert.equal(visibleText(parse('2^10 and 3^5')), '2^10 and 3^5');
+    // Probed, not imagined: with the flag on, md4c pairs the carets greedily,
+    // so `2^10 and 3^5` becomes `2` plus a raised `10 and 3` plus `5`.
+    assert.equal(
+      visibleText(parse('2^10 and 3^5', INLINE_HTML | SUPERSCRIPT_SYNTAX)),
+      '210 and 35'
+    );
+    // `~x~` is only a subscript when the caller asked for it, because remark
+    // reads `~x~` as strikethrough.
+    assert.equal(stylesOf(parse('~strike~').blocks[0], 'strike')[0][2], STRIKE);
+    assert.equal(
+      stylesOf(parse('~x~', INLINE_HTML | SUBSCRIPT_SYNTAX).blocks[0], 'x')[0][2],
+      SUBSCRIPT
+    );
+  });
+
+  test('inline HTML off reproduces the literal tags', () => {
+    // The same sources the default parse handles, with the bit cleared: the
+    // tags are visible text again, exactly as before this feature.
+    assert.equal(visibleText(parse('a<br>b', 0)), 'a<br>b');
+    assert.equal(visibleText(parse('H<sub>2</sub>O', 0)), 'H<sub>2</sub>O');
+    assert.equal(visibleText(parse('a<br>b|c', 0)), 'a<br>b|c');
+  });
+});
+
+describe('preview', () => {
+  // The provisional pass, through the real session: a preview feature is only
+  // worth having if the engine can prove it, and the proof runs the parser.
+  const previewed = (source, features) =>
+    runSession(
+      'incremental',
+      [
+        { op: 'preview', features },
+        { op: 'append', chunk: source },
+        { op: 'parse', finished: false },
+      ],
+      INLINE_HTML
+    );
+
+  test('a half-arrived tag is hidden for as long as the stream stops there', () => {
+    // Only the fragment itself is hidden: the complete tags before it are the
+    // document, and the fragment returns the moment its `>` arrives.
+    for (const [source, expected] of [
+      ['Mix<br', 'Mix'],
+      ['Mix<b', 'Mix'],
+      ['H<sub>2</sub', 'H2'],
+      ['x<sup>2</sup', 'x2'],
+    ]) {
+      assert.equal(visibleText(previewed(source, PREVIEW_HTML_TAGS)), expected);
+    }
+  });
+
+  test('a finished stream is never previewed', () => {
+    const document = runSession('incremental', [
+      { op: 'preview', features: PREVIEW_ALL },
+      { op: 'append', chunk: 'Mix<br' },
+      { op: 'parse', finished: false },
+      { op: 'parse', finished: true },
+    ]);
+    // The fragment comes back the moment the stream is settled, because the
+    // settled document is always a plain parse of the bytes the writer sent.
+    assert.equal(visibleText(document), 'Mix<br');
+  });
+
+  test('a fragment that cannot become an allowed tag is left alone', () => {
+    // `<blink` runs past the name, and `<3` is a comparison; neither is a
+    // prefix of `<br>`, `<sub>` or `<sup>`, so neither is ever hidden. A
+    // candidate whose removal would change what precedes it is refused too: a
+    // `<br>` before the fragment draws a line, and a document whose line
+    // changed is not the document minus a fragment.
+    for (const source of ['a<b and 2<3', 'a<blink', 'a<subtitle>x', 'a<em>']) {
+      assert.equal(visibleText(previewed(source, PREVIEW_ALL)), source);
+    }
+    assert.equal(visibleText(previewed('a<br><su', PREVIEW_ALL)), 'a\n<su');
+  });
+
+  test('a fragment inside code is content', () => {
+    // An unterminated code span keeps its content as code, and the fragment
+    // lands inside that run, so the proof refuses to hide it: the reader is
+    // looking at code, not at a tag.
+    for (const source of ['`<br`', '`<b`', '`x<sup>2</sup`', '`<sup>1</sup`']) {
+      assert.equal(
+        visibleText(previewed(source, PREVIEW_HTML_TAGS)),
+        source.slice(1, -1)
+      );
+    }
+  });
+
+  test('the feature is off unless asked for', () => {
+    const document = runSession(
+      'incremental',
+      [
+        { op: 'append', chunk: 'Mix<br' },
+        { op: 'parse', finished: false },
+      ],
+      INLINE_HTML
+    );
+    assert.equal(visibleText(document), 'Mix<br');
+  });
+});
+
 describe('input', () => {
   // stderr is inherited, not piped: a failing CHECK writes its case label to
   // stderr, and a piped child would swallow the reason a run failed.
@@ -925,6 +1168,12 @@ describe('input', () => {
 
   test('fence info string meta, prefixes, and identity', () => {
     execFileSync(binary('test_fence_meta'), { timeout: 30_000, stdio: 'inherit' });
+  });
+
+  test('reveal alignment, units, timeline, easing, and caret placement', () => {
+    // The rules both platforms draw streamed text with, against the real parser,
+    // so a fade cannot disagree between them or with what a reader sees.
+    execFileSync(binary('test_reveal'), { timeout: 30_000, stdio: 'inherit' });
   });
 
   test('rejects malformed UTF-8', () => {
@@ -949,7 +1198,7 @@ describe('input', () => {
  * Replays a session through the real IncrementalParser and returns the document
  * its last pass published. `steps` mirror what a stream does, in order.
  */
-function runSession(mode, steps) {
+function runSession(mode, steps, parseFlags = 0) {
   const frame = (op, payload) => {
     const length = Buffer.alloc(4);
     length.writeUInt32LE(payload.length);
@@ -962,6 +1211,11 @@ function runSession(mode, steps) {
           return frame('a', Buffer.from(step.chunk, 'utf8'));
         case 'replace':
           return frame('r', Buffer.from(step.source, 'utf8'));
+        case 'preview': {
+          const mask = Buffer.alloc(4);
+          mask.writeUInt32LE(step.features >>> 0);
+          return frame('p', mask);
+        }
         case 'parse':
           return frame(step.finished ? 'f' : 'u', Buffer.alloc(0));
         default:
@@ -969,7 +1223,7 @@ function runSession(mode, steps) {
       }
     });
   return JSON.parse(
-    execFileSync(binary('dump_session'), [mode], {
+    execFileSync(binary('dump_session'), [mode, String(parseFlags)], {
       input: Buffer.concat(frames),
       maxBuffer: 256 << 20,
     }).toString('utf8')

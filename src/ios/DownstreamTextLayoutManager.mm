@@ -95,16 +95,20 @@ void DownstreamTextLayoutManager::installPlatformServices(
 DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
     const downstream::DocumentHandle &document, Float fontSizeMultiplier, Float maximumWidth,
     SurfaceId /*surfaceId*/, uint32_t chrome, const downstream::CodeLayout &code,
-    const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
-    const downstream::Theme::Handle &theme) const {
+    const downstream::PlacedCaret &caret, const downstream::ImageLayout &images,
+    const downstream::HostLayout &hosts, const downstream::Theme::Handle &theme) const {
   @autoreleasepool {
     // The view's own theme, so a themed measure and a themed draw are the same
     // numbers. Colors do not change metrics, so this is valid whether or not the
     // view turns them on; the view builds the rendering it draws.
+    // The caret is measured with everything else rather than added at draw time:
+    // its placeholder is a real character in the measured text, so measuring
+    // without it and drawing with it would put the last line in the wrong place.
     DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:document
                                                                  fontScale:fontSizeMultiplier
                                                         syntaxHighlighting:YES
-                                                                     theme:resolve(theme)];
+                                                                     theme:resolve(theme)
+                                                                    caret:caret];
     // The whole code layout comes along, because every input that changes a
     // card's height is in it: wrapping, the cap, the gutter, and the reader's
     // per-block choices. A document can hold every combination at once. The image
@@ -138,7 +142,8 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
       DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:document
                                                                    fontScale:hint.fontScale
                                                       syntaxHighlighting:YES
-                                                                       theme:resolve(hint.theme)];
+                                                                       theme:resolve(hint.theme)
+                                                                      caret:hint.caret];
       [rendered sizeForWidth:hint.width
                        chrome:hint.chrome
                           code:hint.code

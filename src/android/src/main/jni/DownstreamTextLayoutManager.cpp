@@ -29,7 +29,8 @@ folly::dynamic ordinalArray(const std::vector<uint32_t> &ordinals) {
 /// wrapper all resolve this same shape, so a measurement and a mount cannot
 /// disagree about a height or about the colors it drew it with.
 folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontScale, uint32_t chrome,
-                              const downstream::CodeLayout &code, const downstream::ImageLayout &images,
+                              const downstream::CodeLayout &code, const downstream::PlacedCaret &caret,
+                              const downstream::ImageLayout &images,
                               const downstream::Theme::Handle &theme = nullptr,
                               const downstream::HostLayout &hosts = {},
                               facebook::react::Float width = 0) {
@@ -63,6 +64,10 @@ folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontSc
       "codeBlockWrap", code.props.wrap ? 1.0 : 0.0)("lineNumbers", code.props.lineNumbers ? 1.0 : 0.0)(
       "codeBlockMaxHeight", static_cast<double>(code.props.maxHeight))(
       "wrapToggles", ordinalArray(code.choices.wrapToggles))("expanded", ordinalArray(code.choices.expanded))(
+      // The caret's two small enums and the images, the same way: the caret's
+      // placeholder is part of the prepared text, so a worker has to reserve it
+      // too or the view draws at a height the measurement did not measure.
+      "caretKind", static_cast<double>(caret.kind))("caretPlace", static_cast<double>(caret.place))(
       // Images: whether they are on, each image's answer, and the prefixes that
       // produced them. The view only ever sees the answers.
       "imagesEnabled", images.state.enabled ? 1.0 : 0.0)("imageEntries", imageEntries)(
@@ -216,8 +221,9 @@ void DownstreamTextLayoutManager::installPlatformServices(const facebook::react:
 // StaticLayout configuration the view draws with.
 DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
     const downstream::DocumentHandle &document, Float fontSizeMultiplier, Float maximumWidth, SurfaceId surfaceId,
-    uint32_t chrome, const downstream::CodeLayout &code, const downstream::ImageLayout &images,
-    const downstream::HostLayout &hosts, const downstream::Theme::Handle &theme) const {
+    uint32_t chrome, const downstream::CodeLayout &code, const downstream::PlacedCaret &caret,
+    const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
+    const downstream::Theme::Handle &theme) const {
   // Java resolves the theme through the registry by id, the way it resolves the
   // document, so no slot value is copied across JNI on a measurement. Zero is
   // the default theme's own id.
@@ -239,7 +245,7 @@ DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
   // The same map shape is what the view manager reads in `updateState` and in
   // `measure`, so all three resolve one layout rather than three.
   auto localDataMap = ReadableNativeMap::newObjectCxxArgs(
-      codeLayoutData(document->id, fontSizeMultiplier, chrome, code, images, theme, hosts));
+      codeLayoutData(document->id, fontSizeMultiplier, chrome, code, caret, images, theme, hosts));
 
   auto propsMap = ReadableNativeMap::newObjectCxxArgs(folly::dynamic::object());
   auto componentName = make_jstring("DownstreamMarkdownView");
@@ -295,12 +301,12 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
   }
   downstream::DocumentRegistry::add(document);
   for (const auto &hint : hints) {
-    // The whole code layout and the whole image layout come with the hint,
-    // because a prepared height is only the height of the layout the reader
+    // The whole code layout, the caret, and the whole image layout come with the
+    // hint, because a prepared height is only the height of the layout the reader
     // actually has.
-    auto map = ReadableNativeMap::newObjectCxxArgs(
-        codeLayoutData(document->id, hint.fontScale, hint.chrome, hint.code, hint.images, hint.theme,
-                       downstream::HostLayout{}, hint.width));
+    auto map = ReadableNativeMap::newObjectCxxArgs(codeLayoutData(document->id, hint.fontScale, hint.chrome,
+                                                                   hint.code, hint.caret, hint.images, hint.theme,
+                                                                   downstream::HostLayout{}, hint.width));
     env->CallStaticVoidMethod(nativeClass, prepareMethod, static_cast<jlong>(document->id),
                               reinterpret_cast<ReadableMap::javaobject>(map.get()));
     if (env->ExceptionCheck()) {

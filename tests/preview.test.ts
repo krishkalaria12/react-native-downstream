@@ -29,6 +29,7 @@ import type {
 import {
   PREVIEW_ALL,
   PREVIEW_EMPHASIS,
+  PREVIEW_HTML_TAGS,
   PREVIEW_INLINE_CODE,
   preview,
   stylesOf,
@@ -58,7 +59,7 @@ function flushFrames(): void {
 /** The text a reader would currently see for a session. */
 function shown(sessionId: string): string {
   return visibleText(
-    snapshotOf(sessionId) ?? { blocks: [], links: [], settled: 0 }
+    snapshotOf(sessionId) ?? { blocks: [], links: [], images: [], settled: 0 }
   );
 }
 
@@ -171,6 +172,27 @@ describe('the stream option reaches the native session', () => {
     expect(() =>
       createMarkdownStream({ preview: 'yes' as unknown as boolean })
     ).toThrow();
+  });
+
+  it('reaches the engine as its own bit, and hides a split tag', () => {
+    const { stream: controller, sessionId } = stream({
+      preview: { htmlTags: true },
+    });
+    expect(previewFeaturesOf(sessionId)).toBe(PREVIEW_HTML_TAGS);
+    // The real IncrementalParser, so this is the document a view would publish.
+    controller.append('Mix<br');
+    flushFrames();
+    expect(shown(sessionId)).toBe('Mix');
+    // The next character proves it was a tag, and the break is drawn.
+    controller.append('>Then bake\n');
+    flushFrames();
+    expect(shown(sessionId)).toBe('Mix\nThen bake');
+    controller.dispose();
+  });
+
+  it('leaves a split tag literal when the feature is off', () => {
+    const harness = stream({ preview: { emphasis: true } });
+    expect(harness.append('Mix<br')).toBe('Mix<br');
   });
 });
 
@@ -311,6 +333,7 @@ describe('changing the pass mid-stream', () => {
       links: true,
       images: true,
       math: true,
+      htmlTags: true,
     });
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();

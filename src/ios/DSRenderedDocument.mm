@@ -23,6 +23,16 @@ using namespace downstream::theme_layout;
 
 NSAttributedStringKey const DSBlockInfoAttributeName = @"DSBlockInfo";
 NSAttributedStringKey const DSLinkIndexAttributeName = @"DSLinkIndex";
+NSAttributedStringKey const DSCaretKindAttributeName = @"DSCaretKind";
+
+/// The character a caret reserves its space with.
+///
+/// U+FFFC OBJECT REPLACEMENT is what a text attachment occupies, and the
+/// attachment carries explicit bounds rather than an image, so the placeholder's
+/// height is the last character's own. Nothing is drawn from it: the shape comes
+/// from the run's foreground color, which is how the caret takes the color of the
+/// text it follows.
+NSString *const kCaretPlaceholder = @"\uFFFC";
 
 namespace {
 
@@ -73,6 +83,21 @@ NSWritingDirection writingDirection(const std::u16string &text) {
   return NSWritingDirectionNatural;
 }
 
+/// Whether any of this block's runs is raised or lowered: a footnote
+/// reference, a `<sup>` or `<sub>`, or a `^x^` run.
+bool holdsBaselineShift(const Block &block) {
+  for (const InlineRun &run : block.runs) {
+    if ((run.styles & (InlineStyle::FootnoteRef | InlineStyle::Superscript | InlineStyle::Subscript)) != 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Whether the block carries an inline formula, whose attachment box a cap would
+/// clip. A display formula is a block of its own and never reaches here.
+bool hasInlineMath(const Block &block) { return !block.math.empty(); }
+
 /// Applies a block's inline runs within [clampStart, clampEnd) to text that
 /// starts at `offset`.
 ///
@@ -82,19 +107,46 @@ NSWritingDirection writingDirection(const std::u16string &text) {
 void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockFont &font, const Theme &theme,
                DSThemeColors *colors, NSUInteger offset, CGFloat size, bool monospaced, uint32_t clampStart,
                uint32_t clampEnd) {
+  const auto runs = inlineRunsInRange(block.runs, clampStart, clampEnd);
+  if (runs.empty()) {
+    return;
+  }
   const bool isCode = block.kind == BlockKind::CodeBlock;
   UIColor *inlineCodeBackground = [colors colorForSlot:kSlotCodeBackgroundColor fallback:UIColor.tertiarySystemFillColor];
   UIColor *footnoteColor = [colors colorForSlot:kSlotFootnoteColor fallback:UIColor.linkColor];
   const CGFloat footnoteSize = size * footnoteSizeScale(theme);
-  for (const InlineRun &run : inlineRunsInRange(block.runs, clampStart, clampEnd)) {
+  // Offsets change between runs, but their attributes depend only on style and
+  // link within this block. Bound the local cache so many distinct links cannot
+  // retain an extra dictionary for every run.
+  struct RunAttributes {
+    uint32_t styles;
+    int32_t link;
+    NSDictionary<NSAttributedStringKey, id> *attributes;
+  };
+  std::array<RunAttributes, 16> cachedAttributes{};
+  size_t cachedCount = 0;
+  for (const InlineRun &run : runs) {
     const uint32_t start = std::max(run.start, clampStart);
     const uint32_t end = std::min(run.end, clampEnd);
     if (start >= end) {
       continue;
     }
     const NSRange range = NSMakeRange(offset + start - clampStart, end - start);
+    NSDictionary<NSAttributedStringKey, id> *cached = nil;
+    for (size_t index = 0; index < cachedCount; ++index) {
+      if (cachedAttributes[index].styles == run.styles && cachedAttributes[index].link == run.link) {
+        cached = cachedAttributes[index].attributes;
+        break;
+      }
+    }
+    if (cached != nil) {
+      [text addAttributes:cached range:range];
+      continue;
+    }
     const bool code = (run.styles & InlineStyle::Code) != 0 && !isCode;
     const bool footnote = (run.styles & InlineStyle::FootnoteRef) != 0;
+    const bool sup = (run.styles & InlineStyle::Superscript) != 0;
+    const bool sub = (run.styles & InlineStyle::Subscript) != 0;
     const bool bold = (run.styles & InlineStyle::Strong) != 0;
     const bool italic = (run.styles & InlineStyle::Emphasis) != 0;
 
@@ -114,6 +166,17 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
       runSize = inlineCodeSizeFor(theme, size, 1);
     } else if (footnote) {
       runSize = footnoteSize;
+    } else if (sup) {
+      runSize = size * superscriptFontScale(theme);
+    } else if (sub) {
+      runSize = size * subscriptFontScale(theme);
+    }
+    // Inline code keeps the code face and takes the script's scale too, so
+    // `<sup>`code`</sup>` is raised as well as monospaced.
+    if (code && sup) {
+      runSize = inlineCodeSizeFor(theme, size, 1) * superscriptFontScale(theme);
+    } else if (code && sub) {
+      runSize = inlineCodeSizeFor(theme, size, 1) * subscriptFontScale(theme);
     }
     if (run.link >= 0) {
       runTypeface = linkFont(theme, runTypeface);
@@ -159,6 +222,12 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
       attributes[NSBaselineOffsetAttributeName] = @(size * footnoteRaise(theme));
       attributes[NSForegroundColorAttributeName] = footnoteColor;
     }
+    if (sup) {
+      attributes[NSBaselineOffsetAttributeName] = @(size * superscriptBaselineOffset(theme));
+    }
+    if (sub) {
+      attributes[NSBaselineOffsetAttributeName] = @(-size * subscriptBaselineOffset(theme));
+    }
     if (run.link >= 0) {
       attributes[NSForegroundColorAttributeName] =
           [colors colorForSlot:kSlotLinkColor fallback:UIColor.linkColor];
@@ -171,7 +240,12 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
       }
       attributes[DSLinkIndexAttributeName] = @(run.link);
     }
-    [text addAttributes:attributes range:range];
+    NSDictionary<NSAttributedStringKey, id> *resolved = attributes;
+    if (cachedCount < cachedAttributes.size()) {
+      resolved = [attributes copy];
+      cachedAttributes[cachedCount++] = {run.styles, run.link, resolved};
+    }
+    [text addAttributes:resolved range:range];
   }
 }
 
@@ -269,6 +343,71 @@ void applyTokens(NSMutableAttributedString *text, const Block &block, DSThemeCol
 @implementation DSDecorationMetrics
 @end
 
+/// Keeps a lowered run from lifting its line.
+///
+/// A paragraph holding a script is capped at its own line height, but TextKit
+/// sets a capped line's baseline from the line's deepest descent, so a subscript
+/// moved the whole line up toward the block above. The web's `line-height: 0`
+/// lets the script hang below instead, which is what this restores: the baseline
+/// goes back down by the descent the lowered runs added. Stateless, so one
+/// instance serves every stack on every thread.
+@interface DSScriptLineDelegate : NSObject <NSLayoutManagerDelegate>
+@end
+
+@implementation DSScriptLineDelegate
+
++ (instancetype)shared {
+  static DSScriptLineDelegate *shared;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    shared = [DSScriptLineDelegate new];
+  });
+  return shared;
+}
+
+- (BOOL)layoutManager:(NSLayoutManager *)layoutManager
+    shouldSetLineFragmentRect:(inout CGRect *)lineFragmentRect
+         lineFragmentUsedRect:(inout CGRect *)lineFragmentUsedRect
+               baselineOffset:(inout CGFloat *)baselineOffset
+              inTextContainer:(NSTextContainer *)textContainer
+                forGlyphRange:(NSRange)glyphRange {
+  NSTextStorage *storage = layoutManager.textStorage;
+  const NSRange characters = [layoutManager characterRangeForGlyphRange:glyphRange actualGlyphRange:NULL];
+  if (characters.length == 0) {
+    return NO;
+  }
+  // Only a capped paragraph: one that is not keeps the height a lowered run
+  // asks for, and its baseline is already where the text above put it.
+  NSParagraphStyle *style = [storage attribute:NSParagraphStyleAttributeName
+                                       atIndex:characters.location
+                                effectiveRange:NULL];
+  if (style.maximumLineHeight <= 0) {
+    return NO;
+  }
+  __block CGFloat plain = 0;
+  __block CGFloat lowered = 0;
+  [storage enumerateAttributesInRange:characters
+                              options:0
+                           usingBlock:^(NSDictionary<NSAttributedStringKey, id> *attributes, NSRange, BOOL *) {
+                             UIFont *font = attributes[NSFontAttributeName];
+                             if (font == nil) {
+                               return;
+                             }
+                             const CGFloat descent = -font.descender;
+                             const CGFloat offset = [attributes[NSBaselineOffsetAttributeName] doubleValue];
+                             plain = MAX(plain, descent);
+                             lowered = MAX(lowered, descent - offset);
+                           }];
+  const CGFloat lift = lowered - plain;
+  if (lift <= 0) {
+    return NO;
+  }
+  *baselineOffset += lift;
+  return YES;
+}
+
+@end
+
 @implementation DSTextKitStack
 
 - (instancetype)initWithLayoutManager:(NSLayoutManager *)layoutManager {
@@ -276,6 +415,7 @@ void applyTokens(NSMutableAttributedString *text, const Block &block, DSThemeCol
     _textStorage = [NSTextStorage new];
     _layoutManager = layoutManager;
     _layoutManager.usesFontLeading = YES;
+    _layoutManager.delegate = [DSScriptLineDelegate shared];
     _textContainer = [[NSTextContainer alloc] initWithSize:CGSizeMake(0, CGFLOAT_MAX)];
     _textContainer.lineFragmentPadding = 0;
     _textContainer.maximumNumberOfLines = 0;
@@ -410,7 +550,8 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
                               scale:(CGFloat)scale
                          markerFont:(UIFont *)markerFont
                   syntaxHighlighting:(BOOL)syntaxHighlighting
-                             inCard:(BOOL)inCard {
+                             inCard:(BOOL)inCard
+                              caret:(const PlacedCaret &)caret {
   DSTextSegment *segment = [DSTextSegment new];
   segment->_measurementLock = [NSLock new];
   segment.theme = [DSThemeColors colorsFor:theme];
@@ -418,6 +559,12 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
   NSMutableAttributedString *text = [NSMutableAttributedString new];
   NSMutableArray<DSBlockInfo *> *blocks = [NSMutableArray arrayWithCapacity:to - from];
   NSMutableArray<NSValue *> *blockRanges = [NSMutableArray arrayWithCapacity:to - from];
+  // The last block's own typography, which a caret after it takes. Held here
+  // rather than looked up again, because the placeholder below is drawn in the
+  // face and color of the character it follows.
+  UIFont *lastFont = nil;
+  UIColor *lastColor = nil;
+  NSParagraphStyle *lastStyle = nil;
 
   for (size_t index = from; index < to; index++) {
     const Block &block = document.blocks[index];
@@ -495,6 +642,25 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
     // is clipped. A line height below the face's own is ignored by the platform
     // anyway, so the default of zero and a small value behave alike.
     style.minimumLineHeight = font.lineHeight * scale;
+    // TextKit grows a line fragment to fit a baseline offset, so a raised or
+    // lowered run opens its line by about four points where the web's
+    // `line-height: 0` on `sub` and `sup` does not. A paragraph holding a
+    // script or a footnote reference is capped at the block's own line height
+    // so a formula's marker cannot change the leading of the text around it.
+    // A paragraph with an inline formula keeps its natural height: an
+    // attachment's box is what the line has to hold.
+    if (holdsBaselineShift(block) && !hasInlineMath(block)) {
+      // The cap is the height the line would have anyway: the theme's own line
+      // height when it set one, and the face's when it did not, which is what
+      // the platform would use for itself.
+      const CGFloat themed = font.lineHeight * scale;
+      style.maximumLineHeight = themed > 0 ? themed : baseFont.lineHeight;
+    }
+    // Recorded after the cap, so a caret drawn after this block's text carries
+    // the same face, color and paragraph style the text itself has.
+    lastFont = baseFont;
+    lastColor = baseColor;
+    lastStyle = style;
     NSMutableParagraphStyle *firstStyle = [style mutableCopy];
     firstStyle.paragraphSpacingBefore = gap;
 
@@ -523,6 +689,31 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
     replaceInlineMath(text, block, start);
     [blocks addObject:info];
     [blockRanges addObject:[NSValue valueWithRange:NSMakeRange(start, text.length - start - (hasSeparator ? 1 : 0))]];
+  }
+
+  // The caret goes after the last block, inside this segment, so it takes the
+  // face and color of the character it follows and wraps to the next line when
+  // the line is full — the same thing Streamdown's `::after` does.
+  if (caret.place == CaretPlace::AfterText && lastFont != nil) {
+    NSTextAttachment *attachment = [NSTextAttachment new];
+    attachment.image = nil;
+    // The bounds stay inside the font's own ascent and descent, so a line
+    // holding a caret is exactly as tall as one without it. That is the whole
+    // reason the placeholder is in the measured text rather than an overlay: the
+    // measured height and the drawn height are then the same number.
+    const CGFloat size = lastFont.pointSize;
+    attachment.bounds = CGRectMake(0, std::round(size * -0.24), std::round(size * 0.5),
+                                   std::round(size * 1.06));
+    NSMutableAttributedString *placeholder =
+        [[NSMutableAttributedString alloc] initWithString:kCaretPlaceholder
+                                              attributes:@{
+                                                NSFontAttributeName : lastFont,
+                                                NSForegroundColorAttributeName : lastColor,
+                                                NSParagraphStyleAttributeName : lastStyle,
+                                                DSCaretKindAttributeName : @(static_cast<unsigned char>(caret.kind)),
+                                              }];
+    [placeholder addAttribute:NSAttachmentAttributeName value:attachment range:NSMakeRange(0, 1)];
+    [text appendAttributedString:placeholder];
   }
 
   segment.attributedString = [text copy];
@@ -875,9 +1066,13 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                              theme:(const Theme &)theme
                               scale:(CGFloat)scale
                          markerFont:(UIFont *)markerFont
-                  syntaxHighlighting:(BOOL)syntaxHighlighting {
+                  syntaxHighlighting:(BOOL)syntaxHighlighting
+                              caret:(const PlacedCaret &)caret {
   DSCodeSegment *segment = [DSCodeSegment new];
   const Block &block = document.blocks[index];
+  // The body is a one-block text segment, so a caret inside an open fence goes
+  // where a caret after prose would: inside this segment's text, after its last
+  // character.
   segment.text = [DSTextSegment segmentWithDocument:document
                                               from:index
                                                 to:index + 1
@@ -885,7 +1080,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                               scale:scale
                                         markerFont:markerFont
                                  syntaxHighlighting:syntaxHighlighting
-                                            inCard:YES];
+                                            inCard:YES
+                                             caret:caret];
   segment.language = [NSString stringWithUTF8String:block.language.c_str()];
   // The header row's own typography and its two remaining colors, all from the
   // theme rather than from literals in the card view.
@@ -1190,6 +1386,10 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   NSArray *_segments;
   NSArray<NSNumber *> *_segmentBlockIndexes;
   uint32_t _settledBlocks;
+  /// The caret this rendering reserved room for, which the view draws at its
+  /// placeholder. Already resolved, because the placeholder's presence is a height
+  /// and the measurement had to agree about it.
+  PlacedCaret _caret;
   std::vector<CGFloat> _gaps;
   NSLock *_lock;
   CGFloat _cachedWidth;
@@ -1243,9 +1443,15 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                     theme:(const Theme &)theme
                     scale:(CGFloat)scale
                markerFont:(UIFont *)markerFont
-        syntaxHighlighting:(BOOL)syntaxHighlighting {
+        syntaxHighlighting:(BOOL)syntaxHighlighting
+                  caretAfter:(const PlacedCaret &)caretAfter {
   // The theme is in the key because a segment holds resolved colors and
   // measured sizes, and a second theme must not read the first one's.
+  // The plan's kind is in it for the same reason: a math block and an image-only
+  // paragraph are their own segments, so the same identity can build a formula
+  // and a paragraph and the two are not interchangeable.
+  // The caret is not in it because its placeholder is only ever in the last
+  // segment's measured text, and a committed segment is never the last one.
   NSString *key = [NSString stringWithFormat:@"%llu:%zu:%llu:%.4f:%d:%d", (unsigned long long)document.blocks[from].identity,
                                              to - from, (unsigned long long)theme.id(), scale, syntaxHighlighting,
                                              static_cast<int>(kind)];
@@ -1295,7 +1501,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                                         theme:theme
                                                         scale:scale
                                                    markerFont:markerFont
-                                        syntaxHighlighting:syntaxHighlighting];
+                                        syntaxHighlighting:syntaxHighlighting
+                                                         caret:caretAfter];
       break;
     case SegmentKind::Text:
       cached->segment = (id)[DSTextSegment segmentWithDocument:document
@@ -1305,7 +1512,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                                            scale:scale
                                                      markerFont:markerFont
                                           syntaxHighlighting:syntaxHighlighting
-                                                         inCard:NO];
+                                                         inCard:NO
+                                                          caret:caretAfter];
       break;
   }
   [self.committedSegmentCache setObject:cached forKey:key cost:cost];
@@ -1315,26 +1523,32 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
 + (instancetype)renderedDocumentFor:(const DocumentHandle &)document
                           fontScale:(CGFloat)fontScale
                  syntaxHighlighting:(BOOL)syntaxHighlighting
-                              theme:(const Theme::Handle &)themeHandle {
+                              theme:(const Theme::Handle &)themeHandle
+                             caret:(const PlacedCaret &)caret {
   if (!document) {
     return [[self alloc] initWithDocument:document
                                fontScale:fontScale
                       syntaxHighlighting:syntaxHighlighting
-                                   theme:themeHandle ? themeHandle : Theme::defaultTheme()];
+                                   theme:themeHandle ? themeHandle : Theme::defaultTheme()
+                                  caret:caret];
   }
   // The theme id is in the key rather than the theme itself, because interned
   // themes are stable for the life of a process and their id is all a cache key
-  // needs to tell two of them apart.
-  NSString *key = [NSString stringWithFormat:@"%llu:%.4f:%d:%llu", (unsigned long long)document->id, fontScale,
-                                             syntaxHighlighting,
+  // needs to tell two of them apart. The caret is in it for the same reason: its
+  // placeholder is in the measured text, so two renderings that differ only in
+  // whether a caret was reserved are two different heights.
+  NSString *key = [NSString stringWithFormat:@"%llu:%.4f:%d:%llu:%d:%d", (unsigned long long)document->id,
+                                             fontScale, syntaxHighlighting,
                                              (unsigned long long)(themeHandle ? themeHandle->id()
-                                                                            : Theme::defaultTheme()->id())];
+                                                                          : Theme::defaultTheme()->id()),
+                                             static_cast<int>(caret.kind), static_cast<int>(caret.place)];
   DSRenderedDocument *rendered = [self.cache objectForKey:key];
   if (rendered == nil) {
     rendered = [[self alloc] initWithDocument:document
                                    fontScale:fontScale
                           syntaxHighlighting:syntaxHighlighting
-                                    theme:themeHandle ? themeHandle : Theme::defaultTheme()];
+                                    theme:themeHandle ? themeHandle : Theme::defaultTheme()
+                                   caret:caret];
     [self.cache setObject:rendered forKey:key];
   }
   return rendered;
@@ -1348,12 +1562,14 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
 - (instancetype)initWithDocument:(const DocumentHandle &)documentHandle
                        fontScale:(CGFloat)rawScale
               syntaxHighlighting:(BOOL)syntaxHighlighting
-                            theme:(const Theme::Handle &)themeHandle {
+                            theme:(const Theme::Handle &)themeHandle
+                           caret:(const PlacedCaret &)caret {
   if (!(self = [super init])) {
     return nil;
   }
   _lock = [NSLock new];
   _cachedWidth = -1;
+  _caret = caret;
   const Theme &theme = *themeHandle;
   // A theme can cap the platform's font scale but not raise it, so the cap is
   // applied here once and every measurement below works with the result.
@@ -1374,6 +1590,10 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   _settledBlocks = document.settledBlocks;
 
   for (const SegmentPlan &segment : planSegments(document)) {
+    // The caret belongs to the last segment, whichever kind it is, because that is
+    // where the document ends. The plan is in order, so that is the one segment
+    // that reaches the last block.
+    const PlacedCaret here = segment.to == document.blocks.size() ? caret : PlacedCaret{};
     id built = nil;
     if (segment.committed) {
       built = [DSRenderedDocument committedSegmentFor:document
@@ -1383,14 +1603,16 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                                 theme:theme
                                                 scale:scale
                                            markerFont:markerFont
-                                    syntaxHighlighting:syntaxHighlighting];
+                                    syntaxHighlighting:syntaxHighlighting
+                                           caretAfter:here];
     } else if (segment.isCode()) {
       built = [DSCodeSegment segmentWithDocument:document
                                            index:segment.from
                                           theme:theme
-                                          scale:scale
+                                           scale:scale
                                      markerFont:markerFont
-                              syntaxHighlighting:syntaxHighlighting];
+                              syntaxHighlighting:syntaxHighlighting
+                                           caret:here];
     } else if (segment.isMath()) {
       built = [DSMathSegment segmentWithDocument:document
                                           index:segment.from
@@ -1418,7 +1640,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                             scale:scale
                                        markerFont:markerFont
                                 syntaxHighlighting:syntaxHighlighting
-                                           inCard:NO];
+                                           inCard:NO
+                                            caret:here];
     }
     // The plan counted the code blocks, so the ordinal comes from there rather
     // than from a walk of the blocks. It is assigned here so a committed segment
@@ -1438,6 +1661,18 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                                      &document.blocks[segment.from - 1],
                                                      document.blocks[segment.from]) * scale);
   }
+  // A caret that takes a line of its own is a whole extra segment, because that is
+  // what it is: room for the next block's first line. It replaces nothing, so when
+  // text arrives it is simply gone and the block that arrives has the same gap
+  // above it.
+  if (caret.place == CaretPlace::OwnLine) {
+    [segments addObject:[DSRenderedDocument ownLineCaretSegmentWithTheme:theme
+                                                                  scale:scale
+                                                             markerFont:markerFont
+                                                                  caret:caret]];
+    [indexes addObject:@(document.blocks.size())];
+    _gaps.push_back(0);
+  }
   _segments = [segments copy];
   _segmentBlockIndexes = [indexes copy];
   return self;
@@ -1447,12 +1682,40 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   return _segments;
 }
 
+/// A one-line text segment holding nothing but a caret.
+///
+/// The own-line case: after a table, a closed fence, or a rule, the next block
+/// will start on a fresh line, so the caret takes that line rather than sitting at
+/// the end of a finished one. When text arrives this segment is simply gone, and
+/// the block that replaces it starts on the line the caret already occupied, so
+/// nothing jumps.
++ (DSTextSegment *)ownLineCaretSegmentWithTheme:(const Theme &)theme
+                                           scale:(CGFloat)scale
+                                      markerFont:(UIFont *)markerFont
+                                           caret:(const PlacedCaret &)caret {
+  Document document;
+  document.blocks.tail().push_back(Block{});
+  return [DSTextSegment segmentWithDocument:document
+                                       from:0
+                                         to:1
+                                      theme:theme
+                                       scale:scale
+                                  markerFont:markerFont
+                           syntaxHighlighting:NO
+                                      inCard:NO
+                                       caret:caret];
+}
+
 - (NSArray<NSNumber *> *)segmentBlockIndexes {
   return _segmentBlockIndexes;
 }
 
 - (uint32_t)settledBlocks {
   return _settledBlocks;
+}
+
+- (PlacedCaret)caret {
+  return _caret;
 }
 
 /// The height of one segment at a view width, including whatever control row

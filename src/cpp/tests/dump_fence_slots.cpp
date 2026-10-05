@@ -1,7 +1,7 @@
 // Host test driver: parses Markdown from stdin and prints the fence slots the
 // engine would hand JavaScript, as JSON for tests/engine.ts.
 //
-// argv[1] is the math parse flags, as `mathOptionsFromArg` reads them, and
+// argv[1] is the parse option bitmask, as `parseFlagsFromArg` reads it, and
 // argv[2] is `live` (`1` or `0`), the same distinction the TurboModule draws:
 // a controlled source is live and a finished stream is not. The languages are
 // read from argv[3] onward, comma separated, unnormalized — exactly as
@@ -51,11 +51,11 @@ std::vector<std::string> languagesFromArg(int argc, char **argv, int index) {
 
 int main(int argc, char **argv) {
   const std::string source((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
-  const MathOptions math = testdump::mathOptionsFromArg(argc, argv, 1);
+  const ParseOptions parse = testdump::parseFlagsFromArg(argc, argv, 1);
   const bool live = argc > 2 && std::string_view(argv[2]) == "1";
   const std::vector<std::string> languages = languagesFromArg(argc, argv, 3);
 
-  ParseResult result = parseMarkdown(source, math);
+  ParseResult result = parseMarkdown(source, parse);
   if (result.status != ParseStatus::Ok) {
     testdump::writeError(errorCode(result.status));
     return 0;
