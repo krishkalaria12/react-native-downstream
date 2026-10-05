@@ -275,6 +275,31 @@ export function replaySession(
 }
 
 /**
+ * The fence slots of a replayed session's last published document, read the
+ * way the TurboModule's `sessionFenceSlots` reads a snapshot: from the real
+ * `IncrementalParser`'s blocks, with its own idea of which are settled, live
+ * until the last pass was a finished one.
+ */
+export function replaySessionSlots(
+  mode: SessionMode,
+  steps: readonly SessionOp[],
+  parseFlags: number,
+  languages: readonly string[]
+): readonly FenceSlot[] {
+  const output = JSON.parse(
+    execFileSync(
+      sessionBinary(),
+      [mode, String(parseFlags), languages.join(',')],
+      {
+        input: Buffer.concat(steps.map(encodeOp)),
+        maxBuffer: 256 << 20,
+      }
+    ).toString('utf8')
+  ) as { fenceSlots?: FenceSlot[] };
+  return output.fenceSlots ?? [];
+}
+
+/**
  * The first frame of a stream that previews: `source` arrives in one chunk of
  * an unfinished full-mode session with `features` enabled.
  */

@@ -291,6 +291,12 @@ export type FenceQuery = Readonly<{
   generation: number;
   /** The snapshot a stream view is mounting; 0 for a controlled source. */
   sequence?: number;
+  /**
+   * The stream's publish count. A sequence names the input a snapshot read, not
+   * the snapshot: `finish()` publishes the settled document under the sequence
+   * the last append had, and only this tells a view that it changed.
+   */
+  revision?: number;
   parseFlags: number;
   resolved: ResolvedRenderers;
 }>;
@@ -310,8 +316,15 @@ export type FenceQuery = Readonly<{
  * stream already does.
  */
 export function useFenceSlots(query: FenceQuery): readonly MountedSlot[] {
-  const { source, sessionId, generation, sequence, parseFlags, resolved } =
-    query;
+  const {
+    source,
+    sessionId,
+    generation,
+    sequence,
+    revision,
+    parseFlags,
+    resolved,
+  } = query;
   const languages = resolved.languages;
   // One value per source and registered list, so a re-render of an unchanged
   // message does not ask again. Keyed by the languages as well as the source,
@@ -337,7 +350,10 @@ export function useFenceSlots(query: FenceQuery): readonly MountedSlot[] {
         parseFlags,
         resolved,
       }),
-    [source, sessionId, generation, sequence, parseFlags, resolved]
+    // `revision` is not read, only depended on: it is what says the snapshot
+    // under an unchanged sequence was replaced by a settled one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [source, sessionId, generation, sequence, revision, parseFlags, resolved]
   );
   const slots = answer.slots;
 
@@ -471,25 +487,29 @@ function joinComponents(
  *
  * A throw while the fence is still streaming is not a failure the app can act
  * on — a half-written chart is expected to fail — so it is not reported, which
- * is the rule `onMathError` already follows. A failure from a generation the
- * view has moved past is dropped, so a slow component cannot report into a
- * message that has been replaced.
+ * is the rule `onMathError` already follows. A failure from a document the view
+ * has moved past is dropped, so a slow component cannot report into a message
+ * that has been replaced. "Once" is per document: `scope` names it by session
+ * and generation, because a view handed a new stream numbers its generations
+ * from the same start and its fences are not the last message's.
  */
 export function useRendererErrors(
   options: Readonly<{
     onError: ((error: MarkdownErrorEvent) => void) | undefined;
     currentGeneration: () => number;
+    scope: string;
   }>
-): (ordinal: number, language: string, message: string) => void {
-  const { onError, currentGeneration } = options;
+): RendererFailure {
+  const { onError, currentGeneration, scope } = options;
   const reported = useRef(new Set<string>());
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
   return useCallback(
-    (ordinal: number, language: string, message: string) => {
-      if (onError === undefined) {
+    (failed: string, ordinal: number, language: string, message: string) => {
+      if (onError === undefined || failed !== currentScope.current) {
         return;
       }
-      const generation = currentGeneration();
-      const key = `${generation}:${ordinal}`;
+      const key = `${failed}\u0000${ordinal}`;
       if (reported.current.has(key)) {
         return;
       }
@@ -498,7 +518,7 @@ export function useRendererErrors(
         code: 'renderer_failed',
         message,
         language,
-        generation,
+        generation: currentGeneration(),
         sequence: 0,
         recoverable: true,
       });
@@ -506,6 +526,14 @@ export function useRendererErrors(
     [currentGeneration, onError]
   );
 }
+
+/** Reports one slot's failure: its document's scope, then the slot. */
+export type RendererFailure = (
+  scope: string,
+  ordinal: number,
+  language: string,
+  message: string
+) => void;
 
 /**
  * The slot children for a document, ready to hand to the native view.
@@ -518,11 +546,12 @@ export function useRendererErrors(
 export function FenceSlots(
   props: Readonly<{
     slots: readonly MountedSlot[];
-    generation: number;
-    onFailure: (ordinal: number, language: string, message: string) => void;
+    /** The document these slots belong to, as `useRendererErrors` names it. */
+    scope: string;
+    onFailure: RendererFailure;
   }>
 ): ReactNode {
-  const { slots, generation, onFailure } = props;
+  const { slots, scope, onFailure } = props;
   if (slots.length === 0) {
     return null;
   }
@@ -530,10 +559,11 @@ export function FenceSlots(
     createElement(
       FenceBoundary,
       {
-        // Keyed by generation and ordinal: a growing fence keeps its component
-        // from snapshot to snapshot, and `reset()` — a new generation — gives
-        // every renderer fresh state rather than the previous message's.
-        key: `${generation}:${slot.ordinal}`,
+        // Keyed by document and ordinal: a growing fence keeps its component
+        // from snapshot to snapshot, and `reset()` — a new generation — or a new
+        // stream gives every renderer fresh state rather than the previous
+        // message's.
+        key: `${scope}\u0000${slot.ordinal}`,
         resetKey: `${slot.code}\u0000${slot.incomplete ? '1' : '0'}`,
         onFailure: (error: unknown) => {
           // A throw while the fence is still growing is not a failure the app
@@ -544,6 +574,7 @@ export function FenceSlots(
             return;
           }
           onFailure(
+            scope,
             slot.ordinal,
             slot.language,
             error instanceof Error ? error.message : String(error)

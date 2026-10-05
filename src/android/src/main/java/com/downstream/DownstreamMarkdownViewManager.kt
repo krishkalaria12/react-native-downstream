@@ -334,7 +334,7 @@ class DownstreamMarkdownViewManager :
     }
     return YogaMeasureOutput.make(
       PixelUtil.toDIPFromPixel(layoutWidth.toFloat()),
-      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth, chrome, code, images).toFloat()),
+      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth, chrome, code, images, hosts).toFloat()),
     )
   }
 

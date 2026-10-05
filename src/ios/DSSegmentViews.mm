@@ -930,6 +930,9 @@ constexpr CGFloat kPinThreshold = 8;
     [_scrollView addSubview:_body];
     [_viewport addSubview:_scrollView];
     [self addSubview:_header];
+    // Hidden until the chrome asks for it, the same rule `setShowsHeader:` and
+    // `setHosted:` apply, so the zero-height row never shows its label.
+    _header.hidden = !_showsHeader;
     [self addSubview:_viewport];
     [self setConstraints];
   }
@@ -985,8 +988,10 @@ constexpr CGFloat kPinThreshold = 8;
   // The header, the body and the gutter all belong to the card, which is the
   // fallback: a hosted block shows none of them, because the React child above
   // this view is what the reader sees. Hiding them rather than skipping the draw
-  // also means the view has no text of its own to select.
-  _header.hidden = hosted;
+  // also means the view has no text of its own to select. The header follows
+  // both inputs, because the chrome sets `showsHeader` after this on every
+  // render and must not bring a card's title row back above a chart.
+  _header.hidden = !_showsHeader || hosted;
   _viewport.hidden = hosted;
   _gutter.hidden = hosted;
   if (!hosted) {
@@ -1107,7 +1112,7 @@ constexpr CGFloat kPinThreshold = 8;
     return;
   }
   _showsHeader = showsHeader;
-  _header.hidden = !self.showsHeader;
+  _header.hidden = !_showsHeader || _hosted;
   for (NSLayoutConstraint *constraint in _header.constraints) {
     if (constraint.firstAttribute == NSLayoutAttributeHeight) {
       constraint.constant = self.showsHeader ? kChromeRowHeight : 0;
@@ -1393,8 +1398,10 @@ constexpr CGFloat kPinThreshold = 8;
   // A card fades with its own first unit, so a new code block brings its
   // background, its border, and its header with it rather than appearing behind
   // text that is already there. Its body fades by its own units, so the card does
-  // not multiply them.
-  const CGFloat alpha = _revealProvider == nil
+  // not multiply them. A hosted block does not fade at all: the React child over
+  // it is not faded by the reveal, so its bars and marker arrive with the
+  // component rather than with code text the reader never sees.
+  const CGFloat alpha = _revealProvider == nil || self.hosted
       ? 1
       : [_revealProvider revealAlphaAtBlock:_blockOffset offset:0 now:CACurrentMediaTime()];
   CGContextRef alphaContext = UIGraphicsGetCurrentContext();

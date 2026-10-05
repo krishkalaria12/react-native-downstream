@@ -621,6 +621,7 @@ function useFenceRenderers(
     sessionId?: string;
     generation: number;
     sequence?: number;
+    revision?: number;
     parseFlags: number;
   },
   onError: ((error: MarkdownErrorEvent) => void) | undefined,
@@ -630,17 +631,15 @@ function useFenceRenderers(
     useMemo(() => resolveRenderers(plugins), [plugins])
   );
   const slots = useFenceSlots({ ...document, resolved });
-  const onFailure = useRendererErrors({ onError, currentGeneration });
+  // The document a slot belongs to: a generation alone is not one, because a
+  // view handed a new stream numbers its generations from the same start, and a
+  // renderer's state and its one report belong to one message.
+  const scope = `${document.sessionId ?? ''}\u0000${document.generation}`;
+  const onFailure = useRendererErrors({ onError, currentGeneration, scope });
   if (slots.length === 0) {
     return null;
   }
-  return (
-    <FenceSlots
-      slots={slots}
-      generation={document.generation}
-      onFailure={onFailure}
-    />
-  );
+  return <FenceSlots slots={slots} scope={scope} onFailure={onFailure} />;
 }
 
 /**
@@ -897,6 +896,7 @@ function StreamMarkdown({
       sessionId: binding.sessionId,
       generation: binding.generation,
       sequence: binding.readySequence,
+      revision: binding.revision,
       parseFlags: images.parseFlags,
     },
     onError,

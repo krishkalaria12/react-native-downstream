@@ -80,32 +80,4 @@ DocumentMeasurement DownstreamTextLayoutManager::measure(const downstream::Docum
   return measurement;
 }
 
-DocumentMeasurement DownstreamTextLayoutManager::cachedMeasurement(
-    const downstream::DocumentHandle &document, Float fontSizeMultiplier, Float maximumWidth, uint32_t chrome,
-    const downstream::CodeLayout &code, const downstream::PlacedCaret &caret,
-    const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
-    const downstream::Theme::Handle &theme) const {
-  DocumentMeasurement measurement;
-  if (!document) {
-    return measurement;
-  }
-  // The same key `measure` writes under, including the theme's font scale: the
-  // entry that sized this document was written at the scale measurement
-  // resolved, and layout reads the same resolved scale.
-  const Float scale = static_cast<Float>(downstream::theme_layout::fontScale(
-      theme ? *theme : *downstream::Theme::defaultTheme(), fontSizeMultiplier));
-  const uint64_t themeLayoutKey = themeKey(theme);
-  std::lock_guard<std::mutex> lock(cacheMutex_);
-  for (const auto &entry : cache_) {
-    if (entry.documentId == document->id && entry.fontSizeMultiplier == scale &&
-        entry.maximumWidth == maximumWidth && entry.chrome == chrome && entry.code == code &&
-        entry.caret == caret && entry.images == images && entry.hosts == hosts &&
-        entry.themeLayoutKey == themeLayoutKey) {
-      measurement = entry.measurement;
-      break;
-    }
-  }
-  return measurement;
-}
-
 } // namespace facebook::react

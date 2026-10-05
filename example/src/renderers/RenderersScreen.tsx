@@ -132,7 +132,7 @@ export function RenderersScreen() {
   );
 
   /** A stream that appends the document a piece at a time, so completeness matters. */
-  const streamed = useStreamedSource(streaming, push);
+  const streamed = useStreamedSource(streaming);
 
   /** The held stream's source, so the controlled view can show the same text. */
   const heldSource = SOURCE + OPEN_TAIL;
@@ -198,14 +198,16 @@ export function RenderersScreen() {
               Nothing yet. The broken renderer reports once its fence settles.
             </Text>
           ) : (
-            log.map((line, index) => (
-              <Text
-                key={`${line}-${index}`}
-                style={[t.s.caption, styles.logLine]}
-              >
-                {line}
-              </Text>
-            ))
+            <View style={styles.logBody}>
+              {log.map((line, index) => (
+                <Text
+                  key={`${line}-${index}`}
+                  style={[t.s.caption, styles.logLine]}
+                >
+                  {line}
+                </Text>
+              ))}
+            </View>
           )}
         </Group>
       </ScrollView>
@@ -218,10 +220,7 @@ export function RenderersScreen() {
  * `isIncomplete` and its settledness are both exercised. Returns null until the
  * first chunk has been appended, and again once the stream is disposed.
  */
-function useStreamedSource(
-  enabled: boolean,
-  onChunk: (chunk: string) => void
-): MarkdownStreamController | null {
+function useStreamedSource(enabled: boolean): MarkdownStreamController | null {
   const [stream, setStream] = useState<MarkdownStreamController | null>(null);
   useEffect(() => {
     if (!enabled) {
@@ -241,13 +240,12 @@ function useStreamedSource(
       }
       index += 1;
       controller.append(chunk);
-      onChunk(chunk.length.toString());
     }, 24);
     return () => {
       clearInterval(timer);
       controller.dispose();
     };
-  }, [enabled, onChunk]);
+  }, [enabled]);
   return stream;
 }
 
@@ -271,6 +269,12 @@ const styles = StyleSheet.create({
   },
   empty: {
     opacity: 0.6,
+    paddingHorizontal: space.lg,
+    paddingBottom: space.lg,
+  },
+  logBody: {
+    paddingHorizontal: space.lg,
+    paddingBottom: space.lg,
   },
   logLine: {
     paddingVertical: 2,

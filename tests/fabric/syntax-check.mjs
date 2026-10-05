@@ -31,6 +31,14 @@
 //     rather than to this package: `folly/dynamic.h`, `glog/logging.h` and
 //     `jsi/JSIDynamic.h`. See `stubs/`
 //
+// Each source is checked once per platform, because React Native's `Float` is
+// not one type: Android's `platform/android` headers make it `float`, and
+// iOS's `platform/ios` make it `CGFloat`, a `double` on every device. A
+// conversion that is exact on Android is a narrowing error in Xcode, so checking
+// against one platform's headers proves nothing about the other. Off macOS,
+// where there is no CoreGraphics, `stubs-apple/` supplies the one typedef the
+// iOS header reads.
+//
 // What it deliberately does not do is link or run anything. It proves the sources
 // parse and type-check against the versions an app will resolve, which is the part
 // that catches a signature React Native's bridging cannot call; behaviour is the
@@ -51,6 +59,23 @@ const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const reactNative = join(repo, 'node_modules', 'react-native');
 const common = join(reactNative, 'ReactCommon');
 const stubs = join(repo, 'tests', 'fabric', 'stubs');
+const appleStubs = join(repo, 'tests', 'fabric', 'stubs-apple');
+
+/**
+ * The platform header roots each platform's build puts first. `Float.h` and
+ * `HostPlatformViewEventEmitter.h` live under `platform/<os>`, and whichever
+ * root comes first is the one every include resolves to.
+ */
+const platforms = {
+  ios: {
+    renderer: ['renderer/graphics/platform/ios', 'renderer/components/view/platform/cxx'],
+    extra: process.platform === 'darwin' ? [] : [appleStubs],
+  },
+  android: {
+    renderer: ['renderer/graphics/platform/android', 'renderer/components/view/platform/android'],
+    extra: [],
+  },
+};
 
 /** The sources this repository's own builds never compile. */
 const sources = [
@@ -102,24 +127,19 @@ function generateCodegen(output) {
   return root;
 }
 
-function includes(generatedRoot) {
+function includes(generatedRoot, platform) {
   // Every directory the engine's own headers include each other by, the React
-  // Native trees, and the platform-specific header roots: `Float.h` and
-  // `HostPlatformViewEventEmitter.h` live under `platform/<os>` and nothing
-  // selects one for us.
+  // Native trees, and the platform's own header roots ahead of the shared ones.
   const engine = ['', 'downstream', 'fabric', 'highlight', 'lexilla', 'math', 'md4c', 'remend', 'session', 'theme'].map(
     (directory) => join(repo, 'src', 'cpp', directory)
   );
   const renderer = [
+    ...platform.renderer,
     'renderer',
     'renderer/components',
     'renderer/components/view',
-    'renderer/components/view/platform/cxx',
-    'renderer/components/view/platform/ios',
     'renderer/core',
     'renderer/graphics',
-    'renderer/graphics/platform/cxx',
-    'renderer/graphics/platform/ios',
     'renderer/imagemanager',
     'renderer/mounting',
   ].map((path) => join(common, 'react', path));
@@ -133,6 +153,7 @@ function includes(generatedRoot) {
     join(common, 'yoga'),
     join(common, 'yoga', 'yoga'),
     stubs,
+    ...platform.extra,
     generatedRoot,
     join(generatedRoot, 'ReactCodegen'),
   ];
@@ -143,18 +164,20 @@ const cc = compiler();
 const output = mkdtempSync(join(tmpdir(), 'downstream-fabric-'));
 try {
   const generatedRoot = generateCodegen(output);
-  const flags = ['-std=c++20', '-fsyntax-only', '-fexceptions', '-Wall', ...includes(generatedRoot)];
   let failures = 0;
-  for (const source of sources) {
-    const relative = source.slice(repo.length + 1);
-    const result = spawnSync(cc, [...flags, source], { cwd: repo, encoding: 'utf8' });
-    if (result.status === 0) {
-      console.log(`ok ${relative}`);
-      continue;
+  for (const [name, platform] of Object.entries(platforms)) {
+    const flags = ['-std=c++20', '-fsyntax-only', '-fexceptions', '-Wall', ...includes(generatedRoot, platform)];
+    for (const source of sources) {
+      const relative = source.slice(repo.length + 1);
+      const result = spawnSync(cc, [...flags, source], { cwd: repo, encoding: 'utf8' });
+      if (result.status === 0) {
+        console.log(`ok ${name} ${relative}`);
+        continue;
+      }
+      failures += 1;
+      console.log(`FAIL ${name} ${relative}`);
+      console.log((result.stderr ?? '').trim());
     }
-    failures += 1;
-    console.log(`FAIL ${relative}`);
-    console.log((result.stderr ?? '').trim());
   }
   if (failures > 0) {
     console.log(`\n${failures} file(s) failed to parse`);

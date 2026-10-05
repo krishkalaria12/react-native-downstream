@@ -526,12 +526,15 @@ internal object DownstreamNative {
    * one measurement just filled, cached by document and width, so this reads
    * the frames it stacked rather than laying anything out again.
    *
-   * [layout] is the same map `measure` and `updateState` carry, so the widths
-   * here are the widths the measurement used.
+   * [layout] is the same map `measure` and `updateState` carry, and [width] is
+   * the width Yoga measured at, in points as the shadow node holds it. It is
+   * converted to pixels here exactly as `FabricUIManager.measure` converts it
+   * before `measure`, so this reads the rendering that measurement filled rather
+   * than laying the document out again at a width the view never draws.
    */
   @JvmStatic
   @DoNotStrip
-  fun hostFrames(documentId: Long, layout: ReadableMap, widthPx: Float): FloatArray {
+  fun hostFrames(documentId: Long, layout: ReadableMap, width: Float): FloatArray {
     val context = preparationContext?.get() ?: return FloatArray(0)
     return try {
       val rendered = RenderedDocument.obtain(
@@ -545,13 +548,17 @@ internal object DownstreamNative {
         return FloatArray(0)
       }
       val frames = rendered.hostFrames(
-        widthPx.toInt(),
+        PixelUtil.toPixelFromDIP(width).toInt(),
         layout.numberAt("chrome", 0.0).toInt(),
         layout.toCodeLayout(),
         layout.toImageLayout(),
         hosts,
       )
-      FloatArray(frames.size) { PixelUtil.toDIPFromPixel(frames[it].toFloat()).toFloat() }
+      // Every fifth value is an ordinal, not a length: converting it with the
+      // edges would hand a chart another fence's rectangle.
+      FloatArray(frames.size) { index ->
+        if (index % 5 == 0) frames[index].toFloat() else PixelUtil.toDIPFromPixel(frames[index].toFloat())
+      }
     } catch (error: RuntimeException) {
       FloatArray(0)
     }

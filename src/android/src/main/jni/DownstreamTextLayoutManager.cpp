@@ -10,6 +10,7 @@
 #include <react/renderer/core/conversions.h>
 
 #include <atomic>
+#include <exception>
 #include <mutex>
 
 using namespace facebook::jni;
@@ -120,14 +121,15 @@ void *resolveAppImageLoader() {
   return appImageLoader.load(std::memory_order_acquire);
 }
 
-/// The rectangles of the hosted React children, as `[ordinal, x, y, w, h]`
-/// groups, or null when Java cannot be asked.
+/// The rectangles of the hosted React children, as `[ordinal, left, top, right,
+/// bottom]` groups in points, or null when Java cannot be asked. `width` is in
+/// points too, as Yoga measured it.
 ///
 /// Reads the `RenderedDocument` that the measurement just filled rather than
 /// laying anything out again: the document is cached by id and width, so this is
 /// the same object the view is about to draw, and the rectangles it returns are
 /// the ones its frames are stacked from. Nothing here parses or measures.
-std::shared_ptr<std::vector<jfloat>> hostFrames(jlong documentId, jobject layoutMap, jfloat widthPx) {
+std::shared_ptr<std::vector<jfloat>> hostFrames(jlong documentId, jobject layoutMap, jfloat width) {
   if (!javaReady.load(std::memory_order_acquire) || hostFramesMethod == nullptr) {
     return nullptr;
   }
@@ -136,7 +138,7 @@ std::shared_ptr<std::vector<jfloat>> hostFrames(jlong documentId, jobject layout
     return nullptr;
   }
   auto array = static_cast<jfloatArray>(env->CallStaticObjectMethod(
-      nativeClass, hostFramesMethod, documentId, layoutMap, static_cast<jfloat>(widthPx)));
+      nativeClass, hostFramesMethod, documentId, layoutMap, width));
   if (env->ExceptionCheck()) {
     env->ExceptionClear();
     return nullptr;
@@ -180,21 +182,33 @@ Java_com_downstream_DownstreamNative_nativeInstallPreparer(JNIEnv *env, jclass c
   // The document id and the layout map. The map is the same shape `measure` and
   // `updateState` carry, so a worker prepares the layout the view is about to draw
   // rather than a near copy of it that a fourth positional argument could make
-  // disagree.
-  const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JLjava/util/Map;)V");
+  // disagree. The map is a `ReadableNativeMap`, so the descriptor names the
+  // `ReadableMap` the Kotlin methods declare: a `java.util.Map` descriptor
+  // matches no method at all.
+  const jmethodID method = env->GetStaticMethodID(clazz, "prepare", "(JLcom/facebook/react/bridge/ReadableMap;)V");
+  // A failed lookup leaves a NoSuchMethodError pending, and any further JNI call
+  // with one pending aborts the process, so each lookup clears its own.
+  env->ExceptionClear();
   // Resolved with the preparer rather than lazily at the first measurement: a
   // measurement runs on Fabric's layout thread, and a `GetStaticMethodID` there
   // would race the class loader. A null here means the app runs a build without
   // this method, and hosted children are not placed rather than crashing.
-  const jmethodID frames = env->GetStaticMethodID(clazz, "hostFrames", "(JLjava/util/Map;F)[F");
+  const jmethodID frames =
+      env->GetStaticMethodID(clazz, "hostFrames", "(JLcom/facebook/react/bridge/ReadableMap;F)[F");
+  env->ExceptionClear();
   if (env->GetJavaVM(&javaVm) != JNI_OK) {
     env->ExceptionClear();
     return;
   }
-  env->ExceptionClear();
   if (method == nullptr) {
     return;
   }
+  // The map a worker hands `prepare` is built in C++ before any Java frame is
+  // on that thread, and fbjni finds its class with the calling thread's loader,
+  // which on a thread the pool attached is the system's and cannot see React
+  // Native's classes. Resolved here, on a Java thread, fbjni keeps the class as
+  // a global reference and the workers never look it up themselves.
+  facebook::react::ReadableNativeMap::javaClassStatic();
   nativeClass = static_cast<jclass>(env->NewGlobalRef(clazz));
   prepareMethod = method;
   hostFramesMethod = frames;
@@ -265,8 +279,8 @@ DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
   // `FabricUIManager.measure` returns a packed size and nothing else: only
   // `measureText` reports attachment positions, and a hosted child is not text.
   // So the rectangles come from the `RenderedDocument` that measurement just
-  // filled, read back through one more static call, in the same `[ordinal, x, y,
-  // w, h]` layout every Android layout map uses.
+  // filled, read back through one more static call, as `[ordinal, left, top,
+  // right, bottom]` groups.
   const jfloat framesWidth = static_cast<jfloat>(maximumWidth);
   const auto frames = hostFrames(document->id, reinterpret_cast<ReadableMap::javaobject>(localDataMap.get()),
                                  framesWidth);
@@ -300,19 +314,26 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
     return;
   }
   downstream::DocumentRegistry::add(document);
-  for (const auto &hint : hints) {
-    // The whole code layout, the caret, and the whole image layout come with the
-    // hint, because a prepared height is only the height of the layout the reader
-    // actually has.
-    auto map = ReadableNativeMap::newObjectCxxArgs(codeLayoutData(document->id, hint.fontScale, hint.chrome,
-                                                                   hint.code, hint.caret, hint.images, hint.theme,
-                                                                   downstream::HostLayout{}, hint.width));
-    env->CallStaticVoidMethod(nativeClass, prepareMethod, static_cast<jlong>(document->id),
-                              reinterpret_cast<ReadableMap::javaobject>(map.get()));
-    if (env->ExceptionCheck()) {
-      env->ExceptionClear();
-      return;
+  // A preparation is a head start and never an answer: measurement builds the
+  // same rendering if this does not, so anything that fails here is dropped
+  // rather than allowed to take a pool thread, and the process, down with it.
+  try {
+    for (const auto &hint : hints) {
+      // The whole code layout, the caret, and the whole image layout come with
+      // the hint, because a prepared height is only the height of the layout the
+      // reader actually has.
+      auto map = ReadableNativeMap::newObjectCxxArgs(codeLayoutData(document->id, hint.fontScale, hint.chrome,
+                                                                     hint.code, hint.caret, hint.images, hint.theme,
+                                                                     downstream::HostLayout{}, hint.width));
+      env->CallStaticVoidMethod(nativeClass, prepareMethod, static_cast<jlong>(document->id),
+                                reinterpret_cast<ReadableMap::javaobject>(map.get()));
+      if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return;
+      }
     }
+  } catch (const std::exception &) {
+    env->ExceptionClear();
   }
 }
 

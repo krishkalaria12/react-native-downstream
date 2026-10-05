@@ -898,9 +898,11 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   /** Redraws whatever the fade touched. */
   internal fun invalidateReveal() {
     // Targets come from the retained JNI ranges, so they include units that
-    // became opaque this tick. Settled siblings keep their display lists.
+    // became opaque this tick. Settled siblings keep their display lists. A
+    // target is a segment index, so it is looked up among the segments: this
+    // view's own children are the segment and host layers.
     for (index in 0 until revealTargets.size) {
-      val child = getChildAt(revealTargets.indexAt(index)) ?: continue
+      val child = segmentViews.getOrNull(revealTargets.indexAt(index)) ?: continue
       invalidateTree(child)
     }
   }
@@ -2340,6 +2342,8 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   private val cardBackground = GradientDrawable()
   /** True while a React child draws this block instead of the card. */
   private var hosted = false
+  /** Whether the chrome asks for a header row, apart from whether it is hosted. */
+  private var headerWanted = true
   private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
   private var segment: CodeSegment? = null
@@ -2562,7 +2566,7 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   fun setHosted(hosted: Boolean) {
     if (this.hosted == hosted) return
     this.hosted = hosted
-    header.visibility = if (hosted) View.GONE else header.visibility
+    applyHeaderVisibility()
     viewport.visibility = if (hosted) View.GONE else View.VISIBLE
     gutter.visibility = if (hosted) View.GONE else View.VISIBLE
     cardBackground.setColor(if (hosted) android.graphics.Color.TRANSPARENT else segment?.colors?.codeBlockBackground ?: 0)
@@ -2571,7 +2575,20 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   }
 
   fun setHeaderVisible(visible: Boolean) {
-    val next = if (visible) View.VISIBLE else View.GONE
+    headerWanted = visible
+    applyHeaderVisibility()
+  }
+
+  /**
+   * The header row shows when the chrome asks for it and the block is a card.
+   *
+   * Two inputs rather than one flag that each setter overwrites: the chrome is
+   * synced after the hosted state on every snapshot, and a hosted block's header
+   * shown again by that sync draws a card's title row above a chart, while a
+   * block that stops being hosted has to get back the header the chrome wants.
+   */
+  private fun applyHeaderVisibility() {
+    val next = if (headerWanted && !hosted) View.VISIBLE else View.GONE
     if (header.visibility == next) return
     header.visibility = next
     updateButtons()
@@ -2744,8 +2761,10 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     // unit, so a card arrives with its code rather than appearing around text that
     // is still invisible. The body fades through its own units, so the card does
     // not multiply them: the two are read separately and neither is a multiple of
-    // the other.
-    val chrome = body.alphaAt(0)
+    // the other. A hosted block does not fade at all: the React child over it is
+    // not faded by the reveal, so its bars and marker arrive with the component
+    // rather than with code text the reader never sees.
+    val chrome = if (hosted) 1f else body.alphaAt(0)
     val checkpoint = if (chrome < 1f) canvas.saveLayerAlpha(null, (chrome * 255f).toInt()) else -1
     // A hosted fence draws no card: the component owns its own chrome, and a card
     // behind it would be a second answer to the same block.

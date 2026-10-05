@@ -14,6 +14,7 @@ import { vi } from 'vitest';
 import {
   fenceSlots,
   replaySession,
+  replaySessionSlots,
   type FenceSlot,
   type RenderModel,
   type SessionMode,
@@ -254,14 +255,15 @@ export const realEngineModule = {
         return [];
       }
       slotWork.queries += 1;
-      // The snapshot the view is mounting, parsed from the session's own source
-      // with the session's own flags, which is what the native query reads: no
-      // parse of its own, one walk of the blocks it already holds.
-      return fenceSlots(
-        session.source,
-        languages,
+      // The snapshot the view is mounting, as the session's own parser
+      // published it: the native query walks those blocks and never parses, so
+      // which fences are settled is the incremental parser's answer, not a
+      // fresh parse's, where every block is.
+      return replaySessionSlots(
+        session.mode,
+        session.steps,
         session.parseFlags,
-        !session.finished
+        languages
       );
     },
 

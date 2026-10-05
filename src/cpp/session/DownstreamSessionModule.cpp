@@ -1,8 +1,8 @@
 #include "DownstreamSessionModule.h"
 
+#include "ControlledSlots.h"
 #include "FenceSlots.h"
 #include "MarkdownParser.h"
-#include "PreparedDocument.h"
 #include "SessionRegistry.h"
 #include "SessionTrace.h"
 #include "WorkerPool.h"
@@ -253,52 +253,17 @@ bool DownstreamSessionModule::mathAvailable(jsi::Runtime & /*rt*/) {
 
 namespace {
 
-/// The size of the source a controlled query parses on the JavaScript thread.
-///
-/// The same bound layout waits for (`kWaitForPreparedBytes`), which is what
-/// makes this the same wait moved earlier rather than a new one: a source
-/// larger than this goes to the worker pool, as it already did for layout.
-constexpr size_t kSyncSlotBytes = 16 * 1024;
-
-/// One cached answer, with every input that could change it.
-struct CachedSlots {
-  std::string source;
-  std::uint32_t mathFlags{0};
-  std::vector<std::string> languages;
-  std::vector<Slot> slots;
-};
-
-/// Answers keyed by the source, the math flags *and* the registered languages,
-/// so a chat that re-renders the same message, or a StrictMode double render,
-/// parses nothing twice — and so an app that registers a renderer later reads
-/// a different answer rather than the one that renderer-free screen made.
-/// Bounded the way `PreparedDocument`'s own cache is: by count, because one
-/// chat keeps a screenful of messages and not the whole history.
-struct SlotCache {
-  std::mutex mutex;
-  std::vector<CachedSlots> entries;
-  static constexpr size_t kCapacity = 16;
-};
-
-SlotCache &slotCache() {
-  static auto *instance = new SlotCache();
-  return *instance;
-}
-
-std::vector<Slot> slotsFor(const downstream::DocumentHandle &document, const std::vector<std::string> &languages,
-                           bool live) {
+/// The engine's slots in the shape codegen bridges to JavaScript.
+std::vector<Slot> bridged(const std::vector<downstream::FenceSlot> &slots) {
   std::vector<Slot> out;
-  if (!document) {
-    return out;
-  }
-  for (const downstream::FenceSlot &slot : downstream::fenceSlots(*document, languages, live)) {
-    Slot bridged{static_cast<std::int32_t>(slot.ordinal),
-                 slot.language,
-                 slot.meta.empty() ? std::nullopt : std::optional<std::string>(slot.meta),
-                 downstream::utf16ToUtf8(slot.code),
-                 slot.incomplete,
-                 static_cast<double>(slot.identity)};
-    out.push_back(std::move(bridged));
+  out.reserve(slots.size());
+  for (const downstream::FenceSlot &slot : slots) {
+    out.push_back(Slot{static_cast<std::int32_t>(slot.ordinal),
+                       slot.language,
+                       slot.meta.empty() ? std::nullopt : std::optional<std::string>(slot.meta),
+                       downstream::utf16ToUtf8(slot.code),
+                       slot.incomplete,
+                       static_cast<double>(slot.identity)});
   }
   return out;
 }
@@ -312,72 +277,22 @@ jsi::Array toJs(jsi::Runtime &rt, const std::vector<Slot> &slots) {
   return array;
 }
 
-/// The slots of a controlled source, answering from a finished preparation when
-/// one exists and otherwise from a bare parse. Live is true: a controlled
-/// string is the whole message, so a fence the writer never closed reads as
-/// incomplete until the app settles it, which is Streamdown's rule for a
-/// streaming string that has not been finished yet.
-std::vector<Slot> controlledSlots(const std::string &source, downstream::ParseOptions parse,
-                                  const std::vector<std::string> &languages) {
-  SlotCache &cache = slotCache();
-  {
-    std::lock_guard<std::mutex> lock(cache.mutex);
-    for (const CachedSlots &entry : cache.entries) {
-      if (entry.source == source && entry.mathFlags == parse.flags && entry.languages == languages) {
-        return entry.slots;
-      }
-    }
-  }
-  std::vector<Slot> slots;
-  if (const auto prepared = downstream::PreparedDocument::completed(source, parse)) {
-    if (prepared->result().status == downstream::ParseStatus::Ok) {
-      slots = slotsFor(prepared->result().document, languages, true);
-    }
-  } else if (source.size() <= kSyncSlotBytes && downstream::isValidUtf8(source)) {
-    // A bare parse: no highlighting, no math layout, no platform preparation,
-    // because none of those can change which fences a document has. The
-    // platform rendering belongs to the node, which asks for its own hint.
-    const downstream::ParseResult result = downstream::parseMarkdown(source, parse);
-    if (result.status == downstream::ParseStatus::Ok && result.document) {
-      // A controlled source is complete the moment it is parsed, so every block
-      // settles — the same rule `PreparedDocument` applies.
-      const auto count = static_cast<uint32_t>(std::min<size_t>(result.document->blocks.size(),
-                                                                 std::numeric_limits<uint32_t>::max()));
-      const downstream::DocumentHandle settled = downstream::withSettledBlocks(result.document, count);
-      slots = slotsFor(settled, languages, true);
-    }
-  }
-  {
-    std::lock_guard<std::mutex> lock(cache.mutex);
-    if (cache.entries.size() >= SlotCache::kCapacity) {
-      cache.entries.erase(cache.entries.begin());
-    }
-    cache.entries.push_back(CachedSlots{source, parse.flags, languages, std::move(slots)});
-  }
-  return slots;
-}
-
 } // namespace
 
 jsi::Object DownstreamSessionModule::fenceSlots(jsi::Runtime &rt, std::string source, double mathFlags,
                                                 std::vector<std::string> languages) {
   const downstream::ParseOptions parse{static_cast<uint32_t>(std::clamp(mathFlags, 0.0, 4294967295.0))};
-  bool pending = false;
-  std::vector<Slot> slots;
+  downstream::ControlledSlots answer;
   try {
-    slots = controlledSlots(source, parse, languages);
+    answer = downstream::controlledFenceSlots(source, parse, languages);
   } catch (const std::exception &) {
-    slots.clear();
-  }
-  // Too large to read here, or unreadable at all: the caller draws code cards
-  // and asks again through the asynchronous form, which is what a source whose
-  // preparation is still running does today.
-  if (slots.empty() && source.size() > kSyncSlotBytes) {
-    pending = true;
+    // Unreadable: code cards, and the same `pending` rule a source with no
+    // answer gets, so a large one is still asked for on the worker.
+    answer = downstream::ControlledSlots{source.size() > downstream::kSyncSlotBytes, {}};
   }
   auto result = jsi::Object(rt);
-  result.setProperty(rt, "pending", pending);
-  result.setProperty(rt, "slots", toJs(rt, slots));
+  result.setProperty(rt, "pending", answer.pending);
+  result.setProperty(rt, "slots", toJs(rt, bridged(answer.slots)));
   return result;
 }
 
@@ -400,14 +315,9 @@ AsyncPromise<std::vector<Slot>> DownstreamSessionModule::fenceSlotsAsync(jsi::Ru
       std::vector<Slot> slots;
       std::string message;
       try {
-        const downstream::ParseResult result = downstream::parseMarkdown(source, parse);
-        if (result.status == downstream::ParseStatus::Ok && result.document) {
-          // A controlled source is complete the moment it is parsed, so every
-          // block settles, exactly as the synchronous form settles them.
-          const auto count = static_cast<std::uint32_t>(
-              std::min<size_t>(result.document->blocks.size(), std::numeric_limits<std::uint32_t>::max()));
-          slots = slotsFor(downstream::withSettledBlocks(result.document, count), languages, true);
-        }
+        // The synchronous form's own parse, without its bound: the same answer
+        // on another thread.
+        slots = bridged(downstream::parsedFenceSlots(source, parse, languages));
       } catch (const std::exception &error) {
         message = error.what();
       }
@@ -442,7 +352,7 @@ jsi::Array DownstreamSessionModule::sessionFenceSlots(jsi::Runtime &rt, std::str
       downstream::SessionRegistry::snapshot(sessionId, static_cast<uint64_t>(generation), static_cast<uint64_t>(sequence));
   if (document) {
     const bool live = !downstream::SessionRegistry::isFinished(sessionId);
-    slots = slotsFor(document, languages, live);
+    slots = bridged(downstream::fenceSlots(*document, languages, live));
   }
   return toJs(rt, slots);
 }

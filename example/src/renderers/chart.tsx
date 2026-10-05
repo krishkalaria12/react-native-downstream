@@ -1,5 +1,5 @@
 import { lazy } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { LogBox, StyleSheet, Text, View } from 'react-native';
 
 /**
  * The renderers this screen registers.
@@ -65,6 +65,19 @@ function readChart(code: string, isIncomplete: boolean): ChartSpec {
 
 export const CHART_HEIGHT = 140;
 
+/** The room under the bars for their labels, inside `CHART_HEIGHT`. */
+const LABEL_ROOM = 20;
+
+/**
+ * The caption a chart shows: the fence's `title="…"` when it has one, which is
+ * how a fence names itself in Streamdown's meta, then the rest of the meta, then
+ * the language.
+ */
+function captionOf(props: { language: string; meta?: string }): string {
+  const title = props.meta?.match(/title="([^"]*)"/)?.[1];
+  return title ?? props.meta ?? props.language;
+}
+
 /**
  * The bar chart renderer, about sixty lines and dependency-free.
  *
@@ -81,31 +94,38 @@ export function ChartRenderer(props: {
   const spec = readChart(props.code, props.isIncomplete);
   if (spec.state === 'invalid') {
     return (
-      <ChartFrame caption={props.meta ?? props.language}>
+      <ChartFrame caption={captionOf(props)}>
         <Text style={styles.error}>{spec.reason}</Text>
       </ChartFrame>
     );
   }
   if (spec.state === 'incomplete') {
     return (
-      <ChartFrame caption={props.meta ?? props.language} placeholder>
+      <ChartFrame caption={captionOf(props)} placeholder>
         <Text style={styles.placeholder}>Reading the chart…</Text>
       </ChartFrame>
     );
   }
   const peak = Math.max(...spec.bars.map((bar) => bar.value), 1);
   return (
-    <ChartFrame caption={props.meta ?? props.language}>
+    <ChartFrame caption={captionOf(props)}>
       <View style={styles.bars}>
         {spec.bars.map((bar) => (
           <View key={bar.label} style={styles.bar}>
             <View
               style={[
                 styles.fill,
-                { height: Math.max(2, (bar.value / peak) * CHART_HEIGHT) },
+                {
+                  height: Math.max(
+                    2,
+                    (bar.value / peak) * (CHART_HEIGHT - LABEL_ROOM)
+                  ),
+                },
               ]}
             />
-            <Text style={styles.label}>{bar.label}</Text>
+            <Text style={styles.label} numberOfLines={1}>
+              {bar.label}
+            </Text>
           </View>
         ))}
       </View>
@@ -132,12 +152,23 @@ function ChartFrame({
       style={[styles.frame, placeholder === true && styles.framePlaceholder]}
     >
       <View style={styles.captionRow}>
-        <Text style={styles.caption}>{caption}</Text>
+        <Text style={styles.caption} numberOfLines={1}>
+          {caption}
+        </Text>
       </View>
       {children}
     </View>
   );
 }
+
+/** What `BrokenRenderer` throws, so LogBox can be told it is on purpose. */
+const BROKEN_MESSAGE = 'this renderer always fails';
+
+// In development React Native reports every component error as a full-screen
+// LogBox, including one an error boundary caught, so the deliberate throw below
+// would cover the screen that demonstrates it being caught. The screen's own
+// log shows the `renderer_failed` event instead.
+LogBox.ignoreLogs([BROKEN_MESSAGE]);
 
 /**
  * A renderer that throws, so the screen can show the fallback the feature is
@@ -149,7 +180,7 @@ export function BrokenRenderer(props: {
   meta?: string;
   isIncomplete: boolean;
 }): React.ReactNode {
-  throw new Error(`this renderer always fails: ${props.code.slice(0, 24)}`);
+  throw new Error(`${BROKEN_MESSAGE}: ${props.code.slice(0, 24)}`);
 }
 
 /**
@@ -187,7 +218,8 @@ const styles = StyleSheet.create({
   },
   caption: {
     fontSize: 11,
-    opacity: 0.6,
+    color: '#c9ced6',
+    opacity: 0.8,
   },
   bars: {
     flexDirection: 'row',
@@ -204,6 +236,7 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 11,
+    color: '#c9ced6',
     textAlign: 'center',
     marginTop: 4,
   },
@@ -211,6 +244,7 @@ const styles = StyleSheet.create({
     color: '#e5484d',
   },
   placeholder: {
+    color: '#c9ced6',
     opacity: 0.6,
   },
 });

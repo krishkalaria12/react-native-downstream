@@ -24,36 +24,11 @@
 
 using namespace downstream;
 
-namespace {
-
-std::vector<std::string> languagesFromArg(int argc, char **argv, int index) {
-  std::vector<std::string> languages;
-  if (index >= argc || argv[index] == nullptr) {
-    return languages;
-  }
-  const std::string joined(argv[index]);
-  size_t start = 0;
-  while (start <= joined.size()) {
-    const size_t comma = joined.find(',', start);
-    const std::string one = joined.substr(start, comma == std::string::npos ? comma : comma - start);
-    if (!one.empty()) {
-      languages.push_back(one);
-    }
-    if (comma == std::string::npos) {
-      break;
-    }
-    start = comma + 1;
-  }
-  return languages;
-}
-
-} // namespace
-
 int main(int argc, char **argv) {
   const std::string source((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
   const ParseOptions parse = testdump::parseFlagsFromArg(argc, argv, 1);
   const bool live = argc > 2 && std::string_view(argv[2]) == "1";
-  const std::vector<std::string> languages = languagesFromArg(argc, argv, 3);
+  const std::vector<std::string> languages = testdump::languagesFromArg(argc, argv, 3);
 
   ParseResult result = parseMarkdown(source, parse);
   if (result.status != ParseStatus::Ok) {
@@ -68,19 +43,8 @@ int main(int argc, char **argv) {
   const DocumentHandle settled = withSettledBlocks(result.document, count);
 
   const std::vector<FenceSlot> slots = fenceSlots(*settled, languages, live);
-  std::printf("{\"slots\":[");
-  for (size_t index = 0; index < slots.size(); index++) {
-    const FenceSlot &slot = slots[index];
-    std::printf("%s{\"ordinal\":%u,\"blockIndex\":%zu,\"language\":", index ? "," : "", slot.ordinal,
-                slot.blockIndex);
-    testdump::writeString(slot.language);
-    std::printf(",\"meta\":");
-    testdump::writeString(slot.meta);
-    std::printf(",\"code\":");
-    testdump::writeString(slot.code);
-    std::printf(",\"incomplete\":%s,\"identity\":%llu}", slot.incomplete ? "true" : "false",
-                static_cast<unsigned long long>(slot.identity));
-  }
-  std::printf("]}\n");
+  std::printf("{\"slots\":");
+  testdump::writeFenceSlots(slots);
+  std::printf("}\n");
   return 0;
 }

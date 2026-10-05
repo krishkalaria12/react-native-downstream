@@ -71,6 +71,16 @@ before(async () => {
     ['test_preview', [incremental, ...engine]],
     ['test_session_registry', [registry, incremental, ...pool, ...engine]],
     [
+      'test_controlled_slots',
+      [
+        downstream('ControlledSlots.cpp'),
+        downstream('PreparedDocument.cpp'),
+        ...pool,
+        ...theme,
+        ...engine,
+      ],
+    ],
+    [
       'test_worker_pool',
       [
         registry,
@@ -1164,6 +1174,10 @@ describe('input', () => {
     // the ported remend corpus plus the session integration that proves a repair
     // cannot reach a committed block.
     execFileSync(binary('test_preview'), { timeout: 15_000 });
+  });
+
+  test('controlled fence slots: fresh and cached answers agree, large sources wait', () => {
+    execFileSync(binary('test_controlled_slots'), { timeout: 30_000, stdio: 'inherit' });
   });
 
   test('fence info string meta, prefixes, and identity', () => {

@@ -183,7 +183,7 @@
     "ios": {
       "componentProvider": {
         "DownstreamMarkdownView": "DownstreamMarkdownView",
-        "DownstreamFenceSlot": "RCTView"
+        "DownstreamFenceSlot": "DownstreamFenceSlotView"
       },
       "modulesProvider": {
         "DownstreamSession": "DownstreamSessionProvider"

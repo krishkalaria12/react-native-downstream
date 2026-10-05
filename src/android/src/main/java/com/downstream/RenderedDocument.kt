@@ -845,7 +845,13 @@ internal class RenderedDocument(
           (style.bodySize * LINE_HEIGHT + style.mathPadding * 2 +
             style.mathMarginTop + style.mathMarginBottom).toInt()
         }
-      is CodeSegment -> {
+      // A hosted fence is as tall as the React child that replaced it, as on iOS:
+      // the component owns its height, and the block's margins stay a code
+      // block's, so the space around it does not change when a fence becomes a
+      // chart. The height arrives in pixels, converted where the map is read.
+      is CodeSegment -> if (hosts.hosts(segment.codeOrdinal)) {
+        ceil(hosts.heightFor(segment.codeOrdinal).toDouble()).toInt()
+      } else {
         // The one definition: the props, the reader's choices, and this block's
         // own fence meta all meet in `resolveCodeBlock`, and `codeCardHeight` is
         // the only function that turns that into a height. The view calls the

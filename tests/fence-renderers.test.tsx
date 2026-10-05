@@ -68,6 +68,17 @@ vi.mock(
   async () => (await import('./real-engine-module')).realEngineModule
 );
 
+/**
+ * A paragraph long enough for the incremental parser to commit what comes
+ * before it. A stream settles a block once the parser proves it closed, and it
+ * only tries once a region of at least 128 bytes has arrived, so a test that
+ * wants a fence settled mid-stream follows it with real text, as a model does.
+ */
+const SETTLING_PARAGRAPH =
+  'After the chart, a paragraph long enough for the parser to prove the fence closed and commit it. '.repeat(
+    2
+  ) + '\n\n';
+
 let host: HTMLDivElement | undefined;
 let root: Root | undefined;
 let committed: React.ReactElement | undefined;
@@ -319,6 +330,53 @@ describe('fence renderers, the code card fallback', () => {
     ).toEqual([{ code: 'renderer_failed', language: 'mermaid' }]);
   });
 
+  it('a view handed a new stream reports and mounts that stream afresh', async () => {
+    const errors: { code: string }[] = [];
+    const instances = new Set<unknown>();
+    const Boom = (props: CustomRendererProps) => {
+      const ref = React.useRef({});
+      instances.add(ref.current);
+      if (props.code.startsWith('boom')) {
+        throw new Error('renderer blew up');
+      }
+      return <span>{props.code}</span>;
+    };
+    const plugins = { renderers: [{ language: 'mermaid', component: Boom }] };
+    const onError = (error: { code: string }) => errors.push(error);
+    const first = stream();
+    mount(
+      <DownstreamMarkdown stream={first} plugins={plugins} onError={onError} />
+    );
+    act(() => {
+      first.append('```mermaid\nboom;\n```\n\n```mermaid\nok;\n```\n');
+      first.finish();
+    });
+    runFrames();
+    await act(async () => {});
+
+    // A second message in the same mounted view, as a chat list that recycles
+    // its rows does: its own stream, numbered from the same first generation.
+    const second = stream();
+    rerender(
+      <DownstreamMarkdown stream={second} plugins={plugins} onError={onError} />
+    );
+    act(() => {
+      second.append('```mermaid\nboom;\n```\n\n```mermaid\nok;\n```\n');
+      second.finish();
+    });
+    runFrames();
+    await act(async () => {});
+
+    // Each message's failure is its own, and each message's renderer starts
+    // with its own state rather than the previous message's.
+    expect(errors.map((error) => error.code)).toEqual([
+      'renderer_failed',
+      'renderer_failed',
+    ]);
+    expect(slots()).toEqual([{ ordinal: 1, text: 'ok;' }]);
+    expect(instances.size).toBeGreaterThanOrEqual(4);
+  });
+
   it('a renderer that returns nothing is an empty slot, not an error', async () => {
     const errors: unknown[] = [];
     mount(
@@ -396,8 +454,17 @@ describe('fence renderers while streaming', () => {
       isIncomplete: true,
     });
 
+    // A closing line alone does not settle the fence: in a stream, a fence is
+    // incomplete until the parser proves it closed, which is the moment its
+    // copy button turns on too, so the two never disagree.
     act(() => {
       created.append('```\n');
+    });
+    runFrames();
+    expect(seen.at(-1)!.isIncomplete).toBe(true);
+
+    act(() => {
+      created.append(`\n${SETTLING_PARAGRAPH}`);
     });
     runFrames();
     expect(seen.at(-1)).toEqual({
@@ -406,6 +473,36 @@ describe('fence renderers while streaming', () => {
       meta: undefined,
       isIncomplete: false,
     });
+  });
+
+  it('finish() settles a fence that only the end of the message proves', () => {
+    const seen: CustomRendererProps[] = [];
+    const created = stream();
+    mount(
+      <DownstreamMarkdown
+        stream={created}
+        plugins={{
+          renderers: [{ language: 'chart', component: recorder(seen) }],
+        }}
+      />
+    );
+
+    // A fence inside a list item, then the text a model ends with: the list is
+    // still the unproven tail, so the fence is not settled until the stream
+    // finishes, and finish() publishes under the sequence the last append had.
+    act(() => {
+      created.append(
+        '- Share by quarter:\n\n  ```chart\n  [{"label":"Q1","value":1}]\n  ```\n\nTakeaway.'
+      );
+    });
+    runFrames();
+    expect(seen.at(-1)!.isIncomplete).toBe(true);
+
+    act(() => {
+      created.finish();
+    });
+    runFrames();
+    expect(seen.at(-1)!.isIncomplete).toBe(false);
   });
 
   it('a settled renderer is not re-rendered for later snapshots', () => {
@@ -426,8 +523,14 @@ describe('fence renderers while streaming', () => {
       created.append('```mermaid\ngraph;\n```\n');
     });
     runFrames();
+    // Once while the fence is still the unproven tail, and once when the next
+    // block settles it.
+    act(() => {
+      created.append(SETTLING_PARAGRAPH);
+    });
+    runFrames();
     const afterFence = renders;
-    expect(afterFence).toBe(1);
+    expect(afterFence).toBe(2);
 
     for (let index = 0; index < 50; index++) {
       act(() => {

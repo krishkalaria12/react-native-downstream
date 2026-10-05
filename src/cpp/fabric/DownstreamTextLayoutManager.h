@@ -104,20 +104,6 @@ public:
                               const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
                               const downstream::Theme::Handle &theme) const;
 
-  /// The cached measurement for exactly the layout `measure` would use, so
-  /// `layout()` can place the children that measurement sized without
-  /// measuring the document a second time.
-  ///
-  /// Null when the cache has no such entry, which is the case before the first
-  /// measurement of this revision; a caller that gets null places no child,
-  /// which is the same answer as a view with no renderers.
-  DocumentMeasurement cachedMeasurement(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
-                                        Float maximumWidth, uint32_t chrome, const downstream::CodeLayout &code,
-                                        const downstream::PlacedCaret &caret,
-                                        const downstream::ImageLayout &images,
-                                        const downstream::HostLayout &hosts,
-                                        const downstream::Theme::Handle &theme) const;
-
 private:
   DocumentMeasurement measurePlatform(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
                                       Float maximumWidth, SurfaceId surfaceId, uint32_t chrome,
