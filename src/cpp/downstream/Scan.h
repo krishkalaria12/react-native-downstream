@@ -89,4 +89,32 @@ size_t skipInlineDestination(std::string_view source, size_t open);
 /// here belongs to a link or image whose target has not been typed yet.
 bool isUnfinishedDestination(std::string_view source, size_t at);
 
+// --- inline tag allowlist ---
+
+/// What an `MD_TEXT_HTML` piece says. `None` keeps the piece literal, as
+/// every tag outside the allowlist is; `SubVoid`/`SupVoid` are swallowed,
+/// because a writer who means a superscript never writes `<sup/>`.
+enum class InlineTag : uint8_t {
+  None = 0,
+  Break,
+  SubOpen,
+  SubClose,
+  SupOpen,
+  SupClose,
+  SubVoid,
+  SupVoid,
+};
+
+/// Classifies a piece md4c already proved was one tag. The name must run out
+/// at whitespace, `/`, or `>`, so `<subtitle>` is not `sub`, and attributes
+/// are ignored, as the web's sanitize schema drops them. `</br>` is a break,
+/// because HTML parsers read it that way and models write it.
+InlineTag matchInlineTag(std::string_view piece);
+
+/// True when `fragment` could still grow into one of the allowed tags: `<`
+/// alone, or a strict prefix of one of the three names, with no closing `>`
+/// yet and ASCII only. Drives the provisional hide of a half-arrived tag at the
+/// stream tail; whether hiding it is safe is the caller's to prove.
+bool isInlineTagPrefix(std::string_view fragment);
+
 } // namespace downstream::scan

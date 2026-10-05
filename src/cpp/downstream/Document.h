@@ -69,6 +69,8 @@ constexpr uint32_t Link = 1u << 4;
 constexpr uint32_t ImageAlt = 1u << 5;
 constexpr uint32_t FootnoteRef = 1u << 6;
 constexpr uint32_t Math = 1u << 7;
+constexpr uint32_t Superscript = 1u << 8;
+constexpr uint32_t Subscript = 1u << 9;
 } // namespace InlineStyle
 
 /// A maximal run of block text sharing one style set. Offsets are UTF-16
