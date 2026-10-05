@@ -8,6 +8,7 @@ import { StressScreen } from './bench/StressScreen';
 import { ChatScreen } from './example/ChatScreen';
 import { ControlsScreen } from './controls/ControlsScreen';
 import { MathScreen } from './math/MathScreen';
+import { RenderersScreen } from './renderers/RenderersScreen';
 import { ROUTES, routeById, type RouteId } from './navigation';
 import { ThemeScreen } from './theme/ThemeScreen';
 import { CompareScreen } from './testing/CompareScreen';
@@ -125,6 +126,8 @@ function Navigation() {
               <ControlsScreen />
             ) : route.id === 'math' ? (
               <MathScreen />
+            ) : route.id === 'renderers' ? (
+              <RenderersScreen />
             ) : route.id === 'testing' ? (
               <CompareScreen />
             ) : route.id === 'bench' ? (
