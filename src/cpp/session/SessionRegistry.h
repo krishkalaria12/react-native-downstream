@@ -63,7 +63,7 @@ public:
    * same guarantee and one less thing the create path has to get right. Returns
    * false when the session does not exist.
    */
-  static bool setMath(const std::string &id, MathOptions math);
+  static bool setParse(const std::string &id, ParseOptions parse);
 };
 
 } // namespace downstream

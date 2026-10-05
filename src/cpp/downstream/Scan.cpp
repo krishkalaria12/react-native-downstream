@@ -1,5 +1,8 @@
 #include "Scan.h"
 
+#include <algorithm>
+#include <string>
+
 namespace downstream::scan {
 
 bool isEscaped(std::string_view source, size_t index) {
@@ -237,6 +240,132 @@ size_t skipInlineDestination(std::string_view source, size_t open) {
 
 bool isUnfinishedDestination(std::string_view source, size_t at) {
   return at >= 2 && source[at - 1] == '(' && source[at - 2] == ']' && !isEscaped(source, at - 2);
+}
+
+// --- inline tag allowlist ---
+
+namespace {
+
+char asciiLower(char c) {
+  return c >= 'A' && c <= 'Z' ? static_cast<char>(c + ('a' - 'A')) : c;
+}
+
+bool isTagNameChar(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+bool isTagNameEnd(char c) {
+  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '/' || c == '>';
+}
+
+} // namespace
+
+InlineTag matchInlineTag(std::string_view piece) {
+  if (piece.size() < 3 || piece[0] != '<') {
+    return InlineTag::None;
+  }
+  size_t i = 1;
+  const bool closing = piece[i] == '/';
+  if (closing) {
+    i++;
+  }
+  const size_t nameStart = i;
+  while (i < piece.size() && isTagNameChar(piece[i])) {
+    i++;
+    if (i - nameStart > 3) {
+      return InlineTag::None;
+    }
+  }
+  const size_t nameEnd = i;
+  if (nameEnd == nameStart) {
+    return InlineTag::None;
+  }
+  if (i >= piece.size() || !isTagNameEnd(piece[i])) {
+    // `<subtitle>` and friends: the name runs past `sub`, so this is not a
+    // match, and a prefix is never accepted.
+    return InlineTag::None;
+  }
+  const size_t length = nameEnd - nameStart;
+  if (length == 2 && asciiLower(piece[nameStart]) == 'b' && asciiLower(piece[nameStart + 1]) == 'r') {
+    // A stray `</br>` is a break, because HTML parsers read it that way and
+    // models write it.
+    return InlineTag::Break;
+  }
+  if (length == 3 && asciiLower(piece[nameStart]) == 's' && asciiLower(piece[nameStart + 1]) == 'u' &&
+      (asciiLower(piece[nameStart + 2]) == 'b' || asciiLower(piece[nameStart + 2]) == 'p')) {
+    // Self-closing is a slash before the closing `>`, which may carry trailing
+    // space: `<sub/>` and `<sup />` are both written.
+    const std::string_view rest = piece.substr(i);
+    size_t end = rest.size();
+    while (end > 0 && rest[end - 1] == ' ') {
+      end--;
+    }
+    const bool selfClosing = end > 1 && rest[end - 1] == '>' && rest[end - 2] == '/';
+    if (asciiLower(piece[nameStart + 2]) == 'b') {
+      return closing ? InlineTag::SubClose : (selfClosing ? InlineTag::SubVoid : InlineTag::SubOpen);
+    }
+    return closing ? InlineTag::SupClose : (selfClosing ? InlineTag::SupVoid : InlineTag::SupOpen);
+  }
+  return InlineTag::None;
+}
+
+// A strict prefix of any allowed tag. Names are the three tags', so a name
+// letter sequence that can no longer extend to one of them ends the prefix.
+bool isInlineTagPrefix(std::string_view fragment) {
+  // A bare `<` is a fragment: it is the most common tail a stream stops on, and
+  // the caller's proof is what decides whether it was a tag after all.
+  if (fragment.empty() || fragment[0] != '<') {
+    return false;
+  }
+  // ASCII only, because the caller's proof compares the fragment's bytes with
+  // the block text's UTF-16 units and the two are only the same number here.
+  for (const char c : fragment) {
+    if (static_cast<unsigned char>(c) >= 0x80) {
+      return false;
+    }
+  }
+  size_t i = 1;
+  if (i >= fragment.size()) {
+    // The bare `<`, with nothing after it yet.
+    return true;
+  }
+  if (fragment[i] == '/') {
+    i++;
+    if (i >= fragment.size() || !isTagNameChar(fragment[i])) {
+      return false;
+    }
+  } else if (!isTagNameChar(fragment[i])) {
+    return false;
+  }
+  if (fragment.find('>') != std::string_view::npos) {
+    return false;
+  }
+  const size_t nameStart = i;
+  while (i < fragment.size() && isTagNameChar(fragment[i])) {
+    i++;
+  }
+  // The remaining fragment past the name must be a plausible continuation:
+  // empty (the name itself may still be short), or a delimiter start.
+  if (i < fragment.size()) {
+    const char next = fragment[i];
+    if (next != ' ' && next != '\t' && next != '\n' && next != '\r' && next != '/' &&
+        next != '"' && next != '\'') {
+      return false;
+    }
+  }
+  // The prefix letters so far must still be able to complete to br, sub or sup.
+  // Anything else, including a longer word that starts like one of them, is
+  // already prose.
+  const size_t length = i - nameStart;
+  const std::string_view names[] = {"br", "sub", "sup"};
+  for (const std::string_view candidate : names) {
+    if (length <= candidate.size() &&
+        std::equal(fragment.begin() + nameStart, fragment.begin() + i, candidate.begin(),
+                   [](char actual, char expected) { return asciiLower(actual) == expected; })) {
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace downstream::scan

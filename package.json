@@ -56,6 +56,7 @@
     "typecheck:android": "node tests/android/typecheck.mjs",
     "bench": "vitest bench --run",
     "bench:native": "node benchmarks/native-highlight.mjs",
+    "bench:inline-html": "node benchmarks/native-inline-html.mjs",
     "bench:math": "node benchmarks/native-math.mjs",
     "bench:reveal": "node benchmarks/native-reveal.mjs",
     "bench:reveal-frame": "node benchmarks/reveal-frame-kotlin.mjs",

@@ -1,9 +1,10 @@
 // Host test driver: parses Markdown from stdin and prints the render model
 // as JSON for src/cpp/tests/engine.test.mjs.
 //
-// argv[1] is the math parse flags, as `mathFlagsFromArg` reads them. Absent
-// means math is off, so the existing corpus sees exactly the parse it saw
-// before math existed; a case about a formula names its flags.
+// argv[1] is the parse option bitmask, as `parseFlagsFromArg` reads them.
+// Absent means every bit is off, so the existing corpus sees exactly the parse
+// it saw before any of these options existed; a case about a formula, a tag, or
+// an opt-in syntax names its bits.
 
 #include "CodeBlocks.h"
 #include "CodeHighlighter.h"
@@ -22,8 +23,8 @@ using namespace downstream;
 
 int main(int argc, char **argv) {
   const std::string source((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
-  const MathOptions math = testdump::mathOptionsFromArg(argc, argv, 1);
-  ParseResult result = parseMarkdown(source, math);
+  const ParseOptions parse = testdump::parseFlagsFromArg(argc, argv, 1);
+  ParseResult result = parseMarkdown(source, parse);
   // The controlled path colors after the parse, lays out its formulas, and then
   // marks every block settled, all before the platform text work, so the driver
   // does the same and its JSON is what a view receives.

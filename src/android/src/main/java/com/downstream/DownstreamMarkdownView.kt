@@ -224,7 +224,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   private var codeFilename = "file"
   private var tableFilename = "table"
   private var imageFilename = "image"
-  private var mathFlags = 0
+  private var parseFlags = 0
   private var allowedImagePrefixes: List<String> = emptyList()
   private var exporter = DocumentExporter(context)
   private var generation = 0
@@ -471,15 +471,16 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   }
 
   /**
-   * The math flags, as the engine's bitmask.
+   * The parse flags, as the engine's bitmask.
    *
    * Held so an unresolved formula can be told apart from one that was never meant to
-   * be laid out: with the flag off the engine leaves the literal alone and this view
-   * has nothing to do, and with it on an unresolved formula draws in the theme's
-   * error color. Both answers are otherwise in the state.
+   * be laid out: with the math flag off the engine leaves the literal alone and this
+   * view has nothing to do, and with it on an unresolved formula draws in the theme's
+   * error color. The inline HTML and script-syntax bits are the parser's business and
+   * are already in the state. Both answers are otherwise in the state.
    */
-  fun setMathFlags(value: Int) {
-    mathFlags = value
+  fun setParseFlags(value: Int) {
+    parseFlags = value
   }
 
   /** Whether pictures are fetched at all. The state says so per picture as well. */

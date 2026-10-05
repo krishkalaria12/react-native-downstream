@@ -1,4 +1,4 @@
-/* eslint-disable no-bitwise -- the native `mathFlags` prop is a bitmask */
+/* eslint-disable no-bitwise -- the native `parseFlags` prop is a bitmask */
 /**
  * Resolution of the `math` prop.
  *
@@ -10,23 +10,31 @@
  * that writes those bits.
  */
 import NativeDownstreamSession from './NativeDownstreamSession';
-import type { MarkdownMathOptions } from './types';
+import type { MarkdownMathOptions, MarkdownSyntaxOptions } from './types';
 
 /**
- * Bits of the native `mathFlags` prop. Parsing and drawing both read them, so
+ * Bits of the native `parseFlags` prop. Parsing and drawing both read them, so
  * they are the parse options rather than a resolved boolean: the parser needs
  * to know whether single dollars are math before anything is laid out.
  */
-export const MATH_FLAG_ENABLED = 1 << 0;
-export const MATH_FLAG_SINGLE_DOLLAR = 1 << 1;
-export const MATH_FLAG_BRACKETS = 1 << 2;
+export const PARSE_FLAG_ENABLED = 1 << 0;
+export const PARSE_FLAG_SINGLE_DOLLAR = 1 << 1;
+export const PARSE_FLAG_BRACKETS = 1 << 2;
+export const PARSE_FLAG_INLINE_HTML = 1 << 3;
+export const PARSE_FLAG_SUPERSCRIPT_SYNTAX = 1 << 4;
+export const PARSE_FLAG_SUBSCRIPT_SYNTAX = 1 << 5;
 
 /** Every flag the engine understands. */
-export const MATH_FLAGS_ALL =
-  MATH_FLAG_ENABLED | MATH_FLAG_SINGLE_DOLLAR | MATH_FLAG_BRACKETS;
+export const PARSE_FLAGS_ALL =
+  PARSE_FLAG_ENABLED |
+  PARSE_FLAG_SINGLE_DOLLAR |
+  PARSE_FLAG_BRACKETS |
+  PARSE_FLAG_INLINE_HTML |
+  PARSE_FLAG_SUPERSCRIPT_SYNTAX |
+  PARSE_FLAG_SUBSCRIPT_SYNTAX;
 
 export type ResolvedMath = Readonly<{
-  /** Bitmask for the native `mathFlags` prop. */
+  /** Bitmask for the native `parseFlags` prop. */
   flags: number;
   /** True when at least one delimiter form is recognized. */
   enabled: boolean;
@@ -80,7 +88,7 @@ export function resolveMath(
   }
   if (math === true) {
     return {
-      flags: MATH_FLAG_ENABLED | MATH_FLAG_BRACKETS,
+      flags: PARSE_FLAG_ENABLED | PARSE_FLAG_BRACKETS,
       enabled: true,
     };
   }
@@ -88,17 +96,24 @@ export function resolveMath(
     // Installing the package is the opt-in, as `@streamdown/math` is. Brackets
     // default on because they are what OpenAI-family models emit.
     return available
-      ? { flags: MATH_FLAG_ENABLED | MATH_FLAG_BRACKETS, enabled: true }
+      ? { flags: PARSE_FLAG_ENABLED | PARSE_FLAG_BRACKETS, enabled: true }
       : { flags: 0, enabled: false };
   }
   // An object form always turns math on: naming an option is asking for math.
   // Each option keeps its own default: single dollars off, as in Streamdown, so
   // `{ brackets: false }` does not quietly make `$5 and $10` a formula.
-  const section = options(math)!;
+  const section = options(math);
+  if (!section) {
+    // A truthy value that is not one of the shapes, read out of JSON or out of
+    // JavaScript that skipped a type. It asked for math and named no options,
+    // which is what `true` means, so it resolves as `true` rather than
+    // throwing where every other accessor treats the value as absent.
+    return { flags: PARSE_FLAG_ENABLED | PARSE_FLAG_BRACKETS, enabled: true };
+  }
   const flags =
-    MATH_FLAG_ENABLED |
-    (section.singleDollarTextMath === true ? MATH_FLAG_SINGLE_DOLLAR : 0) |
-    (section.brackets === false ? 0 : MATH_FLAG_BRACKETS);
+    PARSE_FLAG_ENABLED |
+    (section.singleDollarTextMath === true ? PARSE_FLAG_SINGLE_DOLLAR : 0) |
+    (section.brackets === false ? 0 : PARSE_FLAG_BRACKETS);
   return { flags, enabled: true };
 }
 
@@ -124,4 +139,32 @@ export function warnAboutMissingMathEngine(): void {
 /** Test hook: forgets the warning, so a case can observe it more than once. */
 export function resetMathEngineWarning(): void {
   warnedAboutMissingEngine = false;
+}
+
+/**
+ * Resolves `math`, `inlineHtml` and `syntax` into the parse flag bitmask.
+ *
+ * One resolver, so the JS default and the parser default cannot disagree:
+ * `inlineHtml` is on unless explicitly false, and the two syntax bits are set
+ * only when the caller names them. `resolveMath`'s answer is the base, so a
+ * document with no inline tags parses identically under any combination.
+ */
+export function resolveParseFlags(
+  math: boolean | MarkdownMathOptions | undefined,
+  inlineHtml: boolean | undefined,
+  syntax: MarkdownSyntaxOptions | undefined,
+  available: boolean = mathAvailable()
+): ResolvedMath {
+  const base = resolveMath(math, available);
+  let flags = base.flags;
+  if (inlineHtml !== false) {
+    flags |= PARSE_FLAG_INLINE_HTML;
+  }
+  if (syntax?.superscript === true) {
+    flags |= PARSE_FLAG_SUPERSCRIPT_SYNTAX;
+  }
+  if (syntax?.subscript === true) {
+    flags |= PARSE_FLAG_SUBSCRIPT_SYNTAX;
+  }
+  return { flags, enabled: base.enabled };
 }

@@ -122,12 +122,12 @@ public:
   /// the only thing that reads the flags and the worker is the only thread that
   /// touches it. Set once, right after `create`, so there is at most one queued
   /// pass between a session existing and its flags being right.
-  void setMath(MathOptions math) {
+  void setParse(ParseOptions parse) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (stopped_) {
       return;
     }
-    math_ = math;
+    parse_ = parse;
     if (!finished_) {
       markDirty();
     }
@@ -174,7 +174,7 @@ private:
     // The flags travel the same way the preview options do, and for the same
     // reason: only the worker may set them on the parser, and both have to be in
     // place before the parse they change rather than after it.
-    std::optional<MathOptions> math;
+    std::optional<ParseOptions> parse;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (stopped_ || !dirty_) {
@@ -184,7 +184,7 @@ private:
       replacement.swap(replacement_);
       pending.swap(pending_);
       preview.swap(preview_);
-      math.swap(math_);
+      parse.swap(parse_);
       generation = generation_;
       sequence = sequence_;
       finished = finished_;
@@ -197,8 +197,8 @@ private:
     if (preview) {
       parser_.setPreview(*preview);
     }
-    if (math) {
-      parser_.setMath(*math);
+    if (parse) {
+      parser_.setParse(*parse);
     }
     SessionTrace::record(id_, generation, sequence, "parse_start");
     if (replacement) {
@@ -265,7 +265,7 @@ private:
   DocumentHandle shown_;
   std::optional<LayoutHint> layout_;
   std::optional<remend::PreviewOptions> preview_;
-  std::optional<MathOptions> math_;
+  std::optional<ParseOptions> parse_;
   bool dirty_{false};
   bool scheduled_{false};
   bool finished_{false};
@@ -358,12 +358,12 @@ bool SessionRegistry::setPreview(const std::string &id, remend::PreviewOptions o
   return true;
 }
 
-bool SessionRegistry::setMath(const std::string &id, MathOptions math) {
+bool SessionRegistry::setParse(const std::string &id, ParseOptions parse) {
   const auto session = findSession(id);
   if (!session) {
     return false;
   }
-  session->setMath(math);
+  session->setParse(parse);
   return true;
 }
 

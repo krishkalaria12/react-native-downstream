@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Downstream · sub, sup and line breaks plan</title>
+    <style>
+      :root {
+        --paper: #f5f8f8;
+        --surface: #ffffff;
+        --surface-soft: #edf3f2;
+        --ink: #17272d;
+        --ink-soft: #486167;
+        --muted: #667c80;
+        --line: #cddcda;
+        --line-strong: #94aeaa;
+        --accent: #146e69;
+        --accent-soft: #d9efeb;
+        --tail: #aa681b;
+        --tail-soft: #f8eddb;
+        --risk: #a64242;
+        --risk-soft: #faeaea;
+        --code: #e8f0ef;
+        --sans: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --paper: #0f1b1e;
+          --surface: #152528;
+          --surface-soft: #1c3334;
+          --ink: #e8f2ef;
+          --ink-soft: #b6cac5;
+          --muted: #92aca7;
+          --line: #34504e;
+          --line-strong: #537872;
+          --accent: #84d4c6;
+          --accent-soft: #1b4643;
+          --tail: #efbb72;
+          --tail-soft: #46351f;
+          --risk: #ef9993;
+          --risk-soft: #462d30;
+          --code: #223a3b;
+        }
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.58 var(--sans); }
+      a { color: var(--accent); text-underline-offset: 0.18em; }
+      :focus-visible { outline: 3px solid var(--tail); outline-offset: 3px; border-radius: 3px; }
+      .shell { display: grid; grid-template-columns: 15rem minmax(0, 1fr); min-height: 100vh; }
+      .rail { position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 2.1rem 1.2rem 2rem 1.5rem; border-right: 1px solid var(--line); background: var(--surface); }
+      .rail-title { font-weight: 800; letter-spacing: -0.035em; line-height: 1.18; font-size: 1.12rem; margin: 0 0 0.35rem; }
+      .rail-subtitle { margin: 0; color: var(--muted); font-size: 0.8rem; line-height: 1.4; }
+      .rail nav { margin-top: 2rem; display: grid; gap: 0.06rem; }
+      .rail nav a { display: block; padding: 0.46rem 0.6rem; color: var(--ink-soft); text-decoration: none; font-size: 0.86rem; line-height: 1.3; border-left: 2px solid transparent; }
+      .rail nav a:hover { color: var(--ink); background: var(--surface-soft); border-left-color: var(--accent); }
+      main { min-width: 0; }
+      .wrap { max-width: 74rem; padding: 3.2rem clamp(1rem, 4.8vw, 4.5rem) 6rem; margin: 0 auto; }
+      .mast { border-bottom: 2px solid var(--ink); padding-bottom: 2.2rem; margin-bottom: 0.6rem; }
+      .kicker { font: 700 0.77rem/1.3 var(--mono); color: var(--accent); letter-spacing: 0.02em; margin: 0 0 0.9rem; }
+      h1 { font-size: clamp(2.3rem, 5vw, 4.3rem); letter-spacing: -0.06em; line-height: 1; margin: 0 0 1.3rem; max-width: 15ch; font-weight: 760; }
+      .lede { font-size: clamp(1.05rem, 1.5vw, 1.22rem); line-height: 1.5; max-width: 52rem; margin: 0; color: var(--ink-soft); }
+      .decision { margin-top: 2rem; padding: 1.2rem 1.4rem; background: var(--accent-soft); border-left: 5px solid var(--accent); max-width: 62rem; }
+      .decision strong { display: block; margin-bottom: 0.3rem; }
+      .decision p { margin: 0; }
+      section { scroll-margin-top: 1.5rem; padding: 2.4rem 0 1.6rem; border-top: 1px solid var(--line); }
+      .section-head { display: grid; grid-template-columns: minmax(0, 2fr) minmax(12rem, 1fr); align-items: end; gap: 2rem; margin-bottom: 1.2rem; }
+      .section-head h2 { font-size: clamp(1.6rem, 2.6vw, 2.3rem); letter-spacing: -0.05em; line-height: 1.13; margin: 0; }
+      .section-head p { margin: 0; color: var(--ink-soft); font-size: 0.94rem; line-height: 1.45; }
+      h3 { font-size: 1.18rem; letter-spacing: -0.025em; line-height: 1.25; margin: 1.8rem 0 0.6rem; }
+      p { max-width: 72ch; margin: 0.5rem 0 1rem; }
+      ul, ol { padding-left: 1.35rem; max-width: 80ch; }
+      li { margin: 0.38rem 0; }
+      code, pre { font-family: var(--mono); }
+      code { background: var(--code); border-radius: 3px; padding: 0.08rem 0.25rem; font-size: 0.86em; overflow-wrap: anywhere; }
+      pre { background: var(--surface); border: 1px solid var(--line); padding: 1rem 1.2rem; overflow-x: auto; font-size: 0.8rem; line-height: 1.6; max-width: 100%; }
+      pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+      .table-wrap { max-width: 100%; overflow-x: auto; border: 1px solid var(--line); background: var(--surface); margin: 1rem 0 1.5rem; }
+      table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 0.86rem; line-height: 1.45; }
+      th, td { padding: 0.72rem 0.85rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+      th { background: var(--surface-soft); font-size: 0.77rem; font-weight: 750; }
+      tr:last-child td { border-bottom: 0; }
+      td.num { font-family: var(--mono); white-space: nowrap; }
+      tr.pick td { background: var(--accent-soft); }
+      .tag { display: inline-block; font: 700 0.7rem/1 var(--mono); padding: 0.28rem 0.42rem; border-radius: 3px; margin: 0.1rem 0.25rem 0.1rem 0; white-space: nowrap; }
+      .tag.go { background: var(--accent-soft); color: var(--accent); }
+      .tag.later { background: var(--tail-soft); color: var(--tail); }
+      .tag.no { background: var(--risk-soft); color: var(--risk); }
+      .meta-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 1.2rem; }
+      .meta-grid > div { background: var(--surface); padding: 1rem 1.1rem; }
+      .meta-grid b { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; }
+      .meta-grid span { color: var(--ink-soft); font-size: 0.9rem; }
+      .callout { padding: 1rem 1.25rem; background: var(--surface-soft); border-left: 4px solid var(--line-strong); margin: 1.3rem 0; }
+      .callout.risk { background: var(--risk-soft); border-left-color: var(--risk); }
+      .callout p:last-child { margin-bottom: 0; }
+      .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.9rem; margin: 1.2rem 0 1.4rem; }
+      .flow-node { position: relative; background: var(--surface); border: 1px solid var(--line); padding: 0.8rem 0.85rem; font-size: 0.84rem; line-height: 1.4; }
+      .flow-node b { display: block; font-size: 0.86rem; margin-bottom: 0.2rem; }
+      .flow-node span { color: var(--ink-soft); }
+      .flow-node.new { border-color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
+      .flow-node:not(:last-child)::after { content: "→"; position: absolute; top: 0.8rem; right: -0.78rem; color: var(--accent); font-weight: bold; }
+      .phase { border: 1px solid var(--line); background: var(--surface); padding: 1.1rem 1.3rem 0.6rem; margin: 1rem 0; }
+      .phase h3 { margin-top: 0; }
+      .phase .exit { border-top: 1px dashed var(--line); padding-top: 0.6rem; margin-top: 0.6rem; font-size: 0.9rem; color: var(--ink-soft); }
+      .phase .exit b { color: var(--ink); }
+      .sources li { font-size: 0.9rem; overflow-wrap: anywhere; }
+      .mocks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.6rem; margin: 1rem 0 1.4rem; }
+      .mock { background: var(--surface); border: 1px solid var(--line); padding: 0.9rem 1.1rem; }
+      .mock-label { font: 700 0.72rem/1.3 var(--mono); color: var(--muted); margin: 0 0 0.5rem; }
+      .mock-text { font-size: 0.95rem; line-height: 1.7; }
+      .mock-text .lit { font-family: var(--mono); font-size: 0.85em; color: var(--risk); }
+      .mock-text sub, .mock-text sup { font-size: 75%; line-height: 0; position: relative; vertical-align: baseline; }
+      .mock-text sup { top: -0.47em; }
+      .mock-text sub { bottom: -0.27em; }
+      .mock table { min-width: 0; font-size: 0.85rem; }
+      .mock th, .mock td { padding: 0.35rem 0.6rem; border: 1px solid var(--line); }
+      @media (max-width: 1000px) {
+        .shell { grid-template-columns: 1fr; }
+        .rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+        .rail nav { grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); margin-top: 1rem; }
+        .flow { grid-template-columns: 1fr; }
+        .flow-node:not(:last-child)::after { content: "↓"; top: auto; bottom: -1.05rem; right: 50%; }
+      }
+      @media (max-width: 760px) {
+        .meta-grid, .section-head, .mocks { grid-template-columns: 1fr; gap: 0.6rem; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="rail">
+        <p class="rail-title">Sub, sup and line breaks</p>
+        <p class="rail-subtitle">Implementation plan · item 8 of the Streamdown gap analysis</p>
+        <nav aria-label="Sections">
+          <a href="#scope">Scope</a>
+          <a href="#streamdown">What Streamdown does</a>
+          <a href="#today">What the engine does today</a>
+          <a href="#route">HTML subset or md4c syntax</a>
+          <a href="#design">Design</a>
+          <a href="#grammar">Tag grammar</a>
+          <a href="#breaks">Line break rules</a>
+          <a href="#api">Public API</a>
+          <a href="#streaming">Streaming</a>
+          <a href="#platforms">Platforms</a>
+          <a href="#phases">Phases</a>
+          <a href="#testing">Testing</a>
+          <a href="#risks">Decisions and risks</a>
+          <a href="#followups">Follow-ups</a>
+          <a href="#sources">Sources</a>
+        </nav>
+      </aside>
+      <main>
+        <div class="wrap">
+          <header class="mast">
+            <p class="kicker">docs / sub-sup-line-breaks-plan</p>
+            <h1>Sub, sup and line breaks, without a sanitizer</h1>
+            <p class="lede">
+              Models write <code>H&lt;sub&gt;2&lt;/sub&gt;O</code>, <code>x&lt;sup&gt;2&lt;/sup&gt;</code>, footnote markers like
+              <code>&lt;sup&gt;1&lt;/sup&gt;</code>, and above all <code>&lt;br&gt;</code> inside GFM table cells, because a table row has no other way
+              to break a line. Streamdown renders all of these. Downstream shows the tags as literal text, as the
+              <a href="api.md#feature-scope">first-release contract</a> requires. This plan closes the "Sub, sup and line breaks" item of the
+              <a href="streamdown-gap-analysis.html">Streamdown gap analysis</a> by recognizing exactly five inline tags in the parser, mapping them onto
+              two new inline style bits and the line break the engine already has, and leaving every other tag as visible text.
+            </p>
+            <div class="meta-grid">
+              <div><b>Builds on</b><span>Theme and style (#18), copy and download controls (#16), the remend preview port, and math and images (#21). All are treated as merged.</span></div>
+              <div><b>Compared against</b><span>Streamdown 2.7.0 and remend 1.4.0 (<code>vercel/streamdown@1ddd8f4</code>), hast-util-sanitize's GitHub schema, Tailwind's preflight, and <code>react-native-enriched-markdown@c10ab56</code></span></div>
+              <div><b>New dependencies</b><span>None. md4c already reports inline HTML as <code>MD_TEXT_HTML</code> pieces, and both platforms already raise footnote references with a size scale and a baseline shift.</span></div>
+            </div>
+            <div class="decision">
+              <strong>Decision: an allowlist of five inline tags read in the parser, not an HTML renderer</strong>
+              <p>
+                <code>&lt;sub&gt;</code>, <code>&lt;/sub&gt;</code>, <code>&lt;sup&gt;</code>, <code>&lt;/sup&gt;</code> and <code>&lt;br&gt;</code> (with
+                <code>&lt;br/&gt;</code>, <code>&lt;br /&gt;</code> and any letter case) are matched inside the <code>MD_TEXT_HTML</code> pieces md4c already
+                hands the <code>DocumentBuilder</code>. A matched tag contributes no text: <code>sub</code> and <code>sup</code> set
+                <code>InlineStyle::Subscript</code> or <code>InlineStyle::Superscript</code> on the text between them, and <code>br</code> appends the same
+                <code>'\n'</code> a hard break does. Any other tag, and any tag inside code, stays literal exactly as today. md4c's own
+                <code>^sup^</code> and <code>~sub~</code> syntax is offered as an opt-in only, because with it on <code>2^10 and 3^5</code> becomes a
+                superscript and <code>~strike~</code> stops being strikethrough.
+              </p>
+            </div>
+          </header>
+
+          <section id="scope">
+            <div class="section-head">
+              <h2>Scope</h2>
+              <p>What ships, what waits, and what stays out.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Piece</th><th>Status</th><th>Notes</th></tr></thead>
+                <tbody>
+                  <tr><td><code>&lt;br&gt;</code> in paragraphs, headings, list items, quotes</td><td><span class="tag go">in</span></td><td>A line break, merged with an adjacent soft break so <code>a&lt;br&gt;</code> at a line end does not open a blank line. See <a href="#breaks">line break rules</a>.</td></tr>
+                  <tr><td><code>&lt;br&gt;</code> in GFM table cells</td><td><span class="tag go">in</span></td><td>The most common case in model output. Both platforms already wrap cell text and measure multi-line cells; the exporter already writes a cell newline back as <code>&lt;br&gt;</code> for Markdown and quotes it for CSV.</td></tr>
+                  <tr><td><code>&lt;sub&gt;</code> and <code>&lt;sup&gt;</code></td><td><span class="tag go">in</span></td><td>Two new inline style bits, drawn with the footnote reference's size-and-shift mechanism. Markdown inside them keeps working: <code>&lt;sup&gt;**y**&lt;/sup&gt;</code> is bold and raised.</td></tr>
+                  <tr><td>Attributes on those tags</td><td><span class="tag go">in, ignored</span></td><td><code>&lt;sup class="x"&gt;</code> is a superscript. GitHub's sanitize schema allows no attributes on these tags, so Streamdown drops them too.</td></tr>
+                  <tr><td>A block that is only <code>&lt;br&gt;</code> tags</td><td><span class="tag go">in</span></td><td>md4c reports <code>&lt;br&gt;</code> alone between blank lines as an HTML block. It becomes an empty paragraph, one blank line per tag, rather than literal source.</td></tr>
+                  <tr><td>Hiding a half-arrived tag at the stream tail</td><td><span class="tag go">in, opt-in</span></td><td>A new <code>preview.htmlTags</code> feature, the port of remend's <code>htmlTags</code> handler, restricted to prefixes of the five tags.</td></tr>
+                  <tr><td>Theme keys <code>superscript</code> and <code>subscript</code></td><td><span class="tag go">in</span></td><td><code>fontScale</code> and <code>baselineOffsetScale</code>, the names <code>react-native-enriched-markdown</code> already uses.</td></tr>
+                  <tr><td>md4c <code>^sup^</code> and <code>~sub~</code> syntax</td><td><span class="tag go">in, opt-in</span></td><td>Off by default, as in enriched-markdown. Not in Streamdown at all. Same style bits, so it costs two span cases once parse options carry the flags.</td></tr>
+                  <tr><td><code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;strong&gt;</code>, <code>&lt;em&gt;</code>, <code>&lt;s&gt;</code>, <code>&lt;del&gt;</code>, <code>&lt;code&gt;</code>, <code>&lt;kbd&gt;</code></td><td><span class="tag later">later</span></td><td>Each maps onto a style bit the engine already has, so it would be one row in the tag table. Kept out to keep this change to what was asked and to leave the <code>raw-html-literal-math</code> fixture's <code>&lt;b&gt;</code> case untouched. See <a href="#followups">follow-ups</a>.</td></tr>
+                  <tr><td><code>&lt;details&gt;</code>, <code>&lt;summary&gt;</code>, <code>&lt;div&gt;</code>, <code>&lt;img&gt;</code></td><td><span class="tag no">out</span></td><td>Block structure or network access. HTML blocks other than a lone <code>&lt;br&gt;</code> stay literal.</td></tr>
+                  <tr><td>Scripts, styles, event attributes, <code>allowedTags</code></td><td><span class="tag no">out</span></td><td>The contract's "never execute" rule is unchanged. Nothing outside the five tags is ever interpreted.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="streamdown">
+            <div class="section-head">
+              <h2>What Streamdown does, and what we take</h2>
+              <p>Read from <code>packages/streamdown/index.tsx</code>, <code>lib/components.tsx</code>, <code>lib/table/utils.ts</code>, remend's <code>html-tag-handler.ts</code>, and their tests.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Streamdown</th><th>Where</th><th>What Downstream takes</th></tr></thead>
+                <tbody>
+                  <tr><td>rehype-raw parses every tag, then rehype-sanitize keeps the ones in hast-util-sanitize's GitHub schema, which includes <code>br</code>, <code>sub</code> and <code>sup</code></td><td><code>defaultRehypePlugins</code> in <code>index.tsx</code></td><td>The result for those three tags, not the mechanism. A sanitizer over a parsed DOM is the right tool on the web, where the DOM is the renderer; natively it would be a second parser to keep safe. An allowlist that only ever adds style bits cannot execute anything.</td></tr>
+                  <tr><td><code>sup</code> and <code>sub</code> components with the <code>text-sm</code> class</td><td><code>MemoSup</code>, <code>MemoSub</code></td><td>The look. With Tailwind's preflight (<code>font-size: 75%; line-height: 0</code>, <code>sup { top: -0.5em }</code>, <code>sub { bottom: -0.25em }</code>) and <code>text-sm</code> overriding the size, a 16 px body gets 14 px text raised by about 0.44 of the body size or lowered by about 0.22, and <b>the line does not grow</b>. The last part is the one to match.</td></tr>
+                  <tr><td>Table copy reads a <code>BR</code> element as <code>\n</code>, writes it back as <code>&lt;br&gt;</code> in Markdown, quotes it in CSV, and escapes it as <code>\n</code> in TSV</td><td><code>lib/table/utils.ts</code>, <code>copy-dropdown.test.tsx</code></td><td>Already the engine's behavior for a <code>'\n'</code> inside a cell: <code>Export.cpp</code> was written for it ("no GFM table cell can hold one today"). This plan makes cells hold one and adds the missing HTML-export case.</td></tr>
+                  <tr><td>remend strips an incomplete tag (<code>&lt;[a-zA-Z/][^&gt;]*$</code>) from the stream tail, skipping code and math</td><td><code>handleIncompleteHtmlTag</code></td><td>The idea, narrowed: only a prefix of one of the five tags is hidden, and only when a reparse proves the fragment was literal text. See <a href="#streaming">Streaming</a>.</td></tr>
+                  <tr><td>Without rehype-raw, <code>remarkEscapeHtml</code> shows HTML as text</td><td><code>lib/remark/escape-html.ts</code></td><td>Today's Downstream behavior, which <code>inlineHtml={false}</code> keeps available.</td></tr>
+                  <tr><td>remark-gfm's <code>singleTilde</code> is on, so <code>~x~</code> is strikethrough; there is no <code>^x^</code> syntax</td><td><code>remarkGfm</code> defaults</td><td>The reason md4c's subscript and superscript flags stay off by default.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              <code>react-native-enriched-markdown</code>, whose style keys the theme already mirrors, takes the other route: <code>md4cFlags={{ superscript: true, subscript: true }}</code>
+              turns on md4c's syntax, and <code>markdownStyle.superscript</code> and <code>.subscript</code> take <code>fontScale</code> (0.75 on iOS, 0.65 on
+              Android because Roboto's x-height is larger) and <code>baselineOffsetScale</code> (0.35 up, 0.20 down). It renders no inline HTML at all.
+              Downstream takes its key names and offers its syntax as the opt-in.
+            </p>
+          </section>
+
+          <section id="today">
+            <div class="section-head">
+              <h2>What the engine does today</h2>
+              <p>md4c 0.6.0 as vendored, with <code>MD_DIALECT_GITHUB</code>, probed through its callbacks.</p>
+            </div>
+            <p>
+              md4c already does the hard part. A complete inline tag arrives as its own <code>MD_TEXT_HTML</code> callback, separate from the text
+              around it, and Markdown inside the tags is parsed normally. <code>DocumentBuilder::text</code> sends that piece to its default branch, which
+              appends the bytes as visible text. That one branch is the whole reason the tags are literal.
+            </p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Input</th><th>md4c callbacks</th><th>What it tells the design</th></tr></thead>
+                <tbody>
+                  <tr><td><code>H&lt;sub&gt;2&lt;/sub&gt;O</code></td><td><code>N{H} HTML{&lt;sub&gt;} N{2} HTML{&lt;/sub&gt;} N{O}</code></td><td>Each tag is one piece; no tokenizing of mixed text is needed.</td></tr>
+                  <tr><td><code>a&lt;br&gt;b&lt;br/&gt;c&lt;br /&gt;d&lt;BR&gt;e</code></td><td>Four <code>HTML{…}</code> pieces, one per form</td><td>Self-closing forms and case all arrive as pieces.</td></tr>
+                  <tr><td><code>| x&lt;br&gt;y | &lt;sup&gt;1&lt;/sup&gt; |</code></td><td><code>[TD N{x} HTML{&lt;br&gt;} N{y}] [TD HTML{&lt;sup&gt;} N{1} HTML{&lt;/sup&gt;}]</code></td><td>Table cells get the same pieces, scoped to the cell.</td></tr>
+                  <tr><td><code>**bold &lt;sup&gt;x&lt;/sup&gt;** &lt;sup&gt;**y**&lt;/sup&gt;</code></td><td>Strong spans inside and around the tags</td><td>Styles nest both ways, so the tag state is a depth, not a span.</td></tr>
+                  <tr><td><code>text⏎&lt;br&gt;⏎more</code></td><td><code>N{text} SOFTBR HTML{&lt;br&gt;} SOFTBR N{more}</code></td><td>Downstream shows soft breaks as line breaks, so a naive mapping gives two blank lines where HTML shows one break. See <a href="#breaks">line break rules</a>.</td></tr>
+                  <tr><td><code>para⏎⏎&lt;br&gt;⏎⏎next</code></td><td><code>[BHTML HTML{&lt;br&gt;} HTML{⏎}]</code></td><td>A lone tag line is an HTML block (CommonMark type 7), not inline HTML.</td></tr>
+                  <tr><td><code>&lt;sup&gt;1&lt;/sup&gt; footnote</code> at a line start</td><td>A paragraph with inline pieces</td><td>Type 7 needs the tag alone on its line, so this common footnote shape stays inline.</td></tr>
+                  <tr><td><code>`&lt;sub&gt;x&lt;/sub&gt;`</code> and <code>\&lt;sub&gt;y&lt;/sub&gt;</code></td><td><code>CODE{&lt;sub&gt;x&lt;/sub&gt;}</code>; <code>N{&lt;} N{sub&gt;y} HTML{&lt;/sub&gt;}</code></td><td>Code is never HTML. An escaped opener leaves a stray closer, which must be swallowed, as an HTML parser would.</td></tr>
+                  <tr><td><code>H&lt;sub&gt;2 open</code></td><td><code>N{H} HTML{&lt;sub&gt;} N{2 open}</code></td><td>An unclosed tag runs to the end of its block, as a browser does inside a <code>&lt;p&gt;</code>.</td></tr>
+                  <tr><td><code>H&lt;su</code>, <code>x&lt;sup&gt;2&lt;/sup</code></td><td><code>N{H&lt;su}</code>; <code>… N{2&lt;/sup}</code></td><td>A half-arrived tag is text until its <code>&gt;</code> arrives. That is the streaming flash the preview feature hides.</td></tr>
+                  <tr><td><code>![a&lt;sup&gt;2&lt;/sup&gt;b](…)</code></td><td>The pieces arrive inside the image span</td><td>Alt text must drop the tags so <code>Image::alt</code> is <code>a2b</code>, which image-paragraph promotion compares against.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="route">
+            <div class="section-head">
+              <h2>HTML subset or md4c syntax</h2>
+              <p>The gap analysis named both routes. The HTML subset is the default; the syntax is an opt-in.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Route</th><th>Parity</th><th>Cost</th><th>Hazard</th></tr></thead>
+                <tbody>
+                  <tr class="pick"><td>Allowlisted inline tags in <code>DocumentBuilder</code></td><td>Matches Streamdown for every <code>&lt;sub&gt;</code>, <code>&lt;sup&gt;</code>, <code>&lt;br&gt;</code> a model writes</td><td>A table-driven matcher on pieces md4c already splits out, two style bits, one break rule</td><td>Only text that is literally a complete tag changes. Prose such as <code>a &lt; b</code> is never an <code>MD_TEXT_HTML</code> piece.</td></tr>
+                  <tr><td><code>MD_FLAG_SUPERSCRIPTS</code> (<code>^x^</code>)</td><td>Not in Streamdown; in enriched-markdown behind a flag</td><td>One flag, one span case</td><td>Probed: <code>2^10 and 3^5 are powers</code> becomes <code>2</code> + superscript <code>10 and 3</code> + <code>5 are powers</code>. Exponents in prose are common in model output.</td></tr>
+                  <tr><td><code>MD_FLAG_SUBSCRIPTS</code> (<code>~x~</code>)</td><td>Breaks parity: remark-gfm reads <code>~x~</code> as strikethrough</td><td>One flag, one span case</td><td>Probed: <code>~strike~</code> becomes a subscript, and <code>about~5 and then~10</code> becomes <code>about</code> + subscript <code>5 and then</code> + <code>10</code>. It also contradicts the remend README's single-tilde rule.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              The syntax route is still worth exposing, because enriched-markdown users already write <code>H~2~O</code> with the flag on, and because it is
+              cheap once the parse options carry more than math. Both routes produce the same two style bits, so drawing, export and theming are written once.
+            </p>
+          </section>
+
+          <section id="design">
+            <div class="section-head">
+              <h2>Design</h2>
+              <p>Everything new lives in the parser and the two run appliers. Segments, measurement and Fabric state are untouched.</p>
+            </div>
+            <div class="flow">
+              <div class="flow-node"><b>md4c</b><span>Unchanged. Reports <code>MD_TEXT_HTML</code> pieces, or <code>MD_SPAN_SUPERSCRIPT</code> and <code>MD_SPAN_SUBSCRIPT</code> when the opt-in flags are set.</span></div>
+              <div class="flow-node new"><b>Tag matcher</b><span><code>scan::matchInlineTag</code> classifies a piece as one of five tags or as none.</span></div>
+              <div class="flow-node new"><b>DocumentBuilder</b><span>Tag depths and the break merge; a matched piece adds no text.</span></div>
+              <div class="flow-node new"><b>Inline runs</b><span><code>InlineStyle::Superscript</code> and <code>Subscript</code>; <code>br</code> is a <code>'\n'</code>.</span></div>
+              <div class="flow-node new"><b>Platforms, export</b><span>Size and shift from theme slots; <code>&lt;sup&gt;</code>, <code>&lt;sub&gt;</code>, <code>&lt;br&gt;</code> written back.</span></div>
+            </div>
+
+            <h3>1. The tag matcher</h3>
+            <p>
+              A pure function in <code>src/cpp/downstream/Scan.h</code>, next to the scanners the parser and the preview pass already share:
+              <code>InlineTag matchInlineTag(std::string_view piece)</code> returning <code>None</code>, <code>BreakTag</code>, <code>SubOpen</code>,
+              <code>SubClose</code>, <code>SupOpen</code> or <code>SupClose</code>. It is table-driven (name, opens, closes, void) so a later tag is one row.
+              It does not need to be a general HTML tokenizer: md4c has already proven the piece is one well-formed tag, so the matcher only reads the name,
+              case-insensitively, and checks what follows it. The same table drives the preview pass's prefix test, so the two can never disagree about which
+              tags exist.
+            </p>
+
+            <h3>2. Builder state and scoping</h3>
+            <ul>
+              <li><b>Depths, not spans.</b> <code>subDepth_</code> and <code>supDepth_</code> beside <code>strongDepth_</code>. A close tag with depth zero is swallowed (no text), which is what an HTML parser does with a stray end tag and what keeps <code>\&lt;sub&gt;y&lt;/sub&gt;</code> from showing a dangling <code>&lt;/sub&gt;</code>.</li>
+              <li><b>Scope.</b> Both depths reset in <code>beginLeaf</code> and in <code>beginCell</code>. An unclosed <code>&lt;sub&gt;</code> runs to the end of its paragraph or its cell and never leaks into the next block or column, which is how a browser closes it at <code>&lt;/p&gt;</code> or <code>&lt;/td&gt;</code>. Because the state never crosses a block, committed-block identity and the incremental parser's block reuse are unaffected.</li>
+              <li><b>Innermost wins.</b> <code>currentStyles()</code> sets one of the two bits, the one opened last, so <code>&lt;sup&gt;a&lt;sub&gt;b&lt;/sub&gt;&lt;/sup&gt;</code> lowers <code>b</code> rather than cancelling. A small two-entry "last opened" marker is enough; nesting the same tag twice does not shift further, matching enriched-markdown's "cannot nest" rule and avoiding unbounded shifts.</li>
+              <li><b>Footnote references win.</b> A <code>[^1]</code> inside <code>&lt;sup&gt;</code> keeps only <code>FootnoteRef</code>, so it is raised once, not twice.</li>
+              <li><b>Where tags are not tags.</b> Code spans and code blocks never produce <code>MD_TEXT_HTML</code>. Math is verbatim TeX. An <code>HtmlBlock</code> other than a lone <code>&lt;br&gt;</code> keeps its literal text, because a <code>&lt;div&gt;</code> block's contents are not parsed as Markdown and showing half its tags would be worse than showing all of them.</li>
+              <li><b>Inside an image.</b> A matched tag inside <code>MD_SPAN_IMG</code> adds nothing to the alt text, so <code>Image::alt</code> stays plain and <code>promoteImageParagraph</code>'s text comparison still holds. Style bits inside alt text are kept; alt text is drawn secondary anyway.</li>
+              <li><b>Source ranges.</b> <code>noteSourceText</code> still sees the tag's bytes, so a block's source range, a link's range and the commit boundary cover the tag even though it adds no text.</li>
+            </ul>
+
+            <h3>3. The document model</h3>
+            <pre><code>namespace InlineStyle {
+…
+constexpr uint32_t Math = 1u &lt;&lt; 7;
+constexpr uint32_t Superscript = 1u &lt;&lt; 8;
+constexpr uint32_t Subscript = 1u &lt;&lt; 9;
+}</code></pre>
+            <p>
+              No new block kind, field or segment. <code>&lt;br&gt;</code> is a <code>'\n'</code> in <code>Block::text</code>, which is already what a hard
+              break, a soft break and an image-block separator are, so selection, accessibility text, copy and every offset rule already handle it.
+              <code>sameBlock</code> compares runs, so the new bits take part in committed-segment identity with no change. The Kotlin mirror adds
+              <code>STYLE_SUPERSCRIPT</code> and <code>STYLE_SUBSCRIPT</code> to <code>NativeDocument.kt</code>; the JNI layer already passes
+              <code>run.styles</code> through unmasked.
+            </p>
+
+            <h3>4. Drawing</h3>
+            <p>
+              Both platforms already draw a raised, smaller footnote reference, so this is the same code with two more cases rather than a new mechanism.
+              <code>applyRuns</code> in <code>DSRenderedDocument.mm</code> scales the run's size and sets <code>NSBaselineOffsetAttributeName</code>
+              (positive for up, negative for down). <code>RenderedDocument.kt</code> adds a <code>RelativeSizeSpan</code> and the existing
+              <code>BaselineShiftSpan</code> with a signed fraction. The scale and shift come from four new theme slots, read through
+              <code>ThemeLayout.h</code> helpers beside <code>footnoteSizeScale</code> and <code>footnoteRaise</code>. Inline code inside a superscript takes
+              both the code face and the scale. An inline formula inside one keeps its own attachment size; scaling a formula is a follow-up if anyone asks.
+            </p>
+            <div class="callout">
+              <p><b>The line must not grow.</b> Streamdown's line height is unchanged by a superscript because Tailwind's preflight sets <code>line-height: 0</code> on <code>sub</code> and <code>sup</code>. On Android, <code>baselineShift</code> does not change the paint's font metrics, so <code>StaticLayout</code> keeps the line height already. On iOS, TextKit grows a line fragment to fit a baseline offset, which is why a footnote reference may already open its line slightly. Phase 3 measures this on the Simulator. If a line with a superscript is more than half a point taller than the same line without one, a paragraph that contains a script or footnote run gets <code>maximumLineHeight</code> equal to its <code>minimumLineHeight</code>, unless it holds an inline math attachment.</p>
+            </div>
+
+            <h3>5. Copy, export and speech</h3>
+            <ul>
+              <li><b>Plain text.</b> Selection copy and <code>getSource()</code> are unchanged in kind: selection copies <code>E=mc2</code>, which is what a browser copies from Streamdown's <code>&lt;sup&gt;</code>; <code>getSource()</code> returns the tags as written.</li>
+              <li><b>Table Markdown.</b> <code>appendMarkdownCell</code> wraps a script piece in <code>&lt;sup&gt;</code> or <code>&lt;sub&gt;</code>, outside code and inside emphasis. These tags are appended unescaped, unlike text, where <code>kMarkdownEscapes</code> still escapes a literal <code>&lt;</code>. A cell's <code>'\n'</code> is already written as <code>&lt;br&gt;</code>.</li>
+              <li><b>Table HTML.</b> <code>appendHtmlCell</code> gains <code>&lt;sup&gt;</code>/<code>&lt;sub&gt;</code> and, newly, writes a cell's <code>'\n'</code> as <code>&lt;br&gt;</code>. Without that, a paste into a spreadsheet would collapse the break to a space.</li>
+              <li><b>CSV and TSV.</b> Unchanged: a superscript is its text, and a newline is quoted or escaped as today, which is Streamdown's <code>tableDataToCSV</code> and <code>tableDataToTSV</code> behavior.</li>
+              <li><b>Speech.</b> A screen reader reads <code>H2O</code> and <code>x2</code>, as VoiceOver and TalkBack read a web <code>&lt;sup&gt;</code>. Saying "superscript" on every footnote marker would be noise. This is a deliberate choice; see <a href="#risks">decisions</a>.</li>
+            </ul>
+          </section>
+
+          <section id="grammar">
+            <div class="section-head">
+              <h2>Tag grammar</h2>
+              <p>Exactly what the matcher accepts. Anything not in the left column is literal text, as today.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Piece (an <code>MD_TEXT_HTML</code> callback)</th><th>Result</th><th>Why</th></tr></thead>
+                <tbody>
+                  <tr><td><code>&lt;br&gt;</code>, <code>&lt;br/&gt;</code>, <code>&lt;br /&gt;</code>, <code>&lt;BR&gt;</code>, <code>&lt;br clear="all"&gt;</code></td><td>Line break</td><td>Void element; case-insensitive; attributes ignored, as the sanitize schema strips them.</td></tr>
+                  <tr><td><code>&lt;/br&gt;</code></td><td>Line break</td><td>HTML parsers treat a stray <code>&lt;/br&gt;</code> as <code>&lt;br&gt;</code>, and models write it.</td></tr>
+                  <tr><td><code>&lt;sub&gt;</code>, <code>&lt;sup&gt;</code>, with any attributes</td><td>Open</td><td>Attributes dropped. Nothing they say can change the run.</td></tr>
+                  <tr><td><code>&lt;/sub&gt;</code>, <code>&lt;/sup&gt;</code></td><td>Close, or swallowed at depth zero</td><td>A stray end tag is ignored by a browser.</td></tr>
+                  <tr><td><code>&lt;sub/&gt;</code>, <code>&lt;sup /&gt;</code></td><td>Swallowed</td><td>Not void, so a browser opens a script that runs to the end of the paragraph. No writer means that, so this is the one place the engine departs from a browser on purpose.</td></tr>
+                  <tr><td><code>&lt;b&gt;</code>, <code>&lt;span&gt;</code>, <code>&lt;script&gt;</code>, comments, processing instructions, CDATA</td><td>Literal</td><td>Not on the list. <code>&lt;b&gt;</code> is a candidate follow-up.</td></tr>
+                  <tr><td><code>&lt;subtitle&gt;</code>, <code>&lt;supplier&gt;</code>, <code>&lt;brx&gt;</code></td><td>Literal</td><td>The name must end at whitespace, <code>/</code> or <code>&gt;</code>; a prefix is not a match. These are the mention-style custom tags Streamdown's <code>literalTagContent</code> exists for.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="breaks">
+            <div class="section-head">
+              <h2>Line break rules</h2>
+              <p>The one place where Downstream's display differs from HTML's, so the mapping cannot be one break per tag.</p>
+            </div>
+            <p>
+              Downstream renders a soft break as a line break (<code>api.md</code>: "Soft line breaks display as line breaks, as the fixture contract
+              requires"); HTML renders it as a space. A writer who puts <code>&lt;br&gt;</code> at the end of a line means one break, and in Streamdown gets
+              one. Mapping both the tag and the soft break to <code>'\n'</code> would give a blank line instead. The rule:
+            </p>
+            <div class="callout">
+              <p><b>Breaks are counted per stretch.</b> A stretch is a run of soft breaks, hard breaks and <code>&lt;br&gt;</code> tags with no text between them. Each <code>&lt;br&gt;</code> and each hard break (two spaces or a backslash) is one line break; soft breaks count only in a stretch that has neither, which is today's behavior. Spaces directly around a <code>&lt;br&gt;</code> are dropped, as HTML's whitespace collapsing drops them. The builder holds the stretch's count and writes the newlines when the next text arrives, so nothing it has appended is ever taken back.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Source (⏎ newline, ␣ space)</th><th>Pieces (<code>BR</code> is a <code>&lt;br&gt;</code> tag, <code>HARDBR</code> md4c's hard break)</th><th>Block text</th><th>Streamdown shows</th></tr></thead>
+                <tbody>
+                  <tr><td><code>a&lt;br&gt;b</code></td><td><code>a BR b</code></td><td class="num">a⏎b</td><td>two lines</td></tr>
+                  <tr><td><code>a&lt;br&gt;⏎b</code></td><td><code>a BR SOFTBR b</code></td><td class="num">a⏎b</td><td>two lines</td></tr>
+                  <tr><td><code>a⏎&lt;br&gt;b</code></td><td><code>a SOFTBR BR b</code></td><td class="num">a⏎b</td><td>two lines</td></tr>
+                  <tr><td><code>a⏎&lt;br&gt;⏎b</code></td><td><code>a SOFTBR BR SOFTBR b</code></td><td class="num">a⏎b</td><td>two lines</td></tr>
+                  <tr><td><code>a&lt;br&gt;&lt;br&gt;b</code></td><td><code>a BR BR b</code></td><td class="num">a⏎⏎b</td><td>a blank line between</td></tr>
+                  <tr><td><code>a&lt;br&gt;⏎&lt;br&gt;⏎b</code></td><td><code>a BR SOFTBR BR SOFTBR b</code></td><td class="num">a⏎⏎b</td><td>a blank line between</td></tr>
+                  <tr><td><code>a⏎&lt;br&gt;⏎&lt;br&gt;⏎b</code></td><td><code>a SOFTBR BR SOFTBR BR SOFTBR b</code></td><td class="num">a⏎⏎b</td><td>a blank line between</td></tr>
+                  <tr><td><code>a␣␣⏎&lt;br&gt;b</code></td><td><code>a HARDBR BR b</code></td><td class="num">a⏎⏎b</td><td>a blank line between</td></tr>
+                  <tr><td><code>| a &lt;br&gt; b |</code></td><td>in a cell, spaces around the tag</td><td class="num">a⏎b</td><td>two lines, no leading space</td></tr>
+                  <tr><td><code>| a&lt;br&gt;b |</code></td><td>in a cell</td><td class="num">a⏎b</td><td>two lines in the cell</td></tr>
+                  <tr><td><code>⏎⏎&lt;br&gt;⏎⏎</code></td><td>an HTML block</td><td>an empty paragraph, one line high</td><td>one empty line</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              A stretch that ends a paragraph or cell is one break shorter, because a browser draws no empty line for a final <code>&lt;br&gt;</code>; two
+              trailing tags still leave one empty line, as they do in Streamdown. A block that is only <code>&lt;br&gt;</code> tags and whitespace becomes a <code>Paragraph</code> of <i>n</i> empty lines,
+              with the same zero-width placeholder an empty code fence uses so it measures one line per tag; copy and accessibility strip the placeholder, as
+              they already do for code. Merging and trimming change only the visible text; source ranges are unaffected.
+            </p>
+            <div class="mocks">
+              <div class="mock">
+                <p class="mock-label">today</p>
+                <div class="mock-text">E=mc<span class="lit">&lt;sup&gt;</span>2<span class="lit">&lt;/sup&gt;</span> and H<span class="lit">&lt;sub&gt;</span>2<span class="lit">&lt;/sub&gt;</span>O</div>
+                <table style="margin-top: 0.7rem"><tr><th>Step</th><th>Notes</th></tr><tr><td>1</td><td>Mix<span class="lit">&lt;br&gt;</span>Then bake</td></tr></table>
+              </div>
+              <div class="mock">
+                <p class="mock-label">with this plan</p>
+                <div class="mock-text">E=mc<sup>2</sup> and H<sub>2</sub>O</div>
+                <table style="margin-top: 0.7rem"><tr><th>Step</th><th>Notes</th></tr><tr><td>1</td><td>Mix<br />Then bake</td></tr></table>
+              </div>
+            </div>
+          </section>
+
+          <section id="api">
+            <div class="section-head">
+              <h2>Public API</h2>
+              <p>One prop, one option object, two style keys, one preview bit. All additive.</p>
+            </div>
+            <pre><code>type MarkdownSyntaxOptions = Readonly&lt;{
+  /** `^x^` is a superscript. Off: `2^10 and 3^5` would pair the carets. */
+  superscript?: boolean;
+  /** `~x~` is a subscript instead of strikethrough. Off, as in Streamdown. */
+  subscript?: boolean;
+}&gt;;
+
+// DownstreamMarkdownProps and createMarkdownStream options
+/** Renders `&lt;br&gt;`, `&lt;sub&gt;` and `&lt;sup&gt;`. Every other tag stays text. */
+inlineHtml?: boolean;            // default true
+syntax?: MarkdownSyntaxOptions;  // default {}
+
+// MarkdownStyles, enriched-markdown's names
+superscript?: { fontScale?: number; baselineOffsetScale?: number };
+subscript?: { fontScale?: number; baselineOffsetScale?: number };
+
+// PreviewOptions
+htmlTags?: boolean;              // hides a half-arrived allowlisted tag at the tail</code></pre>
+            <h3>Parse options become one bitmask</h3>
+            <p>
+              <code>inlineHtml</code> and <code>syntax</code> change what a source parses to, so like <code>math</code> they are part of a parse's identity and
+              have to reach <code>parseMarkdown</code>, the incremental parser, the preview pass, the shadow node and the session. Today that path carries
+              <code>MathOptions</code> and the native <code>mathFlags</code> prop through about twenty files. Rather than thread a second value beside it,
+              the first phase renames <code>MathOptions</code> to <code>ParseOptions</code>, <code>MathParseFlags</code> to <code>ParseFlags</code> and
+              <code>mathFlags</code> to <code>parseFlags</code>, keeping bits 0 to 2 as they are, and adds:
+            </p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Bit</th><th>Name</th><th>Default</th><th>Effect</th></tr></thead>
+                <tbody>
+                  <tr><td class="num">0–2</td><td><code>MathEnabled</code>, <code>SingleDollar</code>, <code>Brackets</code></td><td>as today</td><td>Unchanged.</td></tr>
+                  <tr><td class="num">3</td><td><code>InlineHtml</code></td><td>on</td><td>The tag matcher runs. Off: every <code>MD_TEXT_HTML</code> piece is literal, exactly today's parse.</td></tr>
+                  <tr><td class="num">4</td><td><code>SuperscriptSyntax</code></td><td>off</td><td>Adds <code>MD_FLAG_SUPERSCRIPTS</code>.</td></tr>
+                  <tr><td class="num">5</td><td><code>SubscriptSyntax</code></td><td>off</td><td>Adds <code>MD_FLAG_SUBSCRIPTS</code>.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              <code>src/math.ts</code>'s resolver becomes the general <code>src/parseFlags.ts</code>, still the only file that writes the bits. A document
+              with no tags parses byte for byte as before under the new default, so every existing golden holds; only documents that contain one of the five
+              tags change.
+            </p>
+            <h3>Theme slots</h3>
+            <p>Appended to <code>src/theme/theme-slots.json</code> at ids 251 to 254 and regenerated into <code>ThemeSlots.h</code>, <code>themeSlots.ts</code> and <code>ThemeSlots.kt</code>. All four are layout slots.</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Slot</th><th>Default</th><th>Reference points</th></tr></thead>
+                <tbody>
+                  <tr><td><code>superscript.fontScale</code></td><td class="num">0.75</td><td>Footnote reference 0.75; enriched 0.75 iOS, 0.65 Android; Streamdown 0.875 (<code>text-sm</code>)</td></tr>
+                  <tr><td><code>superscript.baselineOffsetScale</code></td><td class="num">0.35</td><td>Footnote raise 0.35; enriched 0.35; Streamdown about 0.44</td></tr>
+                  <tr><td><code>subscript.fontScale</code></td><td class="num">0.75</td><td>As above</td></tr>
+                  <tr><td><code>subscript.baselineOffsetScale</code></td><td class="num">0.20</td><td>enriched 0.20; Streamdown about 0.22</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>The defaults match the footnote reference, so a <code>&lt;sup&gt;1&lt;/sup&gt;</code> a model writes and a <code>[^1]</code> it writes look the same. No color slot: a script run inherits its surrounding color, as in both references.</p>
+            <h3>Contract edits</h3>
+            <ul>
+              <li><code>docs/api.md</code> feature scope: the Raw HTML row's first-release cell becomes "Escaped, visible source text, except <code>&lt;br&gt;</code>, <code>&lt;sub&gt;</code> and <code>&lt;sup&gt;</code>"; the GFM tables row's "Raw HTML in cells" exclusion gains the same exception. The implementation-status rows for line breaks and math/raw HTML describe the merge rule.</li>
+              <li><code>docs/feature-matrix.md</code>: a row for the three tags on both platforms.</li>
+              <li><code>src/cpp/remend/README.md</code>: the <code>htmlTags</code> row moves from "not ported" to "ported, narrowed".</li>
+              <li><code>docs/streamdown-gap-analysis.html</code>: the safe-HTML row links this plan, and is marked shipped when it lands.</li>
+            </ul>
+          </section>
+
+          <section id="streaming">
+            <div class="section-head">
+              <h2>Streaming</h2>
+              <p>An open tag needs no repair. A half-arrived tag can flash; the preview pass can hide it.</p>
+            </div>
+            <ul>
+              <li><b>Open tag, no closer yet.</b> <code>H&lt;sub&gt;2</code> already lowers the <code>2</code>, because the scope rule runs an unclosed tag to the end of its block. When <code>&lt;/sub&gt;</code> arrives the following text is ordinary. Nothing reflows that was settled, and the finished document is a plain parse of the bytes the writer sent, as <code>docs/streaming-semantics.md</code> requires.</li>
+              <li><b>Half a tag at the tail.</b> <code>x&lt;sup&gt;2&lt;/sup</code> shows <code>2&lt;/sup</code> raised for one chunk, and <code>Mix&lt;b</code> shows <code>&lt;b</code> until the <code>r&gt;</code> arrives. <code>PreviewFeature::HtmlTags</code> (bit 5) removes a trailing fragment that is a strict prefix of one of the five tags, at least <code>&lt;</code> plus one letter or <code>/</code>, as remend requires.</li>
+              <li><b>Its proof.</b> The same shape as the link proof the pass already has: reparse without the fragment; the block count and every earlier block are unchanged; the last block's text is the previous text minus exactly the fragment; and the fragment was not inside a <code>Code</code> or <code>Math</code> run. A comparison such as <code>a&lt;b</code> mid-stream is hidden for at most one chunk and comes back when the next character proves it is not a tag.</li>
+              <li><b>Off by default</b>, like every preview feature; <code>preview: true</code> includes it. Never applied once the stream is finished.</li>
+              <li><b>Committed blocks.</b> Tag state never crosses a block, so the incremental parser's commit boundary and block reuse are unaffected, and the open-fence fast path never sees HTML.</li>
+            </ul>
+          </section>
+
+          <section id="platforms">
+            <div class="section-head">
+              <h2>Platforms</h2>
+              <p>No new view, segment or measurement path on either side.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Concern</th><th>iOS</th><th>Android</th></tr></thead>
+                <tbody>
+                  <tr><td>Script runs</td><td><code>applyRuns</code>: size from the slot, <code>NSBaselineOffsetAttributeName</code> signed by direction, sharing the footnote branch</td><td><code>RelativeSizeSpan</code> and <code>BaselineShiftSpan</code> with a signed fraction, sharing the footnote branch</td></tr>
+                  <tr><td>Line height</td><td>Measure; if it grows, cap with <code>maximumLineHeight</code> on paragraphs holding a script or footnote run, except ones with inline math</td><td><code>baselineShift</code> leaves font metrics alone; check the first line's top is not clipped by the view bounds</td></tr>
+                  <tr><td>Table cells with <code>'\n'</code></td><td><code>boundingRectWithSize</code> already measures and wraps multi-line cells</td><td><code>Layout.getDesiredWidth</code> takes the widest line and <code>StaticLayout</code> breaks on <code>'\n'</code></td></tr>
+                  <tr><td>Selection and copy</td><td>Unchanged; the tag never was text</td><td>Unchanged</td></tr>
+                  <tr><td>Accessibility</td><td>Reads the text; table row order unchanged</td><td><code>MarkdownAccessibility.kt</code> reads the text; unchanged</td></tr>
+                  <tr><td>RTL</td><td>A baseline shift is direction-free</td><td>Same</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="phases">
+            <div class="section-head">
+              <h2>Phases</h2>
+              <p>Each ends green and can be reviewed alone. Phases 1 and 2 are engine-only; one pull request carries all of them.</p>
+            </div>
+            <div class="callout">
+              <p><b>Where things are verified.</b> Engine behavior by host tests (<code>pnpm test:native</code>), JavaScript by <code>pnpm test</code>, Kotlin mirrors by <code>pnpm test:kotlin</code>, iOS TextKit by <code>pnpm test:ios:layout</code>, and rendering in the example app on the iOS Simulator and an arm64 Android emulator with the headless recipes the earlier items used.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 0 · Contract</h3>
+              <ul>
+                <li><code>inlineHtml</code>, <code>MarkdownSyntaxOptions</code>, the <code>superscript</code>/<code>subscript</code> style keys and <code>preview.htmlTags</code> in <code>src/types.ts</code>, exported.</li>
+                <li>The <code>api.md</code>, <code>feature-matrix.md</code> and gap analysis edits listed under <a href="#api">Public API</a>.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm typecheck</code> passes; contract reviewed.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 1 · Parse options become <code>ParseOptions</code></h3>
+              <ul>
+                <li>Mechanical rename across the parser, incremental parser, preview, session, shadow node, both views and codegen: <code>MathOptions</code> → <code>ParseOptions</code>, <code>mathFlags</code> → <code>parseFlags</code>. No behavior change.</li>
+                <li>Bits 3 to 5 defined; <code>src/parseFlags.ts</code> resolves <code>math</code>, <code>inlineHtml</code> and <code>syntax</code> into one number. The opt-in syntax bits set the md4c flags here, since that is a two-line change once the bits exist.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> every existing test and golden passes unchanged; <code>tests/math-options.test.ts</code> passes under its new name; a parse with bit 3 clear is byte-identical to today's.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 2 · Tags in the engine</h3>
+              <ul>
+                <li><code>scan::matchInlineTag</code> and its table in <code>Scan.h</code>.</li>
+                <li><code>InlineStyle::Superscript</code> and <code>Subscript</code>; the depths, scoping, innermost and footnote rules in <code>DocumentBuilder</code>; <code>MD_SPAN_SUPERSCRIPT</code> and <code>MD_SPAN_SUBSCRIPT</code> feeding the same depths.</li>
+                <li>The break merge rule; the <code>&lt;br&gt;</code>-only HTML block; alt text without tags.</li>
+                <li><code>Export.cpp</code>: script tags in Markdown and HTML cells, and <code>&lt;br&gt;</code> for a newline in HTML.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm test:native</code> passes the grammar table, the break table, the scoping and nesting cases, the probed inputs above, the export cases, and the existing literal-HTML tests (<code>&lt;b&gt;</code> and the <code>&lt;div&gt;&lt;script&gt;</code> block stay literal).</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 3 · iOS</h3>
+              <ul>
+                <li>Script runs in <code>applyRuns</code> from the four slots; the line-height measurement and, if needed, the cap.</li>
+                <li>The theme slots resolved in <code>DSThemeColors</code>/<code>ThemeLayout</code> as layout slots.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm test:ios:layout</code> checks a paragraph with and without <code>&lt;sup&gt;</code> measure the same height, and a table cell with <code>&lt;br&gt;</code> measures two lines. Simulator screenshots of the example sample in light and dark.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 4 · Android</h3>
+              <ul>
+                <li><code>STYLE_SUPERSCRIPT</code>/<code>STYLE_SUBSCRIPT</code>; spans in <code>RenderedDocument.kt</code>; slots read through <code>ThemeSlots.kt</code>.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm test:kotlin</code> and <code>pnpm typecheck:android</code> pass; emulator screenshots match the iOS ones in proportion.</p>
+            </div>
+            <div class="phase">
+              <h3>Phase 5 · Preview, example, docs</h3>
+              <ul>
+                <li><code>PreviewFeature::HtmlTags</code> with its proof; <code>preview.htmlTags</code> in <code>createMarkdownStream</code>; the remend README row.</li>
+                <li>An <code>inline-html</code> sample in <code>benchmarks/samples.ts</code> and the comparison screen, chunked to split a tag, so the side-by-side against Streamdown shows the same result.</li>
+                <li>The api.md implementation-status rows.</li>
+              </ul>
+              <p class="exit"><b>Exit:</b> <code>pnpm test</code> passes the preview cases through the real engine; the comparison screen shows matching text for the new sample; the gap analysis row is marked shipped.</p>
+            </div>
+          </section>
+
+          <section id="testing">
+            <div class="section-head">
+              <h2>Testing</h2>
+              <p>Every expectation runs through the real parser, as the existing suites do.</p>
+            </div>
+            <h3>Engine (<code>pnpm test:native</code>)</h3>
+            <ul>
+              <li>The <a href="#grammar">grammar table</a> and the <a href="#breaks">break table</a> as table-driven cases over <code>dump_document</code>: block text, run ranges and style bits.</li>
+              <li>Scoping: an unclosed <code>&lt;sub&gt;</code> stops at the paragraph and at the cell; a stray <code>&lt;/sup&gt;</code> is swallowed; <code>&lt;sup&gt;[^1]&lt;/sup&gt;</code> keeps only <code>FootnoteRef</code>; nested opposite tags take the innermost.</li>
+              <li>Never-tags: inside a code span, a code block, an <code>HtmlBlock</code>, math, and after a backslash escape; <code>&lt;subtitle&gt;</code>.</li>
+              <li>An <code>inline-html-subset</code> case in <code>oracle.mjs</code> with chunk checkpoints, alongside the unchanged <code>raw-html-literal-math</code> case.</li>
+              <li>Parse identity: <code>inlineHtml</code> off reproduces today's documents for every existing golden; on, a document without the five tags is identical too.</li>
+              <li>Export: Markdown and HTML for script runs and a cell break, round-tripped through the parser.</li>
+              <li>Preview: fragments <code>&lt;</code>, <code>&lt;s</code>, <code>&lt;/su</code>, <code>&lt;br /</code> hidden; <code>&lt;b</code> inside inline code, <code>a &lt; b</code>, and a finished stream left alone. Added to the ported remend corpus, whose invariants already assert no block is lost or invented.</li>
+            </ul>
+            <h3>JavaScript (<code>pnpm test</code>)</h3>
+            <ul>
+              <li><code>parseFlags</code> resolution for every combination of <code>math</code>, <code>inlineHtml</code> and <code>syntax</code>, including invalid shapes.</li>
+              <li>The four slots resolve from <code>superscript</code>/<code>subscript</code> style keys; the slot table check passes after regeneration.</li>
+              <li><code>preview: { htmlTags: true }</code> reaches the session and hides a split tag in both parse modes.</li>
+            </ul>
+            <h3>Platforms (Simulator and emulator)</h3>
+            <ul>
+              <li>One example sample covering a chemical formula, an exponent, footnote-style <code>&lt;sup&gt;</code>, a table with <code>&lt;br&gt;</code> cells, a lone <code>&lt;br&gt;</code> block, and the opt-in syntax, checked in light, dark, the largest accessibility text size, and RTL.</li>
+              <li>Table copy from the toolbar into Notes or Sheets keeps the cell break.</li>
+            </ul>
+          </section>
+
+          <section id="risks">
+            <div class="section-head">
+              <h2>Decisions and risks</h2>
+              <p>The open questions are settled as below. Each is cheap to reverse before release.</p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Question</th><th>Decision</th><th>Why</th></tr></thead>
+                <tbody>
+                  <tr><td>Render the three tags by default?</td><td><span class="tag go">decided</span>Yes. <code>inlineHtml</code> defaults to <code>true</code>; <code>inlineHtml={false}</code> restores today's output exactly.</td><td>It is a contract change, since the contract says raw HTML is "escaped, visible source text". It is what Streamdown shows and what the gap analysis asks for, and a literal <code>&lt;br&gt;</code> in a table is never what a reader wants.</td></tr>
+                  <tr><td>iOS line height</td><td><span class="tag go">decided</span>Measure in Phase 3. If a line with a script run is more than half a point taller than the same line without one, set <code>maximumLineHeight</code> to <code>minimumLineHeight</code> on paragraphs holding a script or footnote run, except paragraphs with an inline math attachment.</td><td>Streamdown's lines do not grow, because of Tailwind's <code>line-height: 0</code>. Skipping math paragraphs keeps a tall inline formula from being clipped.</td></tr>
+                  <tr><td>Prop names</td><td><span class="tag go">decided</span><code>inlineHtml</code> and <code>syntax={{ superscript, subscript }}</code>.</td><td>enriched's <code>md4cFlags</code> names an implementation, so only its keys are kept. Streamdown's <code>allowedTags</code> means something else: custom tags with attributes.</td></tr>
+                  <tr><td>Android script size</td><td><span class="tag go">decided</span>0.75 on both platforms. Split the default only if emulator screenshots visibly differ, through a platform override in <code>ThemeSlots.kt</code>.</td><td>It matches the footnote reference and keeps a single default in the slot table. enriched uses 0.65 on Android because of Roboto's x-height, which the screenshot check covers.</td></tr>
+                  <tr><td>Announce "superscript" to screen readers?</td><td><span class="tag go">decided</span>No. The text is read as written.</td><td>That is what VoiceOver and TalkBack do with a web <code>&lt;sup&gt;</code>, and announcing every footnote marker would be noise. An accessibility label on the run can add it later.</td></tr>
+                  <tr><td>Soft breaks next to a <code>&lt;br&gt;</code></td><td><span class="tag go">decided</span>Use the per-stretch count rule in <a href="#breaks">line break rules</a>.</td><td>It shows what HTML shows. Someone who writes <code>a⏎&lt;br&gt;⏎b</code> to get a blank line gets none, as they would in Streamdown.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <ul>
+              <li><b>Contract change.</b> An app that relied on seeing <code>&lt;br&gt;</code>, <code>&lt;sub&gt;</code> or <code>&lt;sup&gt;</code> as text sees formatting after upgrading. The release notes name <code>inlineHtml={false}</code>.</li>
+              <li><b>Preview hides a real <code>&lt;b</code> for one chunk.</b> This happens only when the stream pauses exactly there, and only with the opt-in feature on.</li>
+            </ul>
+          </section>
+
+          <section id="followups">
+            <div class="section-head">
+              <h2>Follow-ups this unlocks</h2>
+              <p>All reuse the matcher and existing style bits.</p>
+            </div>
+            <ul>
+              <li><b>More inline tags.</b> <code>&lt;b&gt;</code>/<code>&lt;strong&gt;</code> → <code>Strong</code>, <code>&lt;i&gt;</code>/<code>&lt;em&gt;</code> → <code>Emphasis</code>, <code>&lt;s&gt;</code>/<code>&lt;del&gt;</code>/<code>&lt;strike&gt;</code> → <code>Strikethrough</code>, <code>&lt;code&gt;</code>/<code>&lt;tt&gt;</code>/<code>&lt;samp&gt;</code> → <code>Code</code>. All are in the GitHub schema Streamdown keeps. Each is a table row plus a depth; the <code>raw-html-literal-math</code> fixture would move to a tag not on the list.</li>
+              <li><b><code>&lt;kbd&gt;</code></b> as its own style with a key-cap background, since models write it for shortcuts.</li>
+              <li><b><code>&lt;mark&gt;</code> and md4c's <code>==highlight==</code></b>, with a <code>highlight.backgroundColor</code> key enriched already has.</li>
+              <li><b><code>&lt;details&gt;</code>/<code>&lt;summary&gt;</code></b> as a collapsible container, which needs a container kind and a toggle, not a style.</li>
+            </ul>
+          </section>
+
+          <section id="sources">
+            <div class="section-head">
+              <h2>Sources</h2>
+              <p>Read for this plan.</p>
+            </div>
+            <ul class="sources">
+              <li>Streamdown, <code>vercel/streamdown@1ddd8f4</code>: <code>packages/streamdown/index.tsx</code> (<code>defaultSanitizeSchema</code>, <code>defaultRehypePlugins</code>), <code>lib/components.tsx</code> (<code>MemoSup</code>, <code>MemoSub</code>), <code>lib/table/utils.ts</code>, <code>lib/remark/escape-html.ts</code>, <code>__tests__/copy-dropdown.test.tsx</code>; remend <code>src/html-tag-handler.ts</code> — <a href="https://github.com/vercel/streamdown">github.com/vercel/streamdown</a></li>
+              <li>hast-util-sanitize GitHub schema, <code>lib/schema.js</code> — <a href="https://github.com/syntax-tree/hast-util-sanitize">github.com/syntax-tree/hast-util-sanitize</a></li>
+              <li>Tailwind CSS preflight, <code>sub</code>/<code>sup</code> rules — <a href="https://github.com/tailwindlabs/tailwindcss/blob/main/packages/tailwindcss/preflight.css">tailwindcss/preflight.css</a></li>
+              <li>remark-gfm <code>singleTilde</code> option — <a href="https://github.com/remarkjs/remark-gfm">github.com/remarkjs/remark-gfm</a></li>
+              <li>react-native-enriched-markdown <code>@c10ab56</code>: <code>docs/STYLES.md</code> (superscript/subscript keys), <code>docs/API_REFERENCE.md</code> (<code>md4cFlags</code>), <code>ios/renderer/BaselineShiftTextAttributes.m</code> — <a href="https://github.com/software-mansion/react-native-enriched-markdown">github.com/software-mansion/react-native-enriched-markdown</a>; feature request <a href="https://github.com/software-mansion/enriched-markdown/issues/214">#214</a></li>
+              <li>md4c 0.6.0 as vendored: <code>MD_TEXT_HTML</code>, <code>MD_FLAG_SUPERSCRIPTS</code>, <code>MD_FLAG_SUBSCRIPTS</code> in <code>src/cpp/md4c/md4c.c</code>; probed with a callback dump over the inputs in <a href="#today">What the engine does today</a></li>
+              <li>This repository: <code>src/cpp/downstream/MarkdownParser.cpp</code>, <code>Document.h</code>, <code>Export.cpp</code>, <code>src/cpp/remend/README.md</code>, <code>src/ios/DSRenderedDocument.mm</code>, <code>src/android/…/RenderedDocument.kt</code>, <code>src/theme/theme-slots.json</code>, <code>docs/api.md</code></li>
+            </ul>
+          </section>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

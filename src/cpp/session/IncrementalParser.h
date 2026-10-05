@@ -78,18 +78,18 @@ struct IncrementalCounters {
 class IncrementalParser {
 public:
   explicit IncrementalParser(ParseMode mode = ParseMode::FullParse,
-                             MathOptions math = MathOptions())
-      : mode_(mode), math_(math) {}
+                             ParseOptions parse = ParseOptions())
+      : mode_(mode), parse_(parse) {}
 
-  /// The math parse options this session was created with.
+  /// The parse options this session was created with.
   ///
   /// Read once, like the mode, because parse options are part of a source's
   /// identity: a session whose delimiters changed under it would parse the same
   /// bytes two ways, and the reader would see a formula change shape without the
   /// document changing. JavaScript takes the option at `createMarkdownStream` and
   /// keeps it across `reset()` for the same reason.
-  const MathOptions &math() const { return math_; }
-  void setMath(MathOptions math) { math_ = math; }
+  const ParseOptions &options() const { return parse_; }
+  void setParse(ParseOptions parse) { parse_ = parse; }
 
   /// Appends accepted bytes to the canonical source.
   void append(std::string_view chunk);
@@ -166,7 +166,7 @@ private:
   void resetScan();
 
   ParseMode mode_;
-  MathOptions math_;
+  ParseOptions parse_;
   std::string source_;
   DocumentHandle document_;
   // Source length that document_ reflects, and whether the source was

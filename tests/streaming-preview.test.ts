@@ -21,8 +21,13 @@ import {
   KIND,
   linkUrls,
   parse,
-  STYLE,
+  PREVIEW_ALL,
+  PREVIEW_EMPHASIS,
+  PREVIEW_HTML_TAGS,
+  preview,
+  replaySession,
   stylesOf,
+  STYLE,
   visibleText,
 } from './engine';
 import { CORPUS } from './remend-corpus';
@@ -575,6 +580,85 @@ describe('a fence needs a line break', () => {
     expect(inline.kind).toBe(KIND.paragraph);
     expect(inline.text).toBe('text``````');
     expect(inline.runs).toEqual([]);
+  });
+});
+
+describe('a half-arrived tag at the tail', () => {
+  // The `htmlTags` preview feature, through the real engine. It is the one
+  // place a fragment of source is hidden rather than restyled, so the cases
+  // below are answers rather than invariants: what is hidden, what comes back,
+  // and what is never touched.
+  const INLINE_HTML = 1 << 3;
+  const shown = (source: string, features: number, parseFlags = INLINE_HTML) =>
+    visibleText(preview(source, features, parseFlags));
+  /** The same tail, once the stream has finished and the policy is dropped. */
+  const settled = (
+    source: string,
+    features: number,
+    parseFlags = INLINE_HTML
+  ) =>
+    visibleText(
+      replaySession(
+        'full',
+        [
+          { op: 'preview', features },
+          { op: 'append', chunk: source },
+          { op: 'parse', finished: false },
+          { op: 'parse', finished: true },
+        ],
+        parseFlags
+      )
+    );
+
+  it('hides a fragment that could still become an allowed tag', () => {
+    for (const [source, expected] of [
+      ['Mix<br', 'Mix'],
+      ['Mix<b', 'Mix'],
+      ['H<sub>2</sub', 'H2'],
+      ['x<sup>2</sup', 'x2'],
+    ] as const) {
+      expect(shown(source, PREVIEW_HTML_TAGS), JSON.stringify(source)).toBe(
+        expected
+      );
+    }
+    // A bare `<` after a space is not hidden: dropping it would also drop the
+    // space, because a parse trims a line's trailing whitespace, and the proof
+    // asks for the fragment and nothing else.
+    expect(shown('a <', PREVIEW_HTML_TAGS)).toBe('a <');
+  });
+
+  it('returns the fragment the moment the stream finishes', () => {
+    // finish() drops the policy entirely, so the settled document is a plain
+    // parse of the bytes the writer sent, with the tags literal because the
+    // inline HTML bit is off in this case.
+    expect(settled('Mix<br', PREVIEW_ALL, 0)).toBe('Mix<br');
+  });
+
+  it('leaves a fragment that cannot become a tag alone', () => {
+    for (const source of ['a<b and 2<3', 'a<blink', 'a<subtitle>x']) {
+      expect(shown(source, PREVIEW_ALL), JSON.stringify(source)).toBe(source);
+    }
+    // The `<br>` before it is complete, so it is a break, and the fragment after
+    // it is refused because removing it would change the line in front of it.
+    expect(shown('a<br><su', PREVIEW_ALL)).toBe('a\n<su');
+  });
+
+  it('leaves a fragment that is code alone', () => {
+    // An unterminated code span claims the fragment as its content, and hiding
+    // it would delete characters the writer typed inside backticks.
+    expect(shown('`<br`', PREVIEW_ALL)).toBe('<br');
+    expect(shown('`<sup>1</sup`', PREVIEW_ALL)).toBe('<sup>1</sup');
+  });
+
+  it('does nothing without the feature', () => {
+    expect(shown('Mix<br', PREVIEW_EMPHASIS)).toBe('Mix<br');
+  });
+
+  it('holds the html-tags fragment cases to the incremental rule', () => {
+    // Every chunk boundary of each case, through the incremental parser.
+    for (const source of ['Mix<br', 'H<sub>2</sub', 'x<sup>2</sup']) {
+      assertStreamingBatchMatchesFullParse([source.split('')]);
+    }
   });
 });
 

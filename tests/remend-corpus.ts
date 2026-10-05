@@ -858,6 +858,18 @@ export const unterminatedBoldItalic: readonly string[] = [
 export const unterminatedHtml: readonly string[] = [
   '# Heading\n\nParagraph',
   '# Heading\n\nParagraph <custom',
+  // The fragments the htmlTags preview can hide, and the neighbours it must
+  // leave alone: a comparison, a name that runs past an allowed one, and a tag
+  // whose content is code.
+  '<',
+  '<s',
+  '</su',
+  '<br /',
+  'a<b and 2<3',
+  'Mix steps<br',
+  'Water is H<sub>2',
+  '`<br`',
+  '`<sup>1</sup`',
   '$$a<b$$ done',
   '$$a<b$$ done <span',
   '$x<y$ then',

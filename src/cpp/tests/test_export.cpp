@@ -186,7 +186,7 @@ void testMathDocuments() {
 
   // Math off is the byte-for-byte old parse, which is the promise the flags make.
   {
-    const ParseResult off = parseMarkdown("$$x$$\n", MathOptions{0});
+    const ParseResult off = parseMarkdown("$$x$$\n", ParseOptions{0});
     CHECK(off.status == ParseStatus::Ok && off.document, "a document with math off still parses");
     if (off.document) {
       CHECK(off.document->blocks.size() == 1, "math off leaves one block");
@@ -524,6 +524,83 @@ void testHtml() {
   checkExport("", "an empty table exports nothing", "", ExportFormat::Html);
 }
 
+/// A script run and a cell line break, exported in every format that has to
+/// carry them, each one round-tripped through the parser so the claim is that a
+/// paste reproduces the document rather than that a string matches.
+void testScriptExports() {
+  const ParseOptions inlineHtml{ParseFlags::InlineHtml};
+  const auto exported = [&](std::string_view source, ExportFormat format) {
+    const ParseResult result = parseMarkdown(source, inlineHtml);
+    if (result.status != ParseStatus::Ok) {
+      return std::string("<no document>");
+    }
+    return narrow(exportBlocks(*result.document, 0, result.document->blocks.size(), format));
+  };
+
+  // Markdown writes the tags back unescaped, which is the one place a `<` in a
+  // table export is not escaped: a reader that does not know them sees the same
+  // literal text it started from.
+  check("| a |\n| --- |\n| E=mc<sup>2</sup> |", "a superscript is written back as a tag",
+        exported("| a |\n| - |\n| E=mc<sup>2</sup> |\n", ExportFormat::Markdown));
+  check("| a |\n| --- |\n| H<sub>2</sub>O |", "a subscript is written back as a tag",
+        exported("| a |\n| - |\n| H<sub>2</sub>O |\n", ExportFormat::Markdown));
+  check("| a |\n| --- |\n| **<sup>x</sup>** |", "a script wraps the emphasis it was written around",
+        exported("| a |\n| - |\n| <sup>**x**</sup> |\n", ExportFormat::Markdown));
+  check("| a |\n| --- |\n| <sup>`x`</sup> |", "a raised code span keeps the tag outside its backticks",
+        exported("| a |\n| - |\n| <sup>`x`</sup> |\n", ExportFormat::Markdown));
+  check("| a |\n| --- |\n| Mix<br>Then |", "a cell break is written back as a br",
+        exported("| a |\n| - |\n| Mix<br>Then |\n", ExportFormat::Markdown));
+
+  // HTML writes the same runs as elements, and a cell break as a tag rather
+  // than a raw newline, which a browser would collapse to a space.
+  check("<table><thead><tr><th>a</th></tr></thead><tbody><tr><td>E=mc<sup>2</sup></td></tr></tbody></table>",
+        "HTML writes a superscript as an element",
+        exported("| a |\n| - |\n| E=mc<sup>2</sup> |\n", ExportFormat::Html));
+  check("<table><thead><tr><th>a</th></tr></thead><tbody><tr><td>Mix<br>Then</td></tr></tbody></table>",
+        "HTML writes a cell break as a br",
+        exported("| a |\n| - |\n| Mix<br>Then |\n", ExportFormat::Html));
+
+  // CSV and TSV carry the text, which is Streamdown's own behavior for a
+  // superscript and for a break in a cell.
+  check("a\nx2", "CSV writes a superscript as its text",
+        exported("| a |\n| - |\n| x<sup>2</sup> |\n", ExportFormat::Csv));
+  check("a\n\"Mix\nThen\"", "CSV quotes a cell that holds a break",
+        exported("| a |\n| - |\n| Mix<br>Then |\n", ExportFormat::Csv));
+  check("a\nMix\\nThen", "TSV escapes a cell break",
+        exported("| a |\n| - |\n| Mix<br>Then |\n", ExportFormat::Tsv));
+
+  // The round trip: a Markdown export of a document with scripts and a break
+  // parses back to the same visible text and the same runs.
+  {
+    const std::string source = "| Step | Notes |\n| - | - |\n| 1 | Mix **x**<sup>2</sup><br>Then bake |\n";
+    const std::string markdown = exported(source, ExportFormat::Markdown);
+    const ParseResult again = parseMarkdown(markdown, inlineHtml);
+    CHECK(again.status == ParseStatus::Ok, "the Markdown export re-parses");
+    // The first block is the header row the export writes back; the body row is
+    // the one that held the script and the break.
+    if (again.status == ParseStatus::Ok && again.document->blocks.size() >= 2) {
+      const Block &row = again.document->blocks[1];
+      const TableCell &cell = row.cells.back();
+      expectEq(narrow(row.text.substr(cell.start, cell.end - cell.start)), "Mix x2\nThen bake",
+               "a round trip keeps the text and the break");
+      bool raised = false;
+      for (const InlineRun &run : row.runs) {
+        if (run.start < cell.end && run.end > cell.start && (run.styles & InlineStyle::Superscript) != 0) {
+          raised = true;
+        }
+      }
+      CHECK(raised, "a round trip keeps the superscript");
+    }
+  }
+  {
+    const std::string source = "| Step | Notes |\n| - | - |\n| 1 | Mix<br>Then bake |\n";
+    const std::string html = exported(source, ExportFormat::Html);
+    // A browser reads `<br>` as a break, so the export is the HTML a reader of
+    // the paste would see: the break survives where a raw newline would not.
+    CHECK(html.find("<br>") != std::string::npos, "the HTML export carries the break as a tag");
+  }
+}
+
 void testCellPieces() {
   Document document;
   Block row;
@@ -627,6 +704,7 @@ int main() {
   testDelimited();
   testMarkdown();
   testHtml();
+  testScriptExports();
   testCellPieces();
   testNames();
   return ds_check_result();

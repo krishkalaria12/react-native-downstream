@@ -207,6 +207,8 @@ void appendMarkdownCell(std::u16string &out, const Document &document, const Blo
     const bool strong = (styles & InlineStyle::Strong) != 0;
     const bool emphasis = (styles & InlineStyle::Emphasis) != 0;
     const bool code = (styles & InlineStyle::Code) != 0;
+    const bool sup = (styles & InlineStyle::Superscript) != 0;
+    const bool sub = (styles & InlineStyle::Subscript) != 0;
     // A formula is written back as its own source, delimiters included and
     // unescaped. Escaping it would turn `$$a*b$$` into `$$a\*b$$`, which no
     // longer reads as math, and the point of a table export is that pasting it
@@ -228,6 +230,14 @@ void appendMarkdownCell(std::u16string &out, const Document &document, const Blo
     if (emphasis) {
       out.push_back(u'*');
     }
+    // Script tags nest inside the emphasis and around the code span, so a
+    // raised code span round-trips instead of drowning the tag in backticks.
+    if (sup) {
+      out.append(u"<sup>");
+    }
+    if (sub) {
+      out.append(u"<sub>");
+    }
     // Image alt text is plain text today, and a footnote reference is written
     // as the number the reader sees; neither carries its own markup.
     if (math) {
@@ -236,6 +246,12 @@ void appendMarkdownCell(std::u16string &out, const Document &document, const Blo
       appendMarkdownCode(out, text);
     } else {
       appendMarkdownPlain(out, text);
+    }
+    if (sup) {
+      out.append(u"</sup>");
+    }
+    if (sub) {
+      out.append(u"</sub>");
     }
     if (emphasis) {
       out.push_back(u'*');
@@ -314,8 +330,15 @@ void exportMarkdown(const Document &document, size_t from, size_t to, std::u16st
 
 // -------------------------------------------------------------------- html
 
-void appendHtmlEscaped(std::u16string &out, std::u16string_view text) {
+/// Escapes text for an HTML export. `breaks` writes a cell's newline as the
+/// tag a pasting reader has to see, because HTML collapses a raw newline to a
+/// space; outside a cell a newline is a line in the source, not a break.
+void appendHtmlEscaped(std::u16string &out, std::u16string_view text, bool breaks = false) {
   for (const char16_t unit : text) {
+    if (breaks && unit == u'\n') {
+      out.append(u"<br>");
+      continue;
+    }
     switch (unit) {
       case u'&':
         out.append(u"&amp;");
@@ -368,6 +391,8 @@ void appendHtmlCell(std::u16string &out, const Document &document, const Block &
     const bool strong = (styles & InlineStyle::Strong) != 0;
     const bool emphasis = (styles & InlineStyle::Emphasis) != 0;
     const bool code = (styles & InlineStyle::Code) != 0;
+    const bool sup = (styles & InlineStyle::Superscript) != 0;
+    const bool sub = (styles & InlineStyle::Subscript) != 0;
     // A formula needs no special case here: HTML has no math dialect this
     // engine targets, and the cell's literal is already in the text, so
     // escaping it writes the formula's source. That is what a paste into a
@@ -387,12 +412,24 @@ void appendHtmlCell(std::u16string &out, const Document &document, const Block &
     if (emphasis) {
       out.append(u"<em>");
     }
+    if (sup) {
+      out.append(u"<sup>");
+    }
+    if (sub) {
+      out.append(u"<sub>");
+    }
     if (code) {
       out.append(u"<code>");
     }
-    appendHtmlEscaped(out, text);
+    appendHtmlEscaped(out, text, /*breaks=*/true);
     if (code) {
       out.append(u"</code>");
+    }
+    if (sup) {
+      out.append(u"</sup>");
+    }
+    if (sub) {
+      out.append(u"</sub>");
     }
     if (emphasis) {
       out.append(u"</em>");

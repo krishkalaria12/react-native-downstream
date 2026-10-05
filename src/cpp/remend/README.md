@@ -142,11 +142,20 @@ same inputs reach the same answers without rewriting the source.
 | `singleTilde` | md4c's GitHub dialect reads `~x~` as strikethrough, so remend escapes the tilde to stop it. The pass refuses to treat a single tilde as an opener at all, which is the same answer without touching the source. `tests/streaming-preview.test.ts` pins `~hello` as literal. |
 | `comparisonOperators` | remend rewrites `- > 25` to `- \> 25`. CommonMark says the `>` is a quote, so the item really is a list item containing a blockquote, and the test at `streaming-preview.test.ts:351` pins that. Escaping it would break the document. |
 | `setextHeadings` | remend injects U+200B after a partial `---` underline because it cannot tell a heading from a rule until both arrive. md4c waits for the line, which is the same answer without an invisible character. |
-| `htmlTags` | remend strips a partial tag off the end of the text. This engine already renders raw HTML as visible text, never executed, so a partial tag is text and stays text. Stripping it would delete characters the writer sent. |
 | `katex`, `inlineKatex` | Math is literal by policy, and a closer appended to `$$x` would invent a delimiter. |
 | `emphasis-handlers` | 813 lines implementing five marker-counting functions and their flanking rules. md4c already implements CommonMark delimiters, reached through the parser's span callbacks. The pass proposes a candidate run and lets a reparse arbitrate. |
 | `strikethrough` | Ported through the same pass as emphasis. The half-complete case differs: remend turns `~~xxx~` into `~~xxx~~`, which deletes the tilde the writer already sent. The pass leaves it literal and lets the next chunk settle it. |
 | `code-block-utils` | `isInsideCodeBlock` reimplements fence tracking that `Scan.h` already does, and does it worse: it knows only ` ``` `, where the scanner knows `~~~`, indentation, and info strings. The pass does not need it at all, because a completed code span is already identified by the parser's own `InlineStyle::Code` runs, which is an exact answer rather than a re-scan. |
+
+One handler was ported and narrowed rather than dropped. remend's `htmlTags`
+strips any partial tag off the end of the text, which is safe for it because it
+renders nothing as raw source. This engine renders five tags, so a partial tag is
+only worth hiding when it could still become one of them:
+`PreviewFeature::HtmlTags` hides a trailing fragment that is a strict prefix of
+`<br>`, `<sub>` or `<sup>`, and only after a reparse proves the fragment was
+literal text and sat in no code or math run. Everything else stays, which is this
+engine's own default answer: `<b` is visible source until the writer's `>`
+arrives.
 
 One ordering difference also worth naming. remend runs its handlers in a fixed
 priority order, so it closes `**` before a code span and writes

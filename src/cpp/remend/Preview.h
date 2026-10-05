@@ -61,6 +61,13 @@ enum class PreviewFeature : uint32_t {
   /// formula shown as a half-laid-out expression is not, so the repair has to
   /// be able to say no.
   Math = 1u << 4,
+  /// A half-arrived allowlisted tag at the tail, `Mix<b` or `x<sup>2</sup`,
+  /// hidden for as long as the stream stops there. The pass only hides a
+  /// fragment that is a strict prefix of `<br>`, `<sub>` or `<sup>`, and only
+  /// after a reparse proves the fragment was literal text rather than content,
+  /// so a comparison such as `a<b` is hidden for at most one chunk and comes
+  /// back when the next character proves it is not a tag.
+  HtmlTags = 1u << 5,
 };
 
 struct PreviewOptions {
@@ -83,7 +90,7 @@ struct PreviewOptions {
   static constexpr features_t allFeatures() {
     return static_cast<features_t>(PreviewFeature::Emphasis) | static_cast<features_t>(PreviewFeature::InlineCode) |
         static_cast<features_t>(PreviewFeature::Links) | static_cast<features_t>(PreviewFeature::Images) |
-        static_cast<features_t>(PreviewFeature::Math);
+        static_cast<features_t>(PreviewFeature::Math) | static_cast<features_t>(PreviewFeature::HtmlTags);
   }
 };
 
@@ -135,7 +142,7 @@ public:
   /// change it. It is passed in so the probes parse the same way the baseline
   /// did — a proof that reparsed with different flags would prove nothing.
   PreviewResult apply(std::string_view region, size_t origin, size_t frozenBlocks = 0,
-                      MathOptions math = MathOptions()) const;
+                      ParseOptions parse = ParseOptions()) const;
 
 private:
   PreviewOptions options_;

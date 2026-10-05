@@ -26,11 +26,11 @@ export type NativeTraceEvent = SnapshotReadyEvent &
 
 export interface Spec extends TurboModule {
   /**
-   * Creates a session. `mathFlags` is the parse option bitmask, read once here
+   * Creates a session. `parseFlags` is the parse option bitmask, read once here
    * and kept for the life of the session: parse options are part of a source's
    * identity, so they cannot change under a stream the way a preview policy can.
    */
-  create(sessionId: string, mode: string, mathFlags: number): void;
+  create(sessionId: string, mode: string, parseFlags: number): void;
   append(
     sessionId: string,
     chunk: string,

@@ -36,17 +36,17 @@ public:
   /// views' themes and controls are not prepared speculatively for this source.
   static std::shared_ptr<PreparedDocument> request(std::string_view source,
                                                    const LayoutHint &hint = LayoutHint(),
-                                                   MathOptions math = MathOptions());
+                                                   ParseOptions parse = ParseOptions());
 
   /// Drops cached results. For tests.
   static void clearCache();
 
-  explicit PreparedDocument(std::string source, MathOptions math = MathOptions());
+  explicit PreparedDocument(std::string source, ParseOptions parse = ParseOptions());
 
   const std::string &source() const { return source_; }
   /// The parse options this preparation was made under, so the cache can tell
   /// two requests for one string apart.
-  const MathOptions &math() const { return math_; }
+  const ParseOptions &options() const { return parse_; }
   /// Notes one more layout this source should be prepared for. Called by
   /// `request`, and by a node whose theme changed while source work is pending.
   /// A hint added after the worker collects layouts does not restart its task;
@@ -71,7 +71,7 @@ private:
   std::vector<LayoutHint> hintsForPrepare() const;
 
   const std::string source_;
-  MathOptions math_;
+  ParseOptions parse_;
   ParseResult result_;
   std::shared_ptr<Task> task_;
   mutable std::mutex hintMutex_;
