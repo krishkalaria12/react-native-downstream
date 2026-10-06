@@ -9,5 +9,4 @@ measure layout, paint, memory, and responsiveness.
 
 Save raw exports under `<date>/<device>/<sample-order>-<renderer>.json`. Keep failed
 and cancelled runs, native traces, screen recordings, build revision, fixture hash,
-and environment notes. Follow [the measurement method](../../docs/performance-methodology.md)
-before drawing a mode decision.
+and environment notes before drawing a mode decision.

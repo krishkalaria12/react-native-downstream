@@ -61,7 +61,7 @@ public:
 };
 
 /// Blocks over this many UTF-8 bytes are not colored. The API contract in
-/// docs/api.md fixes the limit at 64 KiB.
+/// The limit is fixed at 64 KiB.
 constexpr size_t kMaxHighlightBytes = 64 * 1024;
 
 /// Wall-clock budget for one highlighting pass, in milliseconds. A pass that

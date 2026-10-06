@@ -1065,7 +1065,7 @@ bool sessionIntegration() {
   }
 
   // A finished stream drops the repair entirely, which is what
-  // docs/streaming-semantics.md requires of finish(). Full mode is the one
+  // The streaming contract requires of finish(). Full mode is the one
   // createMarkdownStream uses, and it reaches the parser by a different branch,
   // so both modes have to be asked.
   for (const ParseMode mode : {ParseMode::FullParse, ParseMode::IncrementalTail}) {

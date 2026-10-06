@@ -34,7 +34,7 @@ stream.finish();
 // Later: stream.dispose();
 ```
 
-The view parses with md4c and lays text out natively (TextKit on iOS, `StaticLayout` on Android). Parsing and text preparation run on a small shared pool of worker threads below the UI and JavaScript threads, so several messages render in parallel without blocking the app; see [threading](docs/api.md#threading). It needs the New Architecture and a development build; Expo Go cannot load it. The library never opens links itself.
+The view parses with md4c and lays text out natively (TextKit on iOS, `StaticLayout` on Android). Parsing and text preparation run on a small shared pool of worker threads below the UI and JavaScript threads, so several messages render in parallel without blocking the app. It needs the New Architecture and a development build; Expo Go cannot load it. The library never opens links itself.
 
 An open span renders as the literal text the writer sent, so a half-arrived `**bold wor` shows its markers. Turn on provisional styling to show the content styled while the closer is still on its way:
 
@@ -43,7 +43,7 @@ const stream = createMarkdownStream({ preview: true });
 // Or one feature at a time: { preview: { emphasis: true, links: true, math: true } }
 ```
 
-The pass only ever repairs the stream's unstable tail, and only when reparsing proves the repair changed nothing but the block it aimed at. It never touches `getSource()` or source ranges, and `finish()` drops it, so the settled document is always a parse of the bytes you appended; see [provisional styling](docs/streaming-semantics.md#provisional-styling).
+The pass only ever repairs the stream's unstable tail, and only when reparsing proves the repair changed nothing but the block it aimed at. It never touches `getSource()` or source ranges, and `finish()` drops it, so the settled document is always a parse of the bytes you appended.
 
 Fenced code is colored by the language in its info string, on the same worker that parses it, from the vendored [Lexilla](https://github.com/ScintillaOrg/lexilla) lexers:
 
@@ -51,7 +51,7 @@ Fenced code is colored by the language in its info string, on the same worker th
 <DownstreamMarkdown markdown={message} syntaxHighlighting={false} />
 ```
 
-`ts`, `tsx`, `js`, `java`, `c`, `cpp`, `cs`, `go`, `swift`, `kt`, `dart`, `scala`, `objc`, `py`, `sh`, `json`, `html`, `xml`, `css`, `sql`, `rs`, `yaml`, `toml`, `rb`, `lua`, `diff`, and `md` are colored; anything else renders plain, as it does in Streamdown. The palette follows GitHub's light and dark code themes and is the same on both platforms. A block with no language, an unknown language, and a block over 64 KiB of code stay plain, and a document with no fenced code never loads a lexer. Highlighting only sets colors, so selection, copy, and accessibility text are unchanged; see [the plan](docs/syntax-highlighting-plan.html) for how a streaming block stays cheap.
+`ts`, `tsx`, `js`, `java`, `c`, `cpp`, `cs`, `go`, `swift`, `kt`, `dart`, `scala`, `objc`, `py`, `sh`, `json`, `html`, `xml`, `css`, `sql`, `rs`, `yaml`, `toml`, `rb`, `lua`, `diff`, and `md` are colored; anything else renders plain, as it does in Streamdown. The palette follows GitHub's light and dark code themes and is the same on both platforms. A block with no language, an unknown language, and a block over 64 KiB of code stay plain, and a document with no fenced code never loads a lexer. Highlighting only sets colors, so selection, copy, and accessibility text are unchanged.
 
 ### Images and math
 
@@ -68,7 +68,7 @@ Math is off by default, so a document without it parses exactly as it did before
 <DownstreamMarkdown markdown={message} math={{ singleDollarTextMath: true }} />
 ```
 
-Typesetting a formula needs an engine, which ships as the separate opt-in package. Without it a formula keeps its literal and delimiters — which is also what copy returns and what a screen reader reads — is drawn in the theme's error colour, and reports `onMathError`. A formula that is laid out keeps its last good layout while it streams, so it does not re-shape on every token. See [the plan](docs/math-and-images-plan.html) for the delimiter grammar and the engine's C ABI.
+Typesetting a formula needs an engine, which ships as the separate opt-in package. Without it a formula keeps its literal and delimiters — which is also what copy returns and what a screen reader reads — is drawn in the theme's error colour, and reports `onMathError`. A formula that is laid out keeps its last good layout while it streams, so it does not re-shape on every token.
 
 ### Theming
 
@@ -113,7 +113,7 @@ const converted = syntaxColorsFromTheme(await import('./dracula.json'));
 />
 ```
 
-`presets.github` and `presets.streamdown` are the two themes the renderers are checked against. See [theming](docs/api.md#theming) for the whole surface.
+`presets.github` and `presets.streamdown` are the two themes the renderers are checked against.
 
 ### Line numbers, titles, and a capped height
 
@@ -137,7 +137,7 @@ The header shows `src/app/load.ts` instead of `ts`, and the gutter numbers from 
 
 `lineNumbers` is on by default, as in Streamdown, and a fence's `noLineNumbers` turns them off for one block. Numbers are drawn in a gutter beside the code rather than typed into it, so they are never selected, copied, or read aloud: copied text is byte-identical with numbers on or off. The gutter stays still while the code scrolls sideways, and widens by one digit as a block crosses 99. It draws in the theme's own code color, dimmed, in the theme's code font at the theme's code size, and the card's padding and border are the theme's too, so a theme restyles a code block and its numbers together.
 
-`codeBlockMaxHeight` is 400 points, as in Streamdown, and `0` removes it. A taller block scrolls inside its own card rather than filling the screen, and while it is still streaming it follows its newest line until the reader scrolls away. A vertical drag at the card's edge scrolls the surrounding list instead, so a scroll view inside a chat list does not trap the gesture. The header's expand button lifts the cap for one block; it appears only on a block past the cap. See [the plan](docs/code-block-chrome-plan.html) for the grammar and why the gutter is drawn rather than typed.
+`codeBlockMaxHeight` is 400 points, as in Streamdown, and `0` removes it. A taller block scrolls inside its own card rather than filling the screen, and while it is still streaming it follows its newest line until the reader scrolls away. A vertical drag at the card's edge scrolls the surrounding list instead, so a scroll view inside a chat list does not trap the gesture. The header's expand button lifts the cap for one block; it appears only on a block past the cap.
 
 ### Copy and download controls
 
@@ -158,7 +158,7 @@ Every code block gets a header and every table gets a toolbar, with no setup. `c
 
 Code copies as plain text; a table copies as `text/html` first, so pasting into a spreadsheet keeps the rows, columns, and alignment, and falls back to plain text for targets that do not take HTML. A code block's header has a per-block wrap button and, on a block past the cap, an expand button; `codeBlockWrap` and `codeBlockMaxHeight` set the starting state for all of them. `controls={false}` removes the header and the toolbar without changing any block's layout.
 
-A download opens the platform's own save dialog and the user picks the location, so the library never writes to a path it chose. `filename` is a base name; the extension comes from the block, not from the name. Every press reaches the matching callback, and a failure reports `control_failed` to that control's `onError` or to the view's. A control turns on as soon as its own block is settled, so a finished code block can be copied while the rest of the answer is still streaming. See [controls](docs/api.md#controls) for the whole shape.
+A download opens the platform's own save dialog and the user picks the location, so the library never writes to a path it chose. `filename` is a base name; the extension comes from the block, not from the name. Every press reaches the matching callback, and a failure reports `control_failed` to that control's `onError` or to the view's. A control turns on as soon as its own block is settled, so a finished code block can be copied while the rest of the answer is still streaming.
 
 `selectable` is on by default: a long press on settled text starts a text selection, and text that is still streaming is never selectable. An app that opens its own message menu on a long press — react, reply, delete — passes `selectable={false}`.
 
@@ -182,7 +182,7 @@ A renderer receives four props: `code` (exactly what the block's copy button cop
 
 The code card is the fallback, and it is the reason this is safe to ship: a lazy component that has not loaded yet, one that throws, and any fence you did not register all draw the card you already have, with copy and download. A throw is reported once as `renderer_failed` on `onError`, only after the fence settles, and the fence draws its card. Nothing executes a fence: a renderer that embeds HTML must sandbox it itself, because the text it receives is model output.
 
-See [fence renderers](docs/api.md#fence-renderers) for matching, sizing, streaming, and accessibility, and [the plan](docs/fence-renderers-plan.html) for how it is built.
+Matching is case-insensitive, which differs from Streamdown on purpose.
 
 ### Streaming animation and the caret
 
@@ -213,7 +213,7 @@ What fades is decided by aligning the new document's visible text against the on
 
 `caret` is `'none'`, `'block'`, or `'circle'`. It is drawn rather than typed, so it looks the same in every font and cannot change a line's height, and it is never copied, selected, exported, or read aloud. It sits after the last character of prose, a heading, a list item, or a still-open fence, and takes a line of its own in an empty document or after a table, a closed fence, or a rule. While a fade runs it follows the last word that has *started*, so it never sits after a gap.
 
-A frame of animation costs a lookup and a redraw. There is no React render, no Fabric state update, no relayout, and no change to any cached text, which matters because a segment is shared and immutable and alpha can only be applied in a draw pass. Reduce Motion turns the fade off on both platforms, and Android's animator duration scale multiplies every duration and turns it off at zero. With `animated` and `caret` off the output is identical to a build without them. See [the plan](docs/streaming-animation-plan.html) for the comparison against Streamdown and the other native renderers, and [streaming animation](docs/api.md#streaming-animation-and-the-caret) for the contract.
+A frame of animation costs a lookup and a redraw. There is no React render, no Fabric state update, no relayout, and no change to any cached text, which matters because a segment is shared and immutable and alpha can only be applied in a draw pass. Reduce Motion turns the fade off on both platforms, and Android's animator duration scale multiplies every duration and turns it off at zero. With `animated` and `caret` off the output is identical to a build without them.
 
 ## Contributing
 
@@ -232,7 +232,7 @@ lazily, in controlled and streamed modes. Animation replays a source with the
 per-word fade-in and the caret. Testing replays one source through
 Streamdown and then Downstream and shows the comparison once both runs finish.
 Bench replays a source through Downstream alone and exports a trace for the
-[performance method](docs/performance-methodology.md). Stress streams several
+performance method. Stress streams several
 answers at once to exercise the worker pool. Every screen stays mounted, so a
 run configured on one of them survives a trip through the drawer.
 
@@ -253,7 +253,7 @@ value. The other six screens need no key.
 
 ## Markdown implementation plan
 
-Phase 0 defines the [API contract](docs/api.md) and [streaming behavior](docs/streaming-semantics.md). The native display path, stream controller, and conservative incremental-tail parser are implemented. Streams use incremental parsing by default: completed blocks share their parsed content and rendering, while new input updates the unstable tail. Unproven boundaries fall back to a full parse, and `finish()` always parses the complete canonical source. Copy and download controls, per-block wrap, and the exports behind them are implemented on both platforms; the plan is [copy and download controls](docs/copy-download-controls-plan.html). The streaming fade-in and the caret are implemented on both platforms as well; the plan is [streaming caret and fade-in](docs/streaming-animation-plan.html).
+The native display path, stream controller, and conservative incremental-tail parser are implemented. Streams use incremental parsing by default: completed blocks share their parsed content and rendering, while new input updates the unstable tail. Unproven boundaries fall back to a full parse, and `finish()` always parses the complete canonical source. Copy and download controls, per-block wrap, and the exports behind them are implemented on both platforms, as is the streaming fade-in and the caret.
 
 ## Tests and benchmarks
 
@@ -272,8 +272,7 @@ check a Markdown export re-parses to the table it came from.
 
 `pnpm bench:native` builds a release-mode host engine and measures complete
 highlighting, streaming highlighting, and full versus incremental parsing with
-one parser retained for the stream. See the [PR 15 performance analysis](docs/pr-15-performance.md)
-for workloads, measurements, and the Streamdown source comparison.
+one parser retained for the stream.
 
 `pnpm bench` measures the Vitest adapters. The Downstream adapter starts a fresh
 subprocess and replays earlier operations at every update; the Streamdown RN

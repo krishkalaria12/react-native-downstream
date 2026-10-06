@@ -189,7 +189,7 @@ void testBoundaries() {
   CHECK(tokenize("brainfuck", "x = 1;\n").empty(), "an unknown language has no tokens");
   CHECK(tokenize("", "x = 1;\n").empty(), "a fence with no language has no tokens");
 
-  // The contract in docs/api.md skips a block over 64 KiB of UTF-8.
+  // The contract skips a block over 64 KiB of UTF-8.
   std::string atLimit;
   while (atLimit.size() + sizeof("const a = 1;\n") - 1 <= kMaxHighlightBytes) {
     atLimit += "const a = 1;\n";

@@ -88,7 +88,7 @@ Only on the tail, and only while the stream is unfinished.
 - **After a reset, or past the tail limit.** Both fall back to a full parse of
   a stream that is still open, so both still preview. Blocks already committed
   lead that parse and are passed as frozen, so a repair cannot land on one.
-- **`finished`.** Never, in either mode. `docs/streaming-semantics.md` requires
+- **`finished`.** Never, in either mode. The streaming contract requires
   the settled document to be a parse of the bytes the writer sent, and
   `src/cpp/tests/test_preview.cpp` asserts that a previewed session and a plain
   one produce the same document once the stream finishes. A policy set after

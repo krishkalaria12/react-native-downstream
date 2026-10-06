@@ -24,7 +24,7 @@ struct LineMark {
 ///
 /// Parsed once, where md4c reports the block, so the header label, the gutter,
 /// and the download name all read one struct rather than each scanning the raw
-/// string their own way. See `docs/code-block-chrome-plan.html` for the grammar.
+/// string their own way.
 struct FenceMeta {
   /// From `title="…"`, `filename="…"`, or the path after `lang:` in the first
   /// word. UTF-8 and sanitized: control and bidi characters removed, at most

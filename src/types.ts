@@ -119,7 +119,7 @@ export type MarkdownMathOptions = Readonly<{
  *
  * An open span renders literally unless a feature here is enabled, and even
  * then only when reparsing proves the repair changed nothing but the block it
- * aimed at. See [streaming semantics](docs/streaming-semantics.md).
+ * aimed at.
  */
 export type MarkdownPreviewOptions = Readonly<{
   /**

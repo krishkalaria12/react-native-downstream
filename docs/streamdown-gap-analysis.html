@@ -74,9 +74,8 @@
       td:first-child { font-weight: 700; width: 26%; }
       td:nth-child(2) { width: 18%; color: var(--ink-soft); }
       .tag { display: inline-block; font: 700 0.7rem/1 var(--mono); padding: 0.28rem 0.42rem; border-radius: 3px; margin: 0.1rem 0.25rem 0.1rem 0; white-space: nowrap; }
-      .tag.planned { background: var(--accent-soft); color: var(--accent); }
-      .tag.done { background: var(--accent-soft); color: var(--accent); }
-      .tag.new { background: var(--tail-soft); color: var(--tail); }
+      .tag.partial { background: var(--tail-soft); color: var(--tail); }
+      .tag.new { background: var(--accent-soft); color: var(--accent); }
       .tag.scope { background: var(--risk-soft); color: var(--risk); }
       .legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; font-size: 0.85rem; color: var(--ink-soft); margin: 0.4rem 0 0; }
       .callout { padding: 1rem 1.25rem; background: var(--surface-soft); border-left: 4px solid var(--line-strong); margin: 1.3rem 0; }
@@ -101,142 +100,111 @@
         <h1>What Streamdown has that Downstream does not</h1>
         <p class="lede">
           A feature-by-feature comparison against Vercel's Streamdown, the web renderer this project is benchmarked against.
-          It lists what is still missing from the native renderer, how each gap relates to the
-          <a href="api.md#feature-scope">API contract</a>, and a suggested order for closing them.
+          It lists what is still missing from the native renderer, what is only half built, and a suggested order for
+          closing them.
         </p>
         <div class="meta-grid">
           <div><b>Compared against</b><span>Streamdown 2.6.0, <code>vercel/streamdown@455d32e</code>, with its <code>@streamdown/code</code>, <code>math</code>, <code>mermaid</code> and <code>cjk</code> plugins</span></div>
-          <div><b>Out of this list</b><span>Incomplete-Markdown repair. The remend port lands separately and is treated as done here.</span></div>
-          <div><b>Sources</b><span><code>src/types.ts</code>, <code>docs/api.md</code>, <code>docs/feature-matrix.md</code>, and the native parser in <code>src/cpp/downstream</code></span></div>
+          <div><b>Closed since the first pass</b><span>Syntax highlighting, code block chrome, copy and download controls, math, images, streaming animation, theming, fence renderers, and the <code>br</code>, <code>sub</code> and <code>sup</code> subset</span></div>
+          <div><b>Sources</b><span><code>src/types.ts</code>, the doc comments across <code>src/cpp</code>, and the native parser in <code>src/cpp/downstream</code></span></div>
         </div>
       </header>
 
       <section aria-labelledby="legend">
         <div class="section-head">
           <h2 id="legend">Reading the tables</h2>
-          <p>Each gap is tagged with where it stands relative to the current contract.</p>
+          <p>Each row is tagged with how much of it exists today.</p>
         </div>
         <div class="legend">
-          <span><span class="tag planned">planned</span>listed as a later release in <code>docs/api.md</code></span>
-          <span><span class="tag done">shipped</span>in this build</span>
+          <span><span class="tag partial">partial</span>part of the shape is here, the rest is not</span>
           <span><span class="tag new">not planned</span>not mentioned in the contract yet</span>
           <span><span class="tag scope">contract change</span>the contract rules it out today</span>
         </div>
       </section>
 
-      <section aria-labelledby="high">
+      <section aria-labelledby="partial">
         <div class="section-head">
-          <h2 id="high">High impact for AI chat</h2>
-          <p>The gaps a user of a chat app would notice first when switching from Streamdown.</p>
+          <h2 id="partial">Partially done</h2>
+          <p>Rows where Downstream answers part of the shape and leaves the rest for later.</p>
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Streamdown feature</th><th>Downstream today</th><th>Notes</th></tr></thead>
+            <thead><tr><th>Streamdown feature</th><th>Downstream today</th><th>What is left</th></tr></thead>
             <tbody>
               <tr>
-                <td>Syntax highlighting<br /><span class="tag done">shipped</span></td>
-                <td>Colored native code, on by default, with <code>syntaxHighlighting={'{false}'}</code> to turn it off</td>
-                <td>Shipped in <a href="syntax-highlighting-plan.html">the syntax highlighting plan</a>: vendored Lexilla lexers in <code>src/cpp/lexilla/</code> tokenize on the shared worker pool, iOS and Android read one GitHub-themed palette, and the 64 KiB cap and no-auto-detect rule are kept. Fidelity is Notepad++-like rather than Shiki's: a per-line post-pass promotes a call, a property, and a PascalCase type, and JSX tags are the weakest case.</td>
+                <td>Safe raw HTML subset<br /><span class="tag partial">partial</span></td>
+                <td><code>&lt;br&gt;</code>, <code>&lt;sub&gt;</code> and <code>&lt;sup&gt;</code> rendered; every other tag still shown as source</td>
+                <td>The allowlist is three strings in <code>src/cpp/downstream/Scan.cpp</code>, applied behind <code>inlineHtml</code> (on by default) with md4c's <code>superscript</code> and <code>subscript</code> syntax flags as an opt-in. Attributes are ignored and a self-closed <code>script</code> or a stray close tag is swallowed. Still out: <code>&lt;details&gt;</code>, <code>&lt;summary&gt;</code>, <code>&lt;kbd&gt;</code>, <code>&lt;mark&gt;</code>, and the configurable <code>allowedTags</code>, <code>literalTagContent</code>, <code>fallbackComponent</code> and <code>normalizeHtmlIndentation</code>.</td>
               </tr>
               <tr>
-                <td>Code block header, line numbers, max height<br /><span class="tag done">shipped</span></td>
-                <td>Code card header with the fence title or language, copy, download, wrap and expand; <code>lineNumbers</code> on by default with <code>startLine=</code> read from the fence meta; <code>codeBlockMaxHeight</code> (default 400) that keeps scrolling to the newest line while the block streams</td>
-                <td>Shipped in <a href="code-block-chrome-plan.html">the code block chrome plan</a>: one C++ parser for the fence meta string feeds the header label, the gutter and the download name, the gutter is drawn beside the code so copy and accessibility text are unchanged, and the cap scrolls inside the card with a drag hand-off to the surrounding list. The expand button is the one part Streamdown does not have, and a placeholder while highlighting loads was not needed because tokens arrive with the snapshot.</td>
+                <td>Mermaid diagrams<br /><span class="tag partial">partial</span></td>
+                <td>No diagram engine; a fenced <code>mermaid</code> block can be drawn by the host</td>
+                <td><code>plugins.mermaid</code> with pan and zoom, full screen, and export as SVG, PNG or <code>.mmd</code> is not built in, and should not be. <code>plugins.renderers</code> is the supported path: a fenced block whose language is registered is drawn by that component in the same view, so pan, zoom, full screen and export are the adopter's own component rather than a core dependency.</td>
               </tr>
               <tr>
-                <td>Copy and download controls<br /><span class="tag planned">planned</span></td>
-                <td>Whole-document copy via <code>getSource()</code></td>
-                <td><code>controls.code</code> (copy, download), <code>controls.table</code> (copy as CSV, TSV or Markdown, download, <code>csvSeparator</code>) and <code>controls.image</code>. Tables need a way to extract their data, like Streamdown's <code>tableDataToCSV</code>, <code>tableDataToMarkdown</code> and <code>tableDataToTSV</code>. See <a href="copy-download-controls-plan.html">the copy and download controls plan</a>.</td>
+                <td>CJK handling<br /><span class="tag partial">partial</span></td>
+                <td>CJK text renders, and fades per character</td>
+                <td>Reveal units split on ideograph, kana, Hangul and fullwidth ranges (<code>src/cpp/downstream/Reveal.cpp</code>), and the highlighter offsets CJK runs correctly. Parsing is still plain CommonMark: no <code>@streamdown/cjk</code> equivalent for emphasis next to CJK punctuation, and autolinks still run past <code>。，）</code> and similar. md4c uses standard flanking rules, so text like <code>**太字**。</code> probably fails the same way. Worth a fixture test before deciding.</td>
               </tr>
               <tr>
-                <td>Math<br /><span class="tag planned">planned</span></td>
-                <td>Literal delimiters and source</td>
-                <td><code>@streamdown/math</code> uses remark-math and KaTeX, with an opt-in for single-dollar inline math. md4c already has <code>MD_FLAG_LATEXMATHSPANS</code>, so parsing is cheap; native math layout is the real work. See <a href="math-and-images-plan.html">the math and images plan</a>.</td>
+                <td>Code block line marks and token color overrides<br /><span class="tag partial">partial</span></td>
+                <td>Token colors override; line marks parsed but not drawn</td>
+                <td><code>theme.syntax</code> and <code>markdownStyle.codeBlock.syntaxColors</code> let a theme replace the highlighter's palette. <code>meta.marks</code> is parsed and kept, so a mark list can never reach a title, but it is not drawn as line backgrounds.</td>
               </tr>
               <tr>
-                <td>Images<br /><span class="tag planned">planned</span></td>
-                <td>Alt text only, no request</td>
-                <td>Streamdown loads the image, shows a placeholder while the URL is still streaming, falls back to "Image not available" on error, and offers a download control. The contract already fixes the rules: HTTPS only, four concurrent requests, cancellation. See <a href="math-and-images-plan.html">the math and images plan</a>.</td>
+                <td><code>translations</code> and <code>icons</code><br /><span class="tag partial">partial</span></td>
+                <td>Every control label is overridable; icons are fixed</td>
+                <td><code>translations</code> is a <code>Partial&lt;MarkdownTranslations&gt;</code> covering the control labels, including the failure and image states. There is no <code>icons</code> prop: the glyphs are hardcoded per platform (Android drawables, iOS symbol helpers), so an adopter restyles a control's label but not its icon.</td>
               </tr>
               <tr>
-                <td>Streaming animation and caret<br /><span class="tag done">shipped</span></td>
-                <td>None</td>
-                <td><code>animated</code> (fadeIn, blurIn or slideUp, per word or per character, <code>stagger</code>, <code>maxBacklogMs</code>), <code>caret</code> (<code>▋</code> or <code>●</code>), <code>isAnimating</code>, <code>onAnimationStart</code> and <code>onAnimationEnd</code>. This is the most visible difference in a chat UI. Natively each word gets a start time on Streamdown's shared timeline, the engine works out which characters are new by aligning each snapshot's visible text with the one last shown, and the platforms apply the alpha in their existing draw pass. See <a href="streaming-animation-plan.html">the streaming caret and fade-in plan</a>.</td>
+                <td><code>dir="auto"</code><br /><span class="tag partial">partial</span></td>
+                <td>Natural direction per paragraph</td>
+                <td>Close to Streamdown's behaviour, and code blocks already render left to right like Streamdown. Not modelled: counting strong characters across the paragraph, and ignoring code spans while deciding.</td>
               </tr>
               <tr>
-                <td>Styling and theming<br /><span class="tag planned">planned</span></td>
-                <td>System colors in light and dark only</td>
-                <td>Streamdown takes <code>className</code>, a Tailwind <code>prefix</code>, <code>components</code> overrides and <code>shikiTheme</code>. The native equivalent is a theme object for fonts, sizes, colors and spacing per element. The contract defers this until "the feature set is fixed", but adopters will ask for it first. See <a href="theme-style-plan.html">the theme and style plan</a>.</td>
+                <td>React extension points<br /><span class="tag partial">partial</span></td>
+                <td>Native segments replace them</td>
+                <td><code>mode="static"</code>, <code>BlockComponent</code>, <code>parseMarkdownIntoBlocksFn</code> and <code>useIsCodeFenceInComplete</code> are React surfaces with no native analogue, and none is needed. The one thing the design did owe is a per-block incomplete flag, and fence renderers now receive it as <code>isIncomplete</code>.</td>
               </tr>
             </tbody>
           </table>
         </div>
       </section>
 
-      <section aria-labelledby="medium">
+      <section aria-labelledby="remaining">
         <div class="section-head">
-          <h2 id="medium">Medium impact</h2>
-          <p>Useful for real model output, but each can ship after the chat basics.</p>
+          <h2 id="remaining">Still missing</h2>
+          <p>Nothing in the contract, and nothing in the tree.</p>
         </div>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Streamdown feature</th><th>Downstream today</th><th>Notes</th></tr></thead>
             <tbody>
               <tr>
-                <td>Mermaid diagrams<br /><span class="tag new">not planned</span></td>
-                <td>Fenced code</td>
-                <td><code>plugins.mermaid</code> with pan and zoom, full screen, and export as SVG, PNG or <code>.mmd</code>. Heavy on native: likely a web view or a server-side render. Better served by fence-language renderers below than by the core; <a href="fence-renderers-plan.html#catalog">the fence renderers plan</a> proposes an opt-in package built on a DOM-free Mermaid renderer.</td>
-              </tr>
-              <tr>
-                <td>Custom renderers by fence language<br /><span class="tag new">shipped</span></td>
-                <td><code>plugins.renderers: [{ language, component }]</code></td>
-                <td>Shipped. A fenced block whose language is registered is drawn by that component inside the same view: the view's shadow node measures it at the block's column and places it where the card would have been, in the same commit, with the code card underneath for every case where the component is not up. The component receives <code>code</code>, <code>language</code>, <code>meta</code> and <code>isIncomplete</code>. Matching is case-insensitive, which differs from Streamdown on purpose. See <a href="api.md#fence-renderers">the contract</a> and <a href="fence-renderers-plan.html">the plan</a>.</td>
+                <td>Table height and full screen<br /><span class="tag new">not planned</span></td>
+                <td>Horizontal scroll only</td>
+                <td><code>tableMaxHeight</code> (default 300) with vertical scroll, and a full-screen view. Column widths are already clamped through <code>markdownStyle.table.minColumnWidth</code> and <code>maxColumnWidth</code>, and code blocks have an expand control, so a table is the only block with no way out of a nested scroll. <code>fullscreen</code> is not among the four control actions, so an event naming it is dropped rather than reported.</td>
               </tr>
               <tr>
                 <td>Link safety<br /><span class="tag new">not planned</span></td>
                 <td><code>onLinkPress</code> only</td>
-                <td><code>linkSafety.onLinkCheck</code> plus a confirmation modal, on by default. Downstream never opens URLs, so the host app can already do this; only a documented example is missing.</td>
+                <td><code>linkSafety.onLinkCheck</code> plus a confirmation modal, on by default. Downstream never opens a URL itself, so a host app can already do this; what is missing is a documented example.</td>
               </tr>
               <tr>
                 <td>Wider link policy<br /><span class="tag new">not planned</span></td>
                 <td>Absolute <code>http</code>, <code>https</code>, <code>mailto</code></td>
-                <td>Streamdown also allows <code>tel:</code>, and relative URLs resolved against a <code>defaultOrigin</code> through rehype-harden.</td>
+                <td>Fixed in <code>src/cpp/downstream/LinkPolicy.cpp</code>, which rejects control characters and accepts those three schemes case-insensitively. Streamdown also allows <code>tel:</code>, and relative URLs resolved against a <code>defaultOrigin</code> through rehype-harden.</td>
               </tr>
               <tr>
                 <td><code>disableAutolinkProtocols</code><br /><span class="tag new">not planned</span></td>
                 <td>Always on</td>
-                <td>For example, stop bare emails from becoming <code>mailto:</code> links. md4c runs with <code>MD_DIALECT_GITHUB</code>, so permissive autolinking cannot be switched off.</td>
-              </tr>
-              <tr>
-                <td>Safe raw HTML subset<br /><span class="tag done">shipped</span></td>
-                <td><code>&lt;br&gt;</code>, <code>&lt;sub&gt;</code> and <code>&lt;sup&gt;</code> rendered; every other tag still shown as source</td>
-                <td>Shipped for the three tags a model actually writes, behind <code>inlineHtml</code> (on by default) and with md4c's <code>MD_FLAG_SUPERSCRIPTS</code> and <code>MD_FLAG_SUBSCRIPTS</code> as an opt-in <code>syntax</code>. <code>&lt;details&gt;</code>, <code>&lt;summary&gt;</code>, <code>&lt;kbd&gt;</code>, <code>&lt;mark&gt;</code>, <code>allowedTags</code>, <code>literalTagContent</code>, <code>fallbackComponent</code> and <code>normalizeHtmlIndentation</code> are still out. See <a href="sub-sup-line-breaks-plan.html">the sub, sup and line breaks plan</a>.</td>
-              </tr>
-              <tr>
-                <td>Table height and full screen<br /><span class="tag new">not planned</span></td>
-                <td>Horizontal scroll only</td>
-                <td><code>tableMaxHeight</code> (default 300) with vertical scroll, and a full-screen view.</td>
-              </tr>
-              <tr>
-                <td>CJK handling<br /><span class="tag new">not planned</span></td>
-                <td>Plain CommonMark rules</td>
-                <td><code>@streamdown/cjk</code> fixes emphasis next to CJK punctuation (remark-cjk-friendly) and ends autolinks at <code>。，）</code> and similar. md4c uses standard flanking rules, so text like <code>**太字**。</code> probably fails the same way. Worth a fixture test before deciding.</td>
+                <td>For example, stop bare emails from becoming <code>mailto:</code> links. The parser runs with <code>MD_DIALECT_GITHUB</code>, which includes md4c's permissive-autolink bit, so this is not a flag that is currently off but a dialect constant that would have to change.</td>
               </tr>
             </tbody>
           </table>
         </div>
-      </section>
-
-      <section aria-labelledby="low">
-        <div class="section-head">
-          <h2 id="low">Low impact or web-specific</h2>
-          <p>Mostly React or DOM extension points that the native segment design already covers or does not need.</p>
-        </div>
         <ul>
-          <li><b><code>translations</code> and <code>icons</code>.</b> Only matter once controls ship; the control labels should be overridable from the start.</li>
-          <li><b><code>mode="static"</code>, <code>BlockComponent</code>, <code>parseMarkdownIntoBlocksFn</code>, <code>useIsCodeFenceIncomplete</code>.</b> React extension points that native segments replace. A per-block <code>isIncomplete</code> is still needed if fence renderers land.</li>
-          <li><b><code>dir="auto"</code>.</b> Downstream uses natural direction per paragraph, which is close. Streamdown counts the majority of strong characters, ignores code when deciding, and always renders code blocks left to right.</li>
-          <li><b><code>portal</code> and Tailwind <code>prefix</code>.</b> No React Native equivalent.</li>
+          <li><b><code>portal</code> and Tailwind <code>prefix</code>.</b> No React Native equivalent, and nothing to close.</li>
         </ul>
       </section>
 
@@ -252,26 +220,25 @@
           <li>UTF-16 source ranges on link events.</li>
           <li>Incremental parsing and text preparation on a native worker pool, off the JavaScript and UI threads.</li>
           <li>Completed segments reused across snapshots, so only the active tail is rebuilt.</li>
+          <li>Theming as a slot table the engine reads directly, with a Shiki converter, so a host can restyle every element without a second render pass.</li>
         </ul>
       </section>
 
       <section aria-labelledby="order">
         <div class="section-head">
           <h2 id="order">Suggested order</h2>
-          <p>Items 1, 2, 4 and 8 need no network access and no heavy dependency.</p>
+          <p>All of these are contract changes or small parser work; none needs a heavy dependency.</p>
         </div>
         <ol class="order">
-          <li><b>Theme and style prop</b><span>Unblocks adoption; every later feature needs styling hooks anyway.</span></li>
-          <li><b>Code block header, copy, meta string, max height</b><span>Keep the fence meta string in the parser and add a code segment with its own chrome.</span><span class="tag done">shipped</span></li>
-          <li><b>Syntax highlighting</b><span>Shipped. Kept here so the order reads as it was planned.</span></li>
-          <li><b>Streaming caret and fade-in</b><span>The biggest perceived-quality gap in chat.</span></li>
-          <li><b>Fence-language renderers</b><span>Needs a contract change and a React-hosting segment; opens the door to diagrams without core dependencies.</span></li>
-          <li><b>Images</b><span>Already specified in the contract.</span></li>
-          <li><b>Math</b><span>Parsing is available in md4c; layout needs its own review.</span></li>
-          <li><b>Sub, sup and line breaks</b><span>Shipped through the safe HTML subset, with md4c's syntax flags as an opt-in. See <a href="sub-sup-line-breaks-plan.html">the plan</a>.</span><span class="tag done">shipped</span></li>
+          <li><b>Table max height and a full-screen view</b><span>The only remaining block with no escape from a nested scroll.</span></li>
+          <li><b>A configurable HTML allowlist</b><span>Turns the fixed three-tag list into <code>allowedTags</code>, and opens up <code>&lt;details&gt;</code> and <code>&lt;kbd&gt;</code>.</span></li>
+          <li><b>Link policy: <code>tel:</code> and relative URLs</b><span>A widening of the contract's scheme list rather than a new mechanism.</span></li>
+          <li><b>Decide on autolink protocols</b><span>Needs a dialect change, so it wants a fixture first to show what a stricter mode would cost.</span></li>
+          <li><b>CJK emphasis and autolink boundaries</b><span>Same caveat: write the failing fixture before deciding whether it is worth it.</span></li>
+          <li><b>An <code>icons</code> prop</b><span>The last stub of Streamdown's <code>components</code> surface, and small once the control labels are already overridable.</span></li>
         </ol>
         <div class="callout">
-          <p>This keeps the rule from <a href="feature-matrix.md">the feature matrix</a>: plain prose stays independent of the heavier paths. Highlighting, images, math and diagrams must load only when a document uses them, and a document with no fenced code never loads a lexer.</p>
+          <p>This keeps the rule the feature set was built on: plain prose stays independent of the heavier paths. Highlighting, images, math and diagrams must load only when a document uses them, and a document with no fenced code never loads a lexer. It is also why the heavy paths are absent from this list: they are opt-in packages, not a cost every adopter pays.</p>
         </div>
       </section>
     </main>

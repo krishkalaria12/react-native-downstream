@@ -9,7 +9,7 @@
  *
  * The corpus is asserted as invariants rather than expected output, because
  * the invariants are what must never break. What a reader *should* see while a
- * span is open is a policy question, settled in `docs/streaming-semantics.md`,
+ * span is open is a policy question settled by the streaming contract,
  * and the cases that encode an answer are written out at the bottom of this
  * file instead of being inferred from a repair pass.
  */
@@ -178,7 +178,7 @@ describe('ported corpus', () => {
 });
 
 describe('open inline spans stay literal', () => {
-  // `docs/streaming-semantics.md` allows a provisional style only when the
+  // The streaming contract allows a provisional style only when the
   // opener is unambiguous, and otherwise says to show literal markers. The
   // engine currently takes the literal branch everywhere, so these pin it. A
   // future provisional-styling pass has to relax exactly these, and nothing
