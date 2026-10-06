@@ -336,10 +336,10 @@ export function ControlsScreen() {
                     value === 'none'
                       ? 400
                       : value === 400
-                      ? 200
-                      : value === 200
-                      ? 'none'
-                      : 400
+                        ? 200
+                        : value === 200
+                          ? 'none'
+                          : 400
                   )
                 }
                 hint="Sets codeBlockMaxHeight for the whole document"

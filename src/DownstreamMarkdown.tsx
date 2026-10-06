@@ -428,16 +428,16 @@ function useControls(
         block === undefined || action === undefined
           ? undefined
           : action === 'copy'
-          ? block === 'code'
-            ? handlers.codeCopyError
-            : handlers.tableCopyError
-          : action === 'download'
-          ? block === 'code'
-            ? handlers.codeDownloadError
-            : block === 'image'
-            ? handlers.imageDownloadError
-            : handlers.tableDownloadError
-          : undefined;
+            ? block === 'code'
+              ? handlers.codeCopyError
+              : handlers.tableCopyError
+            : action === 'download'
+              ? block === 'code'
+                ? handlers.codeDownloadError
+                : block === 'image'
+                  ? handlers.imageDownloadError
+                  : handlers.tableDownloadError
+              : undefined;
       if (handler) {
         handler(error);
         return;

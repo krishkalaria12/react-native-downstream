@@ -187,7 +187,7 @@ function compileInto(target, compiler, args) {
 
 function objectBuild(source) {
   const c = source.endsWith('.c');
-  const compiler = c ? process.env.CC ?? 'cc' : process.env.CXX ?? 'c++';
+  const compiler = c ? (process.env.CC ?? 'cc') : (process.env.CXX ?? 'c++');
   const flags = c ? CFLAGS : CXXFLAGS;
   let target = objects.get(source);
   if (target === undefined) {

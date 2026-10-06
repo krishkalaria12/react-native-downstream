@@ -25,29 +25,32 @@ export const highlightCases = [
       '  return res.json();',
       '}',
       '',
-    ].join('\n')
+    ].join('\n'),
   },
   {
     id: 'ts-template',
     info: 'ts',
-    source: 'const greeting = `hello ${name}, you are ${age} years old`;\n'
+    source: 'const greeting = `hello ${name}, you are ${age} years old`;\n',
   },
   {
     id: 'ts-regex-and-numbers',
     info: 'ts',
-    source: 'const pattern = /^[a-z]+\\d{2,}$/gi;\nconst sizes = [0x10, 1e6, 0b1010, 12_345];\n'
+    source:
+      'const pattern = /^[a-z]+\\d{2,}$/gi;\nconst sizes = [0x10, 1e6, 0b1010, 12_345];\n',
   },
   {
     id: 'ts-imports',
     info: 'ts',
-    source: "import { readFile } from 'node:fs/promises';\nimport type { Foo } from './foo';\n"
+    source:
+      "import { readFile } from 'node:fs/promises';\nimport type { Foo } from './foo';\n",
   },
   {
     id: 'ts-jsx',
     // The one case Lexilla is weakest at: JSX tags render as operators and
     // identifiers. Recorded so that gap stays visible rather than surprising.
     info: 'tsx',
-    source: 'export const App = () => <View style={s}><Text>hi</Text></View>;\n'
+    source:
+      'export const App = () => <View style={s}><Text>hi</Text></View>;\n',
   },
   {
     id: 'c-preprocessor',
@@ -61,7 +64,7 @@ export const highlightCases = [
       'int main(void) { return 1; }',
       '#endif',
       '',
-    ].join('\n')
+    ].join('\n'),
   },
   {
     id: 'java',
@@ -75,7 +78,7 @@ export const highlightCases = [
       '  }',
       '}',
       '',
-    ].join('\n')
+    ].join('\n'),
   },
   {
     id: 'go',
@@ -94,12 +97,12 @@ export const highlightCases = [
       '\tfmt.Printf("%d\\n", total)',
       '}',
       '',
-    ].join('\n')
+    ].join('\n'),
   },
   {
     id: 'go-raw-string',
     info: 'go',
-    source: 'var query = `SELECT *\nFROM users`\nvar n = 1\n'
+    source: 'var query = `SELECT *\nFROM users`\nvar n = 1\n',
   },
   {
     id: 'swift',
@@ -112,7 +115,7 @@ export const highlightCases = [
       '  return (dx * dx).squareRoot()',
       '}',
       '',
-    ].join('\n')
+    ].join('\n'),
   },
   {
     id: 'kotlin',
@@ -125,7 +128,7 @@ export const highlightCases = [
       '  return "$prefix, ${user.name}"',
       '}',
       '',
-    ].join('\n')
+    ].join('\n'),
   },
   {
     id: 'python',
@@ -140,12 +143,12 @@ export const highlightCases = [
       '    def greet(self, name: str) -> str:',
       '        return f"hello {name}"',
       '',
-    ].join('\n')
+    ].join('\n'),
   },
   {
     id: 'python-triple-quoted',
     info: 'python',
-    source: "text = '''\nline one\nline two\n'''\nprint(text)\n"
+    source: "text = '''\nline one\nline two\n'''\nprint(text)\n",
   },
   {
     id: 'bash',
@@ -160,12 +163,13 @@ export const highlightCases = [
       '  fi',
       'done',
       '',
-    ].join('\n')
+    ].join('\n'),
   },
   {
     id: 'json',
     info: 'json',
-    source: '{\n  "name": "downstream",\n  "count": 3,\n  "ok": true,\n  "tags": null\n}\n'
+    source:
+      '{\n  "name": "downstream",\n  "count": 3,\n  "ok": true,\n  "tags": null\n}\n',
   },
   {
     id: 'html',
@@ -177,22 +181,24 @@ export const highlightCases = [
       '  <script>const a = 1;</script>',
       '</section>',
       '',
-    ].join('\n')
+    ].join('\n'),
   },
   {
     id: 'xml',
     info: 'xml',
-    source: '<?xml version="1.0"?>\n<root attr="1"><child/></root>\n'
+    source: '<?xml version="1.0"?>\n<root attr="1"><child/></root>\n',
   },
   {
     id: 'css',
     info: 'css',
-    source: '.card > .title, #id {\n  color: #ff0000;\n  margin: 0 auto;\n}\n@media print { a { display: none; } }\n'
+    source:
+      '.card > .title, #id {\n  color: #ff0000;\n  margin: 0 auto;\n}\n@media print { a { display: none; } }\n',
   },
   {
     id: 'sql',
     info: 'sql',
-    source: '-- pick the newest\nSELECT id, name\nFROM users\nWHERE active = 1\nORDER BY created DESC;\n'
+    source:
+      '-- pick the newest\nSELECT id, name\nFROM users\nWHERE active = 1\nORDER BY created DESC;\n',
   },
   {
     id: 'rust',
@@ -204,74 +210,80 @@ export const highlightCases = [
       '    map.values().filter(|v| **v > 0).count()',
       '}',
       '',
-    ].join('\n')
+    ].join('\n'),
   },
   {
     id: 'yaml',
     info: 'yaml',
-    source: 'name: downstream\nversion: 1\nitems:\n  - one\n  - two\n'
+    source: 'name: downstream\nversion: 1\nitems:\n  - one\n  - two\n',
   },
   {
     id: 'toml',
     info: 'toml',
-    source: '[package]\nname = "downstream"\nversion = "0.1.0"\n'
+    source: '[package]\nname = "downstream"\nversion = "0.1.0"\n',
   },
   {
     id: 'ruby',
     info: 'rb',
-    source: "class Greeter\n  def greet(name)\n    puts \"hi #{name}\"\n  end\nend\n"
+    source:
+      'class Greeter\n  def greet(name)\n    puts "hi #{name}"\n  end\nend\n',
   },
   {
     id: 'lua',
     info: 'lua',
-    source: 'local M = {}\n\nfunction M.add(a, b)\n  return a + b\nend\n\nreturn M\n'
+    source:
+      'local M = {}\n\nfunction M.add(a, b)\n  return a + b\nend\n\nreturn M\n',
   },
   {
     id: 'diff',
     info: 'diff',
-    source: '--- a/old.txt\n+++ b/new.txt\n@@ -1,3 +1,3 @@\n context\n-removed\n+added\n'
+    source:
+      '--- a/old.txt\n+++ b/new.txt\n@@ -1,3 +1,3 @@\n context\n-removed\n+added\n',
   },
   {
     id: 'markdown',
     info: 'md',
-    source: '# Title\n\nSome *emphasis* and `code`.\n\n- one\n- two\n'
+    source: '# Title\n\nSome *emphasis* and `code`.\n\n- one\n- two\n',
   },
   {
     id: 'dart',
     info: 'dart',
-    source: 'class Greeter {\n  String greet(String name) => "hi $name";\n}\n'
+    source: 'class Greeter {\n  String greet(String name) => "hi $name";\n}\n',
   },
   {
     id: 'scala',
     info: 'scala',
-    source: 'object Main {\n  def main(args: Array[String]): Unit = println("hi")\n}\n'
+    source:
+      'object Main {\n  def main(args: Array[String]): Unit = println("hi")\n}\n',
   },
   {
     id: 'objc',
     info: 'm',
-    source: '@implementation Greeter\n- (NSString *)greet:(NSString *)name {\n  return [@"hi " stringByAppendingString:name];\n}\n@end\n'
+    source:
+      '@implementation Greeter\n- (NSString *)greet:(NSString *)name {\n  return [@"hi " stringByAppendingString:name];\n}\n@end\n',
   },
   {
     id: 'csharp',
     info: 'cs',
-    source: 'public sealed class Greeter {\n  public static string Greet(string name) => $"hi {name}";\n}\n'
+    source:
+      'public sealed class Greeter {\n  public static string Greet(string name) => $"hi {name}";\n}\n',
   },
   {
     id: 'wide-characters',
     // Emoji, CJK, and Hebrew in one block: every run must still land on a code
     // point boundary, or a platform attribute would split a surrogate pair.
     info: 'ts',
-    source: 'const 👩 = "漢字";\nconst ש = 1; // שלום\n'
+    source: 'const 👩 = "漢字";\nconst ש = 1; // שלום\n',
   },
   {
     id: 'unknown-language',
     info: 'brainfuck',
-    source: '+++++[>++++<-].\n'
+    source: '+++++[>++++<-].\n',
   },
   {
     id: 'no-language',
     info: '',
-    source: 'const a = 1;\n'
+    source: 'const a = 1;\n',
   },
 ];
 
@@ -299,6 +311,7 @@ export const fencedCases = [
   },
   {
     id: 'prose-only',
-    source: '# Title\n\nProse with `inline code`, a [link](https://x.dev), and *emphasis*.\n',
+    source:
+      '# Title\n\nProse with `inline code`, a [link](https://x.dev), and *emphasis*.\n',
   },
 ];

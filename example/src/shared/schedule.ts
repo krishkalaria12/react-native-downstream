@@ -71,7 +71,7 @@ function random(seed: number): () => number {
 function splitRange(source: string, next: () => number, max: number): string[] {
   const points = Array.from(source);
   const chunks: string[] = [];
-  for (let cursor = 0; cursor < points.length; ) {
+  for (let cursor = 0; cursor < points.length;) {
     const length = 1 + Math.floor(next() * max);
     chunks.push(points.slice(cursor, cursor + length).join(''));
     cursor += length;
@@ -90,8 +90,8 @@ export function createSchedule(
     kind === 'manifest'
       ? workload.manifestChunks
       : kind === 'character'
-      ? Array.from(source)
-      : splitRange(source, next, kind === 'range' ? 20 : 32);
+        ? Array.from(source)
+        : splitRange(source, next, kind === 'range' ? 20 : 32);
 
   let dueMs = 0;
   const chunks = texts.map((text, index) => {

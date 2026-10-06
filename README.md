@@ -23,7 +23,10 @@ import { DownstreamMarkdown } from 'react-native-downstream';
 For an append-only response, keep one controller for the message and dispose it when the message is removed:
 
 ```tsx
-import { createMarkdownStream, DownstreamMarkdown } from 'react-native-downstream';
+import {
+  createMarkdownStream,
+  DownstreamMarkdown,
+} from 'react-native-downstream';
 
 const stream = createMarkdownStream();
 stream.append('Hello ');
@@ -58,7 +61,11 @@ Fenced code is colored by the language in its info string, on the same worker th
 An image-only paragraph becomes a picture, fetched through the platform's own image pipeline so your HTTP stack, cache and URL handlers apply. A picture that has not arrived shows a placeholder, one that fails shows its alt text, and `allowedImagePrefixes` decides what may be fetched at all. A press on a picture reports `onImagePress`; the package opens nothing.
 
 ```tsx
-<DownstreamMarkdown markdown={message} images allowedImagePrefixes={['https://cdn.example.com/']} />
+<DownstreamMarkdown
+  markdown={message}
+  images
+  allowedImagePrefixes={['https://cdn.example.com/']}
+/>
 ```
 
 Math is off by default, so a document without it parses exactly as it did before and every formula stays readable source. Turn it on for `$$…$$`, a `$$` line fence, a ` ```math ` fence, and — unlike Streamdown — `\(…\)` and `\[…\]`, which `math={{ brackets: false }}` turns back off:
@@ -110,7 +117,7 @@ const converted = syntaxColorsFromTheme(await import('./dracula.json'));
   markdown={message}
   theme={{ syntax: converted.syntax }}
   markdownStyle={{ codeBlock: converted.codeBlock }}
-/>
+/>;
 ```
 
 `presets.github` and `presets.streamdown` are the two themes the renderers are checked against.
@@ -204,14 +211,14 @@ A message can fade its new words in as they arrive, with a caret at the writing 
   stream={stream}
   animated={{ animation: 'slideUp', sep: 'char', stagger: 20, duration: 200 }}
   caret="circle"
-/>
+/>;
 ```
 
 `animation` is `fadeIn` or `slideUp`; `blurIn` draws as `fadeIn` and warns once, because neither platform can blur one run of glyphs cheaply inside a text draw pass. `duration` is 150 ms, `stagger` 40 ms, `easing` `ease`, `sep` `word`, and `maxBacklogMs` 320. A burst is compressed into the backlog rather than queued, so forty words fade across about a third of a second instead of leaving a second and a half of invisible text. CJK is split per syllable in either mode, and a rule, a table row, and an empty fence are one unit each.
 
 What fades is decided by aligning the new document's visible text against the one the view last showed, in the engine, so a character already on screen never fades again when a `**` closes, a link resolves, or a list continues. A word split across two snapshots joins the fade already running and keeps its timing.
 
-`caret` is `'none'`, `'block'`, or `'circle'`. It is drawn rather than typed, so it looks the same in every font and cannot change a line's height, and it is never copied, selected, exported, or read aloud. It sits after the last character of prose, a heading, a list item, or a still-open fence, and takes a line of its own in an empty document or after a table, a closed fence, or a rule. While a fade runs it follows the last word that has *started*, so it never sits after a gap.
+`caret` is `'none'`, `'block'`, or `'circle'`. It is drawn rather than typed, so it looks the same in every font and cannot change a line's height, and it is never copied, selected, exported, or read aloud. It sits after the last character of prose, a heading, a list item, or a still-open fence, and takes a line of its own in an empty document or after a table, a closed fence, or a rule. While a fade runs it follows the last word that has _started_, so it never sits after a gap.
 
 A frame of animation costs a lookup and a redraw. There is no React render, no Fabric state update, no relayout, and no change to any cached text, which matters because a segment is shared and immutable and alpha can only be applied in a draw pass. Reduce Motion turns the fade off on both platforms, and Android's animator duration scale multiplies every duration and turns it off at zero. With `animated` and `caret` off the output is identical to a build without them.
 

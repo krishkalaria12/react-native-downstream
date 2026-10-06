@@ -132,8 +132,8 @@ function Pane({
       ? 'failed'
       : `${run.metrics.totalMs.toFixed(1)} ms`
     : running
-    ? 'running'
-    : 'waiting';
+      ? 'running'
+      : 'waiting';
   return (
     <DocumentPane
       label={CANDIDATE_LABELS[candidate]}
@@ -402,8 +402,8 @@ export function CompareScreen() {
                     CANDIDATE_LABELS[CANDIDATES[view.active] ?? 'downstream']
                   } is running`
                 : view.status === 'idle'
-                ? 'Streamdown first, Downstream second'
-                : undefined
+                  ? 'Streamdown first, Downstream second'
+                  : undefined
             }
             figures={
               streamdownRun === null && downstreamRun === null

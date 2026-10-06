@@ -145,8 +145,8 @@ export function buildRows(
       faster: metric.lowerIsBetter
         ? verdictFor(ours, theirs, true)
         : delta === null
-        ? 'unavailable'
-        : 'tie',
+          ? 'unavailable'
+          : 'tie',
     };
   });
 }

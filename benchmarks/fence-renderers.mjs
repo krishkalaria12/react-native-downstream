@@ -85,7 +85,7 @@ process.stdout.write(
       node: process.version,
       harnessSha256: createHash('sha256')
         .update(
-        readFileSync(join(root, 'benchmarks/fence-renderers.workload.tsx'))
+          readFileSync(join(root, 'benchmarks/fence-renderers.workload.tsx'))
         )
         .digest('hex'),
       runs,

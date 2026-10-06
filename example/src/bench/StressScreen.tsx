@@ -269,10 +269,10 @@ export function StressScreen({ autoStart = false }: { autoStart?: boolean }) {
     phase === 'history'
       ? 'mounting history'
       : phase === 'streaming'
-      ? 'streaming'
-      : done
-      ? 'finished'
-      : 'idle';
+        ? 'streaming'
+        : done
+          ? 'finished'
+          : 'idle';
 
   return (
     <Screen title="Stress">

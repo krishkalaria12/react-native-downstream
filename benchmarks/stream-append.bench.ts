@@ -37,12 +37,9 @@ function appendAll(chunks: readonly string[]): void {
 describe('stream appends', () => {
   for (const sample of samples) {
     test(`append ${sample.id}`, async ({ bench }) => {
-      await bench(
-        `${sample.chunks.length} chunks, ${sample.source.length} chars`,
-        () => {
-          appendAll(sample.chunks);
-        }
-      ).run();
+      await bench(`${sample.chunks.length} chunks, ${sample.source.length} chars`, () => {
+        appendAll(sample.chunks);
+      }).run();
     });
   }
 });

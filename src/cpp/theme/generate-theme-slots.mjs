@@ -27,12 +27,25 @@ const source = resolve(join(HERE, '..', '..', 'theme', 'theme-slots.json'));
 // Where the three generated files land. The environment override exists so the
 // test can regenerate into a scratch directory and compare against what is
 // checked in, rather than overwriting the tree it is checking.
-const OUT = process.env.DS_THEME_SLOT_OUT ? resolve(process.env.DS_THEME_SLOT_OUT) : null;
+const OUT = process.env.DS_THEME_SLOT_OUT
+  ? resolve(process.env.DS_THEME_SLOT_OUT)
+  : null;
 const GENERATED = {
   'ThemeSlots.h': resolve(join(HERE, 'ThemeSlots.h')),
   'themeSlots.ts': resolve(join(HERE, '..', '..', 'themeSlots.ts')),
   'ThemeSlots.kt': resolve(
-    join(HERE, '..', '..', 'android', 'src', 'main', 'java', 'com', 'downstream', 'ThemeSlots.kt'),
+    join(
+      HERE,
+      '..',
+      '..',
+      'android',
+      'src',
+      'main',
+      'java',
+      'com',
+      'downstream',
+      'ThemeSlots.kt'
+    )
   ),
 };
 const out = (name) => (OUT ? join(OUT, name) : GENERATED[name]);
@@ -42,7 +55,9 @@ const kotlinOut = out('ThemeSlots.kt');
 
 const arg = (name, fallback) => {
   const index = process.argv.indexOf(`--${name}`);
-  return index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
+  return index >= 0 && process.argv[index + 1]
+    ? process.argv[index + 1]
+    : fallback;
 };
 
 const table = JSON.parse(readFileSync(arg('in', source), 'utf8'));
@@ -88,7 +103,9 @@ let previousId = 0;
 
 for (const slot of expanded) {
   if (!KINDS.has(slot.kind)) {
-    console.error(`refusing to write: ${slot.name} has unknown kind ${slot.kind}`);
+    console.error(
+      `refusing to write: ${slot.name} has unknown kind ${slot.kind}`
+    );
     process.exit(1);
   }
   if (!Number.isInteger(slot.id) || slot.id <= 0) {
@@ -120,7 +137,9 @@ for (const slot of expanded) {
     process.exit(1);
   }
   if (slot.appearance === 'dark' && slot.kind !== 'color') {
-    console.error(`refusing to write: ${slot.name} is a second appearance of a non-color`);
+    console.error(
+      `refusing to write: ${slot.name} is a second appearance of a non-color`
+    );
     process.exit(1);
   }
   if (slot.kind === 'font') {
@@ -130,13 +149,22 @@ for (const slot of expanded) {
       console.error(`refusing to write: font slot ${slot.name} has a default`);
       process.exit(1);
     }
-  } else if (typeof slot.default !== 'number' && typeof slot.default !== 'string') {
+  } else if (
+    typeof slot.default !== 'number' &&
+    typeof slot.default !== 'string'
+  ) {
     console.error(`refusing to write: ${slot.name} has no default`);
     process.exit(1);
   }
-  if (slot.kind === 'color' && typeof slot.default === 'string' && !slot.default.startsWith('tokens:')) {
+  if (
+    slot.kind === 'color' &&
+    typeof slot.default === 'string' &&
+    !slot.default.startsWith('tokens:')
+  ) {
     if (!roleIndex.has(slot.default)) {
-      console.error(`refusing to write: ${slot.name} names unknown default ${slot.default}`);
+      console.error(
+        `refusing to write: ${slot.name} names unknown default ${slot.default}`
+      );
       process.exit(1);
     }
   }
@@ -152,9 +180,19 @@ const cString = (text) => `"${String(text).replace(/[\\"]/g, '\\$&')}"`;
 const tsString = (text) => `'${String(text).replace(/'/g, "\\'")}'`;
 /** A Kotlin constant name: paragraph.fontSize becomes SLOT_PARAGRAPH_FONT_SIZE. */
 const kotlinName = (name) =>
-  'SLOT_' + name.replace(/\.dark$/, '').split('.').join('_').replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
+  'SLOT_' +
+  name
+    .replace(/\.dark$/, '')
+    .split('.')
+    .join('_')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toUpperCase();
 const enumName = (name) =>
-  'kSlot' + name.split('.').map((part) => cap(part)).join('');
+  'kSlot' +
+  name
+    .split('.')
+    .map((part) => cap(part))
+    .join('');
 const roleEnum = (name) => 'kRole' + cap(name);
 
 /**
@@ -284,7 +322,13 @@ constexpr uint32_t kSlotIdCount = ${previousId + 1};
 /// light half. Zero for any other slot, and for the dark half itself. Indexed
 /// by id - 1, so the pair's second id is one more than the first.
 constexpr uint32_t kSlotDark[] = {${expanded
-  .map((slot) => (slot.appearance === 'dark' ? '0' : slot.kind === 'color' ? String(slot.id + 1) : '0'))
+  .map((slot) =>
+    slot.appearance === 'dark'
+      ? '0'
+      : slot.kind === 'color'
+        ? String(slot.id + 1)
+        : '0'
+  )
   .join(', ')}};
 
 /// The id holding the light half of a color, which is always the one before the
@@ -308,7 +352,9 @@ constexpr uint8_t kSlotKinds[] = {${expanded
 /// 0 or 1. Zero for a color or a font, whose defaults are below. Indexed by
 /// id - 1.
 constexpr double kSlotDefaults[] = {${expanded
-  .map((slot) => (slot.kind === 'color' || slot.kind === 'font' ? '0' : numericDefault(slot)))
+  .map((slot) =>
+    slot.kind === 'color' || slot.kind === 'font' ? '0' : numericDefault(slot)
+  )
   .join(', ')}};
 
 /// The default of a color slot: a \`ColorRole\`, or \`kRoleTokenClassBase\` plus
@@ -324,7 +370,10 @@ constexpr uint16_t kSlotColorDefaults[] = {${expanded
 /// reads the way the theme was written. Indexed by id - 1.
 constexpr const char *kSlotNames[] = {
 ${expanded
-  .map((slot) => `    ${cString(slot.appearance === 'dark' ? slot.name.replace(/\\.dark$/, '') : slot.name)},`)
+  .map(
+    (slot) =>
+      `    ${cString(slot.appearance === 'dark' ? slot.name.replace(/\\.dark$/, '') : slot.name)},`
+  )
   .join('\n')}
 };
 
@@ -348,7 +397,9 @@ constexpr uint32_t kMarginBottom[6] = {${heading('marginBottom')}};
 /// the base slot, so a platform reads \`kSyntax[token]\` and \`+ 1\`.
 constexpr uint32_t kSyntax[static_cast<size_t>(TokenClass::Count)] = {
 ${expanded
-  .filter((slot) => slot.appearance === 'light' && slot.name.startsWith('syntax.'))
+  .filter(
+    (slot) => slot.appearance === 'light' && slot.name.startsWith('syntax.')
+  )
   .map((slot) => `    ${enumName(slot.name)},`)
   .join('\n')}
 };
@@ -360,7 +411,8 @@ writeFileSync(headerOut, header);
 
 // -------------------------------------------------------------- TypeScript side
 
-const slotKind = (slot) => (slot.kind === 'metric' ? "'metric'" : `'${slot.kind}'`);
+const slotKind = (slot) =>
+  slot.kind === 'metric' ? "'metric'" : `'${slot.kind}'`;
 
 const types = `// GENERATED FILE. Written by src/cpp/theme/generate-theme-slots.mjs.
 //
@@ -456,8 +508,8 @@ const HEADING_PROPERTIES = [
 
 const kotlinHeading =
   '\n\n  /**\n' +
-  '   * A heading level\'s slots, one array per property, in level order. Level n\'s\n' +
-  '   * slot is at index n - 1, as in the engine\'s `heading::` namespace.\n' +
+  "   * A heading level's slots, one array per property, in level order. Level n's\n" +
+  "   * slot is at index n - 1, as in the engine's `heading::` namespace.\n" +
   '   */\n' +
   '  object Heading {\n' +
   HEADING_PROPERTIES.map(
@@ -465,19 +517,31 @@ const kotlinHeading =
       `    /** \`heading.N.${property}\`, for levels one to six. */\n` +
       `    val ${constant} = intArrayOf(${[1, 2, 3, 4, 5, 6]
         .map((level) => slotNamed(`heading.${level}.${property}`).id)
-        .join(', ')})`,
+        .join(', ')})`
   ).join('\n') +
   '\n  }';
 
 /** One `const val` per id, in id order. */
 const kotlinSlots = expanded
   .map((slot) => {
-    const name = slot.appearance === 'dark' ? slot.name.replace(/\\.dark$/, '') : slot.name;
+    const name =
+      slot.appearance === 'dark'
+        ? slot.name.replace(/\\.dark$/, '')
+        : slot.name;
     const suffix = slot.appearance === 'dark' ? ', dark half' : '';
     // The dark half of a color is its own id, so it needs its own name: both are
     // in this object and two constants with one name would not compile.
-    const constant = kotlinName(slot.name) + (slot.appearance === 'dark' ? '_DARK' : '');
-    return '  /** ' + cString(name) + suffix + ' */\n  const val ' + constant + ' = ' + slot.id;
+    const constant =
+      kotlinName(slot.name) + (slot.appearance === 'dark' ? '_DARK' : '');
+    return (
+      '  /** ' +
+      cString(name) +
+      suffix +
+      ' */\n  const val ' +
+      constant +
+      ' = ' +
+      slot.id
+    );
   })
   .join('\n');
 

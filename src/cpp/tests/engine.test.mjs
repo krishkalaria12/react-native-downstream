@@ -8,7 +8,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
 import { resolve } from 'node:path';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -35,14 +41,23 @@ const [STRONG, EMPHASIS, STRIKE, CODE, LINK, IMAGE_ALT, FOOTNOTE] = [
 ].map((bit) => 1 << bit);
 /** Bits of the provisional pass, mirroring `src/cpp/remend/Preview.h`. */
 const PREVIEW_HTML_TAGS = 1 << 5;
-const PREVIEW_ALL = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | PREVIEW_HTML_TAGS;
+const PREVIEW_ALL =
+  (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | PREVIEW_HTML_TAGS;
 
 /**
  * RaTeX's macOS slice, which `node math/scripts/vendor-ratex.mjs` writes. The
  * math engine test links it, and is skipped where it is not vendored: there is
  * no Linux slice in RaTeX's release.
  */
-const RATEX_HOST = resolve(CPP, '..', '..', 'math', 'vendor', 'host', 'libratex_ffi.a');
+const RATEX_HOST = resolve(
+  CPP,
+  '..',
+  '..',
+  'math',
+  'vendor',
+  'host',
+  'libratex_ffi.a'
+);
 const ratexVendored = process.platform === 'darwin' && existsSync(RATEX_HOST);
 
 const targets = {};
@@ -56,7 +71,9 @@ before(async () => {
   const pool = ['WorkerPool.cpp', 'RenderPreparer.cpp'].map(downstream);
   const incremental = session('IncrementalParser.cpp');
   const registry = session('SessionRegistry.cpp');
-  const theme = ['Theme.cpp', 'ThemeLayout.cpp'].map((name) => join(CPP, 'theme', name));
+  const theme = ['Theme.cpp', 'ThemeLayout.cpp'].map((name) =>
+    join(CPP, 'theme', name)
+  );
   const executables = [
     ['dump_document', engine],
     [
@@ -217,7 +234,12 @@ describe('vendored md4c', () => {
 
   for (const [name, digest] of Object.entries(PINS)) {
     test(`${name} is unmodified`, () => {
-      assert.equal(createHash('sha256').update(readFileSync(join(MD4C, name))).digest('hex'), digest);
+      assert.equal(
+        createHash('sha256')
+          .update(readFileSync(join(MD4C, name)))
+          .digest('hex'),
+        digest
+      );
     });
   }
 
@@ -251,7 +273,9 @@ describe('vendored Lexilla', () => {
   function lexillaManifest() {
     const files = [];
     const walk = (dir) => {
-      for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      for (const entry of readdirSync(dir, { withFileTypes: true }).sort(
+        (a, b) => a.name.localeCompare(b.name)
+      )) {
         const path = join(dir, entry.name);
         if (entry.isDirectory()) {
           walk(path);
@@ -262,12 +286,18 @@ describe('vendored Lexilla', () => {
     };
     walk(LEXILLA);
     return files
-      .map((path) => `${path.slice(LEXILLA.length + 1)} ${createHash('sha256').update(readFileSync(path)).digest('hex')}`)
+      .map(
+        (path) =>
+          `${path.slice(LEXILLA.length + 1)} ${createHash('sha256').update(readFileSync(path)).digest('hex')}`
+      )
       .join('\n');
   }
 
   test('the vendored lexers are unmodified', () => {
-    assert.equal(createHash('sha256').update(lexillaManifest()).digest('hex'), LEXILLA_DIGEST);
+    assert.equal(
+      createHash('sha256').update(lexillaManifest()).digest('hex'),
+      LEXILLA_DIGEST
+    );
   });
 
   test('the manifest is not empty', () => {
@@ -655,7 +685,10 @@ describe('syntax highlighting', () => {
   // budget, and the streaming equivalence that a finished block's tokens equal
   // a one-shot pass's.
   test('engine invariants', () => {
-    execFileSync(binary('test_highlight'), { timeout: 30_000, stdio: 'inherit' });
+    execFileSync(binary('test_highlight'), {
+      timeout: 30_000,
+      stdio: 'inherit',
+    });
   });
 
   // One golden snapshot per alias group. A diff here is a diff in what a reader
@@ -671,7 +704,9 @@ describe('syntax highlighting', () => {
   test('a parse colors the fenced blocks in the document', async (t) => {
     for (const testCase of fencedCases) {
       await t.test(testCase.id, (sub) => {
-        sub.assert.snapshot(parse(testCase.source).blocks.map((block) => block.tokens));
+        sub.assert.snapshot(
+          parse(testCase.source).blocks.map((block) => block.tokens)
+        );
       });
     }
   });
@@ -704,10 +739,17 @@ describe('syntax highlighting', () => {
       yaml: '# A comment',
     };
     for (const [info, comment] of Object.entries(comments)) {
-      const [block] = parse(`\`\`\`${info}\nlet x = 1\n${comment}\n\`\`\`\n`).blocks;
+      const [block] = parse(
+        `\`\`\`${info}\nlet x = 1\n${comment}\n\`\`\`\n`
+      ).blocks;
       assert.deepEqual(
         block.tokens.at(-1),
-        [block.text.length - comment.length, block.text.length, 'comment', comment],
+        [
+          block.text.length - comment.length,
+          block.text.length,
+          'comment',
+          comment,
+        ],
         info
       );
     }
@@ -724,10 +766,24 @@ describe('syntax highlighting', () => {
       const { text, runs } = tokens(testCase.info, testCase.source);
       let previous = 0;
       for (const [start, end, token, slice] of runs) {
-        assert.ok(start < end && end <= text.length, `${testCase.id}: run inside the block`);
-        assert.notEqual(token, 'plain', `${testCase.id}: plain text has no run`);
-        assert.ok(start >= previous, `${testCase.id}: runs are sorted and do not overlap`);
-        assert.equal(text.slice(start, end), slice, `${testCase.id}: the slice matches its offsets`);
+        assert.ok(
+          start < end && end <= text.length,
+          `${testCase.id}: run inside the block`
+        );
+        assert.notEqual(
+          token,
+          'plain',
+          `${testCase.id}: plain text has no run`
+        );
+        assert.ok(
+          start >= previous,
+          `${testCase.id}: runs are sorted and do not overlap`
+        );
+        assert.equal(
+          text.slice(start, end),
+          slice,
+          `${testCase.id}: the slice matches its offsets`
+        );
         const before = start > 0 ? text.codePointAt(start - 2) : undefined;
         const after = end < text.length ? text.codePointAt(end) : undefined;
         assert.ok(
@@ -751,12 +807,25 @@ describe('themes', () => {
   // that here rather than at the first themed frame.
   test('the slot table matches its source', () => {
     const scratch = mkdtempSync(join(tmpdir(), 'ds-slots-'));
-    const android = join(CPP, '..', 'android', 'src', 'main', 'java', 'com', 'downstream');
+    const android = join(
+      CPP,
+      '..',
+      'android',
+      'src',
+      'main',
+      'java',
+      'com',
+      'downstream'
+    );
     try {
-      execFileSync(process.execPath, [join(CPP, 'theme', 'generate-theme-slots.mjs')], {
-        env: { ...process.env, DS_THEME_SLOT_OUT: scratch },
-        stdio: 'ignore',
-      });
+      execFileSync(
+        process.execPath,
+        [join(CPP, 'theme', 'generate-theme-slots.mjs')],
+        {
+          env: { ...process.env, DS_THEME_SLOT_OUT: scratch },
+          stdio: 'ignore',
+        }
+      );
       const checkedIn = {
         'ThemeSlots.h': join(CPP, 'theme', 'ThemeSlots.h'),
         'themeSlots.ts': join(CPP, '..', 'themeSlots.ts'),
@@ -766,7 +835,7 @@ describe('themes', () => {
         assert.equal(
           readFileSync(join(scratch, name), 'utf8'),
           readFileSync(path, 'utf8'),
-          `${name} is stale; run node src/cpp/theme/generate-theme-slots.mjs`,
+          `${name} is stale; run node src/cpp/theme/generate-theme-slots.mjs`
         );
       }
     } finally {
@@ -788,7 +857,16 @@ describe('themes', () => {
    */
   test('every slot is read by a renderer or by the shared rules', () => {
     const repo = resolve(CPP, '..', '..');
-    const androidDir = join(repo, 'src', 'android', 'src', 'main', 'java', 'com', 'downstream');
+    const androidDir = join(
+      repo,
+      'src',
+      'android',
+      'src',
+      'main',
+      'java',
+      'com',
+      'downstream'
+    );
     // The drawing code in full, found rather than listed. A hand-kept list is
     // what made this test fail before: splitting a file moved readers into files
     // the list never named, so the slots they read looked unread. Globbing means
@@ -812,7 +890,9 @@ describe('themes', () => {
             name !== 'FenceSlotViewManager.kt'
         )
         .map((name) => join(androidDir, name)),
-    ].map((path) => readFileSync(path, 'utf8')).join('\n');
+    ]
+      .map((path) => readFileSync(path, 'utf8'))
+      .join('\n');
 
     // One form per way a slot can be named in the sources, so the comparison is
     // about the slot rather than about the spelling.
@@ -840,10 +920,15 @@ describe('themes', () => {
       }
     }
 
-    const source = JSON.parse(readFileSync(join(repo, 'src', 'theme', 'theme-slots.json'), 'utf8'));
+    const source = JSON.parse(
+      readFileSync(join(repo, 'src', 'theme', 'theme-slots.json'), 'utf8')
+    );
     const slots = Array.isArray(source.slots)
       ? source.slots
-      : Object.entries(source.slots).map(([name, value]) => ({ name, ...value }));
+      : Object.entries(source.slots).map(([name, value]) => ({
+          name,
+          ...value,
+        }));
     const unread = slots
       .map((slot) => slot.name)
       .filter((name) => !name.endsWith('.dark'))
@@ -899,11 +984,17 @@ describe('images', () => {
 
 describe('math', () => {
   test('bracket scanning preserves code and source offsets', () => {
-    execFileSync(binary('test_math_scan'), { timeout: 15_000, stdio: 'inherit' });
+    execFileSync(binary('test_math_scan'), {
+      timeout: 15_000,
+      stdio: 'inherit',
+    });
   });
 
   test('math cache reuses successes and failures with bounded eviction', () => {
-    execFileSync(binary('test_math_cache'), { timeout: 15_000, stdio: 'inherit' });
+    execFileSync(binary('test_math_cache'), {
+      timeout: 15_000,
+      stdio: 'inherit',
+    });
   });
 
   // The sizing both platforms apply once a layout exists. `test_math` is the C++
@@ -968,9 +1059,25 @@ describe('inline html', () => {
     // An escaped opener leaves no open script, so the stray closer is swallowed.
     ['\\<sub>y</sub>', '<sub>y', []],
     // The innermost opened script wins.
-    ['<sup>a<sub>b</sub>c</sup>d', 'abcd', [['a', SUPERSCRIPT], ['b', SUBSCRIPT], ['c', SUPERSCRIPT]]],
+    [
+      '<sup>a<sub>b</sub>c</sup>d',
+      'abcd',
+      [
+        ['a', SUPERSCRIPT],
+        ['b', SUBSCRIPT],
+        ['c', SUPERSCRIPT],
+      ],
+    ],
     // Nesting the same script twice does not shift further.
-    ['<sup>a<sup>b</sup>c</sup>', 'abc', [['a', SUPERSCRIPT], ['b', SUPERSCRIPT], ['c', SUPERSCRIPT]]],
+    [
+      '<sup>a<sup>b</sup>c</sup>',
+      'abc',
+      [
+        ['a', SUPERSCRIPT],
+        ['b', SUPERSCRIPT],
+        ['c', SUPERSCRIPT],
+      ],
+    ],
     // Markdown inside a script keeps working.
     ['<sup>**y**</sup>', 'y', [['y', SUPERSCRIPT | STRONG]]],
     ['<sub>*i*</sub>', 'i', [['i', SUBSCRIPT | EMPHASIS]]],
@@ -995,7 +1102,8 @@ describe('inline html', () => {
       assert.deepEqual(
         runs.map(([substring, mask]) => [
           substring,
-          stylesOf(block, substring).reduce((bits, run) => bits | run[2], 0) & mask,
+          stylesOf(block, substring).reduce((bits, run) => bits | run[2], 0) &
+            mask,
         ]),
         runs
       );
@@ -1028,8 +1136,7 @@ describe('inline html', () => {
   }
 
   test('a table cell holds a line break, and its spaces go away', () => {
-    const source =
-      '| Step | Notes |\n| - | - |\n| 1 | Mix <br> Then bake |\n';
+    const source = '| Step | Notes |\n| - | - |\n| 1 | Mix <br> Then bake |\n';
     const document = parse(source, INLINE_HTML);
     const row = document.blocks.at(-1);
     assert.equal(row.kind, KIND.table);
@@ -1060,7 +1167,10 @@ describe('inline html', () => {
   });
 
   test('a script inside alt text keeps its text out of the alt', () => {
-    const document = parse('![a<sup>2</sup>b](https://example.com/i.png)', INLINE_HTML);
+    const document = parse(
+      '![a<sup>2</sup>b](https://example.com/i.png)',
+      INLINE_HTML
+    );
     assert.equal(document.images[0].alt, 'a2b');
   });
 
@@ -1078,7 +1188,10 @@ describe('inline html', () => {
     // reads `~x~` as strikethrough.
     assert.equal(stylesOf(parse('~strike~').blocks[0], 'strike')[0][2], STRIKE);
     assert.equal(
-      stylesOf(parse('~x~', INLINE_HTML | SUBSCRIPT_SYNTAX).blocks[0], 'x')[0][2],
+      stylesOf(
+        parse('~x~', INLINE_HTML | SUBSCRIPT_SYNTAX).blocks[0],
+        'x'
+      )[0][2],
       SUBSCRIPT
     );
   });
@@ -1187,11 +1300,17 @@ describe('input', () => {
   });
 
   test('controlled fence slots: fresh and cached answers agree, large sources wait', () => {
-    execFileSync(binary('test_controlled_slots'), { timeout: 30_000, stdio: 'inherit' });
+    execFileSync(binary('test_controlled_slots'), {
+      timeout: 30_000,
+      stdio: 'inherit',
+    });
   });
 
   test('fence info string meta, prefixes, and identity', () => {
-    execFileSync(binary('test_fence_meta'), { timeout: 30_000, stdio: 'inherit' });
+    execFileSync(binary('test_fence_meta'), {
+      timeout: 30_000,
+      stdio: 'inherit',
+    });
   });
 
   test('reveal alignment, units, timeline, easing, and caret placement', () => {
@@ -1228,24 +1347,23 @@ function runSession(mode, steps, parseFlags = 0) {
     length.writeUInt32LE(payload.length);
     return Buffer.concat([Buffer.from(op, 'latin1'), length, payload]);
   };
-  const frames = steps
-    .map((step) => {
-      switch (step.op) {
-        case 'append':
-          return frame('a', Buffer.from(step.chunk, 'utf8'));
-        case 'replace':
-          return frame('r', Buffer.from(step.source, 'utf8'));
-        case 'preview': {
-          const mask = Buffer.alloc(4);
-          mask.writeUInt32LE(step.features >>> 0);
-          return frame('p', mask);
-        }
-        case 'parse':
-          return frame(step.finished ? 'f' : 'u', Buffer.alloc(0));
-        default:
-          throw new Error(`unknown step ${step.op}`);
+  const frames = steps.map((step) => {
+    switch (step.op) {
+      case 'append':
+        return frame('a', Buffer.from(step.chunk, 'utf8'));
+      case 'replace':
+        return frame('r', Buffer.from(step.source, 'utf8'));
+      case 'preview': {
+        const mask = Buffer.alloc(4);
+        mask.writeUInt32LE(step.features >>> 0);
+        return frame('p', mask);
       }
-    });
+      case 'parse':
+        return frame(step.finished ? 'f' : 'u', Buffer.alloc(0));
+      default:
+        throw new Error(`unknown step ${step.op}`);
+    }
+  });
   return JSON.parse(
     execFileSync(binary('dump_session'), [mode, String(parseFlags)], {
       input: Buffer.concat(frames),
@@ -1321,7 +1439,8 @@ describe('copy and download controls', () => {
       ].join('\n'),
       'a short row': '| a | b | c |\n| - | - | - |\n| 1 |\n',
       'a wide table': `| ${'h'.repeat(40)} |\n| - |\n| ${'v'.repeat(80)} |\n`,
-      'a table with a quote around it': '> | a | b |\n> | - | - |\n> | 1 | 2 |\n',
+      'a table with a quote around it':
+        '> | a | b |\n> | - | - |\n> | 1 | 2 |\n',
     };
 
     for (const [name, source] of Object.entries(sources)) {
@@ -1330,7 +1449,11 @@ describe('copy and download controls', () => {
         const round = exports[0].reparsed;
         assert.equal(round.error, undefined, 'the export re-parses');
         assert.deepEqual(tableShape(round), tableShape(model), name);
-        assert.deepEqual(linkUrls(round), linkUrls(model), `${name}: link targets`);
+        assert.deepEqual(
+          linkUrls(round),
+          linkUrls(model),
+          `${name}: link targets`
+        );
       });
     }
   });
@@ -1347,11 +1470,9 @@ describe('copy and download controls', () => {
         const last = parse(source).blocks.findLastIndex(
           (block) => block.kind === KIND.table
         );
-        const { model, exports } = exportOf(
-          source,
-          'markdown',
-          [`r:${first}:${last + 1}`]
-        );
+        const { model, exports } = exportOf(source, 'markdown', [
+          `r:${first}:${last + 1}`,
+        ]);
         const round = exports[0].reparsed;
         assert.equal(round.error, undefined, `${testCase.id}: re-parses`);
         assert.deepEqual(
@@ -1471,7 +1592,11 @@ describe('fence slots', () => {
   const slotsFor = (source, languages, { mathFlags = 0, live = true } = {}) => {
     const output = execFileSync(
       compile(
-        [join(CPP, 'tests', 'dump_fence_slots.cpp'), ...ENGINE, ...MD4C_SOURCES],
+        [
+          join(CPP, 'tests', 'dump_fence_slots.cpp'),
+          ...ENGINE,
+          ...MD4C_SOURCES,
+        ],
         'downstream-fence-slots'
       ),
       [String(mathFlags), live ? '1' : '0', languages.join(',')],
@@ -1497,9 +1622,10 @@ describe('fence slots', () => {
 
   test('a language matches case-insensitively, as written', () => {
     for (const written of ['mermaid', 'Mermaid', 'MERMAID']) {
-      const slots = slotsFor(`\u0060\u0060\u0060${written}\nx\n\u0060\u0060\u0060\n`, [
-        'mermaid',
-      ]);
+      const slots = slotsFor(
+        `\u0060\u0060\u0060${written}\nx\n\u0060\u0060\u0060\n`,
+        ['mermaid']
+      );
       assert.equal(slots.length, 1, `${written} matches mermaid`);
       assert.equal(slots[0].language, written, 'the language is as written');
     }
@@ -1554,8 +1680,14 @@ describe('fence slots', () => {
     // A ```math fence is a formula block either way, exactly as Streamdown treats
     // it: remark-math claims the language before the code component runs, so the
     // engine never reports it as a code block and no renderer can be given one.
-    assert.deepEqual(slotsFor('```math\nx^2\n```\n', ['math'], { mathFlags: 1 }), []);
-    assert.deepEqual(slotsFor('```math\nx^2\n```\n', ['math'], { mathFlags: 0 }), []);
+    assert.deepEqual(
+      slotsFor('```math\nx^2\n```\n', ['math'], { mathFlags: 1 }),
+      []
+    );
+    assert.deepEqual(
+      slotsFor('```math\nx^2\n```\n', ['math'], { mathFlags: 0 }),
+      []
+    );
     // The raw info word is matched, so an entity-encoded language is neither
     // matched nor mistaken for the decoded one.
     assert.deepEqual(
@@ -1570,9 +1702,21 @@ describe('fence slots', () => {
       ['```mermaid\ngraph;\n```\n', false, 'closed by its own fence'],
       ['```mermaid\ngraph;\n````\n', false, 'closed by a longer fence'],
       ['```mermaid\ngraph;\n``\n', true, 'a shorter fence does not close it'],
-      ['```mermaid\ngraph;\n~~~\n```\n', false, 'a different character runs on as code'],
-      ['```mermaid\ngraph;\n  ```\n', false, 'a closing fence may be indented three spaces'],
-      ['- ```mermaid\n  graph;\n  ```\n', false, 'a fence ended by its list item is closed'],
+      [
+        '```mermaid\ngraph;\n~~~\n```\n',
+        false,
+        'a different character runs on as code',
+      ],
+      [
+        '```mermaid\ngraph;\n  ```\n',
+        false,
+        'a closing fence may be indented three spaces',
+      ],
+      [
+        '- ```mermaid\n  graph;\n  ```\n',
+        false,
+        'a fence ended by its list item is closed',
+      ],
     ];
     for (const [source, incomplete, label] of cases) {
       const slots = slotsFor(source, ['mermaid']);
@@ -1583,10 +1727,16 @@ describe('fence slots', () => {
 
   test('a settled stream reads a never-closed fence as final', () => {
     const source = '```mermaid\ngraph;\n';
-    assert.equal(slotsFor(source, ['mermaid'], { live: true })[0].incomplete, true);
+    assert.equal(
+      slotsFor(source, ['mermaid'], { live: true })[0].incomplete,
+      true
+    );
     // The same fence after `finish()`: settled, so the renderer is told the
     // spec is complete even though the model never closed the fence.
-    assert.equal(slotsFor(source, ['mermaid'], { live: false })[0].incomplete, false);
+    assert.equal(
+      slotsFor(source, ['mermaid'], { live: false })[0].incomplete,
+      false
+    );
   });
 
   test('several fences, and one registered language', () => {

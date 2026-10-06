@@ -1,0 +1,30 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 80,
+  "quoteProps": "consistent",
+  "singleQuote": true,
+  "tabWidth": 2,
+  "trailingComma": "es5",
+  "useTabs": false,
+  "sortPackageJson": false,
+  "ignorePatterns": [
+    "lib/",
+    "**/build/**",
+    "example/ios/**",
+    "example/android/**",
+    "example/dist/**",
+    "benchmarks/results/**",
+    "src/cpp/md4c/**",
+    "src/cpp/lexilla/**",
+    "src/cpp/glew/**",
+    "src/cpp/rapidjson/**",
+    "src/cpp/react/**",
+    "math/vendor/**",
+    "patches/**",
+    "tests/fixtures/**",
+    "docs/**",
+    "src/cpp/theme/ThemeSlots.h",
+    "src/themeSlots.ts",
+    "src/android/src/main/java/com/downstream/ThemeSlots.kt"
+  ]
+}

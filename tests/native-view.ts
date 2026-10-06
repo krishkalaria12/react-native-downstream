@@ -79,7 +79,7 @@ function renderBlock(block: Block, index: number): ReactElement {
   }
   if (block.kind === KIND.hr) return createElement('hr', { key: index });
   const tag =
-    block.kind === KIND.heading ? headingTag(block) : TAG[block.kind] ?? 'p';
+    block.kind === KIND.heading ? headingTag(block) : (TAG[block.kind] ?? 'p');
   const props: Record<string, unknown> = { key: index };
   if (block.kind === KIND.code && block.language) {
     props['data-language'] = block.language;
@@ -123,8 +123,8 @@ export function createNativeView(): NativeView {
         sessionId !== ''
           ? sourceForSession(sessionId)
           : typeof props.markdown === 'string'
-          ? props.markdown
-          : '';
+            ? props.markdown
+            : '';
       // The slot children are rendered after the document, exactly as Fabric
       // mounts them: they are the view's children, positioned over the blocks
       // they replace, so a test can see what a renderer mounted and that a

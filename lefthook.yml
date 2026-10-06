@@ -1,14 +1,19 @@
 pre-commit:
   parallel: true
   commands:
+    format:
+      glob: '*.{js,ts,jsx,tsx,mjs,cjs,md,json,jsonc,yaml,yml}'
+      run: npx oxfmt {staged_files}
 
     lint:
-      glob: "*.{js,ts,jsx,tsx}"
-      run: npx eslint {staged_files}
+      glob: '*.{js,ts,jsx,tsx,mjs,cjs}'
+      run: npx oxlint {staged_files}
 
     types:
-      glob: "*.{js,ts, jsx, tsx}"
-      run: npx tsc
+      # Not globbed to the staged files, and not a bare `npx tsc`: a change in one
+      # file can break another, and `tsconfig.json` is the build config, which
+      # has no DOM lib, so only `tsconfig.test.json` typechecks the tests.
+      run: pnpm typecheck
 commit-msg:
   parallel: true
   commands:

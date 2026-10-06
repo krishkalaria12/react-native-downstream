@@ -57,7 +57,7 @@ export type InlineRun = [
   start: number,
   end: number,
   styles: number,
-  link: number
+  link: number,
 ];
 
 /** A syntax token, as `[start, end, class, text]` on the wire. */
@@ -65,7 +65,7 @@ export type TokenRun = [
   start: number,
   end: number,
   token: string,
-  text: string
+  text: string,
 ];
 
 export interface Block {
@@ -611,8 +611,8 @@ export function exportSource(
       operation.op === 'e'
         ? `e:${operation.from}:${operation.to}`
         : operation.op === 'd'
-        ? `d:${operation.block}`
-        : `t:${operation.extension}`
+          ? `d:${operation.block}`
+          : `t:${operation.extension}`
     ),
   ];
   const model: RenderModel & { exports?: ExportResult[] } = JSON.parse(

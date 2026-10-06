@@ -41,10 +41,10 @@ export function Button({
     variant === 'primary'
       ? t.c.onAccent
       : variant === 'danger'
-      ? t.c.danger
-      : variant === 'ghost'
-      ? t.c.inkSoft
-      : t.c.ink;
+        ? t.c.danger
+        : variant === 'ghost'
+          ? t.c.inkSoft
+          : t.c.ink;
   return (
     <Pressable
       accessibilityRole="button"

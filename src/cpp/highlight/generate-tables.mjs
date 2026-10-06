@@ -21,7 +21,9 @@ const SCILEXER = join(HERE, '..', 'lexilla', 'SciLexer.h');
 
 const arg = (name, fallback) => {
   const index = process.argv.indexOf(`--${name}`);
-  return index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
+  return index >= 0 && process.argv[index + 1]
+    ? process.argv[index + 1]
+    : fallback;
 };
 
 const sciteDir = arg('scite');
@@ -110,7 +112,8 @@ function list(file, key) {
 // them. A language with no second list leaves it empty.
 const JS_KEYWORDS = list('cpp', 'keywords.$(file.patterns.js)');
 const CPP_KEYWORDS = list('cpp', 'keywords.$(file.patterns.cpp)');
-const C_KEYWORDS = 'auto break case char const continue default do double else enum extern ' +
+const C_KEYWORDS =
+  'auto break case char const continue default do double else enum extern ' +
   'float for goto if inline int long register return short signed sizeof static struct switch ' +
   'typedef union unsigned void volatile while _Alignas _Alignof _Atomic _Bool _Complex _Generic ' +
   '_Imaginary _Noreturn _Static_assert _Thread_local';
@@ -175,7 +178,10 @@ const WORD_LISTS = {
     list('css', 'keywords3.*.css'),
   ],
   sql: [list('sql', 'keywords.$(file.patterns.sql)'), ''],
-  rust: [list('rust', 'keywords.$(file.patterns.rust)'), list('rust', 'keywords2.$(file.patterns.rust)')],
+  rust: [
+    list('rust', 'keywords.$(file.patterns.rust)'),
+    list('rust', 'keywords2.$(file.patterns.rust)'),
+  ],
   yaml: [list('yaml', 'keywords.$(file.patterns.yaml)'), ''],
   ruby: [list('ruby', 'keywords.$(file.patterns.rb)'), ''],
   lua: [list('lua', 'keywords.$(file.patterns.lua)'), ''],
@@ -189,17 +195,22 @@ const WORD_LISTS = {
 const TYPES = {
   c: 'bool char double float int long short signed unsigned void size_t ssize_t ptrdiff_t int8_t int16_t int32_t int64_t uint8_t uint16_t uint32_t uint64_t wchar_t char8_t char16_t char32_t FILE va_list',
   cpp: 'bool char char8_t char16_t char32_t double float int long short signed size_t ssize_t ptrdiff_t int8_t int16_t int32_t int64_t uint8_t uint16_t uint32_t uint64_t unsigned void wchar_t string vector map unordered_map set unordered_set deque list array pair tuple optional variant function shared_ptr unique_ptr weak_ptr string_view ostringstream istringstream stringstream ostream istream fstream',
-  csharp: 'bool byte char decimal double dynamic float int long object sbyte short string uint ulong ushort var void',
+  csharp:
+    'bool byte char decimal double dynamic float int long object sbyte short string uint ulong ushort var void',
   dart: 'bool double dynamic int num Object String void List Map Set Iterable Future Stream',
   go: 'any bool byte complex64 complex128 error float32 float64 int int8 int16 int32 int64 rune string uint uint8 uint16 uint32 uint64 uintptr',
   java: 'boolean byte char double float int long short void String Object List Map Set Optional',
   js: 'Array ArrayBuffer BigInt Boolean Date Error Function JSON Map Math Number Object Promise Proxy RegExp Set String Symbol WeakMap WeakSet BigInt64Array BigUint64Array Float32Array Float64Array Int8Array Int16Array Int32Array Uint8Array Uint8ClampedArray Uint16Array Uint32Array console globalThis document window',
   objc: 'BOOL id Class SEL IMP nil YES NO instancetype NSInteger NSUInteger CGFloat NSRange NSString NSArray NSDictionary NSNumber NSData NSDate NSError NSURL NSBundle',
-  scala: 'Any AnyRef AnyVal Boolean Byte Char Double Float Int List Long Map Nothing Option Seq Set Short String Symbol Unit Vector Array',
-  swift: 'Any AnyObject Array Bool Character Dictionary Double Error Float Int Optional Set String UInt Void',
+  scala:
+    'Any AnyRef AnyVal Boolean Byte Char Double Float Int List Long Map Nothing Option Seq Set Short String Symbol Unit Vector Array',
+  swift:
+    'Any AnyObject Array Bool Character Dictionary Double Error Float Int Optional Set String UInt Void',
   ts: 'any bigint boolean never number object string symbol undefined unknown void Array AsyncIterable Awaited Boolean Iterable Iterator Number Object Promise ReadonlyArray ReadonlyMap ReadonlySet Record RegExp Set String Uint8Array Uint16Array Uint32Array Uint8ClampedArray ArrayBuffer BigInt64Array BigUint64Array Float32Array Float64Array Int8Array Int16Array Int32Array Map Partial Pick Required Readonly Omit Exclude Extract NonNullable ConstructorParameters',
-  kotlin: 'Any Array Boolean Byte Char Double Float Int List Long Map Nothing Number Set Short String Unit',
-  python: 'bool bytes complex dict float frozenset int list object set str tuple',
+  kotlin:
+    'Any Array Boolean Byte Char Double Float Int List Long Map Nothing Number Set Short String Unit',
+  python:
+    'bool bytes complex dict float frozenset int list object set str tuple',
 };
 
 /** The word lists for a language name, with its types in slot one. */
@@ -429,39 +440,83 @@ const cppLexer = (backquoted, marks, extra = []) => ({
   ],
   marks,
 });
-const plain = (lexer, properties = [], marks = 'MarkNone') => ({ lexer, properties, marks });
+const plain = (lexer, properties = [], marks = 'MarkNone') => ({
+  lexer,
+  properties,
+  marks,
+});
 
 const LANGUAGES = [
   // The C family shares one lexer, so each language carries its own lists.
-  { aliases: ['js', 'jsx', 'mjs', 'cjs', 'javascript'], words: 'js', lex: cppLexer(2, CPP) },
+  {
+    aliases: ['js', 'jsx', 'mjs', 'cjs', 'javascript'],
+    words: 'js',
+    lex: cppLexer(2, CPP),
+  },
   { aliases: ['ts', 'tsx', 'typescript'], words: 'ts', lex: cppLexer(2, CPP) },
   { aliases: ['java'], words: 'java', lex: cppLexer(0, CPP) },
   { aliases: ['c'], words: 'c', lex: cppLexer(0, CPP) },
-  { aliases: ['cpp', 'c++', 'cc', 'hpp', 'cxx', 'hxx', 'h++', 'h'], words: 'cpp', lex: cppLexer(0, CPP) },
+  {
+    aliases: ['cpp', 'c++', 'cc', 'hpp', 'cxx', 'hxx', 'h++', 'h'],
+    words: 'cpp',
+    lex: cppLexer(0, CPP),
+  },
   { aliases: ['cs', 'csharp'], words: 'csharp', lex: cppLexer(0, CPP) },
   { aliases: ['go', 'golang'], words: 'go', lex: cppLexer(1, CPP) },
   { aliases: ['swift'], words: 'swift', lex: cppLexer(0, CPP) },
   { aliases: ['kotlin', 'kt', 'kts'], words: 'kotlin', lex: cppLexer(0, CPP) },
-  { aliases: ['objc', 'objective-c', 'obj-c'], words: 'objc', lex: cppLexer(0, CPP, [['lexer.cpp.allow.hashes', '1']]) },
+  {
+    aliases: ['objc', 'objective-c', 'obj-c'],
+    words: 'objc',
+    lex: cppLexer(0, CPP, [['lexer.cpp.allow.hashes', '1']]),
+  },
   { aliases: ['dart'], words: 'dart', lex: cppLexer(0, CPP) },
   { aliases: ['scala'], words: 'scala', lex: cppLexer(0, CPP) },
 
-  { aliases: ['py', 'python', 'python3'], words: 'python', lex: plain('python', [['lexer.python.identifier.attributes', '1']], CPP) },
   {
-    aliases: ['sh', 'bash', 'zsh', 'shell', 'console', 'shellscript', 'dockerfile'],
+    aliases: ['py', 'python', 'python3'],
+    words: 'python',
+    lex: plain('python', [['lexer.python.identifier.attributes', '1']], CPP),
+  },
+  {
+    aliases: [
+      'sh',
+      'bash',
+      'zsh',
+      'shell',
+      'console',
+      'shellscript',
+      'dockerfile',
+    ],
     words: 'bash',
     lex: plain('bash', [], 'MarkCalls'),
   },
-  { aliases: ['json', 'jsonc', 'json5'], words: 'json', lex: plain('json', [['lexer.json.allow.comments', '1']]) },
+  {
+    aliases: ['json', 'jsonc', 'json5'],
+    words: 'json',
+    lex: plain('json', [['lexer.json.allow.comments', '1']]),
+  },
   { aliases: ['html', 'htm'], words: 'html', lex: plain('hypertext') },
   { aliases: ['xml', 'svg'], words: 'xml', lex: plain('xml') },
   { aliases: ['vue'], words: 'vue', lex: plain('xml') },
   { aliases: ['php'], words: 'php', lex: plain('xml') },
   { aliases: ['css', 'scss', 'less'], words: 'css', lex: plain('css') },
-  { aliases: ['sql', 'postgres', 'postgresql', 'mysql', 'sqlite'], words: 'sql', lex: plain('sql', [], CPP) },
-  { aliases: ['rs', 'rust'], words: 'rust', lex: plain('rust', [], 'MarkCalls|MarkTypes') },
+  {
+    aliases: ['sql', 'postgres', 'postgresql', 'mysql', 'sqlite'],
+    words: 'sql',
+    lex: plain('sql', [], CPP),
+  },
+  {
+    aliases: ['rs', 'rust'],
+    words: 'rust',
+    lex: plain('rust', [], 'MarkCalls|MarkTypes'),
+  },
   { aliases: ['yaml', 'yml'], words: 'yaml', lex: plain('yaml') },
-  { aliases: ['rb', 'ruby'], words: 'ruby', lex: plain('ruby', [], 'MarkCalls|MarkTypes') },
+  {
+    aliases: ['rb', 'ruby'],
+    words: 'ruby',
+    lex: plain('ruby', [], 'MarkCalls|MarkTypes'),
+  },
   { aliases: ['diff', 'patch'], words: 'diff', lex: plain('diff') },
   { aliases: ['md', 'markdown'], words: 'markdown', lex: plain('markdown') },
   { aliases: ['lua'], words: 'lua', lex: plain('lua', [], CPP) },
@@ -510,8 +565,12 @@ const push = (...text) => lines.push(...text);
 
 push('// GENERATED FILE. Written by src/cpp/highlight/generate-tables.mjs.');
 push('//');
-push("// Keyword lists come from SciTE's .properties files, which carry the same");
-push('// license as Lexilla. The style maps name SciLexer.h constants rather than');
+push(
+  "// Keyword lists come from SciTE's .properties files, which carry the same"
+);
+push(
+  '// license as Lexilla. The style maps name SciLexer.h constants rather than'
+);
 push('// numbers, so the generator fails if the pinned Lexilla renames one.');
 push('//');
 push('//   node src/cpp/highlight/generate-tables.mjs --scite <SciTE src dir>');
@@ -537,7 +596,10 @@ for (const set of wordSets.values()) {
 }
 push('');
 for (const lexer of lexers) {
-  const flat = styleMaps[lexer].pairs.flatMap(([style, token]) => [String(style), `static_cast<int32_t>(TokenClass::${token})`]);
+  const flat = styleMaps[lexer].pairs.flatMap(([style, token]) => [
+    String(style),
+    `static_cast<int32_t>(TokenClass::${token})`,
+  ]);
   push(`const int32_t kStyles${cap(lexer)}[] = {${flat.join(', ')}, -1};`);
 }
 push('');

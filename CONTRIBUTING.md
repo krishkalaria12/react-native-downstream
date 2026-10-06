@@ -69,10 +69,17 @@ To check for linting errors, run the following:
 pnpm lint
 ```
 
-To fix formatting errors, run the following:
+To apply the fixable ones:
 
 ```sh
-pnpm lint --fix
+pnpm lint:fix
+```
+
+Formatting is a separate tool. To apply it, or to check it in CI:
+
+```sh
+pnpm format
+pnpm format:check
 ```
 
 Remember to add tests for your change if possible. Run the unit tests by:
@@ -80,7 +87,6 @@ Remember to add tests for your change if possible. Run the unit tests by:
 ```sh
 pnpm test
 ```
-
 
 ### Commit message convention
 
@@ -95,7 +101,6 @@ We follow the [conventional commits specification](https://www.conventionalcommi
 
 Our pre-commit hooks verify that your commit message matches this format when committing.
 
-
 ### Publishing to npm
 
 We use [release-it](https://github.com/release-it/release-it) to make it easier to publish new versions. It handles common tasks like bumping version based on semver, creating tags and releases etc.
@@ -106,14 +111,14 @@ To publish new versions, run the following:
 pnpm release
 ```
 
-
 ### Scripts
 
 The `package.json` file contains various scripts for common tasks:
 
 - `pnpm install`: setup project by installing dependencies.
 - `pnpm typecheck`: type-check files with TypeScript.
-- `pnpm lint`: lint files with [ESLint](https://eslint.org/).
+- `pnpm lint`: lint files with [Oxlint](https://oxc.rs/docs/guide/usage/linter.html), fixable with `pnpm lint:fix`.
+- `pnpm format`: format files with [Oxfmt](https://oxc.rs/docs/guide/usage/formatter.html), checked with `pnpm format:check`.
 - `pnpm test`: run unit tests with [Jest](https://jestjs.io/).
 - `pnpm example start`: start the Metro server for the example app.
 - `pnpm example android`: run the example app on Android.

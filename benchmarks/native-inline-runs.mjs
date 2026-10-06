@@ -18,12 +18,17 @@ try {
   const workloads = JSON.parse(execFileSync(binary, { encoding: 'utf8' }));
   const result = {
     measuredAt: new Date().toISOString(),
-    scope: 'inline run selection only; excludes native layout, allocations and paint',
+    scope:
+      'inline run selection only; excludes native layout, allocations and paint',
     baseline: 'PR #18 full row scan reproduced in the same binary',
     host: { platform: platform(), arch: arch(), cpu: cpus()[0]?.model },
-    compiler: execFileSync(compiler, ['--version'], { encoding: 'utf8' }).trim(),
+    compiler: execFileSync(compiler, ['--version'], {
+      encoding: 'utf8',
+    }).trim(),
     flags,
-    harnessSha256: createHash('sha256').update(readFileSync(source)).digest('hex'),
+    harnessSha256: createHash('sha256')
+      .update(readFileSync(source))
+      .digest('hex'),
     workloads,
   };
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

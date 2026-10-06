@@ -28,8 +28,16 @@ const nativeWaits = {
 };
 
 const workloadFields = [
-  'renderer', 'parseMode', 'fixture', 'sourceHash', 'workloadSize',
-  'workloadShape', 'schedule', 'seed', 'streams', 'runCondition',
+  'renderer',
+  'parseMode',
+  'fixture',
+  'sourceHash',
+  'workloadSize',
+  'workloadShape',
+  'schedule',
+  'seed',
+  'streams',
+  'runCondition',
 ];
 
 const finite = (value) => typeof value === 'number' && Number.isFinite(value);
@@ -41,7 +49,10 @@ export function percentile(values, fraction) {
   const position = (ordered.length - 1) * fraction;
   const low = Math.floor(position);
   const high = Math.ceil(position);
-  return round(ordered[low] + (ordered[high] - ordered[low]) * (position - low), 3);
+  return round(
+    ordered[low] + (ordered[high] - ordered[low]) * (position - low),
+    3
+  );
 }
 
 export function distribution(values) {
@@ -62,23 +73,34 @@ function numbers(events, type, field = 'value') {
 }
 
 function batchKeys(events, type) {
-  return new Set(events
-    .filter((event) => event?.type === type && Number.isInteger(event.stream) && Number.isInteger(event.batch))
-    .map((event) => `${event.stream}:${event.batch}`));
+  return new Set(
+    events
+      .filter(
+        (event) =>
+          event?.type === type &&
+          Number.isInteger(event.stream) &&
+          Number.isInteger(event.batch)
+      )
+      .map((event) => `${event.stream}:${event.batch}`)
+  );
 }
 
-const byTimeNs = (a, b) => (a.timeNs < b.timeNs ? -1 : a.timeNs > b.timeNs ? 1 : 0);
+const byTimeNs = (a, b) =>
+  a.timeNs < b.timeNs ? -1 : a.timeNs > b.timeNs ? 1 : 0;
 
 function nativeEvents(events, names) {
   const selected = [];
   for (const event of events) {
-    if (event?.clockDomain !== 'native-monotonic' ||
-        !names.includes(event?.event) ||
-        typeof event.sessionId !== 'string' ||
-        !Number.isInteger(event.generation) ||
-        !Number.isInteger(event.sequence) ||
-        typeof event.timeNs !== 'string' ||
-        !/^\d{1,30}$/.test(event.timeNs)) continue;
+    if (
+      event?.clockDomain !== 'native-monotonic' ||
+      !names.includes(event?.event) ||
+      typeof event.sessionId !== 'string' ||
+      !Number.isInteger(event.generation) ||
+      !Number.isInteger(event.sequence) ||
+      typeof event.timeNs !== 'string' ||
+      !/^\d{1,30}$/.test(event.timeNs)
+    )
+      continue;
     selected.push({
       sessionId: event.sessionId,
       generation: event.generation,
@@ -102,8 +124,11 @@ function groupNative(events, names, key) {
 
 function nativeDurations(events, startEvent, endEvent) {
   const durations = [];
-  for (const records of groupNative(events, [startEvent, endEvent], (event) =>
-    `${event.sessionId}:${event.generation}:${event.sequence}`)) {
+  for (const records of groupNative(
+    events,
+    [startEvent, endEvent],
+    (event) => `${event.sessionId}:${event.generation}:${event.sequence}`
+  )) {
     const starts = [];
     for (const record of records) {
       if (record.event === startEvent) starts.push(record.timeNs);
@@ -119,8 +144,11 @@ function nativeDurations(events, startEvent, endEvent) {
 function nativeWaitDurations(events, startEvent, endEvent) {
   const durations = [];
   let appends = 0;
-  for (const records of groupNative(events, [startEvent, endEvent], (event) =>
-    `${event.sessionId}:${event.generation}`)) {
+  for (const records of groupNative(
+    events,
+    [startEvent, endEvent],
+    (event) => `${event.sessionId}:${event.generation}`
+  )) {
     let next = null;
     for (let index = records.length - 1; index >= 0; index -= 1) {
       if (records[index].event === endEvent) {
@@ -140,21 +168,44 @@ export function summarizeRun(run, environment = {}) {
   const events = Array.isArray(run.events) ? run.events : [];
   const summary = {};
   for (const field of [
-    'run', 'startedAt', 'renderer', 'parseMode', 'sampleOrder', 'runCondition',
-    'deviceId', 'fixture', 'sourceBytes', 'sourceHash', 'workloadSize',
-    'workloadShape', 'schedule', 'seed', 'streams', 'traceEnabled',
-    'sampleStride', 'batchWindowMs', 'droppedEvents', 'droppedStreamEvents', 'completionStatus',
-    'runDurationMs', 'wallDurationMs',
-  ]) summary[field] = run[field] ?? null;
-  summary.buildRevision = run.buildRevision ?? environment.buildRevision ?? null;
+    'run',
+    'startedAt',
+    'renderer',
+    'parseMode',
+    'sampleOrder',
+    'runCondition',
+    'deviceId',
+    'fixture',
+    'sourceBytes',
+    'sourceHash',
+    'workloadSize',
+    'workloadShape',
+    'schedule',
+    'seed',
+    'streams',
+    'traceEnabled',
+    'sampleStride',
+    'batchWindowMs',
+    'droppedEvents',
+    'droppedStreamEvents',
+    'completionStatus',
+    'runDurationMs',
+    'wallDurationMs',
+  ])
+    summary[field] = run[field] ?? null;
+  summary.buildRevision =
+    run.buildRevision ?? environment.buildRevision ?? null;
 
   for (const [type, [name, field]] of Object.entries(samples)) {
     summary[name] = distribution(numbers(events, type, field));
   }
   const streamEvents = Array.isArray(run.streamEvents) ? run.streamEvents : [];
   summary.streamTraceEvents = streamEvents.length;
-  summary.frameUnavailable = streamEvents.filter((event) =>
-    event?.clockDomain === 'native-monotonic' && event.event === 'frame_unavailable').length;
+  summary.frameUnavailable = streamEvents.filter(
+    (event) =>
+      event?.clockDomain === 'native-monotonic' &&
+      event.event === 'frame_unavailable'
+  ).length;
   for (const [name, [start, end]] of Object.entries(nativeIntervals)) {
     summary[name] = distribution(nativeDurations(streamEvents, start, end));
   }
@@ -173,8 +224,12 @@ export function summarizeRun(run, environment = {}) {
     rendererUpdated: rendered.size,
     frameEstimated: observed.size,
     supersededBeforeFrame: superseded.size,
-    unobservedAfterFlush: [...flushed].filter((key) => !observed.has(key) && !superseded.has(key)).length,
-    supersededRate: rendered.size ? round(superseded.size / rendered.size, 4) : null,
+    unobservedAfterFlush: [...flushed].filter(
+      (key) => !observed.has(key) && !superseded.has(key)
+    ).length,
+    supersededRate: rendered.size
+      ? round(superseded.size / rendered.size, 4)
+      : null,
   };
   summary.batchSizeChunks = distribution(numbers(events, 'batch-flush'));
   return summary;
@@ -205,8 +260,11 @@ export function summarizeGroup(group) {
     repeatedRunVariation: {},
   };
   for (const metric of [
-    'chunkToFrameEstimateMs', 'jsFrameIntervalMs', 'deliveryLatenessMs',
-    ...Object.keys(nativeIntervals), ...Object.keys(nativeWaits),
+    'chunkToFrameEstimateMs',
+    'jsFrameIntervalMs',
+    'deliveryLatenessMs',
+    ...Object.keys(nativeIntervals),
+    ...Object.keys(nativeWaits),
   ]) {
     for (const statistic of ['p50', 'p95', 'p99']) {
       result.repeatedRunVariation[`${metric}.${statistic}`] = distribution(
@@ -215,12 +273,17 @@ export function summarizeGroup(group) {
     }
   }
   result.runDurationMs = {
-    traceOn: distribution(traced.map((run) => run.runDurationMs).filter(finite)),
-    traceOff: distribution(untraced.map((run) => run.runDurationMs).filter(finite)),
+    traceOn: distribution(
+      traced.map((run) => run.runDurationMs).filter(finite)
+    ),
+    traceOff: distribution(
+      untraced.map((run) => run.runDurationMs).filter(finite)
+    ),
   };
   const on = result.runDurationMs.traceOn.p50;
   const off = result.runDurationMs.traceOff.p50;
-  result.traceOnMinusOffMedianRunDurationMs = on === null || off === null ? null : round(on - off, 3);
+  result.traceOnMinusOffMedianRunDurationMs =
+    on === null || off === null ? null : round(on - off, 3);
   return result;
 }
 
@@ -246,19 +309,31 @@ export function summarizeFiles(paths) {
       groups.get(groupKey).push(summary);
     }
   }
-  for (const [key, group] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    rows.push({ kind: 'group', identity: JSON.parse(key), ...summarizeGroup(group) });
+  for (const [key, group] of [...groups.entries()].sort(([a], [b]) =>
+    a.localeCompare(b)
+  )) {
+    rows.push({
+      kind: 'group',
+      identity: JSON.parse(key),
+      ...summarizeGroup(group),
+    });
   }
   return rows;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (
+  process.argv[1] &&
+  fileURLToPath(import.meta.url) === resolve(process.argv[1])
+) {
   if (process.argv.length < 3) {
-    console.error('Usage: node benchmarks/summarize.mjs <trace.json> [trace.json ...]');
+    console.error(
+      'Usage: node benchmarks/summarize.mjs <trace.json> [trace.json ...]'
+    );
     process.exitCode = 2;
   } else {
     try {
-      for (const row of summarizeFiles(process.argv.slice(2))) console.log(JSON.stringify(row));
+      for (const row of summarizeFiles(process.argv.slice(2)))
+        console.log(JSON.stringify(row));
     } catch (error) {
       console.error(error.message);
       process.exitCode = 1;

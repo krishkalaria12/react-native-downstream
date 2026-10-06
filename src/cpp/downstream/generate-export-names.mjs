@@ -22,12 +22,18 @@ const out = resolve(join(HERE, 'ExportNames.cpp'));
 
 const arg = (name, fallback) => {
   const index = process.argv.indexOf(`--${name}`);
-  return index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
+  return index >= 0 && process.argv[index + 1]
+    ? process.argv[index + 1]
+    : fallback;
 };
 
-const { map, source: origin, commit, license, copyright } = JSON.parse(
-  readFileSync(arg('in', source), 'utf8')
-);
+const {
+  map,
+  source: origin,
+  commit,
+  license,
+  copyright,
+} = JSON.parse(readFileSync(arg('in', source), 'utf8'));
 const target = arg('out', out);
 
 /**
@@ -55,7 +61,9 @@ const skipped = Object.entries(map)
   .filter(([key, value]) => !isKey(key) || !isExtension(value))
   .map(([key]) => key);
 if (skipped.length > 0) {
-  console.error(`skipping ${skipped.length} unusable entries: ${skipped.join(', ')}`);
+  console.error(
+    `skipping ${skipped.length} unusable entries: ${skipped.join(', ')}`
+  );
 }
 
 const entries = Object.entries(map)
@@ -63,9 +71,13 @@ const entries = Object.entries(map)
   .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 
 const keys = new Set(entries.map(([key]) => key));
-const duplicates = entries.map(([key]) => key).filter((key, index, all) => all.indexOf(key) !== index);
+const duplicates = entries
+  .map(([key]) => key)
+  .filter((key, index, all) => all.indexOf(key) !== index);
 if (duplicates.length > 0) {
-  console.error(`refusing to write: duplicate keys ${[...new Set(duplicates)].join(', ')}`);
+  console.error(
+    `refusing to write: duplicate keys ${[...new Set(duplicates)].join(', ')}`
+  );
   process.exit(1);
 }
 if (keys.size === 0) {

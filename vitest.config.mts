@@ -96,10 +96,7 @@ export default defineConfig({
       reporter: ['text', 'html'],
     },
     benchmark: {
-      include: [
-        'benchmarks/**/*.bench.ts',
-        'benchmarks/**/*.bench.tsx',
-      ],
+      include: ['benchmarks/**/*.bench.ts', 'benchmarks/**/*.bench.tsx'],
     },
   },
 });

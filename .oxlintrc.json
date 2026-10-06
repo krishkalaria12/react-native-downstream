@@ -1,0 +1,101 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "oxc", "typescript", "react", "unicorn", "import"],
+  "env": {
+    "es2026": true
+  },
+  "options": {
+    "reportUnusedDisableDirectives": "warn",
+    "respectEslintDisableDirectives": true
+  },
+  "ignorePatterns": [
+    "node_modules/",
+    "lib/",
+    "**/build/**",
+    "example/ios/**",
+    "example/android/**",
+    "example/dist/**",
+    "benchmarks/results/**",
+    "src/cpp/md4c/**",
+    "src/cpp/lexilla/**",
+    "src/cpp/glew/**",
+    "src/cpp/rapidjson/**",
+    "src/cpp/react/**",
+    "math/vendor/**",
+    "patches/**",
+    "src/cpp/theme/ThemeSlots.h",
+    "src/themeSlots.ts",
+    "src/android/src/main/java/com/downstream/ThemeSlots.kt"
+  ],
+  "rules": {
+    "eqeqeq": ["warn", "smart"],
+    "no-bitwise": "warn",
+    "no-dupe-keys": "error",
+    "no-duplicate-case": "error",
+    "no-eval": "error",
+    "no-new-func": "error",
+    "no-script-url": "error",
+    "no-self-compare": "warn",
+    "no-unsafe-optional-chaining": "error",
+    "no-unreachable": "error",
+    "no-useless-catch": "error",
+    "no-shadow": "off",
+    "no-undef": "off",
+    "no-unused-vars": "off",
+    "react-hooks/rules-of-hooks": "error",
+    "react-hooks/exhaustive-deps": "error",
+    "react/jsx-no-comment-textnodes": "error",
+    "react/jsx-no-duplicate-props": "error",
+    "react/jsx-no-undef": "error",
+    "react/no-string-refs": "error",
+    "react/no-unstable-nested-components": "warn",
+    "react/react-in-jsx-scope": "off",
+    "react/refs": "off",
+    "react/set-state-in-effect": "off",
+    "react/globals": "off",
+    "react/immutability": "off",
+    "react/no-did-update-set-state": "off",
+    "typescript/no-explicit-any": "warn",
+    "typescript/no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "destructuredArrayIgnorePattern": "^_"
+      }
+    ],
+    "typescript/no-shadow": "warn",
+    "eslint-comments/no-aggregating-enable": "warn",
+    "eslint-comments/no-unused-enable": "warn",
+    "react-native/no-inline-styles": "warn",
+    "rn/no-deep-imports": "warn",
+    "unicorn/no-abusive-eslint-disable": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["*.js", "*.mjs", "*.cjs"],
+      "rules": {
+        "typescript/no-explicit-any": "off"
+      }
+    },
+    {
+      "files": ["src/cpp/tests/oracle.mjs"],
+      "rules": {
+        "no-script-url": "off"
+      }
+    }
+  ],
+  "jsPlugins": [
+    {
+      "name": "eslint-comments",
+      "specifier": "eslint-plugin-eslint-comments"
+    },
+    {
+      "name": "react-native",
+      "specifier": "eslint-plugin-react-native"
+    },
+    {
+      "name": "rn",
+      "specifier": "@react-native/eslint-plugin"
+    }
+  ]
+}

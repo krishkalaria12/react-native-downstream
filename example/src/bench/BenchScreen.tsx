@@ -445,15 +445,15 @@ export function BenchScreen() {
                 view.status === 'complete'
                   ? 'complete'
                   : view.status === 'running'
-                  ? 'streaming'
-                  : 'paused'
+                    ? 'streaming'
+                    : 'paused'
               }
               tone={
                 view.status === 'running'
                   ? 'live'
                   : view.status === 'complete'
-                  ? 'accent'
-                  : 'warn'
+                    ? 'accent'
+                    : 'warn'
               }
               pulse={view.status === 'running'}
             >

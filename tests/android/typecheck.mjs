@@ -30,15 +30,39 @@
 // is a "run it once in a real Android build" prerequisite, so a miss is a skipped
 // check with a message rather than a failure.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const kotlinSources = join(repo, 'src', 'android', 'src', 'main', 'java', 'com', 'downstream');
+const kotlinSources = join(
+  repo,
+  'src',
+  'android',
+  'src',
+  'main',
+  'java',
+  'com',
+  'downstream'
+);
 const jniSources = join(repo, 'src', 'android', 'src', 'main', 'jni');
-const cache = join(process.env.HOME ?? '', '.gradle', 'caches', 'modules-2', 'files-2.1');
+const cache = join(
+  process.env.HOME ?? '',
+  '.gradle',
+  'caches',
+  'modules-2',
+  'files-2.1'
+);
 
 /** Says why a check is not running and returns null, so a miss is not a failure. */
 function skip(reason) {
@@ -47,7 +71,9 @@ function skip(reason) {
 }
 
 function findRuntimes() {
-  const sdk = process.env.ANDROID_HOME ?? join(process.env.HOME ?? '', 'Library', 'Android', 'sdk');
+  const sdk =
+    process.env.ANDROID_HOME ??
+    join(process.env.HOME ?? '', 'Library', 'Android', 'sdk');
   if (!existsSync(sdk)) {
     return skip(`no Android SDK at ${sdk}`);
   }
@@ -63,15 +89,33 @@ function findRuntimes() {
     return skip('no android.jar in the SDK');
   }
   const ndkRoot = join(sdk, 'ndk');
-  const ndk = existsSync(ndkRoot) ? readdirSync(ndkRoot).sort().reverse().find((n) => existsSync(join(ndkRoot, n))) : undefined;
+  const ndk = existsSync(ndkRoot)
+    ? readdirSync(ndkRoot)
+        .sort()
+        .reverse()
+        .find((n) => existsSync(join(ndkRoot, n)))
+    : undefined;
   const clang = ndk
-    ? join(ndkRoot, ndk, 'toolchains', 'llvm', 'prebuilt', 'darwin-x86_64', 'bin', 'clang++')
+    ? join(
+        ndkRoot,
+        ndk,
+        'toolchains',
+        'llvm',
+        'prebuilt',
+        'darwin-x86_64',
+        'bin',
+        'clang++'
+      )
     : undefined;
   if (!clang || !existsSync(clang)) {
     return skip('no NDK clang++');
   }
-  const java = spawnSync('java', ['-version'], { stdio: 'ignore' }).status === 0;
-  if (!java || spawnSync('kotlinc', ['-version'], { stdio: 'ignore' }).status !== 0) {
+  const java =
+    spawnSync('java', ['-version'], { stdio: 'ignore' }).status === 0;
+  if (
+    !java ||
+    spawnSync('kotlinc', ['-version'], { stdio: 'ignore' }).status !== 0
+  ) {
     return skip('no java or kotlinc');
   }
   return { sdk, platform, clang };
@@ -83,12 +127,15 @@ function reactAndroidAar() {
   if (!existsSync(group)) {
     return skip('react-android is not in the Gradle cache');
   }
-  const wanted = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).devDependencies?.['react-native'];
+  const wanted = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8'))
+    .devDependencies?.['react-native'];
   const versions = readdirSync(group)
     .filter((name) => existsSync(join(group, name)))
     // The version the package asks for, newest first otherwise: a mismatch is
     // still worth checking against, and the error it produces is a real one.
-    .sort((a, b) => (a === wanted ? -1 : b === wanted ? 1 : b.localeCompare(a)));
+    .sort((a, b) =>
+      a === wanted ? -1 : b === wanted ? 1 : b.localeCompare(a)
+    );
   for (const version of versions) {
     const builds = join(group, version);
     for (const hash of readdirSync(builds)) {
@@ -107,13 +154,17 @@ function classesOf(aar, out) {
   // Checked before extracting because an AAR need not carry one: a Kotlin Multiplatform
   // artifact ships its classes in a sibling `-jvm` jar instead, and `unzip` exits
   // non-zero when asked for a member that is not there.
-  const listing = (spawnSync('unzip', ['-l', aar], { encoding: 'utf8' }).stdout ?? '').split('\n');
+  const listing = (
+    spawnSync('unzip', ['-l', aar], { encoding: 'utf8' }).stdout ?? ''
+  ).split('\n');
   if (!listing.some((line) => line.trimEnd().endsWith('classes.jar'))) {
     return null;
   }
   const scratch = mkdtempSync(join(tmpdir(), 'downstream-aar-'));
   try {
-    execFileSync('unzip', ['-o', '-q', aar, 'classes.jar', '-d', scratch], { stdio: 'ignore' });
+    execFileSync('unzip', ['-o', '-q', aar, 'classes.jar', '-d', scratch], {
+      stdio: 'ignore',
+    });
     const jar = join(scratch, 'classes.jar');
     if (!existsSync(jar)) {
       return null;
@@ -142,7 +193,9 @@ function classesOf(aar, out) {
 function artifacts(groups) {
   const found = [];
   const roots = readdirSync(cache)
-    .filter((name) => groups.some((group) => name === group || name.startsWith(`${group}.`)))
+    .filter((name) =>
+      groups.some((group) => name === group || name.startsWith(`${group}.`))
+    )
     .map((name) => join(cache, name));
   for (const root of roots) {
     for (const module of readdirSync(root)) {
@@ -153,7 +206,10 @@ function artifacts(groups) {
           const dir = join(versions, version, hash);
           if (!existsSync(dir)) continue;
           for (const file of readdirSync(dir)) {
-            if ((file.endsWith('.jar') || file.endsWith('.aar')) && !file.includes('sources')) {
+            if (
+              (file.endsWith('.jar') || file.endsWith('.aar')) &&
+              !file.includes('sources')
+            ) {
               found.push(join(dir, file));
             }
           }
@@ -204,7 +260,12 @@ try {
   const classpath = [reactJar, toolchain.platform];
 
   // The rest of what the library compiles against, as Gradle would resolve it.
-  const others = artifacts(['com.facebook.fresco', 'com.facebook.fbjni', 'com.facebook.soloader', 'androidx']);
+  const others = artifacts([
+    'com.facebook.fresco',
+    'com.facebook.fbjni',
+    'com.facebook.soloader',
+    'androidx',
+  ]);
   for (const other of others) {
     if (other.endsWith('.jar')) {
       classpath.push(other);
@@ -252,8 +313,18 @@ import java.lang.annotation.*;
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, body);
   }
-  const stubSourcesList = Object.keys(stubSources).map((path) => join(generated, 'stubs', path));
-  if (!run('java stubs', 'javac', ['-nowarn', '-proc:none', '-d', classes, ...stubSourcesList])) {
+  const stubSourcesList = Object.keys(stubSources).map((path) =>
+    join(generated, 'stubs', path)
+  );
+  if (
+    !run('java stubs', 'javac', [
+      '-nowarn',
+      '-proc:none',
+      '-d',
+      classes,
+      ...stubSourcesList,
+    ])
+  ) {
     process.exit(1);
   }
   classpath.push(classes);
@@ -261,56 +332,78 @@ import java.lang.annotation.*;
   // React Native's own codegen, over this package's own spec. The generated view
   // manager interface is the one that ships, so a prop the manager forgot to
   // implement fails here rather than at the first Gradle build.
-  const codegenOk = run(
-    'codegen',
-    'node',
-    [
-      join(repo, 'node_modules', 'react-native', 'scripts', 'generate-codegen-artifacts.js'),
-      '--path',
+  const codegenOk = run('codegen', 'node', [
+    join(
       repo,
-      '--outputPath',
-      join(work, 'codegen'),
-      '--targetPlatform',
-      'android',
-    ],
-  );
+      'node_modules',
+      'react-native',
+      'scripts',
+      'generate-codegen-artifacts.js'
+    ),
+    '--path',
+    repo,
+    '--outputPath',
+    join(work, 'codegen'),
+    '--targetPlatform',
+    'android',
+  ]);
   if (!codegenOk) {
     process.exit(1);
   }
-  const generatedJava = join(work, 'codegen', 'android', 'app', 'build', 'generated', 'source', 'codegen', 'java');
+  const generatedJava = join(
+    work,
+    'codegen',
+    'android',
+    'app',
+    'build',
+    'generated',
+    'source',
+    'codegen',
+    'java'
+  );
   if (!existsSync(generatedJava)) {
     skip('codegen produced no Android java');
     process.exit(0);
   }
   const javaList = listFiles(generatedJava, '.java');
-  if (!run('generated java', 'javac', ['-nowarn', '-proc:none', '-classpath', classpath.join(':'), '-d', classes, ...javaList])) {
-    process.exit(1);
-  }
-
-  const ok = run(
-    'kotlin source set',
-    'kotlinc',
-    [
+  if (
+    !run('generated java', 'javac', [
       '-nowarn',
-      '-jvm-target',
-      '17',
+      '-proc:none',
       '-classpath',
       classpath.join(':'),
       '-d',
-      join(work, 'out'),
-      ...listFiles(kotlinSources, '.kt'),
-    ],
-  );
+      classes,
+      ...javaList,
+    ])
+  ) {
+    process.exit(1);
+  }
+
+  const ok = run('kotlin source set', 'kotlinc', [
+    '-nowarn',
+    '-jvm-target',
+    '17',
+    '-classpath',
+    classpath.join(':'),
+    '-d',
+    join(work, 'out'),
+    ...listFiles(kotlinSources, '.kt'),
+  ]);
 
   // The JNI sources, against React Native's prefab headers and the NDK. This is the
   // half that catches a stale signature in `measurePlatform`, which no Kotlin check
   // would see.
   const prefab = join(unpacked, 'prefab', 'modules');
-  const fbjniAar = artifacts(['com.facebook.fbjni']).find((file) => file.endsWith('.aar'));
+  const fbjniAar = artifacts(['com.facebook.fbjni']).find((file) =>
+    file.endsWith('.aar')
+  );
   const fbjniUnpacked = join(work, 'fbjni');
   mkdirSync(fbjniUnpacked, { recursive: true });
   if (fbjniAar) {
-    execFileSync('unzip', ['-o', '-q', fbjniAar, '-d', fbjniUnpacked], { stdio: 'ignore' });
+    execFileSync('unzip', ['-o', '-q', fbjniAar, '-d', fbjniUnpacked], {
+      stdio: 'ignore',
+    });
   }
   const cpp = join(repo, 'src', 'cpp');
   const includes = [
@@ -373,11 +466,20 @@ import java.lang.annotation.*;
     // A header spelled without its directory, the way
     // `downstream/PreparedDocument.cpp` includes `MathBlocks.h`, needs that
     // directory on the search path rather than only its parent.
-    if (!cmake.includes(cmakeDir + '/' + dir + '\n') && !cmake.includes(cmakeDir + '/' + dir + ' ')) {
-      missing.push('CMakeLists.txt does not put src/cpp/' + dir + ' on the include path');
+    if (
+      !cmake.includes(cmakeDir + '/' + dir + '\n') &&
+      !cmake.includes(cmakeDir + '/' + dir + ' ')
+    ) {
+      missing.push(
+        'CMakeLists.txt does not put src/cpp/' + dir + ' on the include path'
+      );
     }
     if (!podspec.includes('src/cpp/' + dir + '\\"')) {
-      missing.push('Downstream.podspec does not put src/cpp/' + dir + ' on the include path');
+      missing.push(
+        'Downstream.podspec does not put src/cpp/' +
+          dir +
+          ' on the include path'
+      );
     }
   }
   if (missing.length > 0) {
@@ -387,15 +489,21 @@ import java.lang.annotation.*;
     }
     process.exit(1);
   }
-  console.log('ok engine directories (' + engineDirs.length + ') are built on both platforms');
+  console.log(
+    'ok engine directories (' +
+      engineDirs.length +
+      ') are built on both platforms'
+  );
 
   for (const source of listFiles(jniSources, '.cpp')) {
     if (
-      !run(
-        `jni ${source.split('/').pop()}`,
-        toolchain.clang,
-        ['--target=aarch64-linux-android24', '-fsyntax-only', ...defines, ...includes, source],
-      )
+      !run(`jni ${source.split('/').pop()}`, toolchain.clang, [
+        '--target=aarch64-linux-android24',
+        '-fsyntax-only',
+        ...defines,
+        ...includes,
+        source,
+      ])
     ) {
       process.exit(1);
     }
