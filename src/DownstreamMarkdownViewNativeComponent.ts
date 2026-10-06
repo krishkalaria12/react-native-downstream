@@ -126,10 +126,12 @@ export interface NativeProps extends ViewProps {
   linkOrigin?: string;
   /**
    * Which HTML tags the source may use beyond the built-in table, as
-   * `name,attribute,name,attribute` in the order `src/allowedTags.ts` writes it.
+   * `-1,name,attribute,-1,name,…` in name order; see `src/allowedTags.ts`.
    *
    * A flat list of strings because a codegen object prop would need a struct
-   * field per attribute, and this compares as a vector for free.
+   * field per attribute, and this compares as a vector for free. The `-1`
+   * sentinel opens each tag because the reader is a loop that has to know where
+   * one tag's attributes stop.
    */
   allowedTags?: ReadonlyArray<string>;
   /** Base name for a code download, without an extension. */

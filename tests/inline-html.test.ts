@@ -60,8 +60,27 @@ const GRAMMAR: [string, string, [string, number][]][] = [
   ['<sup>**y**</sup>', 'y', [['y', STYLE.superscript | STYLE.strong]]],
   // A name that merely starts with one is not one.
   ['<subtitle>n</subtitle>', '<subtitle>n</subtitle>', []],
-  // Every other tag stays literal, and code is verbatim.
-  ['a <b>bold</b>', 'a <b>bold</b>', []],
+  // A name that merely starts with a real one is not one.
+  ['<supplier>n</supplier>', '<supplier>n</supplier>', []],
+  // Phase 4: the styles, the unwraps, the drop, the comment and the anchor.
+  ['a <b>bold</b>', 'a bold', [['bold', STYLE.strong]]],
+  [
+    '<mark>m</mark><u>u</u><ins>i</ins>',
+    'mui',
+    [
+      ['m', STYLE.highlight],
+      ['u', STYLE.underline],
+      ['i', STYLE.underline],
+    ],
+  ],
+  ['a <span>b</span> c', 'a b c', []],
+  ['a <!-- note --> b', 'a  b', []],
+  ['<!-- note -->', '', []],
+  ['a <script>x</script> b', 'a  b', []],
+  ['<a href="https://x.com">x</a>', 'x', [['x', STYLE.link]]],
+  // A name that is not an HTML element is a generic, not markup.
+  ['Array<string> <T> <Vector<int>>', 'Array<string> <T> <Vector<int>>', []],
+  // Code is verbatim, so a tag inside it is content.
   ['`<sub>x</sub>`', '<sub>x</sub>', [['<sub>x</sub>', STYLE.code]]],
 ];
 

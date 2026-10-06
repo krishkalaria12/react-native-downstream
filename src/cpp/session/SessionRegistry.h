@@ -67,6 +67,18 @@ public:
    * false when the session does not exist.
    */
   static bool setParse(const std::string &id, ParseOptions parse);
+
+  /**
+   * Replaces the session's HTML tag policy, keeping its flags.
+   *
+   * A separate call for the same reason `setParse` is: `create` is one crossing
+   * with one number in it, and a tag policy is a list. Reading the flags back off
+   * the session rather than taking them as an argument is what keeps a caller that
+   * only knows about tags from clearing the bits that came with `create`.
+   *
+   * Returns false when the session does not exist.
+   */
+  static bool setParseTags(const std::string &id, TagPolicy tags);
 };
 
 } // namespace downstream

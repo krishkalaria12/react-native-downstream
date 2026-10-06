@@ -146,6 +146,13 @@ void applyContainerFont(const Theme &theme, const Block &block, BlockFont &font)
         font.italic = theme.flag(kSlotBlockquoteFontStyle);
         font.colorSlot = kSlotBlockquoteColor;
         return;
+      case ContainerKind::Details:
+      case ContainerKind::Custom:
+        // A `<details>` and an app's own block tag are containers without
+        // typography of their own: they hold blocks, and the blocks are what a
+        // theme sets. Indenting them is `containerIndent`'s job, and the
+        // summary is a paragraph like any other.
+        break;
       case ContainerKind::ListItem:
         font.size = theme.number(kSlotListFontSize);
         font.weight = theme.number(kSlotListFontWeight);
@@ -312,10 +319,13 @@ double blockGap(const Theme &theme, BlockSpacing spacing, const Block *previous,
 
 double containerIndent(const Theme &theme, ContainerKind kind) {
   // A quote and an admonition are the same box; a list item and a footnote are
-  // the same column.
+  // the same column; a details and an app's own block tag are indented the way
+  // a quote is, because a box inside a box reads as a quote.
   switch (kind) {
     case ContainerKind::Quote:
     case ContainerKind::Admonition:
+    case ContainerKind::Details:
+    case ContainerKind::Custom:
       return theme.number(kSlotBlockquoteGapWidth);
     case ContainerKind::ListItem:
     case ContainerKind::Footnote:

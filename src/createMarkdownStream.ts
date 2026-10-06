@@ -4,12 +4,14 @@ import NativeDownstreamSession, {
   type SnapshotReadyEvent,
 } from './NativeDownstreamSession';
 import { checkedUtf8Bytes, MAX_SOURCE_BYTES } from './controlledSource';
+import { resolveAllowedTags } from './allowedTags';
 import { mathAvailable, resolveParseFlags } from './parseFlags';
 import { emitJsStreamTrace } from './streamTrace';
 import type {
   MarkdownErrorCode,
   MarkdownErrorEvent,
   MarkdownOperationError,
+  MarkdownAllowedTags,
   MarkdownPreviewOptions,
   MarkdownStreamController,
   MarkdownStreamOptions,
@@ -115,6 +117,8 @@ class StreamState implements MarkdownStreamController {
   private bound = false;
   private tracing = false;
   private previewFeatures = 0;
+  /// The session's HTML tag policy, in the engine's wire form.
+  private parseTags: readonly string[] = [];
   private subscribers = new Set<() => void>();
   /// Whether text is still arriving, which is what a stream view sends to native
   /// as `animating: auto`. A view that names `isAnimating` overrides it, so this
@@ -141,6 +145,10 @@ class StreamState implements MarkdownStreamController {
     // Set after create, so a session always exists before it is configured.
     if (options.preview !== undefined) {
       this.setPreview(options.preview);
+    }
+    this.parseTags = resolveAllowedTags(options.allowedTags).tags;
+    if (this.parseTags.length > 0) {
+      NativeDownstreamSession.setParseTags(this.sessionId, this.parseTags);
     }
     controllers.set(this.sessionId, this);
     listenForNativeEvents();
@@ -327,6 +335,26 @@ class StreamState implements MarkdownStreamController {
     this.assertActive();
     NativeDownstreamSession.setTracing(this.sessionId, enabled);
     this.tracing = enabled;
+  }
+
+  /**
+   * Replaces the HTML tags this stream's source may use.
+   *
+   * Read once, at creation, and kept by `reset()`: a tag policy decides which
+   * runs exist, so it is part of the source's identity in the same way the parse
+   * flags are, and a stream cannot change it under a document that is streaming.
+   */
+  setAllowedTags(allowedTags: MarkdownAllowedTags | undefined): void {
+    this.assertActive();
+    const tags = resolveAllowedTags(allowedTags).tags;
+    if (
+      tags.length === this.parseTags.length &&
+      tags.every((entry, index) => entry === this.parseTags[index])
+    ) {
+      return;
+    }
+    this.parseTags = tags;
+    NativeDownstreamSession.setParseTags(this.sessionId, tags);
   }
 
   setPreview(options: boolean | MarkdownPreviewOptions): void {

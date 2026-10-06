@@ -44,10 +44,21 @@ export const STYLE = {
   math: 1 << 7,
   superscript: 1 << 8,
   subscript: 1 << 9,
+  /** The phase 4 tag styles, mirroring `InlineStyle` in `src/cpp/downstream`. */
+  keyboard: 1 << 10,
+  highlight: 1 << 11,
+  underline: 1 << 12,
 } as const;
 
-/** Container kinds, matching `Container::Kind`. */
-export const CONTAINER = { quote: 0, listItem: 1 } as const;
+/** Container kinds, matching `ContainerKind` in `src/cpp/downstream`. */
+export const CONTAINER = {
+  quote: 0,
+  listItem: 1,
+  admonition: 2,
+  footnote: 3,
+  details: 4,
+  custom: 5,
+} as const;
 
 /** Task states, matching `TaskState`. */
 export const TASK = ['none', 'unchecked', 'checked'] as const;

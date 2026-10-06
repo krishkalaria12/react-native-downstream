@@ -244,6 +244,18 @@ void DownstreamSessionModule::setPreview(jsi::Runtime & /*rt*/, std::string sess
   }
 }
 
+void DownstreamSessionModule::setParseTags(jsi::Runtime & /*rt*/, std::string sessionId,
+                                          std::vector<std::string> tags) {
+  try {
+    if (sessions_.count(sessionId) == 0 ||
+        !downstream::SessionRegistry::setParseTags(sessionId, downstream::tagPolicyFromStrings(tags))) {
+      reportError(sessionId, "invalid_session", "Session is unavailable", 0, 0);
+    }
+  } catch (const std::exception &error) {
+    reportError(sessionId, "invalid_session", error.what(), 0, 0);
+  }
+}
+
 bool DownstreamSessionModule::mathAvailable(jsi::Runtime & /*rt*/) {
   // Asked once per process and answered from the engine's own install flag rather
   // than from anything this module knows: the answer changes only when the app's
@@ -252,10 +264,13 @@ bool DownstreamSessionModule::mathAvailable(jsi::Runtime & /*rt*/) {
   return downstream::MathEngine::available();
 }
 
-AsyncPromise<bool> DownstreamSessionModule::copyText(jsi::Runtime & /*rt*/, std::string text) {
-  // The write is synchronous on both platforms, so the answer is known before
-  // this returns and the promise is settled immediately rather than queued.
-  return AsyncPromise<bool>{[text = std::move(text)] { return downstream::copyTextToClipboard(text); }};
+AsyncPromise<bool> DownstreamSessionModule::copyText(jsi::Runtime &rt, std::string text) {
+  // The promise is made here, on the JavaScript thread, and settled immediately:
+  // both platforms write synchronously, so there is no work to hand to the pool
+  // and a reader who taps "Copy link" should not wait on a hop to find out.
+  AsyncPromise<bool> promise(rt, jsInvoker_);
+  promise.resolve(downstream::copyTextToClipboard(text));
+  return promise;
 }
 
 namespace {

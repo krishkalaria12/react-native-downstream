@@ -80,6 +80,13 @@ export interface Spec extends TurboModule {
    */
   setPreview(sessionId: string, features: number): void;
   /**
+   * Replaces the session's HTML tag policy, keeping the flags `create` set.
+   *
+   * `tags` is the flat list `src/allowedTags.ts` writes: `-1,name,attribute,…`
+   * in name order. Takes effect on the next parse, which this queues.
+   */
+  setParseTags(sessionId: string, tags: ReadonlyArray<string>): void;
+  /**
    * Whether a math engine is linked into this process, so JavaScript can settle
    * the `math` prop's default during render instead of after a first pass.
    *

@@ -6,6 +6,7 @@ export {
   resolveAnimate,
   resolveEasing,
 } from './animation';
+export { resolveAllowedTags } from './allowedTags';
 export { createMarkdownStream } from './createMarkdownStream';
 export {
   openLinkSafely,

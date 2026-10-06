@@ -5,14 +5,19 @@
 //
 // These exist because the same questions were being answered three times in
 // three languages: the parser recovered link destinations with pointer
-// arithmetic, the incremental parser re-derived fence grammar per line, and
-// the preview pass needs the same answers again. The parser's copy is the one
+// arithmetic, the incremental parser re-derived fence grammar per line, and the
+// preview pass needs the same answers again. The parser's copy is the one
 // with a test suite behind it, so it is the one that moved here first.
+
+#include "TagPolicy.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace downstream::scan {
 
@@ -99,32 +104,68 @@ size_t skipInlineDestination(std::string_view source, size_t open);
 /// here belongs to a link or image whose target has not been typed yet.
 bool isUnfinishedDestination(std::string_view source, size_t at);
 
-// --- inline tag allowlist ---
+// --- HTML tags ---
 
-/// What an `MD_TEXT_HTML` piece says. `None` keeps the piece literal, as
-/// every tag outside the allowlist is; `SubVoid`/`SupVoid` are swallowed,
-/// because a writer who means a superscript never writes `<sup/>`.
-enum class InlineTag : uint8_t {
-  None = 0,
-  Break,
-  SubOpen,
-  SubClose,
-  SupOpen,
-  SupClose,
-  SubVoid,
-  SupVoid,
+/**
+ * What one `MD_TEXT_HTML` piece is and what to do with it.
+ *
+ * A table rather than a three-case switch, because the answer to "what is
+ * `<kbd>`" is a policy decision and there are now more of them than a switch
+ * can hold honestly. `Literal` is the default and the common case: a tag the
+ * table has no row for, or a tag whose name is not an HTML element, stays the
+ * text the writer sent.
+ */
+struct TagPiece {
+  TagAction action{TagAction::Literal};
+  /// The style to apply, for `Style`. The *closing* style where the end tag
+  /// differs, which is how `</sub>` arrives as a closer and `</br>` as a break.
+  TagStyle style{TagStyle::None};
+  /// Set for `Link`: the `href` attribute's value, still entity-encoded.
+  std::string_view href;
+  /// The tag's own name, lowercased, without the angle brackets.
+  ///
+  /// Owned rather than a view into the source: it is lowercased, and `<USER>`
+  /// has no lowercase substring to point at. One small allocation per tag piece,
+  /// which is one per tag rather than one per character.
+  std::string name;
+  /// The index into `TagPolicy::tags` of the tag the app allowed, or -1.
+  ///
+  /// The *policy's* index, not the document's: the builder turns it into a
+  /// document record when the tag opens, and that record is what a run names.
+  int32_t tag{-1};
+  /// The attributes the policy allowed for that tag, as written. Empty for
+  /// every built-in tag, whose attributes are dropped as the web's sanitize
+  /// schema drops them, and for an allowed tag that named none.
+  std::vector<std::pair<std::string, std::string>> attributes;
+  /// True for `<!-- … -->`.
+  bool comment{false};
+  /// True for `</…>`. A tag name cannot say this, so the caller reads it here
+  /// rather than re-parsing the piece.
+  bool closing{false};
+  /// True for `<… />`, which opens nothing.
+  bool selfClosing{false};
 };
 
-/// Classifies a piece md4c already proved was one tag. The name must run out
-/// at whitespace, `/`, or `>`, so `<subtitle>` is not `sub`, and attributes
-/// are ignored, as the web's sanitize schema drops them. `</br>` is a break,
-/// because HTML parsers read it that way and models write it.
-InlineTag matchInlineTag(std::string_view piece);
+/**
+ * Classifies a piece md4c already proved was one HTML construct.
+ *
+ * `policy` decides what an unknown name is: `literal` keeps `Array<string>` as
+ * the words the writer typed, and `unwrap` — what Streamdown's sanitizer does —
+ * keeps the text of a real element it has no style for. Both are deliberate;
+ * the difference is a name that is an element or a generic, and only one of the
+ * two can be true of `Array<string>`.
+ *
+ * Returns a `Literal` piece for anything the table has no row for, so a caller
+ * never has to decide what to do with a tag it did not recognise.
+ */
+TagPiece classifyTag(std::string_view piece, const TagPolicy &policy);
 
-/// True when `fragment` could still grow into one of the allowed tags: `<`
-/// alone, or a strict prefix of one of the three names, with no closing `>`
-/// yet and ASCII only. Drives the provisional hide of a half-arrived tag at the
-/// stream tail; whether hiding it is safe is the caller's to prove.
-bool isInlineTagPrefix(std::string_view fragment);
+/**
+ * True when `fragment` could still grow into something the table acts on: `<`
+ * alone, or a strict prefix of one of the known names, with no closing `>`
+ * yet and ASCII only. Drives the provisional hide of a half-arrived tag at the
+ * stream tail; whether hiding it is safe is the caller's to prove.
+ */
+bool isInlineTagPrefix(std::string_view fragment, const TagPolicy &policy);
 
 } // namespace downstream::scan

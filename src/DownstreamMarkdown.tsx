@@ -21,6 +21,7 @@ import {
   acceptControlledSource,
   initialControlledSource,
 } from './controlledSource';
+import { resolveAllowedTags, type ResolvedAllowedTags } from './allowedTags';
 import { resolveControls, type ResolvedControls } from './controls';
 import NativeDownstreamMarkdownView from './DownstreamMarkdownViewNativeComponent';
 import { getStreamState, type StreamState } from './createMarkdownStream';
@@ -498,6 +499,7 @@ function useMathAndImages(
     cjk?: boolean;
     links?: MarkdownViewProps['links'];
     disableAutolinkProtocols?: MarkdownViewProps['disableAutolinkProtocols'];
+    allowedTags?: MarkdownViewProps['allowedTags'];
   },
   currentGeneration: () => number
 ) {
@@ -512,6 +514,7 @@ function useMathAndImages(
     cjk,
     links,
     disableAutolinkProtocols,
+    allowedTags,
   } = props;
 
   // One read of the platform's answer for the lifetime of the process. A test
@@ -602,10 +605,24 @@ function useMathAndImages(
     []
   );
 
+  // The tag policy is kept by value for the same reason the prefix list is: it is
+  // almost always an inline literal, and a new array on every render would send
+  // a props update — and a reparse, because it is a parse option — for a policy
+  // that has not changed.
+  const tags = resolveAllowedTags(allowedTags);
+  const tagsStable = useRef<ResolvedAllowedTags>(tags);
+  if (
+    tagsStable.current.tags.length !== tags.tags.length ||
+    tagsStable.current.tags.some((entry, index) => entry !== tags.tags[index])
+  ) {
+    tagsStable.current = tags;
+  }
+
   return {
     parseFlags: resolvedStable.current.flags,
     images: images !== false,
     allowedImagePrefixes: prefixesStable.current,
+    allowedTags: tagsStable.current.tags,
     onImagePress: onImagePress ? handleImagePress : undefined,
     onMathError: handleMathError,
   };
@@ -887,6 +904,7 @@ function ControlledMarkdown({
       parseFlags={images.parseFlags}
       images={images.images}
       allowedImagePrefixes={images.allowedImagePrefixes}
+      allowedTags={images.allowedTags}
       themeSlots={resolvedTheme.slots}
       themeValues={resolvedTheme.values}
       themeFonts={resolvedTheme.fonts}
@@ -1042,6 +1060,7 @@ function StreamMarkdown({
       parseFlags={images.parseFlags}
       images={images.images}
       allowedImagePrefixes={images.allowedImagePrefixes}
+      allowedTags={images.allowedTags}
       themeSlots={resolvedTheme.slots}
       themeValues={resolvedTheme.values}
       themeFonts={resolvedTheme.fonts}

@@ -1,5 +1,7 @@
 #include "DownstreamMarkdownShadowNode.h"
 
+#include "TagPolicy.h"
+
 #include "ImageLayout.h"
 #include "ImageSizeCache.h"
 #include "MarkdownParser.h"
@@ -67,14 +69,14 @@ DownstreamMarkdownShadowNode::DownstreamMarkdownShadowNode(const ShadowNode &sou
     requestControlledSource();
   } else if (previous.markdown == props.markdown && previous.generation == props.generation &&
              previous.sessionSequence == props.sessionSequence && previous.sessionRevision == props.sessionRevision &&
-             previous.parseFlags == props.parseFlags) {
+             previous.parseFlags == props.parseFlags && previous.allowedTags == props.allowedTags) {
     controlled_ = source.controlled_;
     // A revision that showed a fallback while its source was being prepared
     // collects the result in the next revision.
     needsDocument_ = source.needsDocument_ || source.awaitingPrepared_;
     pendingError_ = source.pendingError_;
   } else if (props.sessionId.empty() && previous.markdown == props.markdown &&
-             previous.parseFlags == props.parseFlags) {
+             previous.parseFlags == props.parseFlags && previous.allowedTags == props.allowedTags) {
     // A generation change without a new source, after a rejected value.
     controlled_ = source.controlled_;
   } else {
@@ -189,8 +191,11 @@ void DownstreamMarkdownShadowNode::requestControlledSource() {
   // The view's math options are parse options: the same string parses to a
   // different document with math on, so they travel with the request and are
   // part of what the preparation cache keys on.
-  downstream::ParseOptions parse;
-  parse.flags = static_cast<uint32_t>(props.parseFlags);
+  // The same string parses to a different document under a different tag policy,
+  // so it travels with the request and is part of what the cache keys on, beside
+  // the flags. The list is the wire form `src/allowedTags.ts` writes.
+  downstream::ParseOptions parse{static_cast<uint32_t>(props.parseFlags),
+                                 downstream::tagPolicyFromStrings(props.allowedTags)};
   controlled_->prepared = downstream::PreparedDocument::request(props.markdown, layoutHint(1, 0, document_), parse);
 }
 

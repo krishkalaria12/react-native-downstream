@@ -199,6 +199,42 @@ class DownstreamMarkdownViewManager :
     view.setParseFlags(value)
   }
 
+  /**
+   * The HTML tags the source may use, in the engine's wire form.
+   *
+   * Only the shadow node reads them, and it reads them from the props itself: it is
+   * the only thing that parses, so there is nothing for the view to keep. The
+   * override exists because codegen declares the prop and a manager that did not
+   * implement it would fail to compile.
+   */
+  override fun setAllowedTags(view: DownstreamMarkdownView, value: ReadableArray?) {
+    // Intentionally empty. See above.
+  }
+
+  /**
+   * The tallest a table grows before it scrolls, in points; 0 is no cap.
+   *
+   * A height, so it reaches the view the way `codeBlockMaxHeight` does: through
+   * the shadow node's state, which is the one path a native view has for changing
+   * its own layout without a React render. The override is here so the manager
+   * implements every prop codegen declared.
+   */
+  override fun setTableMaxHeight(view: DownstreamMarkdownView, value: Double) {
+    // Intentionally empty. See above.
+  }
+
+  /**
+   * The origin a relative link resolves against.
+   *
+   * The engine keeps the source's own `href` on a press and JavaScript resolves
+   * it, so nothing here reads the value: it is a parse bit that arrives in the
+   * same `parseFlags` prop. The override exists so the manager implements every
+   * prop codegen declared.
+   */
+  override fun setLinkOrigin(view: DownstreamMarkdownView, value: String?) {
+    // Intentionally empty. See above.
+  }
+
   override fun setImages(view: DownstreamMarkdownView, value: Boolean) {
     view.setImages(value)
   }

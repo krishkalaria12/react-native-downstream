@@ -604,13 +604,13 @@ bool provesMathRepair(const ParseResult &before, const ParseResult &after) {
  * after it has already been decided. The prefix rule is the one the matcher
  * enforces, so the two can never disagree about which tags exist.
  */
-std::string_view openTagFragment(std::string_view content) {
+std::string_view openTagFragment(std::string_view content, const TagPolicy &tags) {
   const size_t open = content.rfind('<');
   if (open == std::string_view::npos) {
     return {};
   }
   const std::string_view fragment = content.substr(open);
-  if (!scan::isInlineTagPrefix(fragment)) {
+  if (!scan::isInlineTagPrefix(fragment, tags)) {
     return {};
   }
   return fragment;
@@ -695,7 +695,7 @@ PreviewResult Preview::apply(std::string_view region, size_t origin, size_t froz
   // still contains them. A candidate that fails its proof is not hidden, which
   // is what keeps `a<b` visible.
   if (options_.has(PreviewFeature::HtmlTags)) {
-    const std::string_view fragment = openTagFragment(std::string_view(text));
+    const std::string_view fragment = openTagFragment(std::string_view(text), parse.tags);
     if (!fragment.empty()) {
       std::string probe(text.substr(0, text.size() - fragment.size()));
       result.stats.probes++;

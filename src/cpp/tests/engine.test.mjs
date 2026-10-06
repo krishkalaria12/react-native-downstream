@@ -39,6 +39,9 @@ const TASK = { 0: null, 1: 'unchecked', 2: 'checked' };
 const [STRONG, EMPHASIS, STRIKE, CODE, LINK, IMAGE_ALT, FOOTNOTE] = [
   0, 1, 2, 3, 4, 5, 6,
 ].map((bit) => 1 << bit);
+/** The phase 4 tag styles, mirroring `InlineStyle` in `src/cpp/downstream`. */
+const HIGHLIGHT = 1 << 11;
+const UNDERLINE = 1 << 12;
 /** Bits of the provisional pass, mirroring `src/cpp/remend/Preview.h`. */
 const PREVIEW_HTML_TAGS = 1 << 5;
 const PREVIEW_ALL =
@@ -119,6 +122,7 @@ before(async () => {
     ['dump_tokens', [downstream('Unicode.cpp')]],
     ['test_theme', theme],
     ['test_images', [downstream('ImageLayout.cpp')]],
+    ['test_tags', []],
     ['test_math', []],
     [
       'test_math_scan',
@@ -142,7 +146,9 @@ before(async () => {
   for (const [name, dependencies] of executables) {
     targets[name] = [
       testSource(`${name}.cpp`),
-      ...dependencies,
+      // The HTML subset is decided by the builder and read by `Scan.cpp`, so the
+      // test needs the engine rather than just the scanner.
+      ...(name === 'test_tags' ? engine : dependencies),
       ...MD4C_SOURCES,
     ];
   }
@@ -1093,10 +1099,60 @@ describe('inline html', () => {
     ['<subtitle>n</subtitle>', '<subtitle>n</subtitle>', []],
     ['<supplier>n</supplier>', '<supplier>n</supplier>', []],
     ['<brx>a</brx>', '<brx>a</brx>', []],
-    // Every other tag stays literal.
-    ['<b>bold</b>', '<b>bold</b>', []],
-    ['a <span>b</span>', 'a <span>b</span>', []],
-    ['<!-- note -->', '<!-- note -->', []],
+    // A real element with no style of ours is unwrapped, as Streamdown's
+    // sanitizer does, and a name that is not an element stays literal.
+    ['a <span>b</span>', 'a b', []],
+    ['a <b>bold</b>', 'a bold', [['bold', STRONG]]],
+    [
+      '<em>i</em> <i>j</i>',
+      'i j',
+      [
+        ['i', EMPHASIS],
+        ['j', EMPHASIS],
+      ],
+    ],
+    [
+      '<strong>s</strong> <del>d</del> <ins>u</ins>',
+      's d u',
+      [
+        ['s', STRONG],
+        ['d', STRIKE],
+        ['u', UNDERLINE],
+      ],
+    ],
+    [
+      '<mark>m</mark> <u>u</u>',
+      'm u',
+      [
+        ['m', HIGHLIGHT],
+        ['u', UNDERLINE],
+      ],
+    ],
+    [
+      '<code>c</code> <tt>t</tt> <samp>s</samp>',
+      'c t s',
+      [
+        ['c', CODE],
+        ['t', CODE],
+        ['s', CODE],
+      ],
+    ],
+    // A comment emits nothing, rather than being shown as source.
+    ['<!-- note -->', '', []],
+    ['a <!-- note --> b', 'a  b', []],
+    // A dropped element takes its content with it.
+    ['<script>alert(1)</script>', '', []],
+    // An anchor goes through the same policy as a Markdown link.
+    ['<a href="https://x">x</a>', 'x', [['x', LINK]]],
+    // A refused scheme still hides the tag: what a reader gets is the anchor's
+    // text, never its markup, and it is not tappable.
+    ['<a href="javascript:x">x</a>', 'x', []],
+    // A generic in prose is not an element, so it keeps its text.
+    [
+      'Array<string> and <T> and <Vector<int>>',
+      'Array<string> and <T> and <Vector<int>>',
+      [],
+    ],
     // A code span is verbatim.
     ['`<sub>x</sub>`', '<sub>x</sub>', [['<sub>x</sub>', CODE]]],
   ];
@@ -1227,6 +1283,10 @@ describe('preview', () => {
       INLINE_HTML
     );
 
+  test('the HTML subset: the tag table, through the real parser', () => {
+    execFileSync(binary('test_tags'), { timeout: 30_000, stdio: 'inherit' });
+  });
+
   test('a half-arrived tag is hidden for as long as the stream stops there', () => {
     // Only the fragment itself is hidden: the complete tags before it are the
     // document, and the fragment returns the moment its `>` arrives.
@@ -1254,11 +1314,11 @@ describe('preview', () => {
 
   test('a fragment that cannot become an allowed tag is left alone', () => {
     // `<blink` runs past the name, and `<3` is a comparison; neither is a
-    // prefix of `<br>`, `<sub>` or `<sup>`, so neither is ever hidden. A
+    // prefix of any name the tag table acts on, so neither is ever hidden. A
     // candidate whose removal would change what precedes it is refused too: a
     // `<br>` before the fragment draws a line, and a document whose line
     // changed is not the document minus a fragment.
-    for (const source of ['a<b and 2<3', 'a<blink', 'a<subtitle>x', 'a<em>']) {
+    for (const source of ['a<b and 2<3', 'a<blink', 'a<subtitle>x', 'a<my-']) {
       assert.equal(visibleText(previewed(source, PREVIEW_ALL)), source);
     }
     assert.equal(visibleText(previewed('a<br><su', PREVIEW_ALL)), 'a\n<su');

@@ -1,10 +1,12 @@
 #pragma once
 
 #include "Document.h"
+#include "TagPolicy.h"
 
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace downstream {
@@ -73,6 +75,20 @@ constexpr uint32_t All = Enabled | SingleDollar | Brackets | InlineHtml | Supers
 /// A parse's options, as the props and a stream's options resolve to.
 struct ParseOptions {
   uint32_t flags{ParseFlags::Default};
+  /// Which HTML tags the source may use, and what happens to one with no row of
+  /// its own. Compared by value, so it is part of a source's identity in the
+  /// same way the flags are.
+  TagPolicy tags;
+
+  // Constructors rather than aggregate initialisation, because a caller that
+  // names only a bitmask says so rather than leaving the tag policy to default,
+  // and a caller that sets both cannot leave one out by accident.
+  ParseOptions() = default;
+  explicit ParseOptions(uint32_t flagsIn) : flags(flagsIn) {}
+  ParseOptions(uint32_t flagsIn, TagPolicy tagsIn) : flags(flagsIn), tags(std::move(tagsIn)) {}
+
+  /// Relative references are links rather than plain text.
+  bool relativeLinks() const { return (flags & ParseFlags::LinkRelative) != 0; }
 
   bool enabled() const { return (flags & ParseFlags::Enabled) != 0; }
   bool singleDollar() const { return (flags & ParseFlags::SingleDollar) != 0; }
@@ -80,7 +96,6 @@ struct ParseOptions {
   bool inlineHtml() const { return (flags & ParseFlags::InlineHtml) != 0; }
   bool superscriptSyntax() const { return (flags & ParseFlags::SuperscriptSyntax) != 0; }
   bool subscriptSyntax() const { return (flags & ParseFlags::SubscriptSyntax) != 0; }
-  bool relativeLinks() const { return (flags & ParseFlags::LinkRelative) != 0; }
   bool cjk() const { return (flags & ParseFlags::Cjk) != 0; }
 
   /**

@@ -59,6 +59,17 @@ public:
   void setPreview(jsi::Runtime &rt, std::string sessionId, double features);
 
   /**
+   * Replaces the session's HTML tag policy, keeping the flags `create` set.
+   *
+   * `tags` is the flat list `src/allowedTags.ts` writes: `name,attribute,…` in
+   * name order. A tag with an odd number of entries after its name, or one whose
+   * attributes are not the same length as the last tag's, is a caller that is not
+   * this library, and the whole list is refused rather than guessed at: a policy
+   * half-read would allow an attribute nobody named.
+   */
+  void setParseTags(jsi::Runtime &rt, std::string sessionId, std::vector<std::string> tags);
+
+  /**
    * Whether a math engine is linked into this process.
    *
    * So JavaScript can settle the `math` prop's default during its first render

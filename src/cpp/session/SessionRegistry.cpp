@@ -141,6 +141,21 @@ public:
     }
   }
 
+  /// The same, for the tag policy alone. See `SessionRegistry::setParseTags`.
+  void setParseTags(TagPolicy tags) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopped_) {
+      return;
+    }
+    if (!parse_) {
+      parse_ = ParseOptions();
+    }
+    parse_->tags = std::move(tags);
+    if (!finished_) {
+      markDirty();
+    }
+  }
+
   void noteLayout(LayoutHint hint) {
     std::lock_guard<std::mutex> lock(mutex_);
     layout_ = hint;
@@ -376,7 +391,16 @@ bool SessionRegistry::setParse(const std::string &id, ParseOptions parse) {
   if (!session) {
     return false;
   }
-  session->setParse(parse);
+  session->setParse(std::move(parse));
+  return true;
+}
+
+bool SessionRegistry::setParseTags(const std::string &id, TagPolicy tags) {
+  const auto session = findSession(id);
+  if (!session) {
+    return false;
+  }
+  session->setParseTags(std::move(tags));
   return true;
 }
 

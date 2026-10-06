@@ -18,8 +18,8 @@ extern "C" {
 }
 
 #include <algorithm>
-#include <cctype>
 #include <atomic>
+#include <cctype>
 #include <optional>
 
 namespace downstream {
@@ -495,35 +495,97 @@ public:
         stretchStyles_ = currentStyles();
         return done();
       case MD_TEXT_HTML: {
+        const std::string_view html(text, size);
         if (options_.inlineHtml() && current_->kind != BlockKind::HtmlBlock) {
-          switch (scan::matchInlineTag(std::string_view(text, size))) {
-            case scan::InlineTag::Break:
-              trimTrailingSpaces();
-              stretchTag_++;
-              stretchStyles_ = currentStyles();
-              dropNextSpace_ = true;
-              return done();
-            case scan::InlineTag::SubOpen:
-              openScripts_.push_back(0);
-              return done();
-            case scan::InlineTag::SubClose:
-              removeScript(0);
-              return done();
-            case scan::InlineTag::SupOpen:
-              openScripts_.push_back(1);
-              return done();
-            case scan::InlineTag::SupClose:
-              removeScript(1);
-              return done();
-            case scan::InlineTag::SubVoid:
-            case scan::InlineTag::SupVoid:
-              return done();
-            case scan::InlineTag::None:
+          const scan::TagPiece piece = scan::classifyTag(html, options_.tags);
+          if (dropDepth_ > 0) {
+            // Inside a dropped element: only its own closing tag matters, and
+            // everything between — text, entities, nested tags — goes with it.
+            if (piece.action == TagAction::DropContent && piece.closing && piece.name == dropName_) {
+              dropDepth_--;
+            }
+            return done();
+          }
+          if (piece.comment) {
+            // A comment emits nothing. Not a break and not text: a reader who
+            // wrote `<!-- note -->` in a message means nothing by it, and
+            // showing it is how a note to the renderer reaches the screen.
+            return done();
+          }
+          if (piece.action == TagAction::DropContent) {
+            dropName_ = piece.name;
+            if (!piece.closing && !piece.selfClosing) {
+              dropDepth_ = 1;
+            }
+            return done();
+          }
+          if (piece.action == TagAction::Hide || piece.action == TagAction::Unwrap) {
+            // The tag is hidden and its content kept, which is what Streamdown's
+            // sanitizer does for every element it has no style for.
+            return done();
+          }
+          switch (piece.action) {
+            case TagAction::Style:
+              switch (piece.style) {
+                case TagStyle::Break:
+                  trimTrailingSpaces();
+                  stretchTag_++;
+                  stretchStyles_ = currentStyles();
+                  dropNextSpace_ = true;
+                  return done();
+                case TagStyle::Subscript:
+                  if (piece.selfClosing) {
+                    return done();
+                  }
+                  if (piece.closing) {
+                    removeScript(0);
+                  } else {
+                    openScripts_.push_back(0);
+                  }
+                  return done();
+                case TagStyle::Superscript:
+                  if (piece.selfClosing) {
+                    return done();
+                  }
+                  if (piece.closing) {
+                    removeScript(1);
+                  } else {
+                    openScripts_.push_back(1);
+                  }
+                  return done();
+                case TagStyle::VoidScript:
+                  // `<sub/>` means nothing: nobody writes it to mean a script.
+                  return done();
+                default: {
+                  // An app's own tag becomes a document record here, when it
+                  // opens, so a run can name it and a press can read it. The
+                  // policy's index is replaced by the document's on the way in.
+                  scan::TagPiece opened = piece;
+                  if (piece.tag >= 0 && !piece.closing && !piece.selfClosing) {
+                    opened.tag = recordAllowedTag(piece, htmlOffset(text));
+                  }
+                  if (styleTagPush(opened)) {
+                    return done();
+                  }
+                  break;
+                }
+              }
               break;
+            case TagAction::Link:
+              if (applyAnchorTag(piece, htmlOffset(text))) {
+                return done();
+              }
+              break;
+            case TagAction::Unwrap:
+            case TagAction::DropContent:
+            case TagAction::Hide:
+            case TagAction::Literal:
+              break;
+
           }
         }
         // Any other tag, and every tag while inline HTML is off, stays text.
-        appendUtf8Text(std::string_view(text, size), currentStyles(), currentLink());
+        appendUtf8Text(std::string_view(text, size), currentStyles(), currentLink(), -1);
         return done();
       }
       case MD_TEXT_NULLCHAR: {
@@ -541,6 +603,9 @@ public:
       case MD_TEXT_LATEXMATH:
         break;
       default: {
+        if (dropDepth_ > 0) {
+          return done();
+        }
         std::string_view piece(text, size);
         if (dropNextSpace_) {
           size_t skip = 0;
@@ -556,7 +621,7 @@ public:
           }
           dropNextSpace_ = false;
         }
-        appendUtf8Text(piece, currentStyles(), currentLink());
+        appendUtf8Text(piece, currentStyles(), currentLink(), currentTag());
         return done();
       }
     }
@@ -631,6 +696,13 @@ private:
     bool markerPending;
   };
 
+  /// One still-open style tag: what it sets, and which tag record it is when the
+  /// app allowed it by name.
+  struct StyleFrame {
+    TagStyle style{TagStyle::None};
+    int32_t tag{-1};
+  };
+
   /// Tracks a link or image so its source range can be recovered: md4c
   /// reports no span offsets, but text inside the span points into the
   /// source, which bounds the delimiters.
@@ -641,6 +713,15 @@ private:
     /// or the destination of a link or image that never closed.
     std::string autolinkUrl;
     int32_t link{-1};
+    /// This frame's tag's index into Document::tags, or -1. A Markdown link is
+    /// -1; an `<a href>` names the tag it came from, which is what tells a
+    /// writer's own anchor from a link the parser produced.
+    int32_t tag{-1};
+    /// True for a span md4c opened at a known source offset rather than one that
+    /// started at a `[`. An `<a href>` is that: its text follows the `>`, so
+    /// there is no bracket to scan back to and `spanRange` needs the piece's own
+    /// offset as its anchor.
+    bool tagOpen{false};
     /// This frame's image's index into Document::images, or -1.
     int32_t imageIndex{-1};
     size_t cursorAtEnter{kUnknownOffset};
@@ -681,7 +762,11 @@ private:
     for (auto &list : lists_) {
       list.leaves++;
     }
-    openScripts_.clear();
+    // A style tag runs to the end of its block, so it is cleared with
+    // the scripts it sits beside.
+    tagStyles_.clear();
+    tagIndexes_.clear();
+        openScripts_.clear();
     stretchSoft_ = stretchHard_ = stretchTag_ = 0;
     stretchStyles_ = 0;
     dropNextSpace_ = false;
@@ -815,7 +900,11 @@ private:
       current_->fenceClosed = candidate_op();
     }
     flushStretch(true);
-    openScripts_.clear();
+    // A style tag runs to the end of its block, so it is cleared with
+    // the scripts it sits beside.
+    tagStyles_.clear();
+    tagIndexes_.clear();
+        openScripts_.clear();
     dropNextSpace_ = false;
     promoteLeaf();
     document_->blocks.push_back(std::move(*current_));
@@ -863,7 +952,11 @@ private:
       return;
     }
     if (current_->kind == BlockKind::HtmlBlock) {
-      promoteBrOnlyHtml();
+      // The `<br>` rule is pre-existing and unconditional. The comment and the
+      // dropped-element rule is part of the HTML subset, so it is gated with it:
+      // `inlineHtml: false` is a view that wants every tag as source, and a
+      // comment is a tag.
+      promoteBrOnlyHtml() || (options_.inlineHtml() && promoteEmptyHtml());
       return;
     }
     if (current_->kind != BlockKind::Paragraph) {
@@ -901,7 +994,7 @@ private:
         }
         ascii.push_back(static_cast<char>(text[k]));
       }
-      if (scan::matchInlineTag(ascii) != scan::InlineTag::Break) {
+      if (scan::classifyTag(ascii, options_.tags).style != TagStyle::Break) {
         return false;
       }
       count++;
@@ -914,6 +1007,79 @@ private:
     current_->text.assign(count - 1, u'\n');
     current_->runs.clear();
     return true;
+  }
+
+  /**
+   * An HTML block that holds nothing a reader should see becomes no block at
+   * all.
+   *
+   * Three shapes, and they are the three ways a writer leaves something in a
+   * message that is not prose: a comment, a dropped element with its content,
+   * and whitespace. A block of them is what md4c produces for a line of
+   * `<!-- note -->` or `<script>…</script>`, and drawing it would show a reader
+   * the source of a tag the engine already decided to hide.
+   *
+   * The block is emptied rather than removed, because the incremental parser
+   * counts blocks and the segment plan indexes them; an empty paragraph is one
+   * that draws nothing and is one row in every list.
+   */
+  bool promoteEmptyHtml() {
+    const std::u16string &text = current_->text;
+    size_t i = 0;
+    size_t pieces = 0;
+    while (i < text.size()) {
+      while (i < text.size() && isSpaceUnit(text[i])) {
+        i++;
+      }
+      if (i >= text.size()) {
+        break;
+      }
+      // A comment is opaque: its body is not a word, so the scan steps over the
+      // whole run to its `-->` rather than splitting on the space inside it.
+      if (text.compare(i, 4, u"<!--") == 0) {
+        size_t end = i + 4;
+        while (end + 3 <= text.size() && text.compare(end, 3, u"-->") != 0) {
+          end++;
+        }
+        // An unclosed `<!--` is not a comment: hiding to the end of the block
+        // would hide prose a writer typed after a stray opener, which is the one
+        // way this rule could lose a reader's text.
+        if (end + 3 > text.size()) {
+          return false;
+        }
+        const size_t after = end + 3;
+        pieces++;
+        i = after;
+        continue;
+      }
+      size_t j = i;
+      while (j < text.size() && !isSpaceUnit(text[j])) {
+        j++;
+      }
+      std::string ascii;
+      for (size_t k = i; k < j; k++) {
+        if (text[k] >= 0x80) {
+          return false;
+        }
+        ascii.push_back(static_cast<char>(text[k]));
+      }
+      if (scan::classifyTag(ascii, options_.tags).action != TagAction::DropContent) {
+        return false;
+      }
+      pieces++;
+      i = j;
+    }
+    if (pieces == 0) {
+      return false;
+    }
+    current_->kind = BlockKind::Paragraph;
+    current_->text.clear();
+    current_->runs.clear();
+    return true;
+  }
+
+  static bool isSpaceUnit(char16_t unit) {
+    return unit == u' ' || unit == u'\t' || unit == u'\r' || unit == u'\n';
   }
 
   /**
@@ -1015,7 +1181,11 @@ private:
     ensureLeaf();
     // A stretch that ends in a cell is one break shorter, as at a block end.
     flushStretch(true);
-    openScripts_.clear();
+    // A style tag runs to the end of its block, so it is cleared with
+    // the scripts it sits beside.
+    tagStyles_.clear();
+    tagIndexes_.clear();
+        openScripts_.clear();
     dropNextSpace_ = false;
     if (!current_->cells.empty()) {
       current_->text.push_back(u'\t');
@@ -1055,7 +1225,194 @@ private:
       // lowers b. Nesting the same tag twice sets the same bit twice.
       styles |= openScripts_.back() == 0 ? InlineStyle::Subscript : InlineStyle::Superscript;
     }
+    // A tag's own style, from every still-open one. Like the scripts, nesting
+    // the same tag twice sets the same bit twice rather than shifting further,
+    // and a `<mark>` inside a `<u>` is both.
+    for (const StyleFrame &frame : tagStyles_) {
+      styles |= styleBit(frame.style);
+    }
     return styles;
+  }
+
+  /// The tag index a run is attributed to, or -1.
+  ///
+  /// The innermost still-open app-allowed tag, which is the one a press means.
+  /// A Markdown link, a code span and a formula all answer -1 unless an allowed
+  /// tag is open around them.
+  int32_t currentTag() const { return tagIndexes_.empty() ? -1 : tagIndexes_.back(); }
+
+  /// The style bit a tag style sets, which is 0 for the two that are not styles.
+  static uint32_t styleBit(TagStyle style) {
+    switch (style) {
+      case TagStyle::Strong:
+        return InlineStyle::Strong;
+      case TagStyle::Emphasis:
+        return InlineStyle::Emphasis;
+      case TagStyle::Strikethrough:
+        return InlineStyle::Strikethrough;
+      case TagStyle::Code:
+        return InlineStyle::Code;
+      case TagStyle::Keyboard:
+        // A key cap is inline code with a border, so the bit is the same one and
+        // the platform reads the border off the theme slot it also draws.
+        return InlineStyle::Keyboard;
+      case TagStyle::Highlight:
+        return InlineStyle::Highlight;
+      case TagStyle::Underline:
+        return InlineStyle::Underline;
+      default:
+        return 0;
+    }
+  }
+
+  /**
+   * Opens or closes a style the table named.
+   *
+   * A stack rather than a depth, for the reason the scripts have one: the
+   * innermost open tag wins and nesting the same tag twice does not shift
+   * further. `<mark>a<b>b</b>c</mark>` is all three styles on `b`.
+   *
+   * A self-closed tag opens nothing, and a stray end tag closes nothing — both
+   * are what an HTML parser does, and both are what keeps a model's unbalanced
+   * `<u>` from colouring the rest of a message.
+   */
+  bool styleTagPush(const scan::TagPiece &piece) {
+    if (piece.style == TagStyle::None && piece.tag < 0) {
+      // Neither a style of ours nor an app's own tag: nothing to open.
+      return false;
+    }
+    if (piece.selfClosing) {
+      // A self-closed style tag styles nothing, which is why `VoidScript` only
+      // reaches here for the two names a browser voids. An app's own tag is the
+      // exception: the tag still exists and can still be pressed, it just wraps
+      // nothing, which is what `<user/>` means.
+      return piece.style == TagStyle::VoidScript || piece.tag >= 0;
+    }
+    if (!piece.closing) {
+      tagStyles_.push_back({piece.style, piece.tag});
+      // An allowed tag with no style still contributes its index, which is the
+      // whole point of allowing one: `onTagPress` and `markdownStyle.tags` need
+      // something to name.
+      if (piece.tag >= 0) {
+        tagIndexes_.push_back(piece.tag);
+      }
+      return true;
+    }
+    for (auto it = tagStyles_.rbegin(); it != tagStyles_.rend(); ++it) {
+      // Matched on the index when there is one, so an app's own tag closes its
+      // own frame rather than whichever frame happens to carry no style.
+      if (piece.tag >= 0 ? it->tag != piece.tag : it->style != piece.style) {
+        continue;
+      }
+      if (it->tag >= 0) {
+        // The innermost still-open record of this tag's index comes off with it.
+        for (auto jt = tagIndexes_.rbegin(); jt != tagIndexes_.rend(); ++jt) {
+          if (*jt == it->tag) {
+            tagIndexes_.erase(std::next(jt).base());
+            break;
+          }
+        }
+      }
+      tagStyles_.erase(std::next(it).base());
+      return true;
+    }
+    return true;
+  }
+
+  /**
+   * The document record for an app-allowed tag, appended as the tag opens.
+   *
+   * One record per opening tag rather than one per name, because a document that
+   * uses `<user>` twice has two occurrences and a press on the second must point
+   * at the second. `at` is the piece's own offset, so the record's range is where
+   * the writer wrote it.
+   */
+  int32_t recordAllowedTag(const scan::TagPiece &piece, size_t at) {
+    Tag record;
+    record.name = piece.name;
+    record.attributes = piece.attributes;
+    record.range.start = offsets_.toUtf16(at);
+    document_->tags.push_back(std::move(record));
+    const auto index = static_cast<int32_t>(document_->tags.size() - 1);
+    // The range runs to the closing tag, which md4c has not reported yet; it is
+    // completed when the tag closes, and an unclosed one keeps its start, which
+    // is what a reader can still be pointed at.
+    pendingTagRanges_.emplace_back(index, at);
+    return index;
+  }
+
+  /**
+   * Applies an `<a href>` the same way a Markdown link is applied.
+   *
+   * The URL goes through the same policy, so `<a href="javascript:x">` stays
+   * text and `<a href="tel:+1">` is a link, and it is entity-decoded the same
+   * way, so `href="?a=1&amp;b=2"` is the URL a reader means. `at` is the piece's
+   * own offset in the source, which is where the record's range comes from and
+   * what makes a press on an anchor mappable back to where it was written.
+   */
+  bool applyAnchorTag(const scan::TagPiece &piece, size_t at) {
+    if (piece.closing) {
+      // The frame is popped here rather than in a leave-span callback, because
+      // md4c reports `<a href>` as inline HTML and so opens no span of its own:
+      // the text between the tags is ordinary text, and `</a>` is the only thing
+      // that says the anchor ended.
+      closeLinkOrImage();
+      return true;
+    }
+    {
+      if (piece.selfClosing) {
+        return true;
+      }
+      SpanFrame frame;
+      frame.image = false;
+      frame.cursorAtEnter = cursor_;
+      // The piece itself bounds the anchor even before any text lands in it, so
+      // `spanRange` can recover `[open … )]` from a forward scan alone.
+      frame.firstText = at;
+      frame.lastTextEnd = at;
+      frame.tagOpen = true;
+      const std::string url = decodeAttribute(piece.href);
+      if (isActionableUrl(url, options_.relativeLinks())) {
+        Tag record;
+        record.name = "a";
+        document_->tags.push_back(std::move(record));
+        frame.tag = static_cast<int32_t>(document_->tags.size() - 1);
+        frame.link = static_cast<int32_t>(document_->links.size());
+        document_->links.push_back({url, {}, frame.tag});
+      }
+      spans_.push_back(frame);
+      return true;
+    }
+  }
+
+  /**
+   * An attribute value with its entities decoded.
+   *
+   * `appendEntity` rather than a straight copy, so `&amp;` in a query string is
+   * one `&` — the same answer `attributeToUtf8` gives an `MD_ATTRIBUTE`, and the
+   * two must not differ, or one spelling of a URL would not be a link.
+   */
+  std::string decodeAttribute(std::string_view raw) const {
+    std::u16string decoded;
+    size_t i = 0;
+    while (i < raw.size()) {
+      if (raw[i] != '&') {
+        appendUtf8(decoded, std::string_view(raw).substr(i, 1));
+        i++;
+        continue;
+      }
+      const size_t semicolon = raw.find(';', i);
+      // A bare `&` is a bare `&`, which is what a browser reads too: only a
+      // named or numeric entity ends in a semicolon.
+      if (semicolon == std::string_view::npos || semicolon == i + 1) {
+        appendUtf8(decoded, std::string_view(raw).substr(i, 1));
+        i++;
+        continue;
+      }
+      appendEntity(decoded, raw.substr(i, semicolon - i + 1));
+      i = semicolon + 1;
+    }
+    return utf16ToUtf8(decoded);
   }
 
   int32_t currentLink() const {
@@ -1067,39 +1424,50 @@ private:
     return -1;
   }
 
-  void appendText(const std::u16string &piece, uint32_t styles, int32_t link) {
+  void appendText(const std::u16string &piece, uint32_t styles, int32_t link, int32_t tag = -1) {
     if (piece.empty()) {
       return;
     }
     auto &block = *current_;
     const auto start = static_cast<uint32_t>(block.text.size());
     block.text.append(piece);
-    recordRun(start, styles, link);
+    recordRun(start, styles, link, tag);
   }
 
   // Decode directly into the leaf instead of allocating and copying a UTF-16
   // string for every md4c callback, including every fragment between tags.
-  void appendUtf8Text(std::string_view piece, uint32_t styles, int32_t link) {
+  void appendUtf8Text(std::string_view piece, uint32_t styles, int32_t link, int32_t tag = -1) {
     flushStretch(false);
     const auto start = static_cast<uint32_t>(current_->text.size());
     appendUtf8(current_->text, piece);
-    recordRun(start, styles, link);
+    recordRun(start, styles, link, tag);
   }
 
-  void recordRun(uint32_t start, uint32_t styles, int32_t link) {
+  void recordRun(uint32_t start, uint32_t styles, int32_t link, int32_t tag = -1) {
     auto &block = *current_;
     const auto end = static_cast<uint32_t>(block.text.size());
-    if (start == end || (styles == 0 && link < 0)) {
+    if (start == end || (styles == 0 && link < 0 && tag < 0)) {
       return;
     }
     if (!block.runs.empty()) {
       auto &last = block.runs.back();
-      if (last.end == start && last.styles == styles && last.link == link) {
+      if (last.end == start && last.styles == styles && last.link == link && last.tag == tag) {
         last.end = end;
         return;
       }
     }
-    block.runs.push_back({start, end, styles, link});
+    block.runs.push_back({start, end, styles, link, tag});
+  }
+
+  /// The UTF-8 offset of an `MD_TEXT_HTML` piece, read off md4c's pointer.
+  ///
+  /// `kUnknownOffset` when the pointer is not into `parse_`, which cannot happen
+  /// for a piece md4c just reported but is cheaper to prove than to assume.
+  size_t htmlOffset(const MD_CHAR *text) const {
+    if (text < parse_.data() || text >= parse_.data() + parse_.size()) {
+      return kUnknownOffset;
+    }
+    return static_cast<size_t>(text - parse_.data());
   }
 
   /// Folds the pending stretch into the block text with the per-stretch rule:
@@ -1407,6 +1775,25 @@ private:
       anchor = span.childStart;
     }
 
+    if (span.tagOpen) {
+      // An `<a href>` opened at its own `<`, so the range starts there and ends
+      // after the matching `>` plus the text it wraps. `lastTextEnd` is the end
+      // of the last text inside the span, which is the `</a>`'s own offset when
+      // md4c reports it, and the block's otherwise.
+      if (anchor == kUnknownOffset) {
+        return std::nullopt;
+      }
+      size_t end = span.lastTextEnd == kUnknownOffset ? anchor : span.lastTextEnd;
+      // md4c reports the closing tag's own text, so step over it.
+      if (end < source_.size() && source_[end] == '<') {
+        const size_t close = source_.find('>', end);
+        if (close != std::string_view::npos) {
+          end = close + 1;
+        }
+      }
+      return std::make_pair(anchor, end);
+    }
+
     size_t open = kUnknownOffset;
     if (anchor != kUnknownOffset) {
       const size_t floor = span.cursorAtEnter == kUnknownOffset ? 0 : span.cursorAtEnter;
@@ -1480,6 +1867,12 @@ private:
         link.range.start = offsets_.toUtf16(span.firstText);
         link.range.end = offsets_.toUtf16(span.lastTextEnd);
       }
+      if (span.tag >= 0) {
+        // The tag's own range is the anchor's, so `onTagPress` and a press on the
+        // link agree about where in the source either one happened.
+        Tag &tag = document_->tags.tail()[static_cast<size_t>(span.tag)];
+        tag.range = link.range;
+      }
       return;
     }
 
@@ -1536,6 +1929,41 @@ private:
   int emphasisDepth_{0};
   int strikeDepth_{0};
   int codeDepth_{0};
+  /// Still-open style tags from inline HTML, outermost first. Cleared with the
+  /// block, because an unclosed `<mark>` runs to the end of its block and not
+  /// past it — the same rule a browser applies inside a block element.
+  std::vector<StyleFrame> tagStyles_;
+  /// The indices of the still-open tags the app allowed, so a run can name the
+  /// innermost one. A subset of `tagStyles_`, kept beside it rather than inside
+  /// it because only an allowed tag has an index.
+  std::vector<int32_t> tagIndexes_;
+  /// An allowed tag that opened and has not closed, with the offset it opened
+  /// at, so its record's range can be completed when it does.
+  std::vector<std::pair<int32_t, size_t>> pendingTagRanges_;
+
+  /// Completes an allowed tag's range from the offset its closing piece is at.
+  void closeTagRange(int32_t tag) {
+    for (size_t i = 0; i < pendingTagRanges_.size(); i++) {
+      if (pendingTagRanges_[i].first != tag) {
+        continue;
+      }
+      const size_t start = pendingTagRanges_[i].second;
+      pendingTagRanges_.erase(pendingTagRanges_.begin() + static_cast<ptrdiff_t>(i));
+      Tag &record = document_->tags.tail()[static_cast<size_t>(tag)];
+      const size_t close = source_.find('>', start);
+      record.range.end = offsets_.toUtf16(close == std::string_view::npos ? start : close + 1);
+      return;
+    }
+  }
+
+  /// How deep inside a dropped element the block is: 0 outside one.
+  ///
+  /// An unclosed `<script>` drops the rest of its block and nothing after it,
+  /// which is what a browser does inside a block element, and is the safe
+  /// direction: the content was going to be dropped anyway.
+  unsigned dropDepth_{0};
+  /// The dropped element's name, so a nested `</div>` cannot end it.
+  std::string_view dropName_;
   /// Open script tags, innermost last: 0 is a subscript, 1 a superscript.
   /// A small stack, not two depths, because the innermost-opened one wins and
   /// nesting the same tag twice does not shift further.

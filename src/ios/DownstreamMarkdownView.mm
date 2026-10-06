@@ -150,6 +150,10 @@ NSString *nameForFormat(NSString *format) {
   /// from the state beside the image answers, because both are properties of
   /// this view at this moment rather than of the document.
   downstream::HostLayout _hostLayout;
+  /// `tableMaxHeight` in points, 0 for no cap. A height rather than a prop read
+  /// from the segment, because a control press resolves one table's own layout
+  /// and a segment view has no access to the view's props.
+  float _tableMaxHeight{300};
   std::string _codeFilename;
   std::string _tableFilename;
   std::string _imageFilename;
@@ -198,6 +202,7 @@ NSString *nameForFormat(NSString *format) {
     // compares equal rather than looking like a change.
     _codeLayout.props = {defaultProps->codeBlockWrap, defaultProps->lineNumbers,
                          static_cast<float>(defaultProps->codeBlockMaxHeight)};
+    _tableMaxHeight = static_cast<float>(defaultProps->tableMaxHeight);
     _codeFilename = "file";
     _tableFilename = "table";
     _imageFilename = "image";
@@ -468,6 +473,18 @@ NSString *nameForFormat(NSString *format) {
     // different rendering of the same document, and the shadow node's next
     // layout will have a different height for it.
     [self applyRendering];
+  }
+  if (newProps.allowedTags != previous.allowedTags) {
+    // A tag policy decides which runs exist, so a document parsed under a new one
+    // is a different document. The shadow node reads the prop itself and reparses;
+    // this only has to redraw once it has.
+    [self applyRendering];
+  }
+  if (newProps.tableMaxHeight != previous.tableMaxHeight) {
+    // A height, so it reaches the drawing through the shadow node's state on the
+    // next layout. Storing it here is what lets a control press resolve one
+    // table's own cap rather than reading a prop from the segment.
+    _tableMaxHeight = static_cast<float>(newProps.tableMaxHeight);
   }
   if (newProps.csvSeparator != previous.csvSeparator) {
     _csvSeparator = newProps.csvSeparator.empty() ? @"," : @(newProps.csvSeparator.c_str());

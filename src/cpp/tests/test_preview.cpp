@@ -889,39 +889,79 @@ bool sharedScanner() {
   CHECK(!isUnfinishedDestination("ab", 1), "too few bytes to hold a destination");
   CHECK(isUnfinishedDestination("[a](http://x", 4), "a link with no close is an unfinished target");
 
-  // The tag matcher, which is a table rather than an HTML tokenizer: md4c has
+  // The tag table, which is a table rather than an HTML tokenizer: md4c has
   // already proved the piece is one well-formed tag.
-  CHECK(matchInlineTag("<br>") == InlineTag::Break, "a br is a break");
-  CHECK(matchInlineTag("<br/>") == InlineTag::Break, "a self-closed br is a break");
-  CHECK(matchInlineTag("<br />") == InlineTag::Break, "a spaced self-closed br is a break");
-  CHECK(matchInlineTag("<BR>") == InlineTag::Break, "a tag name is case-insensitive");
-  CHECK(matchInlineTag("</br>") == InlineTag::Break, "a stray closer is a break");
-  CHECK(matchInlineTag("<br clear=\"all\">") == InlineTag::Break, "attributes are ignored");
-  CHECK(matchInlineTag("<sub>") == InlineTag::SubOpen, "sub opens");
-  CHECK(matchInlineTag("<sup>") == InlineTag::SupOpen, "sup opens");
-  CHECK(matchInlineTag("</sub>") == InlineTag::SubClose, "sub closes");
-  CHECK(matchInlineTag("</sup >") == InlineTag::SupClose, "a close tag may carry space");
-  CHECK(matchInlineTag("<sub/>") == InlineTag::SubVoid, "a self-closed script is swallowed");
-  CHECK(matchInlineTag("<sup />") == InlineTag::SupVoid, "a spaced self-closed script is swallowed");
-  CHECK(matchInlineTag("<b>") == InlineTag::None, "a tag off the list is literal");
-  CHECK(matchInlineTag("<!-- x -->") == InlineTag::None, "a comment is literal");
-  CHECK(matchInlineTag("<subtitle>") == InlineTag::None, "a longer name is not a prefix match");
-  CHECK(matchInlineTag("<supplier>") == InlineTag::None, "and neither is this one");
-  CHECK(matchInlineTag("<brx>") == InlineTag::None, "a name that runs past br is not a br");
-  CHECK(matchInlineTag("a < b") == InlineTag::None, "prose is never a tag");
-  CHECK(matchInlineTag("<" + std::string(65536, 'a') + ">") == InlineTag::None, "a long unsupported name stays literal");
+  const TagPolicy plain = defaultTagPolicy();
+  const auto piece = [&](std::string_view text) { return classifyTag(text, plain); };
+  CHECK(piece("<br>").style == TagStyle::Break, "a br is a break");
+  CHECK(piece("<br/>").style == TagStyle::Break, "a self-closed br is a break");
+  CHECK(piece("<br />").style == TagStyle::Break, "a spaced self-closed br is a break");
+  CHECK(piece("<BR>").style == TagStyle::Break, "a tag name is case-insensitive");
+  CHECK(piece("</br>").style == TagStyle::Break, "a stray closer is a break");
+  CHECK(piece("<br clear=\"all\">").style == TagStyle::Break, "attributes are ignored");
+  CHECK(piece("<sub>").style == TagStyle::Subscript && !piece("<sub>").closing, "sub opens");
+  CHECK(piece("<sup>").style == TagStyle::Superscript && !piece("<sup>").closing, "sup opens");
+  CHECK(piece("</sub>").style == TagStyle::Subscript && piece("</sub>").closing, "sub closes");
+  CHECK(piece("</sup >").style == TagStyle::Superscript, "a close tag may carry space");
+  CHECK(piece("<sub/>").style == TagStyle::VoidScript, "a self-closed script is swallowed");
+  CHECK(piece("<sup />").style == TagStyle::VoidScript, "a spaced self-closed script is swallowed");
+
+  // Phase 4's rows: the new styles, the unwraps, the drops and the comment.
+  CHECK(piece("<mark>").style == TagStyle::Highlight, "mark highlights");
+  CHECK(piece("<u>").style == TagStyle::Underline, "u underlines");
+  CHECK(piece("<ins>").style == TagStyle::Underline, "ins underlines");
+  CHECK(piece("<kbd>").style == TagStyle::Keyboard, "kbd is a key cap");
+  CHECK(piece("<span>").action == TagAction::Unwrap, "span is unwrapped");
+  CHECK(piece("<small>").action == TagAction::Unwrap, "so is small");
+  CHECK(piece("<script>").action == TagAction::DropContent, "script drops with its content");
+  CHECK(piece("<iframe>").action == TagAction::DropContent, "so does iframe");
+  CHECK(piece("<!-- x -->").action == TagAction::Hide && piece("<!-- x -->").comment,
+        "a comment emits nothing");
+  CHECK(piece("<subtitle>").action == TagAction::Literal, "a longer name is not a match");
+  CHECK(piece("<brx>").action == TagAction::Literal, "a name that runs past br is not a br");
+  CHECK(piece("a < b").action == TagAction::Literal, "prose is never a tag");
+  CHECK(piece("<" + std::string(65536, 'a') + ">").action == TagAction::Literal,
+        "a long unsupported name stays literal");
+  CHECK(piece("<div>").action == TagAction::Unwrap, "a real element with no style is unwrapped");
+  CHECK(piece("<T>").action == TagAction::Literal, "a generic in prose stays literal");
+  CHECK(piece("<Vector<string>>").action == TagAction::Literal, "so does a C++ type");
+  CHECK(piece("<my-widget>").action == TagAction::Literal, "and a hyphenated generic");
+
+  // An `<a href>` is a link, through the same policy as a Markdown one.
+  CHECK(piece("<a href=\"https://x\">").action == TagAction::Link, "an anchor is a link");
+  CHECK(piece("<a href=https://x>").href == "https://x", "an unquoted href is read");
+  CHECK(piece("<a href=\"https://x\" title=\"t\">").href == "https://x",
+        "a later attribute is not swallowed");
+  CHECK(piece("<a href=\"javascript:x\">").action == TagAction::Link,
+        "the policy, not the table, refuses the scheme");
+  CHECK(piece("</a>").action == TagAction::Link && piece("</a>").closing, "an anchor closes");
+
+  // An app's own tag, from `allowedTags`.
+  TagPolicy withUser;
+  withUser.tags = {AllowedTag{"user", {"id"}}};
+  const auto allowed = [&](std::string_view text) { return classifyTag(text, withUser); };
+  CHECK(allowed("<user>").action == TagAction::Style, "an allowed tag runs");
+  CHECK(allowed("<user>").tag == 0, "and names its record");
+  CHECK(allowed("</user>").closing, "and closes");
+  CHECK(allowed("<other>").action == TagAction::Literal, "a tag nobody allowed does not");
+  CHECK(classifyTag("<user>", plain).action == TagAction::Literal,
+        "an allowed tag is literal without the policy");
 
   // The prefix rule the preview pass asks, on the same table.
-  CHECK(isInlineTagPrefix("<"), "a lone opener could still become a tag");
-  CHECK(isInlineTagPrefix("<s"), "a partial name could");
-  CHECK(isInlineTagPrefix("</su"), "a partial closer could");
-  CHECK(isInlineTagPrefix("<br /"), "a partial self-closer could");
-  CHECK(!isInlineTagPrefix("<br>"), "a complete tag is not a fragment");
-  CHECK(isInlineTagPrefix("<b"), "b can still reach br, so it is a fragment");
-  CHECK(!isInlineTagPrefix("<z"), "a name that cannot reach one of the three is not one");
-  CHECK(!isInlineTagPrefix("a<b"), "prose before the fragment does not matter");
-  CHECK(!isInlineTagPrefix("<subtitl"), "a longer word is not a fragment of sub");
-  CHECK(!isInlineTagPrefix("<br漢字"), "a fragment is ASCII, so its bytes are its units");
+  CHECK(isInlineTagPrefix("<", plain), "a lone opener could still become a tag");
+  CHECK(isInlineTagPrefix("<s", plain), "a partial name could");
+  CHECK(isInlineTagPrefix("</su", plain), "a partial closer could");
+  CHECK(isInlineTagPrefix("<br /", plain), "a partial self-closer could");
+  CHECK(isInlineTagPrefix("<!--", plain), "half a comment is a fragment");
+  CHECK(!isInlineTagPrefix("<br>", plain), "a complete tag is not a fragment");
+  CHECK(isInlineTagPrefix("<b", plain), "b can still reach br, so it is a fragment");
+  CHECK(isInlineTagPrefix("<mar", plain), "so can mar reach mark");
+  CHECK(!isInlineTagPrefix("<z", plain), "a name that reaches nothing is not a fragment");
+  CHECK(!isInlineTagPrefix("a<b", plain), "prose before the fragment does not matter");
+  CHECK(!isInlineTagPrefix("<subtitl", plain), "a longer word is not a fragment of sub");
+  CHECK(!isInlineTagPrefix("<br漢字", plain), "a fragment is ASCII, so its bytes are its units");
+  CHECK(isInlineTagPrefix("<us", withUser), "an allowed tag's own prefix is a fragment");
+  CHECK(!isInlineTagPrefix("<us", plain), "and is not without the policy");
 
   // Destination scanning has to survive the shapes a model can emit mid-URL.
   CHECK(skipInlineDestination("(a(b)c)", 0) == 7, "nested parens close in order");
