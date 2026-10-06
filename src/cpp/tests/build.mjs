@@ -76,6 +76,8 @@ export const ENGINE = [
     'ImageSizeCache.cpp',
     'MathScan.cpp',
     'TableLayout.cpp',
+    'Direction.cpp',
+    'BidiTable.cpp',
     'TagPolicy.cpp',
   ].map((name) => join(CPP, 'downstream', name)),
   ...[

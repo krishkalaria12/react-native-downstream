@@ -104,6 +104,11 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   internal var themeFonts: Array<String>? = null
   private var rendered: RenderedDocument? = null
   private var selectable = true
+  /**
+   * The `dir` prop, as a text direction. Null means `auto`, which is the engine's
+   * per-block decision rather than one the view makes.
+   */
+  private var direction = View.TEXT_DIRECTION_FIRST_STRONG_LTR
   private var syntaxHighlighting = true
   // Every control on, which is the default and matches the codegen default.
   private var controls = CONTROL_CODE_COPY or CONTROL_CODE_DOWNLOAD or CONTROL_TABLE_COPY or
@@ -386,6 +391,24 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     super.onDetachedFromWindow()
   }
 
+  /**
+   * The `dir` prop, as a text direction the view draws with.
+   *
+   * `auto` leaves each text view on the engine's per-block answer, which is what
+   * the measurement already used; the two other values pin every block the same
+   * way. Null is `auto`, which is the prop's own default.
+   */
+  fun setDirection(value: String?) {
+    val next = when (value) {
+      "ltr" -> View.TEXT_DIRECTION_LTR
+      "rtl" -> View.TEXT_DIRECTION_RTL
+      else -> View.TEXT_DIRECTION_FIRST_STRONG_LTR
+    }
+    if (next == direction) return
+    direction = next
+    applySettledState()
+  }
+
   fun setSelectable(selectable: Boolean) {
     this.selectable = selectable
     applySettledState()
@@ -642,6 +665,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       when (val child = segmentViews[index]) {
         is TextSegmentView -> {
           child.setSelectable(selectable && settled)
+          child.textDirection = direction
           // The chevron is the control's own glyph, so it appears with the control
           // and points the way the body will move.
           child.readerChoices = readerChoices

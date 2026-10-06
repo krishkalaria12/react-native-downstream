@@ -12,7 +12,9 @@
 #include "InlineRuns.h"
 #include "MarkdownParser.h"
 #include "SegmentPlan.h"
+#include "BidiTable.h"
 #include "DetailsLayout.h"
+#include "Direction.h"
 #include "TableLayout.h"
 #include "Unicode.h"
 #include "tests/check.h"
@@ -513,6 +515,86 @@ void testVisibleTextHeight() {
   CHECK(visibleTextHeight(20, {0}, {0}, {}) == 20, "a single line top is the whole height");
 }
 
+/// The layout direction of a block, decided once in the engine.
+///
+/// The table itself is generated, so what is pinned here is the rule and the
+/// table's edges: which characters count, which way a tie goes, and the three
+/// cases that were wrong on one platform or the other.
+void testDirection() {
+  const auto utf8 = [](const char *bytes) { return utf8ToUtf16(bytes); };
+
+  // The table's own edges: an ASCII letter and a Hebrew letter are on the sides
+  // they are on, and neither table claims the other's ground.
+  CHECK(isStrongLeftToRight('a'), "an ascii letter reads left to right");
+  CHECK(!isStrongRightToLeft('a'), "and is not right to left");
+  CHECK(isStrongRightToLeft(0x05d0), "a hebrew letter reads right to left");
+  CHECK(!isStrongLeftToRight(0x05d0), "and is not left to right");
+  CHECK(isStrongRightToLeft(0x0627), "an arabic letter reads right to left");
+  // A neutral is in neither table, which is what lets a number-only line
+  // inherit rather than being counted.
+  CHECK(!isStrongLeftToRight('5'), "a digit is neutral");
+  CHECK(!isStrongRightToLeft('5'), "a digit is neutral both ways");
+  CHECK(isStrongLeftToRight(0x200e), "the left-to-right mark is strong left to right");
+  CHECK(isStrongRightToLeft(0x200f), "and the right-to-left mark the other way");
+  // A supplementary letter, which is a surrogate pair in the text and one code
+  // point in the table.
+  CHECK(isStrongLeftToRight(0x10400), "a deseret letter reads left to right");
+
+  // The rule: the majority wins.
+  CHECK(textDirection(utf8("hello world"), BlockDirection::Inherit) == BlockDirection::LeftToRight,
+        "an english paragraph is left to right");
+  CHECK(textDirection(utf8("\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D \xD7\xA2\xD7\x95\xD7\x9C\xD7\x9D"), BlockDirection::Inherit) ==
+            BlockDirection::RightToLeft,
+        "a hebrew paragraph is right to left");
+  CHECK(textDirection(utf8("one two three \xD7\x90\xD7\x91"), BlockDirection::Inherit) == BlockDirection::LeftToRight,
+        "one hebrew letter in english prose does not turn the line");
+  CHECK(textDirection(utf8("\xD7\x90\xD7\x91\xD7\x92\xD7\x93\xD7\x94 one"), BlockDirection::Inherit) ==
+            BlockDirection::RightToLeft,
+        "five hebrew letters against one english word read right to left");
+
+  // A tie goes to the first strong character, because a reader's eye starts at the
+  // beginning of the line.
+  CHECK(textDirection(utf8("a \xD7\x90"), BlockDirection::Inherit) == BlockDirection::LeftToRight,
+        "a tie opens the way its first strong character reads");
+  CHECK(textDirection(utf8("\xD7\x90 a"), BlockDirection::Inherit) == BlockDirection::RightToLeft,
+        "and the same the other way round");
+
+  // A block with no strong character is handed back the direction it was given,
+  // which is what "inherits" means here: the function has no document to look at,
+  // so it does not guess. The builder is what carries the previous block's
+  // direction forward, and a document's first such block inherits left to right.
+  CHECK(textDirection(utf8("123 456"), BlockDirection::Inherit) == BlockDirection::Inherit,
+        "a number-only line inherits rather than deciding");
+  CHECK(textDirection(utf8("123 456"), BlockDirection::RightToLeft) == BlockDirection::RightToLeft,
+        "and inherits right to left where that is what came before");
+  CHECK(textDirection(utf8("123 456"), BlockDirection::LeftToRight) == BlockDirection::LeftToRight,
+        "and left to right where that is");
+  CHECK(textDirection(u"", BlockDirection::RightToLeft) == BlockDirection::RightToLeft,
+        "empty text inherits");
+  CHECK(textDirection(utf8("... --- ..."), BlockDirection::RightToLeft) == BlockDirection::RightToLeft,
+        "punctuation is neutral too");
+
+  // Code and math are skipped rather than counted, which is the case the two
+  // platforms disagreed on: a paragraph that opens with an inline code span and
+  // then Arabic came out two different ways.
+  Block code;
+  code.kind = BlockKind::CodeBlock;
+  code.text = utf8("\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D");
+  CHECK(blockDirection(code, BlockDirection::LeftToRight) == BlockDirection::Inherit,
+        "a code block is laid out left to right whatever it contains");
+  Block math;
+  math.kind = BlockKind::MathBlock;
+  math.text = utf8("\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D");
+  CHECK(blockDirection(math, BlockDirection::Inherit) == BlockDirection::Inherit,
+        "and so is a formula");
+
+  Block prose;
+  prose.kind = BlockKind::Paragraph;
+  prose.text = utf8("`x` \xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D");
+  CHECK(blockDirection(prose, BlockDirection::Inherit) == BlockDirection::RightToLeft,
+        "prose that opens with inline code still reads the way its words do");
+}
+
 /// The gutter is as wide as the widest number it draws, and never narrower than
 /// two digits, which is what keeps Streamdown's "over 100" bug out.
 void testGutterDigits() {
@@ -910,6 +992,7 @@ int main() {
   testTableHeight();
   testDetailsLayout();
   testVisibleTextHeight();
+  testDirection();
   testGutterDigits();
   testCodeCardHeight();
   testCodeLineStarts();

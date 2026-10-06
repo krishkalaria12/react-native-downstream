@@ -81,6 +81,8 @@ export type TokenRun = [
 
 export interface Block {
   kind: number;
+  /** The layout direction the engine decided: 0 inherit, 1 ltr, 2 rtl. */
+  direction: number;
   headingLevel: number;
   tableHeader: boolean;
   table: number;

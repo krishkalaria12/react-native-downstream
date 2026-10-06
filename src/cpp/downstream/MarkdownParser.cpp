@@ -2,6 +2,7 @@
 
 #include "LinkPolicy.h"
 #include "MathScan.h"
+#include "Direction.h"
 #include "Scan.h"
 #include "Unicode.h"
 
@@ -668,6 +669,10 @@ public:
     return done();
   }
 
+  /// The direction of the last block finished, which a block with no strong
+  /// character of its own inherits.
+  BlockDirection lastDirection_{BlockDirection::LeftToRight};
+
   /// `openFence` says the source ended inside a fenced code block, which the
   /// parser cannot report on its own. Only the document's last block can be that
   /// fence, so the flag lands on it and nowhere else.
@@ -1317,6 +1322,19 @@ private:
     tagIndexes_.clear();
         openScripts_.clear();
     dropNextSpace_ = false;
+    // The block's layout direction, decided here because this is the last moment
+    // its text is complete.
+    //
+    // A block the rule leaves alone — code, math, or one with no strong character
+    // of its own — takes the direction already in force rather than deciding
+    // again, so it neither reads the other way nor changes what the block after it
+    // inherits. That is also why `direction` is never `Inherit` here: the
+    // platforms draw, they do not decide.
+    const BlockDirection direction = blockDirection(*current_, lastDirection_);
+    if (direction != BlockDirection::Inherit) {
+      lastDirection_ = direction;
+    }
+    current_->direction = lastDirection_;
     promoteLeaf();
     // An HTML block the container rules consumed whole emits nothing.
     //

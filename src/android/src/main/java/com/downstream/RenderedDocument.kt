@@ -791,7 +791,7 @@ internal class RenderedDocument(
         }
         text.setSpan(
           BlockSpan(gap.toInt(), leading, decoration, containers, markerPaint, colors, density,
-            isCode || startsRightToLeft(text, start, end), style.ruleHeight),
+            isCode || document.blockIsRtl(block), style.ruleHeight),
           start,
           spanEnd,
           Spanned.SPAN_PARAGRAPH,
@@ -1249,7 +1249,10 @@ internal class RenderedDocument(
         codeOrdinal = codeOrdinal,
         containers = containers.first,
         contentLeading = contentLeading(containers.first).toInt(),
-        rtl = startsRightToLeft(text, 0, text.length),
+        // A code card's body reads left to right whatever it contains, which is
+        // the rule `Direction.h` states and the one this side used to reach its
+        // own version of.
+        rtl = false,
         firstLine = firstLine,
         padding = style.codePadding,
         gutterGap = ceil(GUTTER_GAP * style.density).toInt(),
@@ -1354,7 +1357,7 @@ internal class RenderedDocument(
         colors = colors,
         density = density,
         borderWidth = border,
-        rtl = startsRightToLeft(text, document.blockStart(from), document.blockEnd(from)),
+        rtl = document.blockIsRtl(from),
         identity = identity,
         blockIndex = blockIndex,
         blockCount = to - from,

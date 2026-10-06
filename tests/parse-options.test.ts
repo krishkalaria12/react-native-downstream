@@ -15,6 +15,7 @@ import {
   resolveMath,
   resolveParseFlags,
 } from '../src/parseFlags';
+import { assertStreamingMatchesFullParse, parse } from './engine';
 
 describe('resolveMath', () => {
   it('is off unless the engine is installed or math is asked for', () => {
@@ -209,5 +210,61 @@ describe('resolveParseFlags', () => {
         false
       ).flags & PARSE_FLAG_NO_AUTOLINK_MAILTO
     ).toBe(PARSE_FLAG_NO_AUTOLINK_MAILTO);
+  });
+});
+
+/**
+ * The layout direction, decided once in the engine.
+ *
+ * A block reads the way the majority of its strong characters read, and on a tie
+ * the way its first strong one does. The engine's own table is pinned in
+ * `testDirection` in `src/cpp/tests/test_export.cpp`; these are the cases that
+ * came from the two platforms disagreeing with each other.
+ */
+describe('the layout direction', () => {
+  const LTR = 1;
+  const RTL = 2;
+
+  const directions = (source: string) =>
+    parse(source).blocks.map((block) => block.direction);
+
+  it('reads a paragraph the way its words read', () => {
+    expect(directions('hello world\n')).toEqual([LTR]);
+    expect(directions('שלום עולם\n')).toEqual([RTL]);
+  });
+
+  it('counts the majority, not the first character', () => {
+    // The case iOS and Android disagreed on: iOS took the first strong letter and
+    // Android used `Character.getDirectionality` over the whole string.
+    expect(directions('one two three אב\n')).toEqual([LTR]);
+    expect(directions('אבגדה one\n')).toEqual([RTL]);
+    expect(directions('אבג one two three\n')).toEqual([LTR]);
+  });
+
+  it('sends a tie to the first strong character', () => {
+    expect(directions('a א\n')).toEqual([LTR]);
+    expect(directions('א a\n')).toEqual([RTL]);
+  });
+
+  it('lets a block with no strong character inherit the one before it', () => {
+    // A line of numbers between two paragraphs takes the paragraph above it, and
+    // a document that opens with one starts left to right.
+    expect(directions('hello\n\n123 456\n\nworld\n')).toEqual([LTR, LTR, LTR]);
+    expect(directions('שלום\n\n123\n\nעולם\n')).toEqual([RTL, RTL, RTL]);
+    expect(directions('123\n\nhello\n')).toEqual([LTR, LTR]);
+  });
+
+  it('skips inline code when deciding, and a code block entirely', () => {
+    // The other disagreement: a paragraph that opens with `x` then Arabic came out
+    // two ways, because one platform counted the identifier and the other did not.
+    expect(directions('`x` שלום\n')).toEqual([RTL]);
+    // A code block takes the direction already in force rather than deciding
+    // from its contents, and does not change what follows it either.
+    expect(directions('```\nשלום\n```\n')).toEqual([LTR]);
+    expect(directions('שלום\n\n```\nx\n```\n')).toEqual([RTL, RTL]);
+  });
+
+  it('holds every case to the incremental rule', () => {
+    assertStreamingMatchesFullParse([...'hello\n\n123\n\nשלום עולם\n']);
   });
 });

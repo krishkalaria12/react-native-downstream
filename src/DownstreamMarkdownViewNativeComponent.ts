@@ -123,6 +123,13 @@ export interface NativeProps extends ViewProps {
    */
   tableMaxHeight?: CodegenTypes.WithDefault<CodegenTypes.Double, 300>;
   /**
+   * `ltr`, `rtl` or `auto`, as the HTML attribute. `auto` is the default and is
+   * the engine's own decision per block; the other two override it, because an app
+   * that knows its whole document is one direction should not have to be right
+   * about any individual line in it.
+   */
+  dir?: CodegenTypes.WithDefault<'ltr' | 'rtl' | 'auto', 'auto'>;
+  /**
    * The origin a relative link resolves against, or empty for the default.
    *
    * One string rather than a resolved URL: the engine keeps the source's own

@@ -145,6 +145,18 @@ class DownstreamMarkdownViewManager :
     view.setSelectable(value)
   }
 
+  /**
+   * The `dir` prop, which overrides the engine's per-block decision.
+   *
+   * Read on the view rather than passed down: the shadow node folds it into the
+   * layout hint, so a measurement already carries it, and what the view needs is
+   * only the direction to draw text in. `auto` is the engine's own answer, which
+   * is what a document with no `dir` prop gets.
+   */
+  override fun setDir(view: DownstreamMarkdownView, value: String?) {
+    view.setDirection(value)
+  }
+
   override fun setSyntaxHighlighting(view: DownstreamMarkdownView, value: Boolean) {
     view.setSyntaxHighlighting(value)
   }

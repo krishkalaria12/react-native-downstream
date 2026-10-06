@@ -78,6 +78,18 @@ internal class NativeDocument(
   fun cellCount(block: Int) = blocks[block * BLOCK_STRIDE + 9]
   fun tableId(block: Int) = blocks[block * BLOCK_STRIDE + 10]
 
+  /**
+   * The block's layout direction, as `BlockDirection` in the engine numbers it.
+   *
+   * Read from the block rather than derived from its text: the engine already
+   * decided, and `Character.getDirectionality` reaching its own answer here is
+   * the second rule this replaced.
+   */
+  fun blockDirection(block: Int) = blocks[block * BLOCK_STRIDE + 16]
+
+  /** True when the engine laid this block out right to left. */
+  fun blockIsRtl(block: Int) = blockDirection(block) == DIRECTION_RTL
+
   /** The synthetic title paragraph of an admonition, decided document-wide. */
   fun isAdmonitionTitle(block: Int) = blocks[block * BLOCK_STRIDE + 11] != 0
 
@@ -244,7 +256,7 @@ internal class NativeDocument(
   fun tokenClass(token: Int) = tokens[token * TOKEN_STRIDE + 2]
 
   companion object {
-    private const val BLOCK_STRIDE = 16
+    private const val BLOCK_STRIDE = 17
     private const val CELL_STRIDE = 3
     private const val CONTAINER_STRIDE = 6
     private const val RUN_STRIDE = 4
@@ -296,6 +308,9 @@ internal class NativeDocument(
     const val KIND_MATH_BLOCK = 6
     /** A paragraph holding nothing but pictures, promoted to a block of its own. */
     const val KIND_IMAGE = 7
+
+    /** `BlockDirection::RightToLeft`. */
+    const val DIRECTION_RTL = 2
 
     const val CONTAINER_QUOTE = 0
     const val CONTAINER_LIST_ITEM = 1

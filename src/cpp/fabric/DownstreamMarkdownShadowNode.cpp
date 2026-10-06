@@ -122,6 +122,25 @@ downstream::Theme::Handle DownstreamMarkdownShadowNode::resolveTheme() const {
   return theme_;
 }
 
+/**
+ * The `dir` prop, as the engine's own direction.
+ *
+ * `Inherit` for `auto`, which is the engine's decision per block: a prop that
+ * named a direction would be a second rule, and the whole point of deciding the
+ * direction in C++ was that there is only one.
+ */
+downstream::BlockDirection directionFor(DownstreamMarkdownViewDir value) {
+  switch (value) {
+    case DownstreamMarkdownViewDir::Ltr:
+      return downstream::BlockDirection::LeftToRight;
+    case DownstreamMarkdownViewDir::Rtl:
+      return downstream::BlockDirection::RightToLeft;
+    case DownstreamMarkdownViewDir::Auto:
+      break;
+  }
+  return downstream::BlockDirection::Inherit;
+}
+
 downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale, Float width,
                                                                const downstream::DocumentHandle &document) const {
   const auto &state = getStateData();
@@ -139,6 +158,7 @@ downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale,
                               imageLayout(document),
                               theme_};
   hint.tables = tableProps(state);
+  hint.direction = directionFor(getConcreteProps().dir);
   return hint;
 }
 
@@ -160,6 +180,13 @@ downstream::CaretKind caretKind(DownstreamMarkdownViewCaret value) {
   return downstream::CaretKind::None;
 }
 
+/**
+ * The `dir` prop, as the engine's own direction.
+ *
+ * `Inherit` for `auto`, which is the engine's decision per block: a prop that
+ * named a direction would be a second rule, and the whole point of deciding the
+ * direction in C++ was that there is only one.
+ */
 downstream::Animating animatingFor(DownstreamMarkdownViewAnimating value) {
   switch (value) {
     case DownstreamMarkdownViewAnimating::Auto:

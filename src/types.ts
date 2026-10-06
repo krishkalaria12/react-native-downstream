@@ -1135,6 +1135,20 @@ type MarkdownViewBaseProps = Readonly<{
   /** The tallest a table grows before it scrolls, in points. 300 by default. */
   tableMaxHeight?: number | '0' | 'none' | 'Infinity';
   /**
+   * Which way the document lays out, as the HTML `dir` attribute.
+   *
+   * `auto` is the default and is the engine's own decision, block by block: a
+   * block reads the way the majority of its strong characters read, and one with
+   * no strong character of its own inherits the block before it. The other two
+   * override that for every block, which is what an app whose whole document is
+   * one direction should reach for rather than being right about each line.
+   *
+   * The decision is made in the engine rather than on either platform, because
+   * "the first strong letter" is not the same rule anywhere and a paragraph that
+   * opened with inline code and then Arabic came out two different ways.
+   */
+  dir?: 'ltr' | 'rtl' | 'auto';
+  /**
    * What a reader is asked before a link opens, when the app passed no
    * `onLinkPress`. On by default.
    *
@@ -1157,11 +1171,6 @@ type MarkdownViewBaseProps = Readonly<{
   renderTableFullscreen?: (event: MarkdownTableFullscreenEvent) => ReactNode;
   /** A table's full-screen button, for an app with its own handler. */
   onTableFullscreen?: (event: MarkdownTableFullscreenEvent) => void;
-  /**
-   * Whether this document runs right to left, and what a neutral block inherits.
-   * Unset means the engine decides from the text itself.
-   */
-  dir?: 'ltr' | 'rtl' | 'auto';
   /**
    * Glyphs for the control buttons, by key, as Streamdown's `icons`. A key here
    * replaces the platform's own glyph for that button; a key with no entry keeps

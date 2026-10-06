@@ -60,27 +60,22 @@ NSString *toNSString(const std::u16string &text) {
   return [NSString stringWithCharacters:reinterpret_cast<const unichar *>(text.data()) length:text.size()];
 }
 
-/// Find the first strong letter. Digits and punctuation do not decide the
-/// direction, so a numbered Arabic or Hebrew item still starts on the right.
-NSWritingDirection writingDirection(const std::u16string &text) {
-  NSCharacterSet *letters = NSCharacterSet.letterCharacterSet;
-  for (size_t i = 0; i < text.size(); i++) {
-    UTF32Char scalar = text[i];
-    if (scalar >= 0xd800 && scalar <= 0xdbff && i + 1 < text.size() &&
-        text[i + 1] >= 0xdc00 && text[i + 1] <= 0xdfff) {
-      scalar = 0x10000 + ((scalar - 0xd800) << 10) + (text[++i] - 0xdc00);
-    }
-    if (![letters longCharacterIsMember:scalar]) {
-      continue;
-    }
-    const BOOL rtl = (scalar >= 0x0590 && scalar <= 0x08ff) ||
-        (scalar >= 0xfb1d && scalar <= 0xfdff) ||
-        (scalar >= 0xfe70 && scalar <= 0xfeff) ||
-        (scalar >= 0x10800 && scalar <= 0x10fff) ||
-        (scalar >= 0x1e800 && scalar <= 0x1efff);
-    return rtl ? NSWritingDirectionRightToLeft : NSWritingDirectionLeftToRight;
+/// The writing direction a resolved block direction draws with.
+///
+/// The engine decided the direction; this only says how to hand it to TextKit.
+/// `NSWritingDirectionNatural` is not an option, because it would let the
+/// platform look at the text again and reach its own answer — which is the second
+/// rule this replaced.
+NSWritingDirection writingDirectionFor(downstream::BlockDirection direction) {
+  switch (direction) {
+    case downstream::BlockDirection::RightToLeft:
+      return NSWritingDirectionRightToLeft;
+    case downstream::BlockDirection::LeftToRight:
+      return NSWritingDirectionLeftToRight;
+    case downstream::BlockDirection::Inherit:
+      break;
   }
-  return NSWritingDirectionNatural;
+  return NSWritingDirectionLeftToRight;
 }
 
 /// Whether any of this block's runs is raised or lowered: a footnote
@@ -580,11 +575,17 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
     DSBlockInfo *info = [DSBlockInfo new];
     info.index = static_cast<NSInteger>(index);
     info.headingLevel = block.headingLevel;
-    NSWritingDirection direction = inCard ? NSWritingDirectionLeftToRight : writingDirection(block.text);
-    if (direction == NSWritingDirectionNatural && blocks.count > 0) {
-      direction = blocks.lastObject.rightToLeft ? NSWritingDirectionRightToLeft
-                                                 : NSWritingDirectionLeftToRight;
-    }
+    // The engine's own answer, with the `dir` prop already folded into it. A code
+    // card's body is the one place it is overridden outright: a fenced block is
+    // laid out left to right on both platforms whatever it contains, which is the
+    // same rule `Direction.h` states, and saying it here keeps a code card from
+    // depending on which of the two the caller was.
+    const downstream::BlockDirection resolved =
+        isCode && inCard ? downstream::BlockDirection::LeftToRight : block.direction;
+    const NSWritingDirection direction =
+        resolved == downstream::BlockDirection::Inherit
+            ? NSWritingDirectionLeftToRight
+            : writingDirectionFor(resolved);
     info.rightToLeft = direction == NSWritingDirectionRightToLeft;
     info.decoration = block.kind == BlockKind::ThematicBreak ? DSBlockDecorationRule : DSBlockDecorationNone;
 
@@ -1221,7 +1222,10 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   // block is measured at this number by the shadow node, so the two platforms
   // and the node cannot drift apart on where the column is.
   segment.contentLeading = theme_layout::contentLeading(theme, block.containers, scale);
-  segment.rightToLeft = writingDirection(block.text) == NSWritingDirectionRightToLeft;
+  // The engine's own answer again, and for the same reason: a segment's own
+  // direction is its first block's, because the segment draws as one text layout
+  // and the platform cannot be told otherwise.
+  segment.rightToLeft = block.direction == downstream::BlockDirection::RightToLeft;
   segment.containers = containers;
   const size_t newline = block.text.find(u'\n');
   segment.firstLine = toNSString(block.text.substr(0, newline == std::u16string::npos ? block.text.size() : newline));
@@ -1323,11 +1327,9 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                            [segment.theme colorForSlot:kSlotListMarkerColor
                                                            fallback:UIColor.secondaryLabelColor],
                                            containers, spoken, &inQuote);
-  NSWritingDirection direction = NSWritingDirectionNatural;
-  for (size_t index = from; index < to && direction == NSWritingDirectionNatural; index++) {
-    direction = writingDirection(document.blocks[index].text);
-  }
-  segment.rightToLeft = direction == NSWritingDirectionRightToLeft;
+  // A table draws as one grid, so its direction is the first row's — and the
+  // engine has already decided that one.
+  segment.rightToLeft = first.direction == downstream::BlockDirection::RightToLeft;
   segment.tableIdentifier = first.table;
   segment.firstRowText = toNSString(first.text);
   segment.blockIndex = static_cast<NSInteger>(from);

@@ -635,7 +635,7 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
                                     static_cast<jint>(block.spacingBefore),
                                     start,
                                     static_cast<jint>(text.size()),
-                                    static_cast<jint>(containers.size() / 5),
+                                    static_cast<jint>(containers.size() / 6),
                                     static_cast<jint>(block.containers.size()),
                                     static_cast<jint>(cells.size() / 3),
                                     static_cast<jint>(block.cells.size()),
@@ -645,6 +645,11 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
                                     intern(block.meta.title),
                                     static_cast<jint>(block.meta.startLine),
                                     block.meta.noLineNumbers ? 1 : 0,
+                                    // The layout direction the engine decided, so
+                                    // this side draws the line the way the
+                                    // measurement was made rather than asking
+                                    // `Character.getDirectionality` again.
+                                    static_cast<jint>(block.direction),
                                 });
     for (const MathSpan &span : block.math) {
       formulas.insert(formulas.end(), {static_cast<double>(index - static_cast<size_t>(from)),

@@ -127,6 +127,11 @@ inline bool write(const ParseResult &result) {
       std::printf("%s[%u,%u]", m ? "," : "", block.meta.marks[m].first, block.meta.marks[m].last);
     }
     std::printf("]}");
+    // The layout direction, so a test can read the rule's answer rather than
+    // inferring it from the text. 0 is `Inherit`, which the engine resolves to a
+    // resolved direction before the block reaches here, so a block that prints 0
+    // is a block the rule left alone.
+    std::printf(",\"direction\":%d", static_cast<int>(block.direction));
     std::printf(",\"text\":");
     writeString(block.text);
     std::printf(",\"containers\":[");

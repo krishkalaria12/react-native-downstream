@@ -992,6 +992,7 @@ function ControlledMarkdown({
   onLinkPress,
   linkSafety,
   tableMaxHeight,
+  dir,
   onTableFullscreen,
   renderTableFullscreen,
   onError,
@@ -1091,6 +1092,7 @@ function ControlledMarkdown({
       lineNumbers={lineNumbers}
       codeBlockMaxHeight={resolveMaxHeight(codeBlockMaxHeight)}
       tableMaxHeight={resolveMaxHeight(tableMaxHeight, defaultTableMaxHeight)}
+      dir={dir}
       controls={resolved.flags}
       codeFilename={resolved.codeFilename}
       tableFilename={resolved.tableFilename}
@@ -1142,6 +1144,7 @@ function StreamMarkdown({
   onLinkPress,
   linkSafety,
   tableMaxHeight,
+  dir,
   onTableFullscreen,
   renderTableFullscreen,
   onError,
@@ -1257,6 +1260,7 @@ function StreamMarkdown({
       lineNumbers={lineNumbers}
       codeBlockMaxHeight={resolveMaxHeight(codeBlockMaxHeight)}
       tableMaxHeight={resolveMaxHeight(tableMaxHeight, defaultTableMaxHeight)}
+      dir={dir}
       controls={resolved.flags}
       codeFilename={resolved.codeFilename}
       tableFilename={resolved.tableFilename}
