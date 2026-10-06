@@ -12,6 +12,7 @@ import { Badge, ChipRow, Group, Notice } from '../ui/kit';
 import { Hero, Screen, SectionLabel, useScreenScroll } from '../ui/screen';
 import { space, useTheme } from '../ui/theme';
 import { BrokenRenderer, ChartRenderer, LazyChart } from './chart';
+import { MermaidRenderer } from './mermaid';
 
 /**
  * Every shape the feature has to get right, in one document.
@@ -55,6 +56,15 @@ const SOURCE = [
   '',
   'A chart whose renderer throws falls back to the code card, with copy and',
   'download, and reports once:',
+  '',
+  'A diagram, drawn with mermaid.js in a WebView that only shows the SVG:',
+  '',
+  '```mermaid',
+  'flowchart TD',
+  '    A[Model writes] --> B{Parses?}',
+  '    B -->|Yes| C[Diagram]',
+  '    B -->|No| D[The source as prose]',
+  '```',
   '',
   '```broken',
   'this renderer always throws',
@@ -126,6 +136,10 @@ export function RenderersScreen() {
         { language: ['chart', 'lazychart'], component: ChartRenderer },
         { language: 'lazy', component: LazyChart },
         { language: 'broken', component: BrokenRenderer },
+        // Phase 7's example: a `mermaid` fence becomes a diagram, drawn with
+        // mermaid.js in a WebView that only shows the SVG it is given. The core
+        // ships no diagram code; this screen is where it lives.
+        { language: 'mermaid', component: MermaidRenderer },
       ],
     }),
     []
