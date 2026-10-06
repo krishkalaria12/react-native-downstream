@@ -1252,6 +1252,23 @@ type MarkdownViewBaseProps = Readonly<{
    */
   onTaskPress?: (event: MarkdownTaskPressEvent) => void;
   /**
+   * A hold on a link.
+   *
+   * A tap opens (or asks, through link safety); a hold is the app's: copy the
+   * URL, show a sheet. The library does nothing with it, because doing anything
+   * would be a second behavior for one gesture.
+   */
+  onLinkLongPress?: (event: MarkdownLinkPressEvent) => void;
+  /**
+   * Whether a hold on a link may show the system's preview of its destination.
+   *
+   * iOS only: a `UITextView` shows a peek-and-pop preview on force touch, and a
+   * chat message that previews every link it holds is a message that navigates
+   * by accident. `true` keeps the platform's default; `false` — the default —
+   * turns it off, so a hold is the app's `onLinkLongPress` and nothing else.
+   */
+  linkPreview?: boolean;
+  /**
    * Glyphs for the control buttons, by key, as Streamdown's `icons`. A key here
    * replaces the platform's own glyph for that button; a key with no entry keeps
    * it.

@@ -88,6 +88,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   internal var onTableFullscreen: ((view: DownstreamMarkdownView, ordinal: Int) -> Unit)? = null
   internal var onDetailsToggle: ((view: DownstreamMarkdownView, containerId: Int, open: Boolean) -> Unit)? = null
   internal var onTaskToggle: ((view: DownstreamMarkdownView, containerId: Int, checked: Boolean) -> Unit)? = null
+  internal var onLinkLongPress: ((view: DownstreamMarkdownView, url: String, start: Int, end: Int) -> Unit)? = null
 
   private var documentId = 0L
   private var fontScale = 1f
@@ -1297,6 +1298,18 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   internal fun pressLink(index: Int) {
     val link = DownstreamNative.readLink(documentId, index) ?: return
     onLinkPress?.invoke(this, link.url, link.start, link.end)
+  }
+
+  /**
+   * A hold on a link, reported rather than acted on.
+   *
+   * A tap opens (or asks, through link safety); a hold is the app's: copy the
+   * URL, show a sheet. The library does nothing with it, because doing anything
+   * would be a second behavior for one gesture.
+   */
+  internal fun longPressLink(index: Int) {
+    val link = DownstreamNative.readLink(documentId, index) ?: return
+    onLinkLongPress?.invoke(this, link.url, link.start, link.end)
   }
 
   // The segment views this view is currently holding, in document order. Every

@@ -238,6 +238,8 @@ NSString *symbolForExpand(BOOL expanded) {
   NSArray<NSString *> *_labels;
   /// The `icons` prop's resolved names, handed to every segment view on the way.
   NSArray<NSString *> *_icons;
+  /// Whether a hold on a link may show the system's preview.
+  BOOL _linkPreview;
   uint32_t _chrome;
   /// A code block's ordinals, so a wrap or expand choice can be applied by
   /// ordinal rather than by segment index, which moves as blocks stream in.
@@ -343,6 +345,7 @@ static Class segmentViewClassFor(id segment) {
     text.detailsToggle = (_controls & downstream::ControlBits::DetailsToggle) != 0;
     text.detailsChoices = _detailsChoices;
     text.controlDelegate = _controlDelegate;
+    text.linkPreview = _linkPreview;
     return;
   }
   if ([view isKindOfClass:DSCodeSegmentView.class]) {

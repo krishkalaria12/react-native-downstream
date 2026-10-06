@@ -87,6 +87,7 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   private val codePath = Path()
   private var pressedSummary: DetailsBlock? = null
   private var pressedSpoiler = false
+  private var longPress: LongPress? = null
   private var pressedTask: TaskPress? = null
 
 /**
@@ -738,6 +739,14 @@ private class TaskPress(val id: Int, val checked: Boolean)
     val x = event.x - totalPaddingLeft + scrollX
     val y = event.y - totalPaddingTop + scrollY
     if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+      // A hold is recognised beside the tap rather than through it, so the tap's
+      // timing is unchanged for every press that is not a hold.
+      longPress?.cancel()
+      val held = linkAt(layout, x, y)
+      if (held >= 0) {
+        longPress = LongPress(context, held) { findHost()?.longPressLink(it) }
+        longPress?.schedule(event.x, event.y)
+      }
       // The summary is hit-tested before the links under it: the whole line is the
       // control, and a link inside a summary is still a summary a reader meant to
       // open. Everything else falls through to the link, then to selection.
@@ -802,6 +811,15 @@ private class TaskPress(val id: Int, val checked: Boolean)
         MotionEvent.ACTION_CANCEL -> pressedSummary = null
         else -> return true
       }
+    }
+    if (event.actionMasked == MotionEvent.ACTION_MOVE) {
+      longPress?.moved(event.x, event.y)
+    }
+    if (event.actionMasked == MotionEvent.ACTION_UP ||
+      event.actionMasked == MotionEvent.ACTION_CANCEL
+    ) {
+      longPress?.cancel()
+      longPress = null
     }
     if (pressedLink < 0) {
       return super.onTouchEvent(event)

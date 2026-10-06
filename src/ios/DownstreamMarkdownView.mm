@@ -172,6 +172,7 @@ NSString *nameForFormat(NSString *format) {
   /// An empty string is a key the app removed, which the button reads as "draw no
   /// icon" — a text-only button is how a quiet header is built.
   NSArray<NSString *> *_controlIcons;
+  BOOL _linkPreview;
   CADisplayLink *_traceDisplayLink;
   uint64_t _traceDocumentId;
   uint64_t _controlEpoch;
@@ -247,6 +248,12 @@ NSString *nameForFormat(NSString *format) {
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap:)];
     tap.cancelsTouchesInView = NO;
     [self addGestureRecognizer:tap];
+    // A hold is recognised beside the tap rather than through it, so the tap's
+    // timing is unchanged for every press that is not a hold.
+    UILongPressGestureRecognizer *hold =
+        [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
+    hold.cancelsTouchesInView = NO;
+    [self addGestureRecognizer:hold];
   }
   return self;
 }
@@ -458,6 +465,14 @@ NSString *nameForFormat(NSString *format) {
   if (newProps.controls != _controls) {
     _controls = newProps.controls;
     _documentView.controls = _controls;
+  }
+  // A chat message that previews every link it holds is a message that
+  // navigates by accident, so the default is off and a hold is the app's own
+  // `onLinkLongPress`. The preview is a text view behavior, which is why this
+  // is a view prop rather than state: it changes no height.
+  if (newProps.linkPreview != _linkPreview) {
+    _linkPreview = newProps.linkPreview;
+    _documentView.linkPreview = _linkPreview;
   }
   // The props that decide code layout, gathered into one value. The height and
   // the gutter are heights, so the shadow node measures with them and the view
@@ -854,6 +869,21 @@ NSString *nameForFormat(NSString *format) {
   }
 }
 
+/// A hold on a link, for the app to do something else with.
+///
+/// Installed beside the tap rather than instead of it, because the two gestures
+/// recognise independently: a hold that becomes a tap still taps, and a tap never
+/// waits to find out whether it was a hold.
+- (void)handleLongPress:(UILongPressGestureRecognizer *)recognizer {
+  if (recognizer.state != UIGestureRecognizerStateBegan) {
+    return;
+  }
+  const NSInteger linkIndex = [_documentView linkIndexAtPoint:[recognizer locationInView:_documentView]];
+  if (linkIndex >= 0) {
+    [self didLongPressLinkAtIndex:linkIndex];
+  }
+}
+
 - (void)didPressLinkAtIndex:(NSInteger)linkIndex {
   if (!_state || !_eventEmitter) {
     return;
@@ -865,6 +895,28 @@ NSString *nameForFormat(NSString *format) {
   const auto &link = document->links[static_cast<size_t>(linkIndex)];
   std::static_pointer_cast<const DownstreamMarkdownViewEventEmitter>(_eventEmitter)
       ->onLinkPress({
+          .url = link.url,
+          .start = static_cast<int>(link.range.start),
+          .end = static_cast<int>(link.range.end),
+      });
+}
+
+/// A long press on a link, reported rather than acted on.
+///
+/// A tap opens (or asks, through link safety); a hold is the app's: copy the URL,
+/// show a preview, open a sheet. The library does nothing with it, because doing
+/// anything would be a second behavior for one gesture.
+- (void)didLongPressLinkAtIndex:(NSInteger)linkIndex {
+  if (!_state || !_eventEmitter) {
+    return;
+  }
+  const auto &document = _state->getData().document;
+  if (!document || linkIndex < 0 || static_cast<size_t>(linkIndex) >= document->links.size()) {
+    return;
+  }
+  const auto &link = document->links[static_cast<size_t>(linkIndex)];
+  std::static_pointer_cast<const DownstreamMarkdownViewEventEmitter>(_eventEmitter)
+      ->onLinkLongPress({
           .url = link.url,
           .start = static_cast<int>(link.range.start),
           .end = static_cast<int>(link.range.end),

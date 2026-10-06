@@ -409,7 +409,11 @@ describe('DownstreamMarkdown controls', () => {
 
   /** Calls the native view's event handler as Fabric would. */
   function fire(
-    name: 'onControlAction' | 'onMarkdownError' | 'onTaskPress',
+    name:
+      | 'onControlAction'
+      | 'onMarkdownError'
+      | 'onTaskPress'
+      | 'onLinkLongPress',
     event: unknown
   ): void {
     act(() => {
@@ -660,6 +664,48 @@ describe('DownstreamMarkdown controls', () => {
       mount(<DownstreamMarkdown markdown={TASKS} onTaskPress={onTaskPress} />);
       fire('onTaskPress', taskEvent({ generation: -1 }));
       expect(onTaskPress).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DownstreamMarkdown link long press', () => {
+    const LINKED = 'See [the docs](https://example.com/a) today.\n';
+
+    function longPressEvent(overrides: Record<string, unknown> = {}) {
+      return {
+        nativeEvent: {
+          url: 'https://example.com/a',
+          start: 4,
+          end: 26,
+          ...overrides,
+        },
+      };
+    }
+
+    it('routes a hold to onLinkLongPress with the link as written and resolved', () => {
+      const onLinkLongPress = vi.fn();
+      mount(
+        <DownstreamMarkdown
+          markdown={LINKED}
+          onLinkLongPress={onLinkLongPress}
+        />
+      );
+      fire('onLinkLongPress', longPressEvent());
+      // A hold is the app's, so it gets both forms: the resolved URL to act on and
+      // the source to show.
+      expect(onLinkLongPress).toHaveBeenCalledWith({
+        url: 'https://example.com/a',
+        href: 'https://example.com/a',
+        range: { start: 4, end: 26 },
+      });
+    });
+
+    it('sends the preview flag through, defaulting to off', () => {
+      mount(<DownstreamMarkdown markdown={LINKED} />);
+      // A chat message that previews every link navigates by accident, so the
+      // default is off and a hold is the app's handler and nothing else.
+      expect(nativeView.last()?.linkPreview).toBe(false);
+      rerender(<DownstreamMarkdown markdown={LINKED} linkPreview />);
+      expect(nativeView.last()?.linkPreview).toBe(true);
     });
   });
 

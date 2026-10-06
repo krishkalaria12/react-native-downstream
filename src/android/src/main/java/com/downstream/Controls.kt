@@ -213,6 +213,56 @@ internal fun newControlButton(context: Context, drawable: Int): ImageButton = Im
   setBackgroundResource(ripple.resourceId)
 }
 
+/**
+ * A hold recogniser: one link, one deadline, cancelled on lift or drift.
+ *
+ * A small class rather than a handler callback because the deadline has to be
+ * armed on the down and disarmed on anything else, and a `Handler.postDelayed`
+ * with no owner is how a hold outlives the touch that started it.
+ */
+internal class LongPress(
+  private val context: android.content.Context,
+  private val link: Int,
+  private val fire: (Int) -> Unit,
+) {
+  private var handler: android.os.Handler? = null
+  private var startX = 0f
+  private var startY = 0f
+  private var armed = false
+
+  fun schedule(x: Float, y: Float) {
+    cancel()
+    startX = x
+    startY = y
+    armed = true
+    val queue = android.os.Handler(android.os.Looper.getMainLooper())
+    handler = queue
+    queue.postDelayed(
+      {
+        armed = false
+        fire(link)
+      },
+      android.view.ViewConfiguration.getLongPressTimeout().toLong(),
+    )
+  }
+
+  fun moved(x: Float, y: Float) {
+    if (!armed) return
+    // A finger that drifted past the touch slop is scrolling or selecting, not
+    // holding: the hold is cancelled rather than fired late.
+    val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+    if (kotlin.math.abs(x - startX) > slop || kotlin.math.abs(y - startY) > slop) {
+      cancel()
+    }
+  }
+
+  fun cancel() {
+    armed = false
+    handler?.removeCallbacksAndMessages(null)
+    handler = null
+  }
+}
+
 /** Link index at a point in a laid-out text, or -1. */
 internal fun linkAt(layout: Layout, x: Float, y: Float): Int {
   if (y < 0 || y > layout.height) {

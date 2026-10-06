@@ -112,6 +112,12 @@ NSString *const kPlaceholder = @"\u200b";
 
 /// The layout manager is what splits the glyph runs, so the provider is its as
 /// well as this view's.
+- (void)setLinkPreview:(BOOL)linkPreview {
+  if ([self respondsToSelector:@selector(setAllowsLinkPreview:)]) {
+    self.allowsLinkPreview = linkPreview;
+  }
+}
+
 - (void)setRevealProvider:(id<DSRevealProvider>)revealProvider {
   if (_revealProvider == revealProvider) {
     return;

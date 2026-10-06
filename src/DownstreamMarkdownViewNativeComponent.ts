@@ -11,6 +11,12 @@ type NativeLinkPressEvent = Readonly<{
   end: CodegenTypes.Int32;
 }>;
 
+type NativeLinkLongPressEvent = Readonly<{
+  url: string;
+  start: CodegenTypes.Int32;
+  end: CodegenTypes.Int32;
+}>;
+
 type NativeMarkdownErrorEvent = Readonly<{
   code: string;
   message: string;
@@ -143,6 +149,15 @@ export interface NativeProps extends ViewProps {
    */
   dir?: CodegenTypes.WithDefault<'ltr' | 'rtl' | 'auto', 'auto'>;
   /**
+   * Whether a hold on a link may show the system's preview of its destination.
+   *
+   * iOS only: a text view shows a peek-and-pop preview on a hold, and a chat
+   * message that previews every link it holds is a message that navigates by
+   * accident. `false` — the default — turns it off, so a hold is the app's
+   * `onLinkLongPress` and nothing else.
+   */
+  linkPreview?: CodegenTypes.WithDefault<boolean, false>;
+  /**
    * The origin a relative link resolves against, or empty for the default.
    *
    * One string rather than a resolved URL: the engine keeps the source's own
@@ -241,6 +256,7 @@ export interface NativeProps extends ViewProps {
   /** The shape drawn after the newest text while animating. */
   caret?: CodegenTypes.WithDefault<'none' | 'block' | 'circle', 'none'>;
   onLinkPress?: CodegenTypes.DirectEventHandler<NativeLinkPressEvent>;
+  onLinkLongPress?: CodegenTypes.DirectEventHandler<NativeLinkLongPressEvent>;
   onImagePress?: CodegenTypes.DirectEventHandler<NativeImagePressEvent>;
   onMathError?: CodegenTypes.DirectEventHandler<NativeMathErrorEvent>;
   onMarkdownError?: CodegenTypes.DirectEventHandler<NativeMarkdownErrorEvent>;

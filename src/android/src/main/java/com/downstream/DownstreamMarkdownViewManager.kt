@@ -103,6 +103,19 @@ class DownstreamMarkdownViewManager :
     view.onTaskToggle = { target, containerId, checked ->
       dispatchTaskToggle(target, containerId, checked)
     }
+    view.onLinkLongPress = linkLongPress@{ target, url, start, end ->
+      val context = target.context as? ReactContext ?: return@linkLongPress
+      dispatch(
+        target,
+        LinkLongPressEvent(
+          UIManagerHelper.getSurfaceId(context),
+          target.id,
+          url,
+          start,
+          end,
+        ),
+      )
+    }
     return view
   }
 
@@ -753,6 +766,26 @@ private class TaskPressEvent(
 
   companion object {
     const val NAME = "topTaskPress"
+  }
+}
+
+private class LinkLongPressEvent(
+  surfaceId: Int,
+  viewTag: Int,
+  private val url: String,
+  private val start: Int,
+  private val end: Int,
+) : Event<LinkLongPressEvent>(surfaceId, viewTag) {
+  override fun getEventName() = NAME
+
+  override fun getEventData(): WritableMap = Arguments.createMap().apply {
+    putString("url", url)
+    putInt("start", start)
+    putInt("end", end)
+  }
+
+  companion object {
+    const val NAME = "topLinkLongPress"
   }
 }
 

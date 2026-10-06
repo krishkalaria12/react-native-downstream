@@ -998,6 +998,8 @@ function ControlledMarkdown({
   icons,
   onTableFullscreen,
   onTaskPress,
+  onLinkLongPress,
+  linkPreview = false,
   renderTableFullscreen,
   onError,
   ...rest
@@ -1033,6 +1035,21 @@ function ControlledMarkdown({
   // reader taps one, so the press only reports. A press on a document that has
   // since been replaced is dropped, which is the same generation rule every
   // other event follows.
+  // A hold on a link is the app's, full stop: the library neither opens nor
+  // asks, so there is no safety flow — only the URL as written, the URL resolved,
+  // and where the link was.
+  const handleLinkLongPress = useCallback(
+    (native: NativeSyntheticEvent<NativeLinkPress>) => {
+      const { url: href, start, end } = native.nativeEvent;
+      onLinkLongPress?.({
+        url: resolveLinkUrl(href, ''),
+        href,
+        range: { start, end },
+      });
+    },
+    [onLinkLongPress]
+  );
+
   const handleTaskPress = useCallback(
     (native: NativeSyntheticEvent<MarkdownTaskPressEvent>) => {
       const payload = native.nativeEvent;
@@ -1122,6 +1139,8 @@ function ControlledMarkdown({
       controlLabels={resolved.labels}
       controlIcons={resolveIcons(icons)}
       onTaskPress={handleTaskPress}
+      onLinkLongPress={handleLinkLongPress}
+      linkPreview={linkPreview}
       parseFlags={images.parseFlags}
       images={images.images}
       allowedImagePrefixes={images.allowedImagePrefixes}
@@ -1171,6 +1190,8 @@ function StreamMarkdown({
   icons,
   onTableFullscreen,
   onTaskPress,
+  onLinkLongPress,
+  linkPreview = false,
   renderTableFullscreen,
   onError,
   ...rest
@@ -1203,6 +1224,21 @@ function StreamMarkdown({
   // reader taps one, so the press only reports. A press on a document that has
   // since been replaced is dropped, which is the same generation rule every
   // other event follows.
+  // A hold on a link is the app's, full stop: the library neither opens nor
+  // asks, so there is no safety flow — only the URL as written, the URL resolved,
+  // and where the link was.
+  const handleLinkLongPress = useCallback(
+    (native: NativeSyntheticEvent<NativeLinkPress>) => {
+      const { url: href, start, end } = native.nativeEvent;
+      onLinkLongPress?.({
+        url: resolveLinkUrl(href, ''),
+        href,
+        range: { start, end },
+      });
+    },
+    [onLinkLongPress]
+  );
+
   const handleTaskPress = useCallback(
     (native: NativeSyntheticEvent<MarkdownTaskPressEvent>) => {
       const payload = native.nativeEvent;
@@ -1311,6 +1347,8 @@ function StreamMarkdown({
       controlLabels={resolved.labels}
       controlIcons={resolveIcons(icons)}
       onTaskPress={handleTaskPress}
+      onLinkLongPress={handleLinkLongPress}
+      linkPreview={linkPreview}
       parseFlags={images.parseFlags}
       images={images.images}
       allowedImagePrefixes={images.allowedImagePrefixes}
