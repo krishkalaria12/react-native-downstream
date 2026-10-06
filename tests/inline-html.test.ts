@@ -14,8 +14,10 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import type { Block, RenderModel } from './engine';
 import {
   assertStreamingMatchesFullParse,
+  CONTAINER,
   KIND,
   PARSE_INLINE_HTML,
   PARSE_SUBSCRIPT_SYNTAX,
@@ -246,5 +248,166 @@ describe('with inlineHtml off', () => {
     for (const source of sources) {
       expect(parse(source, ON)).toEqual(parse(source, 0));
     }
+  });
+});
+
+/**
+ * `<details>` and `<summary>`.
+ *
+ * md4c gives an HTML block up to a blank line, so the tags and the body arrive as
+ * separate blocks and the pairing is the builder's job. These cases pin the four
+ * decisions that pairing makes: a container per opener, nesting, a summary that is
+ * a synthetic first leaf, and a closer with no opener dropped rather than shown.
+ */
+describe('<details>', () => {
+  const DETAILS = [
+    '<details>',
+    '<summary>Click</summary>',
+    '',
+    'Body **text**.',
+    '',
+    '</details>',
+    '',
+  ].join('\n');
+
+  it('turns the tags into a container around the body', () => {
+    const model = parse(DETAILS, ON);
+    expect(visibleText(model)).toBe('Click\nBody text.');
+    // The summary and the body are the two blocks the reader sees, and neither
+    // carries the tags: a `<details>` is a control, not source text.
+    expect(model.blocks).toHaveLength(2);
+    for (const block of model.blocks) {
+      expect(
+        block.containers.some(
+          (c: { kind: number }) => c.kind === CONTAINER.details
+        )
+      ).toBe(true);
+    }
+  });
+
+  it("marks the summary as the container's own leaf, so the chevron has a home", () => {
+    const model = parse(DETAILS, ON);
+    const [summary, body] = model.blocks as [Block, Block];
+    const detailsOf = (block: {
+      containers: { kind: number; showsMarker: boolean }[];
+    }) => block.containers.find((c) => c.kind === CONTAINER.details);
+    expect(detailsOf(summary)?.showsMarker).toBe(true);
+    // Only the first leaf carries it: a marker is drawn once per container, the
+    // same rule a list item's bullet follows.
+    expect(detailsOf(body)?.showsMarker).toBe(false);
+  });
+
+  it("keeps the writer's open attribute as the starting state", () => {
+    const opened = parse(DETAILS.replace('<details>', '<details open>'), ON);
+    const closed = parse(DETAILS, ON);
+    const openOf = (model: RenderModel) =>
+      model.blocks[0]!.containers.find((c) => c.kind === CONTAINER.details)
+        ?.open;
+    expect(openOf(opened)).toBe(true);
+    expect(openOf(closed)).toBe(false);
+    // `open="open"` is the same attribute as a bare `open`, which is what HTML
+    // says and what a writer typing it meant.
+    expect(
+      openOf(parse(DETAILS.replace('<details>', '<details open="open">'), ON))
+    ).toBe(true);
+    // An attribute that merely starts with the name is not the attribute.
+    expect(
+      openOf(parse(DETAILS.replace('<details>', '<details opened>'), ON))
+    ).toBe(false);
+  });
+
+  it('nests, and each level names its own summary', () => {
+    const nested = [
+      '<details>',
+      '<summary>Outer</summary>',
+      '',
+      '<details>',
+      '<summary>Inner</summary>',
+      '',
+      'Deep.',
+      '',
+      '</details>',
+      '',
+      '</details>',
+      '',
+    ].join('\n');
+    const model = parse(nested, ON);
+    expect(visibleText(model)).toBe('Outer\nInner\nDeep.');
+    // Two containers, and the inner block is inside both — which is what makes
+    // the outer one collapsible as a whole.
+    expect(
+      model.blocks[2]!.containers.filter((c) => c.kind === CONTAINER.details)
+    ).toHaveLength(2);
+    const summaries = model.blocks
+      .map((block: { containers: { kind: number; showsMarker: boolean }[] }) =>
+        block.containers.find(
+          (c) => c.kind === CONTAINER.details && c.showsMarker
+        )
+      )
+      .filter(Boolean);
+    expect(summaries).toHaveLength(2);
+  });
+
+  it('drops a closing tag with no opener rather than showing it as source', () => {
+    // A reader cannot act on a tag whose block is not there, and Streamdown's
+    // sanitizer drops it too.
+    expect(visibleText(parse('Text.\n\n</details>\n\nMore.\n', ON))).toBe(
+      'Text.\nMore.'
+    );
+  });
+
+  it('keeps a line that merely mentions the tag as prose', () => {
+    // A tag counts only when the line is nothing but the tag, so prose that names
+    // one is not turned into a container.
+    const model = parse('The word <details> in prose.\n', ON);
+    expect(visibleText(model)).toBe('The word  in prose.');
+    expect(model.blocks[0]!.containers).toHaveLength(0);
+  });
+
+  it('unwraps the tags inside a summary, so it reads as the writer meant', () => {
+    const model = parse(
+      '<details>\n<summary>a <code>b</code></summary>\n\nBody.\n\n</details>\n',
+      ON
+    );
+    expect(visibleText(model)).toBe('a b\nBody.');
+  });
+
+  it('sits inside a list item when the writer put it there', () => {
+    const inList = [
+      '- item',
+      '',
+      '  <details>',
+      '  <summary>Click</summary>',
+      '',
+      '  Body.',
+      '',
+      '  </details>',
+      '',
+    ].join('\n');
+    const model = parse(inList, ON);
+    const body = model.blocks[2]!;
+    // The list item's frame is still the outer one, so the collapsible block is
+    // indented and bulleted exactly as it was before it became a container.
+    expect(body.containers.map((c) => c.kind)).toEqual([
+      CONTAINER.listItem,
+      CONTAINER.details,
+    ]);
+  });
+
+  it('is a plain HTML block with inline HTML off', () => {
+    // The tags are HTML, so turning HTML off turns the container off with it and
+    // the source is what a reader sees.
+    const model = parse(DETAILS, 0);
+    expect(visibleText(model)).toContain('<details>');
+  });
+
+  it('holds every case to the incremental rule', () => {
+    // One byte at a time, because a collapsible block is the case the rule exists
+    // for: the tags arrive as their own blocks, so an unstable tail that committed
+    // between them would show a summary with no body and a body with no summary.
+    assertStreamingMatchesFullParse([...DETAILS]);
+    assertStreamingMatchesFullParse([
+      ...'<details open>\n<summary>a <code>b</code></summary>\n\nBody.\n\n</details>\n',
+    ]);
   });
 });

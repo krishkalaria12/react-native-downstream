@@ -95,6 +95,10 @@ export interface Block {
     showsMarker: boolean;
     task: number;
     marker: string;
+    /** `<details open>`: the writer's starting state, which a reader overrides. */
+    open: boolean;
+    /** An app-allowed block tag's index in the document's tag list, or -1. */
+    tag: number;
   }[];
   runs: InlineRun[];
   tokens: TokenRun[];

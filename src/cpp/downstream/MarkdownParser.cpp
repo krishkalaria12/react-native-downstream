@@ -306,6 +306,13 @@ public:
         break;
     }
 
+    // A `<details>` block is a container rather than a leaf, so its tags are read
+    // before the leaf is finished: the opener pushes a frame the body blocks land
+    // inside, and the closer pops it. See `consumeContainerHtml`.
+    if (type == MD_BLOCK_HTML && options_.inlineHtml()) {
+      consumeContainerHtml();
+    }
+
     finishLeaf();
 
     switch (type) {
@@ -738,6 +745,325 @@ private:
     size_t childEnd{kUnknownOffset};
   };
 
+  /// One recognised line of an HTML block, or the text of a line that is not one.
+  struct ContainerTagLine {
+    enum class Kind : uint8_t {
+      /// A `<details …>` opener, with the `open` attribute it carried.
+      Open,
+      /// A `</details>` closer.
+      Close,
+      /// A `<summary …>…</summary>` line, with the summary's text.
+      Summary,
+      /// Not a container tag. The line's text, delimiters included.
+      Other,
+    };
+
+    Kind kind{Kind::Other};
+    bool open{false};
+    std::u16string summary;
+    std::u16string text;
+  };
+
+  /// Classifies one line of an HTML block.
+  ///
+  /// A tag counts only when the line is *nothing but* that tag, so a line of
+  /// prose that merely mentions `<details>` stays the prose the writer wrote.
+  static ContainerTagLine classifyContainerLine(std::u16string_view line) {
+    ContainerTagLine result;
+    const std::u16string trimmed = trimAscii(line);
+    if (trimmed.size() < 3 || trimmed.front() != u'<' || trimmed.back() != u'>') {
+      result.kind = ContainerTagLine::Kind::Other;
+      result.text = std::u16string(trimmed);
+      return result;
+    }
+    // The name and the attributes, split at the first space. `<details-panel>`
+    // therefore keeps its own name and is not this tag, which is what stops a
+    // custom element of the same prefix from opening a container.
+    size_t nameEnd = 1;
+    while (nameEnd < trimmed.size() && trimmed[nameEnd] != u' ' && trimmed[nameEnd] != u'\t' &&
+           trimmed[nameEnd] != u'>') {
+      nameEnd++;
+    }
+    const std::u16string_view name(trimmed.data() + 1, nameEnd - 1);
+    const bool closing = name.size() > 1 && name.front() == u'/';
+    const std::u16string_view bare = closing ? name.substr(1) : name;
+    // `<details/>` opens nothing and closes nothing, so it is a line of source.
+    if (bare.size() > 1 && bare.back() == u'/') {
+      result.kind = ContainerTagLine::Kind::Other;
+      result.text = std::u16string(trimmed);
+      return result;
+    }
+    if (bare == u"details" && !closing) {
+      result.kind = ContainerTagLine::Kind::Open;
+      // The rest is the attribute list, and `open` in it is what the writer's
+      // starting state says.
+      result.open = hasAttribute(
+          std::u16string_view(trimmed.data() + nameEnd, trimmed.size() - nameEnd), u"open");
+      return result;
+    }
+    if (closing && bare == u"details") {
+      result.kind = ContainerTagLine::Kind::Close;
+      return result;
+    }
+    if (bare == u"summary" && !closing && endsWithAscii(trimmed, u"</summary>")) {
+      // The summary's body is whatever sits between the two tags, which is what a
+      // reader reads on the collapsed line. `nameEnd` is the opener's `>` and the
+      // closer's own ten characters are excluded from the other end, so a nested
+      // `</summary>` inside the body is not mistaken for this line's own closer.
+      const size_t bodyEnd = trimmed.size() - 10;
+      if (bodyEnd > nameEnd + 1) {
+        result.kind = ContainerTagLine::Kind::Summary;
+        result.summary = unwrapInlineTags(std::u16string_view(trimmed).substr(nameEnd + 1, bodyEnd - nameEnd - 1));
+        return result;
+      }
+    }
+    result.kind = ContainerTagLine::Kind::Other;
+    result.text = std::u16string(trimmed);
+    return result;
+  }
+
+  /**
+   * True when the attribute list `rest` carries `name`.
+   *
+   * Presence is the whole question, because `open` is a boolean attribute: HTML
+   * says a boolean attribute is true whenever it appears, whatever its value,
+   * so `<details open>`, `<details open="open">` and `<details open="">` all mean
+   * the same thing and only its absence means closed. `opened` is a different
+   * attribute, which is why the name is compared whole rather than by prefix.
+   */
+  static bool hasAttribute(std::u16string_view rest, std::u16string_view name) {
+    size_t at = 0;
+    while (at < rest.size()) {
+      while (at < rest.size() && isAttributeSpace(rest[at])) {
+        at++;
+      }
+      if (at >= rest.size() || rest[at] == u'>') {
+        return false;
+      }
+      const size_t start = at;
+      while (at < rest.size() && rest[at] != u'=' && rest[at] != u'>' && !isAttributeSpace(rest[at])) {
+        at++;
+      }
+      const bool matched = std::u16string_view(rest.data() + start, at - start) == name;
+      if (matched) {
+        return true;
+      }
+      // Step over the value, so a value that happens to contain the name — an
+      // `id="open"` — is not read as the attribute itself.
+      while (at < rest.size() && isAttributeSpace(rest[at])) {
+        at++;
+      }
+      if (at < rest.size() && rest[at] == u'=') {
+        at++;
+        if (at < rest.size() && (rest[at] == u'"' || rest[at] == u'\'')) {
+          const char16_t quote = rest[at];
+          at++;
+          while (at < rest.size() && rest[at] != quote) {
+            at++;
+          }
+          at = at < rest.size() ? at + 1 : at;
+        } else {
+          while (at < rest.size() && rest[at] != u'>' && !isAttributeSpace(rest[at])) {
+            at++;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /// Whitespace between attributes, which is a space or a tab and nothing else.
+  static bool isAttributeSpace(char16_t unit) { return unit == u' ' || unit == u'\t'; }
+
+  /**
+   * Turns one HTML block's lines into containers, a summary leaf, and whatever
+   * text is left over.
+   *
+   * md4c gives an HTML block up to a blank line, so `<details>` and its
+   * `<summary>` arrive in one block, the body arrives as ordinary blocks in
+   * between, and `</details>` arrives in a block of its own. Pairing those is
+   * what a stack of frames does, the same way a quote and a list item are frames:
+   * the opener pushes one, the closer pops the nearest, and a block in between
+   * finds itself inside by being built while the frame is open.
+   *
+   * Nesting works because the stack is a stack. A closer with no opener is
+   * hidden rather than shown as source: a `</details>` a reader sees is a tag the
+   * writer left behind, and Streamdown's sanitizer drops it too.
+   */
+  void consumeContainerHtml() {
+    if (!current_ || current_->kind != BlockKind::HtmlBlock) {
+      return;
+    }
+    // Every line is classified before anything is emitted, because emitting a
+    // summary finishes the leaf being built — and the leaf being built is this
+    // HTML block, whose text has to be the leftovers by then. Classifying first
+    // is what makes the order of the two irrelevant.
+    const std::u16string text = current_->text;
+    std::vector<ContainerTagLine> lines;
+    size_t at = 0;
+    while (at <= text.size()) {
+      const size_t newline = text.find(u'\n', at);
+      lines.push_back(classifyContainerLine(newline == std::u16string::npos
+                                                ? std::u16string_view(text).substr(at)
+                                                : std::u16string_view(text).substr(at, newline - at)));
+      if (newline == std::u16string::npos) {
+        break;
+      }
+      at = newline + 1;
+    }
+    const bool recognised =
+        std::any_of(lines.begin(), lines.end(), [](const ContainerTagLine &line) {
+          return line.kind != ContainerTagLine::Kind::Other;
+        });
+    if (!recognised) {
+      // Nothing in this block was a container tag, so the leaf keeps the text it
+      // was built with and `promoteLeaf` promotes it as an ordinary HTML block.
+      return;
+    }
+    // The leftovers are written back *before* anything is emitted, because
+    // emitting a summary finishes this leaf — and this leaf is the HTML block
+    // whose text has to be the leftovers by then.
+    std::u16string leftover;
+    for (const ContainerTagLine &line : lines) {
+      if (line.kind != ContainerTagLine::Kind::Other || line.text.empty()) {
+        continue;
+      }
+      if (!leftover.empty()) {
+        leftover.push_back(u'\n');
+      }
+      leftover.append(line.text);
+    }
+    current_->text = leftover;
+
+    for (const ContainerTagLine &line : lines) {
+      switch (line.kind) {
+        case ContainerTagLine::Kind::Open:
+          pushContainer(ContainerKind::Details, u"", TaskState::None);
+          containers_.back().container.open = line.open;
+          break;
+        case ContainerTagLine::Kind::Close:
+          // A closer with nothing open is dropped, and so is the whole line: the
+          // frame it belongs to is not here, and a reader cannot act on a tag.
+          (void)popDetails();
+          break;
+        case ContainerTagLine::Kind::Summary:
+          emitSummary(line.summary);
+          break;
+        case ContainerTagLine::Kind::Other:
+          break;
+      }
+    }
+  }
+
+  /// Pops the nearest `<details>` frame, if there is one. Returns whether it did.
+  bool popDetails() {
+    for (auto frame = containers_.rbegin(); frame != containers_.rend(); ++frame) {
+      if (frame->container.kind == ContainerKind::Details) {
+        containers_.erase(std::next(frame).base());
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// True while a `<details>` frame is open, which is what a summary needs.
+  bool insideDetails() const {
+    for (const auto &frame : containers_) {
+      if (frame.container.kind == ContainerKind::Details) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Emits the block a `<summary>` names.
+   *
+   * A synthetic leaf inside the container, the way an admonition's title is one:
+   * it is not in the source as a block, so it cannot be one, and a platform
+   * draws the chevron and the pressed state from the container frame rather than
+   * from text the writer never typed.
+   *
+   * `showsMarker` on the frame is the hook: it is what the list-item marker
+   * already uses to say "the first leaf of this container draws the chrome", and
+   * a collapsible block's summary is exactly that leaf.
+   */
+  void emitSummary(const std::u16string &summary) {
+    if (!insideDetails()) {
+      return;
+    }
+    // The frame's marker is what says "this leaf is the container's own", and
+    // `beginLeaf` consumes it as it copies the frame, so it is set before the
+    // leaf rather than after: set afterwards, the body's first leaf would claim
+    // the summary's chevron and the summary itself would read as an ordinary line.
+    for (auto frame = containers_.rbegin(); frame != containers_.rend(); ++frame) {
+      if (frame->container.kind == ContainerKind::Details) {
+        frame->markerPending = true;
+        break;
+      }
+    }
+    beginLeaf(BlockKind::Paragraph);
+    appendText(summary, InlineStyle::Strong, -1);
+    finishLeaf();
+  }
+
+  /**
+   * A summary's own text, with the tags inside it unwrapped.
+   *
+   * `<summary>a <code>b</code></summary>` has to read as the summary a writer
+   * meant rather than as the markup they typed, so the tags go and their content
+   * stays — the rule the table gives every element it has no drawing for. The
+   * summary is a synthetic leaf rather than a parsed span, so a style the writer
+   * used inside it does not become a run; the text is what a screen reader needs
+   * and what the summary's own strong run already draws.
+   */
+  static std::u16string unwrapInlineTags(std::u16string_view body) {
+    std::u16string out;
+    size_t at = 0;
+    while (at < body.size()) {
+      const size_t open = body.find(u'<', at);
+      if (open == std::u16string_view::npos) {
+        out.append(body.substr(at));
+        break;
+      }
+      out.append(body.substr(at, open - at));
+      const size_t close = body.find(u'>', open);
+      if (close == std::u16string_view::npos) {
+        // An unterminated `<` is text, which is what a reader who typed one meant.
+        out.append(body.substr(open));
+        break;
+      }
+      const std::u16string_view tag = body.substr(open, close - open + 1);
+      // A comment is dropped whole; every other tag keeps what it wrapped.
+      if (tag.size() < 4 || tag.compare(0, 4, u"<!--") != 0) {
+        const bool closing = tag.size() > 2 && tag[1] == u'/';
+        const bool opening = tag.size() > 2 && tag[2] != u'/';
+        if (!closing && !opening) {
+          at = close + 1;
+          continue;
+        }
+      }
+      at = close + 1;
+    }
+    return out;
+  }
+
+  static std::u16string trimAscii(std::u16string_view text) {
+    size_t start = 0;
+    size_t end = text.size();
+    while (start < end && (text[start] == u' ' || text[start] == u'\t')) {
+      start++;
+    }
+    while (end > start && (text[end - 1] == u' ' || text[end - 1] == u'\t' || text[end - 1] == u'\r')) {
+      end--;
+    }
+    return std::u16string(text.substr(start, end - start));
+  }
+
+  static bool endsWithAscii(std::u16string_view text, std::u16string_view suffix) {
+    return text.size() >= suffix.size() && text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
+  }
+
   void pushContainer(ContainerKind kind, std::u16string marker, TaskState task) {
     Container container;
     container.kind = kind;
@@ -907,7 +1233,16 @@ private:
         openScripts_.clear();
     dropNextSpace_ = false;
     promoteLeaf();
-    document_->blocks.push_back(std::move(*current_));
+    // An HTML block the container rules consumed whole emits nothing.
+    //
+    // The block is *still* an HTML block here, and that is what distinguishes it
+    // from one whose pieces were all hidden: that one was promoted to a paragraph
+    // on the way through `promoteLeaf`, and an empty paragraph is a line of space
+    // a comment-only block has always taken. A `<details>` tag pair is not a line
+    // of prose, so it gets no block at all.
+    if (current_->kind != BlockKind::HtmlBlock || !current_->text.empty()) {
+      document_->blocks.push_back(std::move(*current_));
+    }
     current_.reset();
     if (leafStart_ == kUnknownOffset) {
       leafStart_ = leafEnd_ = lastLeafEnd_;
@@ -956,7 +1291,7 @@ private:
       // dropped-element rule is part of the HTML subset, so it is gated with it:
       // `inlineHtml: false` is a view that wants every tag as source, and a
       // comment is a tag.
-      promoteBrOnlyHtml() || (options_.inlineHtml() && promoteEmptyHtml());
+      promoteBrOnlyHtml() || (options_.inlineHtml() && promoteHiddenHtml());
       return;
     }
     if (current_->kind != BlockKind::Paragraph) {
@@ -1023,7 +1358,7 @@ private:
    * counts blocks and the segment plan indexes them; an empty paragraph is one
    * that draws nothing and is one row in every list.
    */
-  bool promoteEmptyHtml() {
+  bool promoteHiddenHtml() {
     const std::u16string &text = current_->text;
     size_t i = 0;
     size_t pieces = 0;
@@ -1181,6 +1516,7 @@ private:
     ensureLeaf();
     // A stretch that ends in a cell is one break shorter, as at a block end.
     flushStretch(true);
+    promoteLeaf();
     // A style tag runs to the end of its block, so it is cleared with
     // the scripts it sits beside.
     tagStyles_.clear();

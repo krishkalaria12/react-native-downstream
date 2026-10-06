@@ -132,11 +132,15 @@ inline bool write(const ParseResult &result) {
     std::printf(",\"containers\":[");
     for (size_t c = 0; c < block.containers.size(); c++) {
       const Container &container = block.containers[c];
+      // `open` and `tag` are the two fields only a `<details>` and an app's own
+      // block tag carry, and they are what a reader's own choice is resolved
+      // against, so the model says which of them are present rather than leaving
+      // a test to infer it from the kind.
       std::printf("%s{\"kind\":%d,\"id\":%u,\"showsMarker\":%s,\"task\":%d,\"marker\":", c ? "," : "",
                   static_cast<int>(container.kind), container.id, container.showsMarker ? "true" : "false",
                   static_cast<int>(container.task));
       writeString(container.marker);
-      std::printf("}");
+      std::printf(",\"open\":%s,\"tag\":%d}", container.open ? "true" : "false", container.tag);
     }
     std::printf("],\"runs\":[");
     for (size_t r = 0; r < block.runs.size(); r++) {
