@@ -27,7 +27,21 @@ import android.widget.TextView
  * A text segment in a TextView configured like the measuring StaticLayout
  * (RenderedDocument.buildLayout), which gives selection and text navigation.
  */
-private class TextReadingPart(val piece: AccessibleTextPiece, val heading: Boolean, val taskState: Int)
+/**
+ * One announced piece of a block.
+ *
+ * `summaryContainer` is the `<details>` container this piece's block is the
+ * summary of, or null. Carried on the part rather than read from the view at
+ * announce time because the reading order is built once per segment and a
+ * screen reader walks it repeatedly, long after the layout that built it.
+ */
+private class TextReadingPart(
+  val piece: AccessibleTextPiece,
+  val heading: Boolean,
+  val taskState: Int,
+  val summaryContainer: Int? = null,
+  val isSummary: Boolean = false,
+)
 
 @SuppressLint("ViewConstructor")
 internal class TextSegmentView(context: Context) : TextView(context) {
@@ -196,7 +210,7 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     rendered.style.colors.selectionColor?.let { highlight ->
       highlightColor = highlight
     }
-    readingParts = buildReadingParts(accessibleBlocks)
+    readingParts = buildReadingParts(accessibleBlocks, segment?.detailsBlocks ?: emptyList())
     accessibility.contentChanged()
   }
 
@@ -210,14 +224,19 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     info.isFocusable = false
   }
 
-  private fun buildReadingParts(blocks: List<AccessibleBlock>): List<TextReadingPart> = buildList {
+  private fun buildReadingParts(
+    blocks: List<AccessibleBlock>,
+    details: List<DetailsBlock>,
+  ): List<TextReadingPart> = buildList {
     val content = this@TextSegmentView.text as? Spanned ?: return@buildList
     for (block in blocks) {
       val start = block.start.coerceIn(0, content.length)
       val end = block.end.coerceIn(start, content.length)
+      val frame = details.firstOrNull { it.start == block.start && it.end == block.end }
+      val container = frame?.containers?.lastOrNull { it.kind == CONTAINER_DETAILS }?.id
       linkPieces(content, start, end).forEachIndexed { index, piece ->
         add(TextReadingPart(piece, index == 0 && block.heading,
-          if (index == 0) block.taskState else 0))
+          if (index == 0) block.taskState else 0, container, frame?.summary == true))
       }
     }
   }
@@ -246,11 +265,17 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     }
     bounds.offset(0, -scrollY)
     val link = part.piece.linkIndex
+    // A summary is announced as the control it is, so a screen reader says which
+    // words open a body rather than leaving the reader to guess.
+    val summary = part.summaryContainer
+    val toggle = if (detailsToggle && summary != null && part.isSummary) summary else null
     return MarkdownAccessibility.Entry(
       text = label,
       bounds = bounds,
       heading = part.heading,
       linkPress = if (link == null) null else ({ findHost()?.pressLink(link) }),
+      togglePress = toggle?.let { id -> ({ findHost()?.toggleDetails(id) }) },
+      expanded = toggle?.let { isSummaryOpen(readerChoices) },
     )
   }
 
@@ -697,13 +722,24 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     return y >= layout.getLineTop(first) && y <= layout.getLineBottom(last)
   }
 
+  /**
+   * The reader's own set of choices, which the accessibility tree is built against.
+   *
+   * The announcement has to say which way the chevron points, and the chevron is
+   * drawn from the same set, so the view holds it rather than re-deriving it from
+   * the document at announce time.
+   */
+  var readerChoices = ReaderChoices()
+    set(value) {
+      field = value
+      accessibility.contentChanged()
+    }
+
   /** Whether this view's summary has its body showing under [choices]. */
   fun isSummaryOpen(choices: ReaderChoices): Boolean {
     val summary = summary ?: return true
-    return resolveDetails(
-      choices, summary.containers.last { it.kind == CONTAINER_DETAILS }.id,
-      summary.containers.last { it.kind == CONTAINER_DETAILS }.open,
-    ).open
+    val frame = summary.containers.last { it.kind == CONTAINER_DETAILS }
+    return resolveDetails(choices, frame.id, frame.open).open
   }
 
   private fun findHost(): DownstreamMarkdownView? {

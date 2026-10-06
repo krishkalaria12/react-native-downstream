@@ -401,6 +401,43 @@ describe('<details>', () => {
     expect(visibleText(model)).toContain('<details>');
   });
 
+  it('keeps a closed body in the text a copy would produce', () => {
+    // Collapsing is a drawing decision and the document is untouched, so the
+    // export and a selection either side of the toggle produce the same words.
+    // That is the property that lets the toggle be a height change and nothing
+    // else: a reader who copies a closed block gets its body.
+    const model = parse(DETAILS, ON);
+    expect(visibleText(model)).toBe('Click\nBody text.');
+    expect(model.blocks.map((block) => block.text)).toEqual([
+      'Click',
+      'Body text.',
+    ]);
+  });
+
+  it('keeps a closed body in the text a copy would produce', () => {
+    // Collapsing is a drawing decision and the document is untouched, so the
+    // export and a selection either side of the toggle produce the same words.
+    // That is the property that lets the toggle be a height change and nothing
+    // else: a reader who copies a closed block gets its body.
+    const model = parse(DETAILS, ON);
+    expect(visibleText(model)).toBe('Click\nBody text.');
+    expect(model.blocks.map((block) => block.text)).toEqual([
+      'Click',
+      'Body text.',
+    ]);
+  });
+
+  it('keeps a closed body in the text a copy would produce', () => {
+    // Collapsing is a drawing decision and the document is untouched, so the
+    // export and a selection either side of the toggle produce the same words.
+    // That is the property that lets the toggle be a height change and nothing
+    // else: a reader who copies a closed block gets its body.
+    expect(parse(DETAILS, ON).blocks.map((block) => block.text)).toEqual([
+      'Click',
+      'Body text.',
+    ]);
+  });
+
   it('holds every case to the incremental rule', () => {
     // One byte at a time, because a collapsible block is the case the rule exists
     // for: the tags arrive as their own blocks, so an unstable tail that committed

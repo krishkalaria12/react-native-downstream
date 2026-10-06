@@ -52,6 +52,17 @@ internal class MarkdownAccessibility(
     val bounds: Rect,
     val heading: Boolean = false,
     val linkPress: (() -> Unit)? = null,
+    /**
+     * A press that does something other than follow a link, described the way a
+     * screen reader reads it: `expanded` says which of the two states it would
+     * leave the control in, and the string is what the reader hears alongside it.
+     *
+     * Separate from `linkPress` because a link announces itself as a link and this
+     * announces itself as a button that collapses — which is a different thing to
+     * hear, and the whole point of marking it up at all.
+     */
+    val togglePress: (() -> Unit)? = null,
+    val expanded: Boolean? = null,
   )
 
   private var focused = -1
@@ -86,6 +97,18 @@ internal class MarkdownAccessibility(
         addAction(AccessibilityNodeInfo.ACTION_CLICK)
         AccessibilityNodeInfoCompat.wrap(this).roleDescription =
           host.context.getString(com.facebook.react.R.string.link_description)
+      }
+      if (entry.togglePress != null) {
+        // A summary is a control, not a line of text: without this the only way to
+        // reach a body with a screen reader is to guess which words are the
+        // disclosure. `stateDescription` is what says which way it points, and it
+        // is the state the control would leave in, which is what an announcement
+        // after the press then describes.
+        isClickable = true
+        addAction(AccessibilityNodeInfo.ACTION_CLICK)
+        AccessibilityNodeInfoCompat.wrap(this).roleDescription = "button"
+        AccessibilityNodeInfoCompat.wrap(this).stateDescription =
+          if (entry.expanded == true) "expanded" else "collapsed"
       }
       isVisibleToUser = visible
       isAccessibilityFocused = focused == virtualViewId

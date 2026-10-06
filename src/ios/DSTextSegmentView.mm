@@ -125,6 +125,40 @@ NSString *const kPlaceholder = @"\u200b";
   [self setNeedsDisplay];
 }
 
+/// The `<details>` container this block is the summary of, or 0.
+- (uint32_t)summaryContainerIdFor:(DSBlockInfo *)info {
+  if (!_detailsToggle) {
+    return 0;
+  }
+  for (DSContainerInfo *frame in info.containers) {
+    if (frame.kind == DSContainerKindDetails && frame.summary) {
+      return frame.containerId;
+    }
+  }
+  return 0;
+}
+
+/// The custom action a screen reader offers to open or close a body.
+///
+/// A custom action rather than the element's own activation because the
+/// surrounding element is also selectable text: VoiceOver's default double-tap on
+/// a static text does nothing, and an app that wants a tap-to-select gesture has
+/// to keep it.
+- (UIAccessibilityCustomAction *)openActionFor:(uint32_t)containerId {
+  const BOOL open = [self isOpenForContainer:containerId];
+  NSString *title = open ? @"Collapse" : @"Expand";
+  __weak __typeof__(self) weakSelf = self;
+  UIAccessibilityCustomAction *action =
+      [[UIAccessibilityCustomAction alloc] initWithName:title
+                                       actionHandler:^BOOL(UIAccessibilityCustomAction *customAction) {
+                                         __typeof__(self) strongSelf = weakSelf;
+                                         [strongSelf.controlDelegate didToggleDetailsAtContainer:containerId
+                                                                                            open:!open];
+                                         return YES;
+                                       }];
+  return action;
+}
+
 /**
  * The `<details>` container a touch lands on, or 0.
  *
@@ -300,6 +334,17 @@ NSString *const kPlaceholder = @"\u200b";
           ? [NSString stringWithFormat:@"%@, %@", info.accessibilityPrefix, text] : text;
       element.accessibilityFrameInContainerSpace = blockFrame;
       element.accessibilityTraits = info.headingLevel > 0 ? UIAccessibilityTraitHeader : UIAccessibilityTraitStaticText;
+      // A summary is a button, not a line of text: a screen reader has to be able
+      // to say "collapsed, button" and activate it, or the only way to reach a
+      // body is to guess which words are the control.
+      if (_detailsToggle && [self summaryContainerIdFor:info] != 0) {
+        element.accessibilityTraits |= UIAccessibilityTraitButton;
+        if (![self isOpenForContainer:[self summaryContainerIdFor:info]]) {
+          element.accessibilityValue = @"collapsed";
+        }
+        const uint32_t container = [self summaryContainerIdFor:info];
+        element.accessibilityCustomActions = @[ [self openActionFor:container] ];
+      }
       [elements addObject:element];
     }
   }];

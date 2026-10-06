@@ -644,6 +644,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
           child.setSelectable(selectable && settled)
           // The chevron is the control's own glyph, so it appears with the control
           // and points the way the body will move.
+          child.readerChoices = readerChoices
           child.setDetailsState(
             controls and CONTROL_DETAILS_TOGGLE != 0,
             child.isSummaryOpen(readerChoices),
