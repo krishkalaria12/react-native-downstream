@@ -1,0 +1,1681 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Downstream · Streamdown gap plan</title>
+    <style>
+      :root {
+        --paper: #f5f8f8;
+        --surface: #ffffff;
+        --surface-soft: #edf3f2;
+        --ink: #17272d;
+        --ink-soft: #486167;
+        --muted: #667c80;
+        --line: #cddcda;
+        --line-strong: #94aeaa;
+        --accent: #146e69;
+        --accent-soft: #d9efeb;
+        --tail: #aa681b;
+        --tail-soft: #f8eddb;
+        --risk: #a64242;
+        --risk-soft: #faeaea;
+        --code: #e8f0ef;
+        --sans: 'Avenir Next', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --paper: #0f1b1e;
+          --surface: #152528;
+          --surface-soft: #1c3334;
+          --ink: #e8f2ef;
+          --ink-soft: #b6cac5;
+          --muted: #92aca7;
+          --line: #34504e;
+          --line-strong: #537872;
+          --accent: #84d4c6;
+          --accent-soft: #1b4643;
+          --tail: #efbb72;
+          --tail-soft: #46351f;
+          --risk: #ef9993;
+          --risk-soft: #462d30;
+          --code: #223a3b;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        scroll-padding-top: 1.2rem;
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        html {
+          scroll-behavior: smooth;
+        }
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font: 16px/1.58 var(--sans);
+      }
+      a {
+        color: var(--accent);
+        text-underline-offset: 0.18em;
+      }
+      :focus-visible {
+        outline: 3px solid var(--tail);
+        outline-offset: 3px;
+        border-radius: 3px;
+      }
+      .wrap {
+        max-width: 76rem;
+        padding: 3.5rem clamp(1rem, 4.8vw, 5rem) 6rem;
+        margin: 0 auto;
+      }
+      .mast {
+        border-bottom: 2px solid var(--ink);
+        padding-bottom: 2.2rem;
+        margin-bottom: 1rem;
+      }
+      .kicker {
+        font: 700 0.77rem/1.3 var(--mono);
+        color: var(--accent);
+        letter-spacing: 0.02em;
+        margin: 0 0 0.9rem;
+      }
+      h1 {
+        font-size: clamp(2.3rem, 5vw, 4.4rem);
+        letter-spacing: -0.06em;
+        line-height: 1;
+        margin: 0 0 1.3rem;
+        max-width: 17ch;
+        font-weight: 760;
+      }
+      .lede {
+        font-size: clamp(1.05rem, 1.5vw, 1.25rem);
+        line-height: 1.48;
+        max-width: 52rem;
+        margin: 0;
+        color: var(--ink-soft);
+      }
+      .meta-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1px;
+        background: var(--line);
+        border: 1px solid var(--line);
+        margin-top: 2rem;
+      }
+      .meta-grid > div {
+        background: var(--surface);
+        padding: 1rem 1.1rem;
+      }
+      .meta-grid b {
+        display: block;
+        font-size: 0.85rem;
+        margin-bottom: 0.25rem;
+      }
+      .meta-grid span {
+        color: var(--ink-soft);
+        font-size: 0.9rem;
+      }
+      nav.toc {
+        margin: 1.6rem 0 0;
+        font-size: 0.88rem;
+      }
+      nav.toc ol {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem 0.5rem;
+        max-width: none;
+      }
+      nav.toc li {
+        margin: 0;
+      }
+      nav.toc a {
+        display: inline-block;
+        padding: 0.28rem 0.6rem;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        border-radius: 3px;
+        text-decoration: none;
+        color: var(--ink-soft);
+      }
+      nav.toc a:hover {
+        border-color: var(--line-strong);
+        color: var(--ink);
+      }
+      section {
+        padding: 2.4rem 0 1.6rem;
+        border-top: 1px solid var(--line);
+      }
+      section:first-of-type {
+        border-top: 0;
+      }
+      .section-head {
+        display: grid;
+        grid-template-columns: minmax(0, 2fr) minmax(12rem, 1fr);
+        align-items: end;
+        gap: 2rem;
+        margin-bottom: 1.2rem;
+      }
+      .section-head h2 {
+        font-size: clamp(1.6rem, 2.6vw, 2.3rem);
+        letter-spacing: -0.05em;
+        line-height: 1.13;
+        margin: 0;
+      }
+      .section-head h2 .num {
+        font: 800 0.9em/1 var(--mono);
+        color: var(--accent);
+        margin-right: 0.35em;
+        letter-spacing: 0;
+      }
+      .section-head p {
+        margin: 0;
+        color: var(--ink-soft);
+        font-size: 0.94rem;
+        line-height: 1.45;
+      }
+      h3 {
+        font-size: 1.12rem;
+        letter-spacing: -0.02em;
+        margin: 1.8rem 0 0.5rem;
+      }
+      p {
+        max-width: 72ch;
+        margin: 0.5rem 0 1rem;
+      }
+      ul,
+      ol {
+        padding-left: 1.35rem;
+        max-width: 80ch;
+      }
+      li {
+        margin: 0.4rem 0;
+      }
+      code {
+        font-family: var(--mono);
+        background: var(--code);
+        border-radius: 3px;
+        padding: 0.08rem 0.25rem;
+        font-size: 0.86em;
+        overflow-wrap: anywhere;
+      }
+      .table-wrap {
+        max-width: 100%;
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        margin: 1rem 0 1.5rem;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 720px;
+        font-size: 0.88rem;
+        line-height: 1.45;
+      }
+      th,
+      td {
+        padding: 0.78rem 0.87rem;
+        text-align: left;
+        vertical-align: top;
+        border-bottom: 1px solid var(--line);
+      }
+      th {
+        background: var(--surface-soft);
+        font-size: 0.78rem;
+        font-weight: 750;
+      }
+      tr:last-child td {
+        border-bottom: 0;
+      }
+      td:first-child {
+        font-weight: 700;
+        width: 22%;
+      }
+      table.work td:nth-child(3),
+      table.work td:nth-child(4) {
+        color: var(--ink-soft);
+        width: 20%;
+      }
+      table.probe td:first-child {
+        font: 600 0.84rem/1.45 var(--mono);
+        width: 34%;
+      }
+      table.probe td:nth-child(2) {
+        width: 18%;
+      }
+      .tag {
+        display: inline-block;
+        font: 700 0.7rem/1 var(--mono);
+        padding: 0.28rem 0.42rem;
+        border-radius: 3px;
+        margin: 0.1rem 0.25rem 0.1rem 0;
+        white-space: nowrap;
+      }
+      .tag.ok {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+      .tag.warn {
+        background: var(--tail-soft);
+        color: var(--tail);
+      }
+      .tag.bad {
+        background: var(--risk-soft);
+        color: var(--risk);
+      }
+      .tag.size {
+        background: var(--surface-soft);
+        color: var(--ink-soft);
+        border: 1px solid var(--line);
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem 1.2rem;
+        font-size: 0.85rem;
+        color: var(--ink-soft);
+        margin: 0.4rem 0 0;
+      }
+      .callout {
+        padding: 1rem 1.25rem;
+        background: var(--surface-soft);
+        border-left: 4px solid var(--line-strong);
+        margin: 1.3rem 0;
+      }
+      .callout.risk {
+        border-left-color: var(--risk);
+      }
+      .callout.tail {
+        border-left-color: var(--tail);
+      }
+      .callout p {
+        margin: 0;
+      }
+      .callout p + p,
+      .callout ul {
+        margin-top: 0.5rem;
+      }
+      .callout b.label {
+        display: block;
+        font-size: 0.8rem;
+        letter-spacing: 0.02em;
+        margin-bottom: 0.2rem;
+      }
+      .order {
+        counter-reset: step;
+        list-style: none;
+        padding: 0;
+        display: grid;
+        gap: 1px;
+        background: var(--line);
+        border: 1px solid var(--line);
+        max-width: none;
+      }
+      .order li {
+        counter-increment: step;
+        background: var(--surface);
+        margin: 0;
+        padding: 0.9rem 1rem 0.9rem 3.3rem;
+        position: relative;
+      }
+      .order li::before {
+        content: counter(step, decimal-leading-zero);
+        position: absolute;
+        left: 0.9rem;
+        top: 0.85rem;
+        font: 800 0.95rem/1.4 var(--mono);
+        color: var(--accent);
+      }
+      .order.zero {
+        counter-reset: step -1;
+      }
+      .order li b {
+        display: block;
+      }
+      .order li span {
+        color: var(--ink-soft);
+        font-size: 0.9rem;
+      }
+      .order li .tag {
+        float: right;
+        margin-left: 0.5rem;
+      }
+      .two {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 1.4rem 2.5rem;
+      }
+      .two h3 {
+        margin-top: 0.4rem;
+      }
+      .checks {
+        list-style: none;
+        padding-left: 0;
+      }
+      .checks li {
+        padding-left: 1.5rem;
+        position: relative;
+      }
+      .checks li::before {
+        content: '';
+        position: absolute;
+        left: 0.15rem;
+        top: 0.42rem;
+        width: 0.7rem;
+        height: 0.7rem;
+        border: 2px solid var(--accent);
+        border-radius: 2px;
+      }
+      footer {
+        border-top: 2px solid var(--ink);
+        margin-top: 2rem;
+        padding-top: 1.2rem;
+        font-size: 0.88rem;
+        color: var(--ink-soft);
+      }
+      @media (max-width: 760px) {
+        .meta-grid,
+        .section-head,
+        .two {
+          grid-template-columns: 1fr;
+          gap: 0.6rem;
+        }
+        .meta-grid {
+          gap: 1px;
+        }
+        .order li .tag {
+          float: none;
+          display: inline-block;
+          margin: 0.2rem 0 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="mast">
+        <p class="kicker">docs / streamdown-gap-plan</p>
+        <h1>Closing the Streamdown gaps</h1>
+        <p class="lede">
+          An implementation plan for every row in
+          <a href="streamdown-gap-analysis.html">the gap analysis</a>, checked
+          against Streamdown's source and the native parser before anything is
+          built. Some rows turned out smaller than the analysis thought, some
+          larger, and a few were not gaps at all.
+        </p>
+        <div class="meta-grid">
+          <div>
+            <b>Compared against</b
+            ><span
+              >Streamdown 2.6.0 at <code>455d32e</code> with
+              <code>@streamdown/cjk</code>, <code>rehype-harden</code> 1.1.8 and
+              <code>hast-util-sanitize</code> 5.0.2;
+              <code>react-native-enriched-markdown</code> 0.6.0</span
+            >
+          </div>
+          <div>
+            <b>Evidence</b
+            ><span
+              >Probes through <code>dump_document</code> built from
+              <code>src/cpp/tests/build.mjs</code>, so every claim about the
+              parser is what md4c 0.6.0 and the builder do today</span
+            >
+          </div>
+          <div>
+            <b>Status</b
+            ><span
+              >Plan only. Nothing here is implemented. The decisions at the end
+              were settled on 2026-10-06, and each phase below follows
+              them</span
+            >
+          </div>
+        </div>
+        <nav class="toc" aria-label="Contents">
+          <ol>
+            <li><a href="#findings">Findings</a></li>
+            <li><a href="#rules">Ground rules</a></li>
+            <li><a href="#order">Order</a></li>
+            <li><a href="#p0">0 · Fixtures</a></li>
+            <li><a href="#p1">1 · Links</a></li>
+            <li><a href="#p2">2 · Tables</a></li>
+            <li><a href="#p3">3 · CJK</a></li>
+            <li><a href="#p4">4 · HTML</a></li>
+            <li><a href="#p5">5 · Details</a></li>
+            <li><a href="#p6">6 · Polish</a></li>
+            <li><a href="#p7">7 · Mermaid</a></li>
+            <li><a href="#p8">8 · Beyond parity</a></li>
+            <li><a href="#decisions">Decisions</a></li>
+          </ol>
+        </nav>
+      </header>
+
+      <section aria-labelledby="findings">
+        <div class="section-head">
+          <h2 id="findings">What the research changed</h2>
+          <p>
+            Corrections to the gap analysis. Each one moves a row's size or its
+            design.
+          </p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>The analysis says</th>
+                <th>What is true</th>
+                <th>Consequence for the plan</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <code>disableAutolinkProtocols</code> needs a dialect change
+                </td>
+                <td>
+                  It does not. The builder already holds a bare URL until its
+                  first text offset is known, at
+                  <code>MarkdownParser.cpp:1316</code>, and decides there
+                  whether it becomes a link.
+                </td>
+                <td>
+                  A protocol check at that point, behind three parse bits. It
+                  also covers <code>&lt;a@b.com&gt;</code>, which dropping
+                  md4c's permissive flags would not.
+                </td>
+              </tr>
+              <tr>
+                <td>CJK autolinks run past <code>。，）</code></td>
+                <td>
+                  md4c rejects them outright. Its permissive autolink needs
+                  whitespace or <code>({[</code> before and
+                  <code>)}].!?,;</code> or whitespace after, and its hostname
+                  and path scan stops at the first non-ASCII character.
+                </td>
+                <td>
+                  A worse failure than Streamdown's: the URL is not a link at
+                  all. The fix is a boundary patch in md4c, not a post-pass.
+                </td>
+              </tr>
+              <tr>
+                <td><code>**太字**。</code> probably fails</td>
+                <td>
+                  It renders bold. The failures are a delimiter between CJK
+                  punctuation and a CJK letter, and <code>~~</code> next to any
+                  letter.
+                </td>
+                <td>
+                  The fixtures below replace the guess, and they are the
+                  acceptance list for phase 3.
+                </td>
+              </tr>
+              <tr>
+                <td>Line marks are a gap</td>
+                <td>
+                  Streamdown forwards the meta string and draws nothing with it.
+                  Its <code>remarkCodeMeta</code> only feeds
+                  <code>startLine</code>.
+                </td>
+                <td>
+                  Drawing marks puts Downstream ahead. It moves to polish.
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  The HTML gap is <code>details</code>, <code>summary</code>,
+                  <code>kbd</code>, <code>mark</code>
+                </td>
+                <td>
+                  Streamdown's sanitizer is GitHub's schema: it renders
+                  <code>details</code>, <code>summary</code>, <code>kbd</code>,
+                  <code>b</code>, <code>i</code>, <code>s</code>,
+                  <code>ins</code>, <code>a</code> and more, unwraps every other
+                  tag to its text, and drops comments. <code>mark</code> is not
+                  in the schema, so it is unwrapped.
+                </td>
+                <td>
+                  Two gaps the analysis missed: comments render as visible text,
+                  and unknown-but-real HTML tags show as source.
+                  <code>mark</code> support would be ahead of Streamdown.
+                </td>
+              </tr>
+              <tr>
+                <td>Link policy: add <code>tel:</code> and relative URLs</td>
+                <td>
+                  Streamdown's defaults also allow <code>irc:</code>,
+                  <code>ircs:</code>, <code>xmpp:</code>, path-relative URLs
+                  (<code>/</code>, <code>./</code>, <code>../</code>) and
+                  <code>#fragments</code> without any
+                  <code>defaultOrigin</code>. A bare <code>docs/a</code> is
+                  shown as text with a <code>[blocked]</code> suffix.
+                </td>
+                <td>
+                  Relative links become an opt-in parse bit, resolved in
+                  JavaScript, with the raw <code>href</code> kept on the event.
+                </td>
+              </tr>
+              <tr>
+                <td>Table full screen</td>
+                <td>
+                  Streamdown disables the button for the whole stream
+                  (<code>disabled={isAnimating}</code>) and gives the full
+                  screen view a sticky header; the inline view has none.
+                </td>
+                <td>
+                  Downstream enables it per settled table, as its other controls
+                  already are, and pins the header in both views.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="probes">Probe results</h3>
+        <p>
+          What the parser produces today, with inline HTML on (<code
+            >parseFlags = 8</code
+          >).
+        </p>
+        <div class="table-wrap">
+          <table class="probe">
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Today</th>
+                <th>Rendered as</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>**太字**。</td>
+                <td><span class="tag ok">works</span></td>
+                <td>Bold <code>太字</code></td>
+              </tr>
+              <tr>
+                <td>中文**粗体**中文 · 한국어**굵게**입니다</td>
+                <td><span class="tag ok">works</span></td>
+                <td>Bold</td>
+              </tr>
+              <tr>
+                <td>これは**「強調」**です</td>
+                <td><span class="tag bad">fails</span></td>
+                <td>Literal asterisks</td>
+              </tr>
+              <tr>
+                <td>**[リンク](https://x.com)**です</td>
+                <td><span class="tag bad">fails</span></td>
+                <td>Link, literal asterisks</td>
+              </tr>
+              <tr>
+                <td>**“quoted”**text</td>
+                <td><span class="tag bad">fails</span></td>
+                <td>
+                  Literal asterisks. CommonMark-correct, and also fixed by the
+                  spec when the curly quotes are fullwidth variants
+                </td>
+              </tr>
+              <tr>
+                <td>これは~~削除~~です · ~~del~~ok</td>
+                <td><span class="tag bad">fails</span></td>
+                <td>
+                  Literal tildes. md4c applies underscore-style intraword rules
+                  to <code>~~</code>
+                </td>
+              </tr>
+              <tr>
+                <td>__テスト__です</td>
+                <td><span class="tag warn">by spec</span></td>
+                <td>
+                  Literal. The CJK-friendly spec leaves <code>_</code>
+                  intraword rules alone, so this stays literal after phase 3
+                </td>
+              </tr>
+              <tr>
+                <td>請訪問 https://example.com。謝謝</td>
+                <td><span class="tag bad">fails</span></td>
+                <td>No link at all</td>
+              </tr>
+              <tr>
+                <td>https://example.com） · see https://example.com/中文 ok</td>
+                <td><span class="tag bad">fails</span></td>
+                <td>No link at all</td>
+              </tr>
+              <tr>
+                <td>see &lt;https://example.com&gt;。</td>
+                <td><span class="tag ok">works</span></td>
+                <td>Link; angle autolinks are unaffected</td>
+              </tr>
+              <tr>
+                <td>mail me at a@b.com please</td>
+                <td><span class="tag ok">links</span></td>
+                <td><code>mailto:a@b.com</code>, with no way to turn it off</td>
+              </tr>
+              <tr>
+                <td>[call](tel:+15551234) · [rel](/docs/a) · [a](#sec)</td>
+                <td><span class="tag warn">text</span></td>
+                <td>Plain text, by the current policy</td>
+              </tr>
+              <tr>
+                <td>text &lt;!-- comment --&gt; more</td>
+                <td><span class="tag bad">shown</span></td>
+                <td>The comment is visible</td>
+              </tr>
+              <tr>
+                <td>&lt;details&gt;&lt;summary&gt;Click&lt;/summary&gt; …</td>
+                <td><span class="tag bad">source</span></td>
+                <td>
+                  HTML block shown as source; a blank-line body parses as an
+                  ordinary paragraph outside any container
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  &lt;kbd&gt; &lt;mark&gt; &lt;u&gt; &lt;span&gt; &lt;b&gt;
+                  &lt;a href&gt;
+                </td>
+                <td><span class="tag bad">source</span></td>
+                <td>Every tag visible as text</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section aria-labelledby="rules">
+        <div class="section-head">
+          <h2 id="rules">Ground rules for every phase</h2>
+          <p>
+            These come from how the engine is already built, so a new feature
+            fits the shape the existing ones have.
+          </p>
+        </div>
+        <div class="two">
+          <div>
+            <h3>Where a setting lives</h3>
+            <ul>
+              <li>
+                <b>Which runs exist</b> (a link, a style, a tag) is a parse
+                option: a <code>ParseFlags</code> bit or a field of
+                <code>ParseOptions</code>. A stream reads it once in
+                <code>createMarkdownStream</code>, because parse options are
+                part of a source's identity.
+              </li>
+              <li>
+                <b>Anything that changes a height</b> joins
+                <code>LayoutHint</code>, as <code>CodeLayout</code> does, so the
+                worker, the shadow node and the view measure the same layout.
+              </li>
+              <li>
+                <b>Everything else</b> is a view prop, resolved in JavaScript
+                where possible, the way <code>controls</code> is.
+              </li>
+            </ul>
+          </div>
+          <div>
+            <h3>How it is built and proved</h3>
+            <ul>
+              <li>
+                C++ decides; Kotlin mirrors it, as
+                <code>CodeLayout.kt</code> mirrors <code>codeCardHeight</code>,
+                with a host check in <code>tests/android</code>.
+              </li>
+              <li>
+                Positional arrays only grow at the end:
+                <code>CONTROL_LABEL_KEYS</code> and the control bitmask, whose
+                codegen default (<code>127</code>) moves with each new bit.
+              </li>
+              <li>
+                Tests use the real engine: <code>dump_document</code> cases in
+                <code>engine.test.mjs</code>, <code>test_incremental</code>
+                for anything that can move a commit boundary, vitest through
+                <code>real-engine-module</code>. Fabric and JNI changes get a
+                device run on both platforms, and
+                <code>pnpm test:ios:layout</code> runs when
+                <code>src/ios</code> changes.
+              </li>
+              <li>
+                Each md4c change is a <code>LOCAL PATCH</code> behind a flag
+                that is off by default, recorded in
+                <code>src/cpp/md4c/README.md</code>, pinned in
+                <code>engine.test.mjs</code>, and offered upstream.
+              </li>
+            </ul>
+          </div>
+        </div>
+        <div class="callout">
+          <p>
+            The rule the feature set was built on still holds: plain prose stays
+            independent of the heavier paths. Nothing here adds a dependency to
+            the core package. Mermaid, if it happens, is a separate package like
+            math.
+          </p>
+        </div>
+      </section>
+
+      <section aria-labelledby="order">
+        <div class="section-head">
+          <h2 id="order">Recommended order</h2>
+          <p>
+            Parser-only work first, because it is low risk and unblocks the
+            fixtures. The two phases that touch Fabric state and JNI come after.
+            Each numbered item is about one pull request.
+          </p>
+        </div>
+        <ol class="order zero">
+          <li>
+            <span class="tag size">S</span><b>Failing fixtures</b
+            ><span
+              >The probe table as engine tests, so each phase turns its own rows
+              green.</span
+            >
+          </li>
+          <li>
+            <span class="tag size">S–M</span><b>Links</b
+            ><span
+              ><code>tel:</code>, relative links, autolink protocols, link
+              safety. Parser and JavaScript only.</span
+            >
+          </li>
+          <li>
+            <span class="tag size">L</span
+            ><b>Table max height, expand, full screen</b
+            ><span
+              >The one block left without a way out of a nested scroll. Touches
+              layout, state and both platforms.</span
+            >
+          </li>
+          <li>
+            <span class="tag size">M</span
+            ><b>CJK emphasis and autolink boundaries</b
+            ><span>Two md4c patches and a parse bit.</span>
+          </li>
+          <li>
+            <span class="tag size">L</span><b>HTML subset v2</b
+            ><span
+              >A tag table, hidden comments, new inline styles,
+              <code>allowedTags</code>.</span
+            >
+          </li>
+          <li>
+            <span class="tag size">XL</span><b>Details and block custom tags</b
+            ><span
+              >A new container kind and a reader choice. The largest single
+              item.</span
+            >
+          </li>
+          <li>
+            <span class="tag size">S–M</span><b>Polish</b
+            ><span
+              >Line marks, engine-decided direction, <code>icons</code>,
+              translations.</span
+            >
+          </li>
+          <li>
+            <span class="tag size">opt-in</span><b>Mermaid</b
+            ><span>An example renderer now; a package only after a spike.</span>
+          </li>
+          <li>
+            <span class="tag size">backlog</span><b>Beyond parity</b
+            ><span
+              >Features enriched-markdown has that neither list covers.</span
+            >
+          </li>
+        </ol>
+      </section>
+
+      <section aria-labelledby="p0">
+        <div class="section-head">
+          <h2 id="p0"><span class="num">0</span>Failing fixtures</h2>
+          <p>Size S. No behaviour change.</p>
+        </div>
+        <p>
+          Add every row of the probe table to <code>engine.test.mjs</code> as a
+          <code>dump_document</code> case with its expected render model, marked
+          as a known failure. A later phase removes the mark from the rows it
+          fixes. The rows that already work stay as regression cases.
+        </p>
+        <ul class="checks">
+          <li>
+            CJK emphasis, strikethrough and autolink cases, with the expected
+            runs and links.
+          </li>
+          <li>
+            Link scheme cases: <code>tel:</code>, relative, fragment, bare
+            <code>docs/a</code>, <code>javascript:</code>.
+          </li>
+          <li>
+            HTML cases: inline comment, comment block, an unclosed
+            <code>&lt;!--</code>, <code>details</code> in both forms, each
+            phrasing tag, <code>Array&lt;string&gt;</code>.
+          </li>
+          <li>
+            A <code>test_incremental</code> case that streams a
+            <code>details</code> block a byte at a time, so phase 5 has a commit
+            test to pass.
+          </li>
+        </ul>
+      </section>
+
+      <section aria-labelledby="p1">
+        <div class="section-head">
+          <h2 id="p1"><span class="num">1</span>Links</h2>
+          <p>
+            Size S–M. Covers <em>Link safety</em>,
+            <em>Wider link policy</em> and
+            <code>disableAutolinkProtocols</code>.
+          </p>
+        </div>
+        <div class="table-wrap">
+          <table class="work">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Design</th>
+                <th>Files</th>
+                <th>Proof</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>1.1 <code>tel:</code></td>
+                <td>
+                  Accept <code>tel:</code> followed by <code>+</code> or a digit
+                  in <code>isActionableUrl</code>. On by default, as in
+                  Streamdown. Optionally <code>irc:</code>,
+                  <code>ircs:</code> and <code>xmpp:</code> for parity.
+                </td>
+                <td>
+                  <code>LinkPolicy.cpp</code>, contract docs in
+                  <code>types.ts</code>
+                </td>
+                <td>Engine cases; a vitest press through the real engine</td>
+              </tr>
+              <tr>
+                <td>1.2 Relative and fragment links</td>
+                <td>
+                  A parse bit <code>LinkRelative</code>, set by
+                  <code>links={{ relative: true }}</code> or a
+                  <code>defaultOrigin</code>. It accepts <code>/…</code>,
+                  <code>./…</code>, <code>../…</code> and <code>#…</code>, as
+                  rehype-harden does, and never <code>javascript:</code>,
+                  <code>data:</code>, <code>file:</code> or
+                  <code>vbscript:</code>. The press event keeps the source as
+                  <code>href</code> and resolves <code>url</code> against
+                  <code>defaultOrigin</code> in JavaScript.
+                </td>
+                <td>
+                  <code>MarkdownParser.h</code> (bit),
+                  <code>LinkPolicy.cpp</code>, <code>parseFlags.ts</code>,
+                  <code>DownstreamMarkdown.tsx</code>
+                </td>
+                <td>
+                  Resolver unit tests, including <code>../</code> and query
+                  strings. Do not rely on React Native's <code>URL</code>
+                  polyfill to resolve against a base
+                </td>
+              </tr>
+              <tr>
+                <td>1.3 <code>disableAutolinkProtocols</code></td>
+                <td>
+                  Three parse bits: no <code>mailto</code>, no
+                  <code>http</code> (which <code>www.</code> produces), no
+                  <code>https</code>. The builder skips the link at the point it
+                  already decides one. Strings are normalized as Streamdown
+                  does: trimmed, lower case, colon optional. The text is
+                  unchanged; only the link goes.
+                </td>
+                <td>
+                  <code>MarkdownParser.cpp</code> (around line 1316),
+                  <code>parseFlags.ts</code>, <code>types.ts</code>,
+                  <code>createMarkdownStream.ts</code>
+                </td>
+                <td>
+                  Bare, angle and <code>www.</code> forms; an explicit
+                  <code>[x](mailto:…)</code> stays a link
+                </td>
+              </tr>
+              <tr>
+                <td>1.4 <code>linkSafety</code></td>
+                <td>
+                  JavaScript only. With no <code>onLinkPress</code>, the view
+                  opens links itself: <code>onLinkCheck(url)</code> true opens
+                  through <code>Linking</code>; otherwise
+                  <code>renderModal</code>, or a native <code>Alert</code>
+                  with Open, Copy link and Cancel. With
+                  <code>onLinkPress</code>, behaviour is unchanged, and an
+                  exported <code>openLinkSafely()</code> lets the app use the
+                  same flow. Copy needs a <code>copyText</code> method on the
+                  TurboModule, since React Native core has no clipboard.
+                </td>
+                <td>
+                  <code>DownstreamMarkdown.tsx</code>, a new
+                  <code>linkSafety.ts</code>,
+                  <code>NativeDownstreamSession.ts</code>,
+                  <code>controls.ts</code> (labels)
+                </td>
+                <td>
+                  Vitest for each path. Labels: <code>openExternalLink</code>,
+                  <code>externalLinkWarning</code>, <code>close</code>,
+                  <code>copyLink</code>, <code>openLink</code>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout tail">
+          <p>
+            <b class="label">Decided</b>The view opens links itself when the app
+            passes no <code>onLinkPress</code>, behind link safety, which is on
+            by default. Today such a press does nothing, so this changes what
+            existing apps do and goes in the changelog.
+          </p>
+        </div>
+      </section>
+
+      <section aria-labelledby="p2">
+        <div class="section-head">
+          <h2 id="p2">
+            <span class="num">2</span>Table height and full screen
+          </h2>
+          <p>
+            Size L. Follows the code block's cap and expand design, so the
+            pieces already exist on one block kind.
+          </p>
+        </div>
+        <div class="table-wrap">
+          <table class="work">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Design</th>
+                <th>Files</th>
+                <th>Proof</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>2.1 <code>tableMaxHeight</code></td>
+                <td>
+                  The same value rules as <code>codeBlockMaxHeight</code>:
+                  <code>0</code>, <code>'none'</code> and
+                  <code>Infinity</code> remove the cap, and an invalid value
+                  becomes the default. The default is 300, as in Streamdown.
+                  Generalize <code>resolveMaxHeight</code> rather than copying
+                  it.
+                </td>
+                <td>
+                  <code>types.ts</code>, native props,
+                  <code>DownstreamMarkdown.tsx</code>
+                </td>
+                <td>Vitest for resolution</td>
+              </tr>
+              <tr>
+                <td>2.2 Measurement</td>
+                <td>
+                  <code>TableLayout{props.maxHeight, choices.expanded}</code>
+                  in <code>LayoutHint</code>. A shared
+                  <code>tableCardHeight()</code>: toolbar plus the smaller of
+                  grid and cap, with a floor of the header and a few rows so a
+                  large text size still shows a readable table.
+                  <code>SegmentPlan</code> gains <code>tableOrdinal</code>,
+                  counted like <code>codeOrdinal</code>, so a choice survives
+                  streaming.
+                </td>
+                <td>
+                  <code>RenderPreparer.h</code>, a new
+                  <code>TableLayout.h</code>, <code>SegmentPlan.*</code>, Fabric
+                  state, JNI and <code>LayoutMaps.kt</code>, a Kotlin mirror
+                </td>
+                <td>
+                  A C++ unit for the height, a Kotlin host check that mirrors
+                  it, and a device run
+                </td>
+              </tr>
+              <tr>
+                <td>2.3 iOS view</td>
+                <td>
+                  The table's <code>UIScrollView</code> scrolls on both axes
+                  when capped. The header row is pinned and follows the
+                  horizontal offset. While streaming, a capped table follows its
+                  newest row until the reader scrolls away, using the code
+                  card's <code>_pinned</code> rule.
+                </td>
+                <td>
+                  <code>DSTableSegmentView.mm</code>,
+                  <code>DSRenderedDocument.mm</code>
+                </td>
+                <td><code>pnpm test:ios:layout</code>, simulator run</td>
+              </tr>
+              <tr>
+                <td>2.4 Android view</td>
+                <td>
+                  A two-axis scroller in place of the bare
+                  <code>HorizontalScrollView</code>, cooperating with a parent's
+                  nested scroll, plus the same pinned header and follow rule.
+                </td>
+                <td>
+                  <code>TableSegmentView.kt</code>,
+                  <code>RenderedDocument.kt</code>
+                </td>
+                <td><code>pnpm test:kotlin</code>, emulator run</td>
+              </tr>
+              <tr>
+                <td>2.5 Controls</td>
+                <td>
+                  Bits <code>TableExpand</code> (<code>1&lt;&lt;7</code>) and
+                  <code>TableFullscreen</code> (<code>1&lt;&lt;8</code>).
+                  <code>controls.table.fullscreen</code> is Streamdown's key;
+                  <code>controls.table.expand</code> mirrors code. Actions gain
+                  <code>'fullscreen'</code>, and <code>'expand'</code> applies
+                  to tables. Labels: <code>viewFullscreen</code>,
+                  <code>exitFullscreen</code>, <code>expandTable</code>,
+                  <code>collapseTable</code>.
+                </td>
+                <td>
+                  <code>Controls.h</code>, <code>controls.ts</code>,
+                  <code>Controls.kt</code>, icons on both platforms
+                </td>
+                <td>Vitest for resolution and routing</td>
+              </tr>
+              <tr>
+                <td>2.6 Full screen</td>
+                <td>
+                  Native sends the table's Markdown in the control event;
+                  <code>Export.cpp</code> already writes it. JavaScript opens a
+                  React Native <code>Modal</code> holding a second
+                  <code>DownstreamMarkdown</code> with
+                  <code>tableMaxHeight={0}</code>, the same theme, styles,
+                  translations and images, and full screen off. No new native
+                  drawing. Enabled once the table settles. An optional
+                  <code>renderTableFullscreen</code> replaces the modal.
+                </td>
+                <td>
+                  <code>DownstreamMarkdown.tsx</code>, a new
+                  <code>TableFullscreen.tsx</code>
+                </td>
+                <td>Vitest with the export from the real engine; device run</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout risk">
+          <p>
+            <b class="label">Risk</b>A nested vertical scroll inside a scrolling
+            chat is the behaviour this phase introduces. The expand control and
+            full screen are the ways out, and accessibility must keep every row
+            reachable: focusing a row scrolls it into view.
+          </p>
+        </div>
+      </section>
+
+      <section aria-labelledby="p3">
+        <div class="section-head">
+          <h2 id="p3"><span class="num">3</span>CJK</h2>
+          <p>Size M. Two md4c patches. The fixtures decide when it is done.</p>
+        </div>
+        <div class="table-wrap">
+          <table class="work">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Design</th>
+                <th>Files</th>
+                <th>Proof</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>3.1 CJK-friendly emphasis</td>
+                <td>
+                  <code>MD_FLAG_CJKFRIENDLY</code> implements the
+                  markdown-cjk-friendly amendment for <code>*</code> and
+                  <code>_</code>, and for <code>~~</code> as
+                  remark-cjk-friendly-gfm-strikethrough does. Compute
+                  left-flanking and right-flanking the cmark way, then map them
+                  to md4c's opener and closer flags. The CJK test is comrak's
+                  range table (Unicode 18, about 70 ranges), with its handling
+                  of variation selectors that follow a CJK character.
+                </td>
+                <td>
+                  <code>md4c.c</code> around lines 3305 and 3614,
+                  <code>md4c.h</code>, the md4c README
+                </td>
+                <td>
+                  The fixtures, and the spec's own cases if their licence allows
+                </td>
+              </tr>
+              <tr>
+                <td>3.2 Autolink boundaries</td>
+                <td>
+                  In <code>md_analyze_permissive_autolink</code>, accept a CJK
+                  character or CJK punctuation immediately before the start and
+                  after the end. The result is the split Streamdown's plugin
+                  produces.
+                </td>
+                <td><code>md4c.c</code> around line 4420</td>
+                <td>The three failing autolink rows</td>
+              </tr>
+              <tr>
+                <td>3.3 Option</td>
+                <td>
+                  A parse bit <code>Cjk</code>, a <code>cjk</code> prop and a
+                  stream option. On by default; <code>cjk: false</code> turns it
+                  off.
+                </td>
+                <td>
+                  <code>MarkdownParser.*</code>, <code>parseFlags.ts</code>,
+                  <code>types.ts</code>
+                </td>
+                <td>Vitest for resolution</td>
+              </tr>
+              <tr>
+                <td>3.4 Preview</td>
+                <td>
+                  The streaming repair in <code>remend/Preview.cpp</code>
+                  tests flanking itself. It should use the same rule, so
+                  <code>**太字</code> previews. A mismatch only loses that
+                  repair, because every repair is proved by reparsing.
+                </td>
+                <td><code>Preview.cpp</code>, <code>Scan.cpp</code></td>
+                <td><code>test_preview</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <ul class="checks">
+          <li>
+            Differential test: the whole engine and remend corpora produce
+            identical render models with the bit on and off. This is what
+            justifies turning it on by default.
+          </li>
+          <li>
+            Bench: the CJK lookup runs only when neither neighbour is
+            whitespace, as the spec's implementer notes suggest.
+          </li>
+          <li>
+            Both patches offered to md4c upstream, as the <code>$$</code> fence
+            patch was.
+          </li>
+        </ul>
+      </section>
+
+      <section aria-labelledby="p4">
+        <div class="section-head">
+          <h2 id="p4"><span class="num">4</span>HTML subset v2</h2>
+          <p>
+            Size L. Replaces the three-tag allowlist with a table, and closes
+            the two gaps the analysis missed.
+          </p>
+        </div>
+        <h3>4.1 The tag table</h3>
+        <p>
+          <code>InlineTag</code> in <code>Scan.cpp</code> becomes a sorted table
+          from tag name to action. Name matching is generalized to letters,
+          digits and hyphens, so custom tags can be named.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>Tags</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Existing style</td>
+                <td>
+                  <code>b</code> <code>strong</code> · <code>i</code>
+                  <code>em</code> · <code>s</code> <code>del</code>
+                  <code>strike</code> · <code>code</code> <code>samp</code>
+                  <code>tt</code> · <code>sub</code> <code>sup</code>
+                  <code>br</code>
+                </td>
+                <td>Reuse the current <code>InlineStyle</code> bits</td>
+              </tr>
+              <tr>
+                <td>New style</td>
+                <td>
+                  <code>kbd</code> · <code>mark</code> · <code>u</code>
+                  <code>ins</code>
+                </td>
+                <td>
+                  Bits <code>Keyboard</code>, <code>Highlight</code>,
+                  <code>Underline</code>, each with theme slots from the slot
+                  generator and drawing on both platforms. <code>kbd</code>
+                  draws as a key cap, like inline code with a border
+                </td>
+              </tr>
+              <tr>
+                <td>Link</td>
+                <td><code>a href</code></td>
+                <td>
+                  A small attribute parser (quoted and unquoted values,
+                  entities). The URL goes through the same policy as a Markdown
+                  link
+                </td>
+              </tr>
+              <tr>
+                <td>Unwrap</td>
+                <td>
+                  <code>span</code> <code>font</code> <code>abbr</code>
+                  <code>small</code> <code>q</code> <code>time</code>
+                </td>
+                <td>The tag is hidden and its text kept, as Streamdown does</td>
+              </tr>
+              <tr>
+                <td>Hide</td>
+                <td>Comments, inline and as a block</td>
+                <td>
+                  A comment block emits no block. An unclosed
+                  <code>&lt;!--</code> stays text, so one stray opener cannot
+                  hide the rest of a stream
+                </td>
+              </tr>
+              <tr>
+                <td>Drop with content</td>
+                <td>
+                  <code>script</code> <code>style</code> <code>iframe</code>
+                  <code>object</code> <code>embed</code> <code>template</code>
+                </td>
+                <td>Never shown, not even as source</td>
+              </tr>
+              <tr>
+                <td>Literal</td>
+                <td>Every name that is not an HTML element</td>
+                <td>
+                  A deliberate difference from Streamdown:
+                  <code>Array&lt;string&gt;</code> and
+                  <code>&lt;T&gt;</code> keep their text
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          The <code>htmlTags</code> preview, which hides a half-arrived tag at
+          the stream tail, reads the same table through a generalized
+          <code>isInlineTagPrefix</code>. The <code>bench:inline-html</code>
+          bench guards the lookup cost.
+        </p>
+        <h3>4.2 <code>allowedTags</code> and <code>literalTagContent</code></h3>
+        <ul>
+          <li>
+            Streamdown's shape, <code>Record&lt;tag, attributes[]&gt;</code>.
+            <code>ParseOptions</code> gains a tag policy compared by value, and
+            the native prop carries it as strings.
+          </li>
+          <li>
+            <code>Document</code> gains a <code>tags</code> list (name, the
+            allowed attributes, source range). <code>InlineRun</code> gains a
+            <code>tag</code> index beside <code>link</code>.
+          </li>
+          <li>
+            <code>markdownStyle.tags[name]</code> styles a custom tag, as
+            enriched-markdown's <code>linkVariants</code> styles a link.
+            <code>onTagPress({ tag, attributes, text, range })</code> reports a
+            press.
+          </li>
+          <li>
+            <code>literalTagContent</code> replaces a tag's content with the raw
+            source between its open and close tags, when both are in one block.
+          </li>
+        </ul>
+        <h3>4.3 <code>normalizeHtmlIndentation</code></h3>
+        <p>
+          A rewrite that keeps the source the same length: the indentation moves
+          to after the tag instead of being removed. It runs where the math
+          delimiter rewrite runs, and only when the document starts with a tag
+          (Streamdown's rule), so every offset outside the tag is unchanged.
+        </p>
+      </section>
+
+      <section aria-labelledby="p5">
+        <div class="section-head">
+          <h2 id="p5">
+            <span class="num">5</span>Details and block custom tags
+          </h2>
+          <p>
+            Size XL. A new container kind that spans several md4c blocks, and
+            the first collapsible content in the engine.
+          </p>
+        </div>
+        <h3>
+          5.1 <code>&lt;details&gt;</code> and <code>&lt;summary&gt;</code>
+        </h3>
+        <ul>
+          <li>
+            <code>ContainerKind::Details</code>, holding the
+            <code>open</code> attribute. The summary is a synthetic first block,
+            as an admonition's title is.
+          </li>
+          <li>
+            The builder pairs opening and closing HTML blocks with a stack, so
+            nesting works. A closing tag with no opener is hidden.
+          </li>
+          <li>
+            The one-block form, with no blank lines, is split: the summary from
+            the tag, and the body parsed as Markdown. That goes past GitHub and
+            Streamdown, which show the body as raw text.
+          </li>
+          <li>
+            Streaming is already safe: <code>provesClosed</code> refuses a
+            commit while the last block is inside a container, so a details
+            block commits in one piece after <code>&lt;/details&gt;</code>. The
+            phase 0 incremental test proves it.
+          </li>
+          <li>
+            Open or closed is a reader choice, like code expand. Fold the code
+            choices, the table choices and this one into one
+            <code>ReaderChoices</code> in <code>LayoutHint</code>, and route it
+            through state and JNI once.
+          </li>
+          <li>
+            A closed body lays out at zero height. The segment plan does not
+            change, because it is cached per committed chunk.
+          </li>
+          <li>
+            The summary is a button with an expanded state for screen readers.
+            Copy and export include the hidden body.
+          </li>
+        </ul>
+        <h3>5.2 Block custom tags</h3>
+        <p>
+          A multi-line allowed tag becomes the same kind of container, with a
+          tag index. <code>plugins.tags[name]</code> draws it through the fence
+          slot hosting that renderers already use (<code>HostLayout</code>), and
+          receives the inner Markdown and <code>isIncomplete</code>.
+          <code>fallbackComponent</code> is the component for an allowed tag
+          with none of its own; with neither, the children render natively.
+        </p>
+        <div class="callout risk">
+          <p>
+            <b class="label">Risk</b>A very long details block holds every
+            commit until it closes, so it can reach the tail limit and fall back
+            to full parses. The existing <code>TailLimit</code> fallback covers
+            correctness; the bench should measure the cost.
+          </p>
+        </div>
+      </section>
+
+      <section aria-labelledby="p6">
+        <div class="section-head">
+          <h2 id="p6"><span class="num">6</span>Polish</h2>
+          <p>The partial rows that need no new mechanism.</p>
+        </div>
+        <div class="table-wrap">
+          <table class="work">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Design</th>
+                <th>Files</th>
+                <th>Proof</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>6.1 Line marks <span class="tag size">S–M</span></td>
+                <td>
+                  Draw <code>meta.marks</code> as line backgrounds in the code
+                  card, with a <code>codeBlock.lineMarkColor</code> slot. A
+                  wrapped line is marked on every visual line. No height
+                  changes, so no layout input. Optionally, <code>+</code> and
+                  <code>-</code> backgrounds in <code>diff</code> fences.
+                </td>
+                <td>
+                  <code>DSCodeSegmentView.mm</code>,
+                  <code>CodeSegmentView.kt</code>, theme slots
+                </td>
+                <td>Harness screenshots on both platforms</td>
+              </tr>
+              <tr>
+                <td>6.2 Direction <span class="tag size">M</span></td>
+                <td>
+                  Today iOS takes the first strong letter from a fixed range
+                  list, Android uses
+                  <code>Character.getDirectionality</code> and
+                  <code>FIRSTSTRONG_LTR</code>, and neither skips inline code.
+                  Decide it once in C++ as <code>Block::direction</code>: the
+                  majority of strong characters, the first one on a tie, code
+                  and math ignored, a neutral block inheriting the one before. A
+                  <code>dir</code> prop overrides it and joins
+                  <code>LayoutHint</code>.
+                </td>
+                <td>
+                  <code>Document.h</code>, the builder, a generated bidi table,
+                  both platforms' renderers
+                </td>
+                <td>
+                  Engine cases, including Arabic prose that opens with code
+                </td>
+              </tr>
+              <tr>
+                <td>6.3 <code>icons</code> <span class="tag size">M</span></td>
+                <td>
+                  Keys follow Streamdown's names where they exist (copy, check,
+                  download, maximize, close) plus wrap, expand, collapse and the
+                  details chevron. First version: platform names, an SF Symbol
+                  on iOS and a drawable on Android. Later: image sources, which
+                  need their own loader because
+                  <code>DSImageLoader</code> only loads HTTPS. Streamdown's
+                  React icon components cannot cross into a native header.
+                </td>
+                <td>
+                  <code>DSSegmentViews.mm</code>, <code>Controls.kt</code>, a
+                  new prop
+                </td>
+                <td>Vitest for resolution; device run</td>
+              </tr>
+              <tr>
+                <td>6.4 Translations <span class="tag size">S</span></td>
+                <td>
+                  The new keys from phases 1, 2 and 5, appended to
+                  <code>CONTROL_LABEL_KEYS</code>.
+                </td>
+                <td><code>types.ts</code>, <code>controls.ts</code></td>
+                <td>Existing label tests</td>
+              </tr>
+              <tr>
+                <td>6.5 React extension points</td>
+                <td>
+                  No code. A README table maps each React surface to its native
+                  answer: <code>BlockComponent</code> to renderers and tag
+                  slots, <code>mode="static"</code> to the
+                  <code>markdown</code> prop, the fence hook to
+                  <code>isIncomplete</code>.
+                </td>
+                <td><code>README.md</code></td>
+                <td>—</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section aria-labelledby="p7">
+        <div class="section-head">
+          <h2 id="p7"><span class="num">7</span>Mermaid</h2>
+          <p>
+            The analysis is right that it does not belong in core. Decided: an
+            example renderer now, and a native package only if a spike shows the
+            cost is worth it.
+          </p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Option</th>
+                <th>What it is</th>
+                <th>Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>A · Example renderer <span class="tag ok">chosen</span></td>
+                <td>
+                  A <code>plugins.renderers</code> component in the example app
+                  that draws with mermaid.js in a WebView, with pan, zoom, full
+                  screen and export.
+                </td>
+                <td>Small, and adds no dependency to any published package</td>
+              </tr>
+              <tr>
+                <td>
+                  B · Native package <span class="tag warn">later spike</span>
+                </td>
+                <td>
+                  <code>react-native-downstream-mermaid</code>, vendoring a Rust
+                  renderer through the pinned, checksum-checked pipeline RaTeX
+                  uses. mermaid-rs-renderer (MIT, 23 diagram types) has a vector
+                  scene output that could be drawn natively as math is;
+                  sebastian (MIT) claims SVG identical to mermaid.js for 18
+                  types.
+                </td>
+                <td>
+                  Large. Neither has a C interface, so a bridge crate is ours to
+                  write. Measure binary size and output quality before deciding
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  C · Documentation only
+                  <span class="tag size">not chosen</span>
+                </td>
+                <td>The status quo: describe the renderer path.</td>
+                <td>None</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section aria-labelledby="p8">
+        <div class="section-head">
+          <h2 id="p8"><span class="num">8</span>Beyond parity</h2>
+          <p>
+            Backlog from react-native-enriched-markdown. None of it is in the
+            gap analysis.
+          </p>
+        </div>
+        <ul>
+          <li>
+            <code>onLinkLongPress</code>, and control over the iOS link preview.
+          </li>
+          <li>Task item press events.</li>
+          <li>
+            md4c's own <code>==highlight==</code>,
+            <code>__underline__</code> and <code>||spoiler||</code> syntaxes.
+            The first two reuse the phase 4 style bits; spoilers need tap to
+            reveal.
+          </li>
+          <li>
+            <code>linkVariants</code>, per-URL link styles, which pair with
+            app-defined link schemes.
+          </li>
+          <li>Extra items in the text selection menu, and copy as Markdown.</li>
+          <li>A streaming mode that hides a table until it is complete.</li>
+        </ul>
+      </section>
+
+      <section aria-labelledby="decisions">
+        <div class="section-head">
+          <h2 id="decisions">Decisions</h2>
+          <p>
+            Settled on 2026-10-06, each as recommended. Each changes what an
+            existing app sees, so each goes in the changelog when its phase
+            ships.
+          </p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Question</th>
+                <th>Decided</th>
+                <th>Why</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>tableMaxHeight</code> default</td>
+                <td>300, with an expand control</td>
+                <td>
+                  Matches Streamdown and the code block's 400 precedent. 0
+                  avoids a nested scroll but differs from Streamdown
+                </td>
+              </tr>
+              <tr>
+                <td>Open links with no <code>onLinkPress</code></td>
+                <td>Yes, with link safety on</td>
+                <td>
+                  Today such a press does nothing, which no reader expects
+                </td>
+              </tr>
+              <tr>
+                <td>CJK parsing default</td>
+                <td>On, with <code>cjk: false</code> to opt out</td>
+                <td>The differential test shows non-CJK text is unchanged</td>
+              </tr>
+              <tr>
+                <td>Unknown HTML tags</td>
+                <td>Unwrap real element names; keep other names literal</td>
+                <td>
+                  Streamdown's reading for HTML, without eating generics in
+                  prose
+                </td>
+              </tr>
+              <tr>
+                <td>Details body without blank lines</td>
+                <td>Parse it as Markdown</td>
+                <td>Models write details without blank lines</td>
+              </tr>
+              <tr>
+                <td>Table full screen</td>
+                <td>A JavaScript modal holding a second view</td>
+                <td>No new native drawing, and the app can replace it</td>
+              </tr>
+              <tr>
+                <td>Mermaid</td>
+                <td>Example renderer now, Rust spike later</td>
+                <td>
+                  Keeps core free of a diagram engine until the cost is known
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <footer>
+        <p>
+          Sources:
+          <a href="https://github.com/vercel/streamdown/tree/455d32e"
+            >vercel/streamdown@455d32e</a
+          >,
+          <a
+            href="https://github.com/tats-u/markdown-cjk-friendly/blob/main/specification.md"
+            >markdown-cjk-friendly specification</a
+          >, <a href="https://github.com/kivikakk/comrak">comrak</a>,
+          <a href="https://github.com/mity/md4c">md4c</a>,
+          <a href="https://github.com/1jehuang/mermaid-rs-renderer"
+            >mermaid-rs-renderer</a
+          >,
+          <a href="https://github.com/aovestdipaperino/sebastian">sebastian</a>,
+          <a href="https://github.com/Latias94/merman">merman</a>.
+        </p>
+      </footer>
+    </main>
+  </body>
+</html>
