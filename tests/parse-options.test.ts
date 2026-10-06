@@ -268,3 +268,73 @@ describe('the layout direction', () => {
     assertStreamingMatchesFullParse([...'hello\n\n123\n\nשלום עולם\n']);
   });
 });
+
+/**
+ * md4c's own three syntaxes: `==highlight==`, `__underline__` and `||spoiler||`.
+ *
+ * Each behind its own bit because each changes what the delimiters mean
+ * everywhere — and `__underline__` in particular takes `_` away from emphasis.
+ * The bits are off by default, so a document that never asks for them parses
+ * exactly as it did before they existed.
+ */
+describe('the extra syntaxes', () => {
+  const HIGHLIGHT = 1 << 11;
+  const UNDERLINE = 1 << 12;
+  const SPOILER = 1 << 13;
+
+  const styles = (source: string, flags: number) =>
+    parse(source, flags).blocks[0]!.runs.map((run) => run[2]);
+
+  it('leaves all three alone until asked for', () => {
+    expect(styles('a ==b== c', 0)).toEqual([]);
+    // `__b__` without the bit is Strong, which is what it has always been: the
+    // bit does not turn the syntax off, it changes what it means.
+    expect(styles('a __b__ c', 0)).toEqual([1]);
+    expect(styles('a ||b|| c', 0)).toEqual([]);
+  });
+
+  it('marks highlighted text once the bit is on', () => {
+    expect(styles('a ==b== c', HIGHLIGHT)).toEqual([HIGHLIGHT]);
+    // And off again with any other bit: the three do not imply each other.
+    expect(styles('a ==b== c', UNDERLINE)).toEqual([]);
+  });
+
+  it('underlines once the bit is on, and takes `_` from emphasis with it', () => {
+    expect(styles('a __b__ c', UNDERLINE)).toEqual([UNDERLINE]);
+    // `_x_` is emphasis without the bit and underline with it, which is why the
+    // bit is never on unless the app asked for it by name.
+    expect(styles('a _b_ c', 0)).toEqual([2]);
+    expect(styles('a _b_ c', UNDERLINE)).toEqual([UNDERLINE]);
+  });
+
+  it('marks spoilers once the bit is on', () => {
+    expect(styles('a ||b|| c', SPOILER)).toEqual([SPOILER]);
+    expect(styles('a ||b|| c', 0)).toEqual([]);
+  });
+
+  it('resolves the three from the syntax options', () => {
+    const base = {
+      math: false as const,
+      inlineHtml: undefined,
+      syntax: undefined,
+      cjk: undefined,
+      links: undefined,
+      autolinkProtocols: undefined,
+    };
+    expect(
+      resolveParseFlags({ ...base, syntax: { highlight: true } }, false).flags &
+        HIGHLIGHT
+    ).toBe(HIGHLIGHT);
+    expect(
+      resolveParseFlags({ ...base, syntax: { underline: true } }, false).flags &
+        UNDERLINE
+    ).toBe(UNDERLINE);
+    expect(
+      resolveParseFlags({ ...base, syntax: { spoiler: true } }, false).flags &
+        SPOILER
+    ).toBe(SPOILER);
+    expect(
+      resolveParseFlags(base, false).flags & (HIGHLIGHT | UNDERLINE | SPOILER)
+    ).toBe(0);
+  });
+});

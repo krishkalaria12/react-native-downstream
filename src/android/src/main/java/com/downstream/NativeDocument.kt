@@ -364,6 +364,14 @@ internal class NativeDocument(
     const val STYLE_FOOTNOTE = 1 shl 6
     const val STYLE_SUPERSCRIPT = 1 shl 8
     const val STYLE_SUBSCRIPT = 1 shl 9
+    /** `<kbd>`: a key cap, drawn as inline code with a border. */
+    const val STYLE_KEYBOARD = 1 shl 10
+    /** `<mark>`: highlighted text. */
+    const val STYLE_HIGHLIGHT = 1 shl 11
+    /** `<u>` and `<ins>`: underlined text. */
+    const val STYLE_UNDERLINE = 1 shl 12
+    /** `||spoiler||`: hidden until tapped. */
+    const val STYLE_SPOILER = 1 shl 13
 
     // Token classes, in the order src/cpp/downstream/Document.h declares them.
     const val TOKEN_PLAIN = 0

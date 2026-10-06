@@ -61,6 +61,9 @@ typedef NS_ENUM(NSInteger, DSContainerKind) {
 
 /// Decoration for one nesting level around a block. Leading offsets are in
 /// points from the segment's leading edge.
+/// Marks a spoiler run, so a press can find it by range rather than by color.
+extern NSString *const DSSpoilerAttributeName;
+
 @interface DSContainerInfo : NSObject
 @property (nonatomic, readonly) DSContainerKind kind;
 @property (nonatomic, readonly) CGFloat leading;

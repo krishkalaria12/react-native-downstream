@@ -40,6 +40,12 @@ export const PARSE_FLAG_NO_AUTOLINK_HTTPS = 1 << 9;
  * either way — which is what `tests/parse-options.test.ts` asserts.
  */
 export const PARSE_FLAG_CJK = 1 << 10;
+/** `==highlight==`, md4c's own mark syntax. Off by default. */
+export const PARSE_FLAG_HIGHLIGHT_SYNTAX = 1 << 11;
+/** `__underline__`, md4c's own underline syntax. Off by default. */
+export const PARSE_FLAG_UNDERLINE_SYNTAX = 1 << 12;
+/** `||spoiler||`, md4c's own spoiler syntax. Off by default. */
+export const PARSE_FLAG_SPOILER_SYNTAX = 1 << 13;
 
 /** Every flag the engine understands. */
 export const PARSE_FLAGS_ALL =
@@ -53,7 +59,10 @@ export const PARSE_FLAGS_ALL =
   PARSE_FLAG_NO_AUTOLINK_MAILTO |
   PARSE_FLAG_NO_AUTOLINK_HTTP |
   PARSE_FLAG_NO_AUTOLINK_HTTPS |
-  PARSE_FLAG_CJK;
+  PARSE_FLAG_CJK |
+  PARSE_FLAG_HIGHLIGHT_SYNTAX |
+  PARSE_FLAG_UNDERLINE_SYNTAX |
+  PARSE_FLAG_SPOILER_SYNTAX;
 
 export type ResolvedMath = Readonly<{
   /** Bitmask for the native `parseFlags` prop. */
@@ -203,6 +212,15 @@ export function resolveParseFlags(
   }
   if (input.syntax?.subscript === true) {
     flags |= PARSE_FLAG_SUBSCRIPT_SYNTAX;
+  }
+  if (input.syntax?.highlight === true) {
+    flags |= PARSE_FLAG_HIGHLIGHT_SYNTAX;
+  }
+  if (input.syntax?.underline === true) {
+    flags |= PARSE_FLAG_UNDERLINE_SYNTAX;
+  }
+  if (input.syntax?.spoiler === true) {
+    flags |= PARSE_FLAG_SPOILER_SYNTAX;
   }
   if (
     input.links?.relative === true ||

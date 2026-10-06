@@ -10,9 +10,12 @@ import android.graphics.RectF
 import android.os.Build
 import android.text.Layout
 import android.text.PrecomputedText
+import android.text.Spannable
+import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.TextPaint
 import android.text.style.AbsoluteSizeSpan
+import android.text.style.BackgroundColorSpan
 import android.text.style.ForegroundColorSpan
 import android.text.style.StrikethroughSpan
 import android.util.TypedValue
@@ -83,6 +86,7 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   private val revealClipBounds = Rect()
   private val codePath = Path()
   private var pressedSummary: DetailsBlock? = null
+  private var pressedSpoiler = false
   private val chevronPath = Path()
   private val codeBounds = RectF()
   private var readingParts = emptyList<TextReadingPart>()
@@ -189,10 +193,21 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     blockOffset = firstBlock
   }
 
+  /**
+   * Whether this view's spoilers are showing.
+   *
+   * One boolean for the whole view rather than a set of ranges: a tap reveals the
+   * spoiler it lands on, and a second tap anywhere on one hides them again. A
+   * reader who wants one word of a hidden sentence is served by revealing the
+   * sentence, not by addressing its words.
+   */
+  private var spoilersRevealed = false
+
   fun setContent(text: Spanned, accessibleBlocks: List<AccessibleBlock>, rendered: RenderedDocument) {
     bandFrame = null
     segment = null
     summary = null
+    spoilersRevealed = false
     readingBlocks = accessibleBlocks
     val precomputed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
       PrecomputedTexts.show(this, text, rendered.paint.color)
@@ -212,6 +227,49 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     }
     readingParts = buildReadingParts(accessibleBlocks, segment?.detailsBlocks ?: emptyList())
     accessibility.contentChanged()
+  }
+
+  /**
+   * A press on hidden text reveals it; a press on shown text hides it again.
+   *
+   * The colors are the view's own copy to change: `setContent` hands the text
+   * over as a mutable copy whenever it holds a spoiler, so revealing here never
+   * touches the segment another view is drawing from. Hiding rebuilds from the
+   * segment, because the segment is the only place the hidden colors still are.
+   */
+  private fun toggleSpoilers(): Boolean {
+    val content = text as? Spannable ?: return false
+    val spoilers = content.getSpans(0, content.length, SpoilerSpan::class.java)
+    if (spoilers.isEmpty()) return false
+    spoilersRevealed = !spoilersRevealed
+    if (spoilersRevealed) {
+      for (spoiler in spoilers) {
+        val start = content.getSpanStart(spoiler)
+        val end = content.getSpanEnd(spoiler)
+        // Only the spans this spoiler put there: a background in its own color
+        // and a foreground it cleared. Anything else on the range — a link, a
+        // style — stays exactly as it was.
+        for (span in content.getSpans(start, end, BackgroundColorSpan::class.java)) {
+          if (content.getSpanStart(span) >= start && content.getSpanEnd(span) <= end) {
+            content.removeSpan(span)
+          }
+        }
+        for (span in content.getSpans(start, end, ForegroundColorSpan::class.java)) {
+          if (content.getSpanStart(span) >= start && content.getSpanEnd(span) <= end &&
+            span.foregroundColor == 0
+          ) {
+            content.removeSpan(span)
+          }
+        }
+      }
+    } else {
+      val segment = segment
+      if (segment != null) {
+        setText(SpannableStringBuilder(segment.text))
+      }
+    }
+    invalidate()
+    return true
   }
 
   override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = accessibility
@@ -680,6 +738,23 @@ internal class TextSegmentView(context: Context) : TextView(context) {
         return true
       }
       pressedLink = linkAt(layout, x, y)
+      if (pressedLink < 0) {
+        // No link under the finger: a spoiler is the only other thing a press
+        // can mean here, and it is hit-tested by range rather than by glyph
+        // because hidden text has no ink to aim at.
+        pressedSpoiler = spoilerAt(layout, x, y)
+      }
+    }
+    if (pressedSpoiler) {
+      when (event.actionMasked) {
+        MotionEvent.ACTION_UP -> {
+          pressedSpoiler = false
+          toggleSpoilers()
+          return true
+        }
+        MotionEvent.ACTION_CANCEL -> pressedSpoiler = false
+        else -> return true
+      }
     }
     val pressed = pressedSummary
     if (pressed != null) {
@@ -713,6 +788,15 @@ internal class TextSegmentView(context: Context) : TextView(context) {
       MotionEvent.ACTION_CANCEL -> pressedLink = -1
     }
     return true
+  }
+
+  /** A spoiler run under the point, or null. Hidden text has no ink, so the range is the target. */
+  private fun spoilerAt(layout: Layout, x: Float, y: Float): Boolean {
+    val content = text as? Spanned ?: return false
+    if (y < 0 || y > layout.height) return false
+    val line = layout.getLineForVertical(y.toInt())
+    val offset = layout.getOffsetForHorizontal(line, x)
+    return content.getSpans(offset, offset + 1, SpoilerSpan::class.java).isNotEmpty()
   }
 
   /** The summary line under `y`, or null. The whole line is the control. */

@@ -31,6 +31,10 @@ constexpr uint32_t Keyboard = 1u << 10;
 constexpr uint32_t Highlight = 1u << 11;
 /// `<u>` and `<ins>`: underlined text.
 constexpr uint32_t Underline = 1u << 12;
+/// `||spoiler||`: hidden until tapped, which is a reader's choice rather than a
+/// style — but it travels as a run because the text is laid out whether or not
+/// it is shown, exactly like a collapsed `<details>` body.
+constexpr uint32_t Spoiler = 1u << 13;
 } // namespace InlineStyle
 
 /// How the builder treats a tag it recognised.

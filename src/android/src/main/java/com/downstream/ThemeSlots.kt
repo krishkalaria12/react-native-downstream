@@ -524,9 +524,25 @@ internal object ThemeSlots {
   const val SLOT_CODE_BLOCK_LINE_MARK_COLOR = 256
   /** "codeBlock.lineMarkColor", dark half */
   const val SLOT_CODE_BLOCK_LINE_MARK_COLOR_DARK = 257
+  /** "mark.color" */
+  const val SLOT_MARK_COLOR = 258
+  /** "mark.color", dark half */
+  const val SLOT_MARK_COLOR_DARK = 259
+  /** "mark.backgroundColor" */
+  const val SLOT_MARK_BACKGROUND_COLOR = 260
+  /** "mark.backgroundColor", dark half */
+  const val SLOT_MARK_BACKGROUND_COLOR_DARK = 261
+  /** "underline.color" */
+  const val SLOT_UNDERLINE_COLOR = 262
+  /** "underline.color", dark half */
+  const val SLOT_UNDERLINE_COLOR_DARK = 263
+  /** "spoiler.color" */
+  const val SLOT_SPOILER_COLOR = 264
+  /** "spoiler.color", dark half */
+  const val SLOT_SPOILER_COLOR_DARK = 265
 
   /** One past the highest id in use. */
-  const val SLOT_ID_COUNT = 258
+  const val SLOT_ID_COUNT = 266
 
 
   /**

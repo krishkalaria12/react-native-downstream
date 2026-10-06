@@ -118,6 +118,30 @@ internal class ThemedStrikeSpan(val color: Int) : UnderlineSpan() {
 }
 
 
+/**
+ * An underline in a color the theme chose, beside the strike span above.
+ *
+ * The same reason for existing: Android's own `UnderlineSpan` draws the current
+ * text color, and a theme that wants its links — or its `<u>` — underlined in
+ * another color needs a span of its own.
+ */
+internal class ThemedUnderlineSpan(val color: Int) : UnderlineSpan() {
+  override fun updateDrawState(ds: TextPaint) {
+    super.updateDrawState(ds)
+    ds.underlineColor = color
+  }
+}
+
+/**
+ * A spoiler run, hidden until tapped.
+ *
+ * A marker span rather than a drawing span, because the hiding is done by the
+ * background and foreground colors the builder already set: this only says *that*
+ * the run is a spoiler, so a press on it can reveal it and a screen reader can
+ * announce it as hidden.
+ */
+internal class SpoilerSpan(val color: Int)
+
 /** One native block's reading order and role inside a shared text layout. */
 internal class AccessibleBlock(val start: Int, val end: Int, val heading: Boolean, val taskState: Int)
 

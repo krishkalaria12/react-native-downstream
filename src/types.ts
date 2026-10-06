@@ -212,6 +212,21 @@ export type MarkdownSyntaxOptions = Readonly<{
    * `~x~` is a subscript instead of strikethrough. Off, as in Streamdown.
    */
   subscript?: boolean;
+  /**
+   * `==x==` is highlighted text. Off: a version number in `==` is not a
+   * highlighter, and Streamdown has no such syntax.
+   */
+  highlight?: boolean;
+  /**
+   * `__x__` is underlined text. Off — and it takes `_` away from emphasis, so
+   * turning it on changes what `_x_` means everywhere.
+   */
+  underline?: boolean;
+  /**
+   * `||x||` is hidden until tapped. Off: hiding text behind a tap is an app's
+   * decision about its own messages.
+   */
+  spoiler?: boolean;
 }>;
 
 /**

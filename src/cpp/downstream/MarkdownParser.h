@@ -58,6 +58,17 @@ constexpr uint32_t NoAutolinkHttps = 1u << 9;
 /// amendment defines them. On by default: a document without CJK in it parses
 /// identically either way, which is what the differential test proves.
 constexpr uint32_t Cjk = 1u << 10;
+/// `==highlight==`, md4c's own mark syntax. Off by default: it is not GitHub
+/// dialect, and a chat model that writes `==` around a version number does not
+/// mean a highlighter.
+constexpr uint32_t HighlightSyntax = 1u << 11;
+/// `__underline__`, md4c's own underline syntax. Off by default, for the same
+/// reason — and because it takes `_` away from emphasis, so turning it on
+/// changes what `_x_` means everywhere.
+constexpr uint32_t UnderlineSyntax = 1u << 12;
+/// `||spoiler||`, md4c's own spoiler syntax. Off by default: it hides text
+/// behind a tap, which is an app's decision about its own messages.
+constexpr uint32_t SpoilerSyntax = 1u << 13;
 
 /// What `undefined` resolves to, and therefore what the codegen default is.
 ///
@@ -68,7 +79,8 @@ constexpr uint32_t Cjk = 1u << 10;
 constexpr uint32_t Default = Enabled | Brackets | Cjk;
 
 constexpr uint32_t All = Enabled | SingleDollar | Brackets | InlineHtml | SuperscriptSyntax |
-    SubscriptSyntax | LinkRelative | NoAutolinkMailto | NoAutolinkHttp | NoAutolinkHttps | Cjk;
+    SubscriptSyntax | LinkRelative | NoAutolinkMailto | NoAutolinkHttp | NoAutolinkHttps | Cjk |
+    HighlightSyntax | UnderlineSyntax | SpoilerSyntax;
 
 } // namespace ParseFlags
 
@@ -97,6 +109,9 @@ struct ParseOptions {
   bool superscriptSyntax() const { return (flags & ParseFlags::SuperscriptSyntax) != 0; }
   bool subscriptSyntax() const { return (flags & ParseFlags::SubscriptSyntax) != 0; }
   bool cjk() const { return (flags & ParseFlags::Cjk) != 0; }
+  bool highlightSyntax() const { return (flags & ParseFlags::HighlightSyntax) != 0; }
+  bool underlineSyntax() const { return (flags & ParseFlags::UnderlineSyntax) != 0; }
+  bool spoilerSyntax() const { return (flags & ParseFlags::SpoilerSyntax) != 0; }
 
   /**
    * Whether a bare address of this protocol may become a link.

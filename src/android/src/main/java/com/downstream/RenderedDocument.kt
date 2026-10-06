@@ -19,6 +19,7 @@ import android.text.style.LeadingMarginSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StrikethroughSpan
 import android.text.style.TypefaceSpan
+import android.text.style.UnderlineSpan
 import android.util.LruCache
 import android.widget.TextView
 import androidx.annotation.RequiresApi
@@ -937,6 +938,59 @@ internal class RenderedDocument(
             end,
             flags,
           )
+        }
+        if (styles and NativeDocument.STYLE_KEYBOARD != 0) {
+          // A key cap draws as inline code with a border. The face and the size
+          // are the code's, and the border is drawn by the background span the
+          // view draws for it — so this only has to set the face.
+          blockPaintFor(blockIndex)
+          text.setSpan(
+            RelativeSizeSpan(theme.inlineCodeRatio(px(theme.number(ThemeSlots.SLOT_CODE_FONT_SIZE)))),
+            start,
+            end,
+            flags,
+          )
+          text.setSpan(
+            InlineCodeBackgroundSpan(colors.codeBackground, metricAscent, metricDescent),
+            start,
+            end,
+            flags,
+          )
+        }
+        if (styles and NativeDocument.STYLE_HIGHLIGHT != 0) {
+          // Highlighted text, in the theme's own mark color over the block's
+          // face. A foreground color rather than a background one, because a
+          // highlight is ink and the text under it stays the text it was.
+          val mark = theme.color(ThemeSlots.SLOT_MARK_COLOR, colors.night)
+          text.setSpan(
+            if (mark != null) {
+              ForegroundColorSpan(mark)
+            } else {
+              BackgroundColorSpan(
+                theme.color(ThemeSlots.SLOT_MARK_BACKGROUND_COLOR, colors.night) ?: colors.codeBackground,
+              )
+            },
+            start,
+            end,
+            flags,
+          )
+        }
+        if (styles and NativeDocument.STYLE_UNDERLINE != 0) {
+          val underline = theme.color(ThemeSlots.SLOT_UNDERLINE_COLOR, colors.night)
+          text.setSpan(
+            if (underline != null) ThemedUnderlineSpan(underline) else UnderlineSpan(),
+            start,
+            end,
+            flags,
+          )
+        }
+        if (styles and NativeDocument.STYLE_SPOILER != 0) {
+          // Hidden until tapped: the text is laid out, measured and selectable,
+          // and only the ink is withheld. The tap that reveals it is a press on
+          // the run, reported the way a link press is.
+          val spoiler = theme.color(ThemeSlots.SLOT_SPOILER_COLOR, colors.night) ?: colors.text
+          text.setSpan(BackgroundColorSpan(spoiler), start, end, flags)
+          text.setSpan(SpoilerSpan(spoiler), start, end, flags)
         }
         if (styles and NativeDocument.STYLE_IMAGE_ALT != 0) {
           // Alt text reads as secondary by design, so the theme's own alt color

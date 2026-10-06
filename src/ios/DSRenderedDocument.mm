@@ -56,6 +56,12 @@ CGFloat inlineCodeSizeFor(const Theme &theme, CGFloat blockSize, CGFloat scale) 
   return blockSize * inlineCodeScale(theme);
 }
 
+/// Marks a spoiler run, so a press can find it by range rather than by color.
+///
+/// A string constant rather than a boolean because TextKit attributes are
+/// objects, and the value is never read — only its presence matters.
+NSString *const DSSpoilerAttributeName = @"DSSpoiler";
+
 NSString *toNSString(const std::u16string &text) {
   return [NSString stringWithCharacters:reinterpret_cast<const unichar *>(text.data()) length:text.size()];
 }
@@ -194,6 +200,45 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
       if (strike != nil) {
         attributes[NSStrikethroughColorAttributeName] = strike;
       }
+    }
+    // `<kbd>`: a key cap, which draws as inline code with a border. The border
+    // comes from the background span the platform draws for it, so this only has
+    // to set the face: the cap is what tells a reader it is a key.
+    if (run.styles & InlineStyle::Keyboard) {
+      runTypeface = inlineCodeFont(theme, runTypeface);
+      runSize = inlineCodeSizeFor(theme, size, 1);
+    }
+    // `<mark>`: highlighted text, in the theme's own mark color over the block's
+    // face. No background change: a highlight is ink, and the text under it stays
+    // the text it was.
+    if (run.styles & InlineStyle::Highlight) {
+      UIColor *mark = [colors colorForSlot:kSlotMarkColor fallback:nil];
+      if (mark != nil) {
+        attributes[NSForegroundColorAttributeName] = mark;
+      } else {
+        attributes[NSBackgroundColorAttributeName] =
+            [colors colorForSlot:kSlotMarkBackgroundColor fallback:UIColor.systemYellowColor];
+      }
+    }
+    // `<u>` and `<ins>`: underlined text, in the theme's underline color where
+    // it sets one.
+    if (run.styles & InlineStyle::Underline) {
+      attributes[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
+      UIColor *underline = [colors colorForSlot:kSlotUnderlineColor fallback:nil];
+      if (underline != nil) {
+        attributes[NSUnderlineColorAttributeName] = underline;
+      }
+    }
+    // `||spoiler||`: drawn as its own background until tapped, which is what
+    // makes it hidden without removing it: the text is laid out, measured and
+    // selectable, and only the ink is withheld. The marker attribute is what a
+    // press reads to find the run, because the colors alone cannot say whether a
+    // background is a spoiler's or a code span's.
+    if (run.styles & InlineStyle::Spoiler) {
+      attributes[NSBackgroundColorAttributeName] =
+          [colors colorForSlot:kSlotSpoilerColor fallback:UIColor.labelColor];
+      attributes[NSForegroundColorAttributeName] = [UIColor clearColor];
+      attributes[DSSpoilerAttributeName] = @YES;
     }
     if (run.styles & InlineStyle::ImageAlt) {
       // Image alt text reads as secondary by design, so the theme's own alt

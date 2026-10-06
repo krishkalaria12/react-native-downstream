@@ -19,6 +19,9 @@ NSString *const kPlaceholder = @"\u200b";
   /// block and an offset within it, and this is what turns that into a range in
   /// this view's own text.
   NSInteger _blockOffset;
+  /// Whether this view's spoilers are showing. One boolean for the whole view:
+  /// a tap reveals the spoiler it lands on, and a second tap hides them again.
+  BOOL _spoilersRevealed;
 }
 
 - (instancetype)init {
@@ -52,6 +55,7 @@ NSString *const kPlaceholder = @"\u200b";
   if (segment == _segment) {
     return;
   }
+  _spoilersRevealed = NO;
   _segment = segment;
   ((DSLayoutManager *)self.layoutManager).blockRanges = segment.blockRanges;
   [self applyDetailsState];
@@ -89,6 +93,23 @@ NSString *const kPlaceholder = @"\u200b";
   return [self detailsContainerAtPoint:gestureRecognizer.locationInView:self] == 0;
 }
 
+- (void)handleDetailsTap:(UITapGestureRecognizer *)recognizer {
+  if (recognizer.state != UIGestureRecognizerStateEnded) {
+    return;
+  }
+  const CGPoint at = [recognizer locationInView:self];
+  const uint32_t container = [self detailsContainerAtPoint:at];
+  if (container != 0) {
+    [self.controlDelegate didToggleDetailsAtContainer:container
+                                                 open:![self isOpenForContainer:container]];
+    return;
+  }
+  // No summary under the finger: a spoiler is the only other thing a press can
+  // mean here, and it is hit-tested by range rather than by glyph because hidden
+  // text has no ink to aim at.
+  [self toggleSpoilersAtPoint:at];
+}
+
 /// The layout manager is what splits the glyph runs, so the provider is its as
 /// well as this view's.
 - (void)setRevealProvider:(id<DSRevealProvider>)revealProvider {
@@ -122,6 +143,37 @@ NSString *const kPlaceholder = @"\u200b";
   DSLayoutManager *layout = (DSLayoutManager *)self.layoutManager;
   [layout setDetailsToggle:_detailsToggle];
   [layout setDetailsChoices:_detailsChoices];
+  [self setNeedsDisplay];
+}
+
+/// A press on hidden text reveals it; a press on shown text hides it again.
+///
+/// The colors are this view's own storage to change: the text storage holds a
+/// copy of the segment's string, so revealing here never touches the string
+/// another view is drawing from. Hiding rebuilds from the segment, because the
+/// segment is the only place the hidden colors still are.
+- (void)toggleSpoilersAtPoint:(CGPoint)point {
+  NSTextStorage *storage = _stack.textStorage;
+  const NSUInteger at =
+      [self.layoutManager glyphIndexForPoint:point inTextContainer:self.textContainer];
+  if (at >= storage.length) {
+    return;
+  }
+  NSRange effective;
+  id spoiler = [storage attribute:DSSpoilerAttributeName atIndex:at effectiveRange:&effective];
+  if (spoiler == nil) {
+    return;
+  }
+  _spoilersRevealed = !_spoilersRevealed;
+  if (_spoilersRevealed) {
+    // Only the spoiler's own attributes go: the background it hid behind and
+    // the foreground it cleared. Anything else on the range — a link, a style —
+    // stays exactly as it was.
+    [storage removeAttribute:NSBackgroundColorAttributeName range:effective];
+    [storage removeAttribute:NSForegroundColorAttributeName range:effective];
+  } else if (_segment != nil) {
+    [_stack.textStorage setAttributedString:_segment.attributedString];
+  }
   [self setNeedsDisplay];
 }
 

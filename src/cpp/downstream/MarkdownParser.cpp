@@ -353,6 +353,15 @@ public:
       case MD_SPAN_DEL:
         strikeDepth_++;
         break;
+      case MD_SPAN_MARK:
+        highlightDepth_++;
+        break;
+      case MD_SPAN_U:
+        underlineDepth_++;
+        break;
+      case MD_SPAN_SPOILER:
+        spoilerDepth_++;
+        break;
       case MD_SPAN_CODE:
         codeDepth_++;
         break;
@@ -439,6 +448,15 @@ public:
         break;
       case MD_SPAN_DEL:
         strikeDepth_--;
+        break;
+      case MD_SPAN_MARK:
+        highlightDepth_--;
+        break;
+      case MD_SPAN_U:
+        underlineDepth_--;
+        break;
+      case MD_SPAN_SPOILER:
+        spoilerDepth_--;
         break;
       case MD_SPAN_CODE:
         codeDepth_--;
@@ -1648,6 +1666,15 @@ private:
     if (strikeDepth_ > 0) {
       styles |= InlineStyle::Strikethrough;
     }
+    if (highlightDepth_ > 0) {
+      styles |= InlineStyle::Highlight;
+    }
+    if (underlineDepth_ > 0) {
+      styles |= InlineStyle::Underline;
+    }
+    if (spoilerDepth_ > 0) {
+      styles |= InlineStyle::Spoiler;
+    }
     if (codeDepth_ > 0) {
       styles |= InlineStyle::Code;
     }
@@ -2367,6 +2394,9 @@ private:
   int strongDepth_{0};
   int emphasisDepth_{0};
   int strikeDepth_{0};
+  int highlightDepth_{0};
+  int underlineDepth_{0};
+  int spoilerDepth_{0};
   int codeDepth_{0};
   /// Still-open style tags from inline HTML, outermost first. Cleared with the
   /// block, because an unclosed `<mark>` runs to the end of its block and not
@@ -2475,6 +2505,19 @@ DocumentBuilder builder(source, options);
   }
   if (options.subscriptSyntax()) {
     parser.flags |= MD_FLAG_SUBSCRIPTS;
+  }
+  // md4c's own three: `==mark==`, `__underline__` and `||spoiler||`. Each behind
+  // its own bit because each changes what the delimiters mean everywhere — and
+  // `__underline__` in particular takes `_` away from emphasis, so it is never on
+  // unless the app asked for it by name.
+  if (options.highlightSyntax()) {
+    parser.flags |= MD_FLAG_HIGHLIGHT;
+  }
+  if (options.underlineSyntax()) {
+    parser.flags |= MD_FLAG_UNDERLINE;
+  }
+  if (options.spoilerSyntax()) {
+    parser.flags |= MD_FLAG_SPOILERS;
   }
   if (options.cjk()) {
     parser.flags |= MD_FLAG_CJKFRIENDLY;
