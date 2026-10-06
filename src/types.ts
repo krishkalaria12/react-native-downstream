@@ -60,8 +60,29 @@ export type CustomRenderer = Readonly<{
   component: ComponentType<CustomRendererProps>;
 }>;
 
+/**
+ * Props for a component drawn in place of an allowed block tag.
+ *
+ * The tag name is a prop so one component can serve several tags.
+ */
+export type TagRendererProps = Readonly<{
+  name: string;
+  attributes: ReadonlyArray<readonly [string, string]>;
+  markdown: string;
+  isIncomplete: boolean;
+}>;
+
+export type TagRenderer = Readonly<{
+  name: string | readonly string[];
+  component: ComponentType<TagRendererProps>;
+}>;
+
+export type FallbackRendererProps = CustomRendererProps | TagRendererProps;
+
 export type MarkdownPlugins = Readonly<{
   renderers?: readonly CustomRenderer[];
+  tags?: readonly TagRenderer[];
+  fallbackComponent?: ComponentType<FallbackRendererProps>;
 }>;
 
 /** Thrown by rejected synchronous stream operations. */

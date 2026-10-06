@@ -61,7 +61,7 @@ export function resolveIcon(
  * platform would then have to guess at.
  */
 export function resolveIcons(
-  icons: Partial<Record<MarkdownControlIcon, MarkdownIconSource>> | undefined
+  icons?: Partial<Record<MarkdownControlIcon, MarkdownIconSource>>
 ): ReadonlyArray<ResolvedIcon> {
   const source = icons ?? {};
   return CONTROL_ICON_KEYS.map((key) => resolveIcon(source[key]));
