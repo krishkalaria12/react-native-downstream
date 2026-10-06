@@ -36,6 +36,93 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
   DSExportFormatHtml = 4,
 };
 
+#pragma mark - Shared by the segment view implementations
+
+/**
+ * The pieces more than one segment view is built from.
+ *
+ * Each implementation lives beside the view that owns it — a code card's gutter
+ * beside the card, a table's grid beside the table — so this header carries what
+ * crosses between them: the control buttons a code header and a table toolbar are
+ * both made of, and the link hit testing and accessibility slicing a text
+ * segment and a table grid both answer.
+ */
+
+/// The height of a control row, matching the one the measurement reserves.
+extern const CGFloat kChromeRowHeight;
+
+/// How far outside a glyph a press still counts as its link.
+extern const CGFloat kLinkHitSlop;
+
+/// Indexes into the label array `src/controls.ts` sends, in the same order.
+typedef NS_ENUM(NSInteger, DSControlLabel) {
+  DSControlLabelCopyCode = 0,
+  DSControlLabelDownloadFile = 1,
+  DSControlLabelCopied = 2,
+  DSControlLabelWrapCode = 3,
+  DSControlLabelUnwrapCode = 4,
+  // Appended, not inserted: `src/controls.ts` sends the labels positionally, so
+  // a new key goes at the end rather than moving every later one.
+  DSControlLabelExpandCode = 5,
+  DSControlLabelCollapseCode = 6,
+  DSControlLabelCopyTable = 7,
+  DSControlLabelCopyTableAsMarkdown = 8,
+  DSControlLabelCopyTableAsCsv = 9,
+  DSControlLabelCopyTableAsTsv = 10,
+  DSControlLabelDownloadTable = 11,
+  DSControlLabelDownloadTableAsCsv = 12,
+  DSControlLabelDownloadTableAsMarkdown = 13,
+  DSControlLabelTableFormatMarkdown = 14,
+  DSControlLabelTableFormatCsv = 15,
+  DSControlLabelTableFormatTsv = 16,
+  // Appended, in `src/controls.ts`'s order. The four image keys: what a failed
+  // image says, what its button says, and the two names a screen reader needs
+  // when the alt text is empty or the prefix list blocked it.
+  DSControlLabelImageNotAvailable = 17,
+  DSControlLabelDownloadImage = 18,
+  DSControlLabelImage = 19,
+  DSControlLabelImageBlocked = 20,
+  DSControlLabelCount = 21,
+};
+
+extern NSString *const kSymbolCopy;
+extern NSString *const kSymbolDownload;
+
+/// One action on a code block or a table. The view that owns the button sends
+/// the delegate a description rather than doing the work itself, because only
+/// the view that holds the document can read a block.
+@interface DSControlButton : UIButton
+@property (nonatomic, copy) NSString *action;
+@property (nonatomic, copy) NSString *format;
+@end
+
+/// Every control glyph at one size, so a glyph swapped in later (a copy's check,
+/// a wrap state) matches the ones built with the button.
+UIImage *controlImage(NSString *symbol);
+UIButton *makeControlButton(NSString *symbol, NSString *label, NSString *action, NSString *format);
+NSString *symbolForCopy(BOOL copied);
+NSString *symbolForWrap(BOOL wrapped);
+NSString *symbolForExpand(BOOL expanded);
+
+/// Whether a laid-out range carries a link, which is what decides whether a
+/// reader hears one element or several.
+BOOL hasLink(NSAttributedString *text, NSRange range);
+
+/// Link index under a point in a laid-out TextKit stack, or -1.
+NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *container, CGPoint location);
+
+/// Detaches the link delegates a view's cached elements hold, so a recycled view
+/// cannot be activated through an element that outlived its text.
+void invalidateAccessibleLinks(NSArray<UIAccessibilityElement *> *elements);
+
+/// Splits only ranges containing links. Each link gets a focusable element in
+/// source order; plain text remains readable without repeating link labels.
+void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, NSAttributedString *text,
+                            NSRange range, UIView *container, NSLayoutManager *layoutManager,
+                            NSTextContainer *textContainer, CGPoint origin, CGRect fallbackFrame,
+                            NSString *_Nullable prefix, UIAccessibilityTraits firstTraits,
+                            id<DSLinkDelegate> _Nullable delegate);
+
 /// Something a control button did, for the view to report to JavaScript.
 @protocol DSControlDelegate <NSObject>
 /// A copy or a download of a code block or a table. `format` and `filename` are
