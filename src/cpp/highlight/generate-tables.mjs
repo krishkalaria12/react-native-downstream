@@ -169,7 +169,6 @@ const WORD_LISTS = {
   html: [list('html', 'keywords.$(file.patterns.html)'), JS_KEYWORDS],
   xml: ['', JS_KEYWORDS],
   vue: [list('html', 'keywords.$(file.patterns.html)'), JS_KEYWORDS],
-  php: ['', JS_KEYWORDS, '', '', PHP_KEYWORDS],
   css: [
     list('css', 'keywords.*.css'),
     list('css', 'keywords2.*.css'),

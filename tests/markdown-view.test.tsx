@@ -403,7 +403,7 @@ describe('DownstreamMarkdown controls', () => {
     event: unknown
   ): void {
     act(() => {
-      (nativeView.last()?.[name] as (event: unknown) => void)(event);
+      (nativeView.last()?.[name] as (event: unknown) => void)?.(event);
     });
   }
 

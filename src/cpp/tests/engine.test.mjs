@@ -780,28 +780,38 @@ describe('themes', () => {
    * A slot nothing reads is not a harmless extra: `src/theme.ts` will happily
    * resolve it and send it, the theme will intern, the view will rebuild, and the
    * value will simply not appear. That is the worst shape a feature can fail in,
-   * because it looks like it worked. So this reads the sources rather than a
-   * hand-kept list, which is the only list that would be right.
+   * because it looks like it worked. So this reads the drawing sources directly,
+   * which is the only list that would stay right.
    *
    * One direction on purpose: a read counted for the wrong slot is a false pass,
-   * but a read missed is caught, and the readers are few and named in one place.
+   * but a read missed is caught.
    */
   test('every slot is read by a renderer or by the shared rules', () => {
     const repo = resolve(CPP, '..', '..');
+    const androidDir = join(repo, 'src', 'android', 'src', 'main', 'java', 'com', 'downstream');
+    // The drawing code in full, found rather than listed. A hand-kept list is
+    // what made this test fail before: splitting a file moved readers into files
+    // the list never named, so the slots they read looked unread. Globbing means
+    // a split cannot change the answer, and the generated slot table is left out
+    // because it names every slot by definition.
     const readers = [
       // The rules both platforms call, and the one token table both read.
       join(CPP, 'theme', 'ThemeLayout.cpp'),
       join(CPP, 'highlight', 'TokenPalette.h'),
       // Each platform's own drawing.
-      join(repo, 'src', 'ios', 'DSRenderedDocument.mm'),
-      join(repo, 'src', 'ios', 'DSSegmentViews.mm'),
-      join(repo, 'src', 'ios', 'DSLayoutManager.mm'),
-      join(repo, 'src', 'ios', 'DSThemeColors.mm'),
-      join(repo, 'src', 'ios', 'DownstreamMarkdownView.mm'),
-      join(repo, 'src', 'ios', 'DownstreamTextLayoutManager.mm'),
-      join(repo, 'src', 'android', 'src', 'main', 'java', 'com', 'downstream', 'RenderedDocument.kt'),
-      join(repo, 'src', 'android', 'src', 'main', 'java', 'com', 'downstream', 'NativeTheme.kt'),
-      join(repo, 'src', 'android', 'src', 'main', 'java', 'com', 'downstream', 'DownstreamMarkdownView.kt'),
+      ...readdirSync(join(repo, 'src', 'ios'))
+        .filter((name) => name.endsWith('.mm') || name.endsWith('.h'))
+        .map((name) => join(repo, 'src', 'ios', name)),
+      ...readdirSync(androidDir)
+        .filter(
+          (name) =>
+            name.endsWith('.kt') &&
+            name !== 'ThemeSlots.kt' &&
+            name !== 'DownstreamPackage.kt' &&
+            name !== 'DownstreamMarkdownViewManager.kt' &&
+            name !== 'FenceSlotViewManager.kt'
+        )
+        .map((name) => join(androidDir, name)),
     ].map((path) => readFileSync(path, 'utf8')).join('\n');
 
     // One form per way a slot can be named in the sources, so the comparison is
