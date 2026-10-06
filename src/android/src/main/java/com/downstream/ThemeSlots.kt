@@ -520,9 +520,13 @@ internal object ThemeSlots {
   const val SLOT_SUBSCRIPT_FONT_SCALE = 254
   /** "subscript.baselineOffsetScale" */
   const val SLOT_SUBSCRIPT_BASELINE_OFFSET_SCALE = 255
+  /** "codeBlock.lineMarkColor" */
+  const val SLOT_CODE_BLOCK_LINE_MARK_COLOR = 256
+  /** "codeBlock.lineMarkColor", dark half */
+  const val SLOT_CODE_BLOCK_LINE_MARK_COLOR_DARK = 257
 
   /** One past the highest id in use. */
-  const val SLOT_ID_COUNT = 256
+  const val SLOT_ID_COUNT = 258
 
 
   /**

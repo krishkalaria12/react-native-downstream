@@ -1361,6 +1361,13 @@
       "kind": "metric",
       "layout": true,
       "default": 0.2
+    },
+    {
+      "id": 256,
+      "name": "codeBlock.lineMarkColor",
+      "kind": "color",
+      "layout": false,
+      "default": "selection"
     }
   ]
 }

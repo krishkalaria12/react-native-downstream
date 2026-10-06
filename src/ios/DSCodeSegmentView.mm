@@ -165,6 +165,65 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
   return [NSString stringWithFormat:@"%u", self.firstNumber + index];
 }
 
+/// The line bands a fence asked for with `{1,3-5}` in its info string.
+///
+/// Drawn behind the code rather than beside it, and behind *every* visual line a
+/// logical line wraps onto, because a mark is about a line of the file rather
+/// than about a line of the screen: marking only the first visual row would leave
+/// the rest of a wrapped marked line looking unmarked.
+///
+/// No height of its own, so it is not a layout input and does not join
+/// `LayoutHint` — the bands are drawn into the card's existing rows.
+- (void)drawLineMarksInRect:(CGRect)rect {
+  DSCodeSegment *segment = self.segment;
+  DSTextSegmentView *body = self.body;
+  const std::vector<LineMark> &marks = segment.fenceMeta.marks;
+  if (marks.empty() || body == nil || self.lineCount == 0) {
+    return;
+  }
+  NSLayoutManager *manager = body.layoutManager;
+  UIColor *const color = [segment.theme colorForSlot:kSlotCodeBlockLineMarkColor fallback:UIColor.clearColor];
+  if (color == nil || CGColorGetAlpha(color.CGColor) == 0) {
+    return;
+  }
+  const CGFloat inset = body.textContainerInset.top;
+  const uint32_t *starts = segment.lineStarts->data();
+  const uint32_t firstNumber = segment.fenceMeta.startLine;
+  [color setFill];
+  for (const LineMark &mark : marks) {
+    // Marked lines are the fence's own numbering, so a fence that started at line
+    // 10 marks line 10 first — which is what makes `{1,3-5}` on a diff mean the
+    // same thing as it does in every other diff viewer.
+    for (int64_t index = static_cast<int64_t>(mark.first) - firstNumber;
+         index <= static_cast<int64_t>(mark.last) - firstNumber; index++) {
+      if (index < 0 || index >= self.lineCount) {
+        continue;
+      }
+      const uint32_t offset = starts[index];
+      if (offset >= body.textStorage.length) {
+        continue;
+      }
+      NSRange line;
+      // The effective range is the whole line, which is what finds a wrapped
+      // line's continuation rows as well as the one it starts on.
+      const CGRect fragment = [manager lineFragmentRectForGlyphAtIndex:[manager glyphIndexForCharacterAtIndex:offset]
+                                                       effectiveRange:&line];
+      for (NSUInteger glyph = line.location; glyph < NSMaxRange(line); glyph++) {
+        const CGRect row = [manager lineFragmentRectForGlyphAtIndex:glyph effectiveRange:NULL];
+        const CGRect drawn = CGRectOffset(row, 0, inset);
+        if (CGRectGetMinY(drawn) > CGRectGetMaxY(rect)) {
+          break;
+        }
+        if (CGRectGetMaxY(drawn) < CGRectGetMinY(rect)) {
+          continue;
+        }
+        UIRectFill(CGRectMake(0, drawn.origin.y, CGRectGetWidth(self.bounds), drawn.size.height));
+      }
+      (void)fragment;
+    }
+  }
+}
+
 - (void)drawRect:(CGRect)rect {
   DSTextSegmentView *body = self.body;
   DSCodeSegment *segment = self.segment;
@@ -182,6 +241,7 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
   }
   const CGFloat inset = body.textContainerInset.top;
   const CGFloat width = CGRectGetWidth(self.bounds);
+  [self drawLineMarksInRect:CGRectOffset(rect, 0, -inset)];
 
   // Only the numbers whose lines intersect the dirty rect are drawn, so a block
   // with two thousand lines costs the same per frame as one with twenty.

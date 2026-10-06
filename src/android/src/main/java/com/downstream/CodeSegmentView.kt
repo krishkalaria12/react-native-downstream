@@ -79,11 +79,55 @@ internal class CodeGutterView(context: Context) : View(context) {
     invalidate()
   }
 
+  private val markPaint = Paint()
+
+  /**
+   * The line bands a fence asked for with `{1,3-5}` in its info string.
+   *
+   * Drawn behind the code rather than beside it, and behind *every* visual line a
+   * logical line wraps onto, because a mark is about a line of the file rather
+   * than about a line of the screen: marking only the first visual row would leave
+   * the rest of a wrapped marked line looking unmarked.
+   *
+   * No height of its own, so it is not a layout input and does not join
+   * `LayoutHint` — the bands are drawn into the card's existing rows.
+   */
+  private fun drawLineMarks(canvas: Canvas, textLayout: Layout) {
+    val segment = segment ?: return
+    val marks = segment.fenceMeta.marks
+    if (marks.isEmpty()) return
+    val color = segment.colors.slotOrNull(ThemeSlots.SLOT_CODE_BLOCK_LINE_MARK_COLOR) ?: return
+    val first = segment.fenceMeta.startLine
+    val starts = segment.lineStarts
+    val dirty = canvas.clipBounds
+    markPaint.color = color
+    for (mark in marks) {
+      // Marked lines are the fence's own numbering, so a fence that started at
+      // line 10 marks line 10 first — which is what makes `{1,3-5}` on a diff mean
+      // the same thing as it does in every other diff viewer.
+      val from = (mark[0] - first).toInt()
+      val to = (mark[1] - first).toInt()
+      for (index in from..to) {
+        if (index < 0 || index >= starts.size) continue
+        val offset = starts[index].coerceAtMost(textLayout.text.length)
+        val lastOffset = (offset + 1).coerceAtMost(textLayout.text.length)
+        for (line in textLayout.getLineForOffset(offset)..
+          textLayout.getLineForOffset(lastOffset)) {
+          val top = textLayout.getLineTop(line)
+          if (top > dirty.bottom) break
+          if (textLayout.getLineBottom(line) < dirty.top) continue
+          canvas.drawRect(0f, top.toFloat(), width.toFloat(), textLayout.getLineBottom(line).toFloat(), markPaint)
+        }
+      }
+    }
+  }
+
   override fun onDraw(canvas: Canvas) {
     val segment = this.segment ?: return
     val layout = this.layout ?: return
     val body = this.body ?: return
     val textLayout = body.layout ?: return
+    drawLineMarks(canvas, textLayout)
     val color = this.color
     if (segment.lineStarts.isEmpty() || color == 0) return
     // The gutter is as tall as the code and sits beside it, so a line's y here is

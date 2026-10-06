@@ -222,6 +222,7 @@ const SLOTS = {
   'superscript.baselineOffsetScale': { id: 253, kind: 'metric', layout: true },
   'subscript.fontScale': { id: 254, kind: 'metric', layout: true },
   'subscript.baselineOffsetScale': { id: 255, kind: 'metric', layout: true },
+  'codeBlock.lineMarkColor': { id: 256, kind: 'color', layout: false, darkId: 257 },
 } as const satisfies Readonly<Record<string, ThemeSlot>>;
 
 export const THEME_SLOTS: Readonly<Record<string, ThemeSlot>> = SLOTS;
@@ -420,10 +421,11 @@ export const THEME_SLOT_NAMES = [
   'superscript.baselineOffsetScale',
   'subscript.fontScale',
   'subscript.baselineOffsetScale',
+  'codeBlock.lineMarkColor',
 ] as const satisfies readonly ThemeSlotName[];
 
 /** One past the highest id in use. */
-export const THEME_SLOT_COUNT = 256;
+export const THEME_SLOT_COUNT = 258;
 
 const BY_NAME: ReadonlyMap<string, ThemeSlot> = new Map<string, ThemeSlot>(
   (Object.keys(SLOTS) as ThemeSlotName[]).map((name) => [name, SLOTS[name]])

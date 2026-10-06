@@ -157,6 +157,14 @@ internal data class FenceMeta(
   val title: String = "",
   val startLine: Int = 1,
   val noLineNumbers: Boolean = false,
+  /**
+   * The `{1,3-5}` the info string asked for, as inclusive line-number pairs.
+   *
+   * The engine parsed it and the platforms only draw it, so a fence's marks are
+   * the same numbers on both rather than two parsers disagreeing about what
+   * `{3-5}` means.
+   */
+  val marks: List<IntArray> = emptyList(),
 )
 
 /** The lines a capped block still shows, whatever the font scale. */

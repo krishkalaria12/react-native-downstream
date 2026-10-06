@@ -578,6 +578,9 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
 
   std::u16string text;
   std::vector<jint> blocks;
+  /// The `{1,3-5}` marks, flattened across every block: a count per block and
+  /// then that many inclusive `first,last` pairs, in block order.
+  std::vector<jint> marks;
   std::vector<jint> containers;
   std::vector<jint> runs;
   std::vector<jint> cells;
@@ -645,12 +648,20 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
                                     intern(block.meta.title),
                                     static_cast<jint>(block.meta.startLine),
                                     block.meta.noLineNumbers ? 1 : 0,
+                                    // How many `{first,last}` pairs follow for
+                                    // this block; the pairs themselves are in the
+                                    // flat mark list.
+                                    static_cast<jint>(block.meta.marks.size()),
                                     // The layout direction the engine decided, so
                                     // this side draws the line the way the
                                     // measurement was made rather than asking
                                     // `Character.getDirectionality` again.
                                     static_cast<jint>(block.direction),
                                 });
+    for (const LineMark &mark : block.meta.marks) {
+      marks.push_back(static_cast<jint>(mark.first));
+      marks.push_back(static_cast<jint>(mark.last));
+    }
     for (const MathSpan &span : block.math) {
       formulas.insert(formulas.end(), {static_cast<double>(index - static_cast<size_t>(from)),
                                        static_cast<double>(span.start), static_cast<double>(span.end), 0.0});
@@ -740,7 +751,7 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
     env->DeleteLocalRef(value);
   }
 
-  jobjectArray result = env->NewObjectArray(10, objectClass, nullptr);
+  jobjectArray result = env->NewObjectArray(11, objectClass, nullptr);
   env->SetObjectArrayElement(result, 0, toJavaString(env, text));
   env->SetObjectArrayElement(result, 1, toJavaArray(env, blocks));
   env->SetObjectArrayElement(result, 2, toJavaArray(env, containers));
@@ -763,6 +774,7 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
     env->SetDoubleArrayRegion(formulaArray, 0, static_cast<jsize>(formulas.size()), formulas.data());
   }
   env->SetObjectArrayElement(result, 9, formulaArray);
+  env->SetObjectArrayElement(result, 10, toJavaArray(env, marks));
   return result;
 }
 

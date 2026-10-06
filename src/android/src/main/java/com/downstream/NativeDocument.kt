@@ -28,6 +28,11 @@ internal class NativeDocument(
    */
   private val layouts: DoubleArray,
   /**
+   * The `{1,3-5}` line marks across every block in the range: a count per block
+   * and then that many inclusive `first,last` pairs, in block order.
+   */
+  private val markValues: IntArray,
+  /**
    * Each block's formula, one entry per block per [MATH_STRIDE] fields.
    *
    * A separate table from [layouts] because these are the document's own ems
@@ -227,7 +232,32 @@ internal class NativeDocument(
     title = blocks[block * BLOCK_STRIDE + 13].let { if (it >= 0) strings[it] else "" },
     startLine = blocks[block * BLOCK_STRIDE + 14],
     noLineNumbers = blocks[block * BLOCK_STRIDE + 15] != 0,
+    marks = marksOf(block),
   )
+
+  /**
+   * The fence's line marks, read out of the flat mark list.
+   *
+   * A count per block and then that many inclusive `first,last` pairs, walked
+   * from the front on each read: the list is built once per document read and a
+   * document with no marks is empty, which is the whole of what this costs in
+   * every case but one.
+   */
+  private fun marksOf(block: Int): List<IntArray> {
+    val found = ArrayList<IntArray>()
+    var at = 0
+    for (index in 0..block) {
+      val count = blocks[index * BLOCK_STRIDE + 17]
+      if (index == block) {
+        for (pair in 0 until count) {
+          found.add(intArrayOf(markValues[at + pair * 2], markValues[at + pair * 2 + 1]))
+        }
+        return found
+      }
+      at += count * 2
+    }
+    return found
+  }
 
   private fun cell(block: Int, column: Int) = (blocks[block * BLOCK_STRIDE + 8] + column) * CELL_STRIDE
 
@@ -256,7 +286,7 @@ internal class NativeDocument(
   fun tokenClass(token: Int) = tokens[token * TOKEN_STRIDE + 2]
 
   companion object {
-    private const val BLOCK_STRIDE = 17
+    private const val BLOCK_STRIDE = 18
     private const val CELL_STRIDE = 3
     private const val CONTAINER_STRIDE = 6
     private const val RUN_STRIDE = 4
@@ -629,6 +659,7 @@ internal object DownstreamNative {
       layouts = parts[7] as DoubleArray,
       maths = parts[8] as DoubleArray,
       formulaTable = parts.getOrNull(9) as? DoubleArray ?: DoubleArray(0),
+      markValues = parts.getOrNull(10) as? IntArray ?: IntArray(0),
     )
   }
 
