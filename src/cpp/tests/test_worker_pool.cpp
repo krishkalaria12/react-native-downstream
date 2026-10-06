@@ -119,37 +119,35 @@ bool preparedDocumentsAreSharedAndPrepared() {
 
 /// A code layout that wraps every block except one, which is the choice set the
 /// test is about.
-CodeLayout wrappedWithToggle(uint32_t ordinal) {
-  CodeLayout code;
-  code.props.wrap = true;
-  code.choices.wrapToggles = {ordinal};
+/// A hint's code props with one block's wrap toggled, which is the smallest
+/// thing that makes two hints different layouts.
+CodeLayoutProps wrappedWithToggle(uint32_t ordinal) {
+  CodeLayoutProps code{true, true, 400};
+  (void)ordinal;
   return code;
+}
+
+ReaderChoices togglesAt(uint32_t ordinal) {
+  ReaderChoices choices;
+  choices.wrapToggles = {ordinal};
+  return choices;
 }
 
 /// The same, with two blocks unwrapped rather than one.
-CodeLayout wrappedWithToggles(std::vector<uint32_t> ordinals) {
-  CodeLayout code;
-  code.props.wrap = true;
-  code.choices.wrapToggles = std::move(ordinals);
-  return code;
-}
-
-/// Every block wrapped and none chosen against it, which is the empty choice set
-/// the dedup below needs.
-CodeLayout wrappedAtDefaultCap() {
-  CodeLayout code;
-  code.props.wrap = true;
-  return code;
+ReaderChoices togglesAt(std::vector<uint32_t> ordinals) {
+  ReaderChoices choices;
+  choices.wrapToggles = std::move(ordinals);
+  return choices;
 }
 
 bool preparedDocumentsUseTheirOwnHints() {
   const auto unrelated = ThemeRegistry::intern({theme::kSlotParagraphFontSize}, {30}, {});
   const auto requested = ThemeRegistry::intern({theme::kSlotParagraphFontSize}, {18}, {});
   RenderPreparer::install(&recordPrepare);
-  RenderPreparer::noteLayout({2, 280, kChromeCodeWrap, wrappedWithToggle(9), unrelated});
-  RenderPreparer::noteLayout({1.5f, 320, kChromeTableToolbar, wrappedWithToggle(7), unrelated});
+  RenderPreparer::noteLayout({2, 280, kChromeCodeWrap, wrappedWithToggle(9), togglesAt(9), unrelated});
+  RenderPreparer::noteLayout({1.5f, 320, kChromeTableToolbar, wrappedWithToggle(7), togglesAt(7), unrelated});
 
-  const LayoutHint owned{1, 0, kChromeCodeHeader, wrappedWithToggles({1, 3}), requested};
+  const LayoutHint owned{1, 0, kChromeCodeHeader, CodeLayoutProps{true, true, 400}, togglesAt({1, 3}), requested};
   const auto prepared = PreparedDocument::request("Owned theme and code controls.", owned);
   prepared->runOrWait();
   bool valid = true;
@@ -167,7 +165,7 @@ bool preparedDocumentsUseTheirOwnHints() {
 
   // Recent layouts with identical geometry but different themes/controls seed
   // only one owned preparation, rather than repeating the same text work.
-  RenderPreparer::noteLayout({1.5f, 320, kChromeCodeWrap, wrappedAtDefaultCap(), unrelated});
+  RenderPreparer::noteLayout({1.5f, 320, kChromeCodeWrap, CodeLayoutProps{true, true, 400}, ReaderChoices{}, unrelated});
   const auto deduped = PreparedDocument::request("One layout per owned geometry.", owned);
   deduped->runOrWait();
   size_t distinctCalls = 0;
@@ -178,7 +176,7 @@ bool preparedDocumentsUseTheirOwnHints() {
     }
   }
 
-  const LayoutHint measured{1, 410, kChromeNone, CodeLayout{}, requested};
+  const LayoutHint measured{1, 410, kChromeNone, CodeLayoutProps{}, ReaderChoices{}, requested};
   const auto exact = PreparedDocument::request("A known width needs no speculative preparation.", measured);
   exact->runOrWait();
   size_t exactCalls = 0;

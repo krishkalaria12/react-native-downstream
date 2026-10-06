@@ -6,9 +6,21 @@
 #include <cmath>
 #include <cstdint>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace downstream {
+
+/// Which of a reader's choice sets a toggle acts on.
+///
+/// The ordinal in each set counts something different, so a toggle has to say
+/// which one it means: a bare ordinal would let a code wrap land on a table.
+enum class ChoiceKind : uint8_t {
+  Wrap = 0,
+  CodeExpand,
+  TableExpand,
+  DetailsOpen,
+};
 
 /// The code layout inputs that come from props, and so are equal for every block
 /// in one view.
@@ -34,18 +46,38 @@ struct CodeLayoutProps {
 };
 
 /**
- * The reader's own per-block choices, by code ordinal, each sorted.
+ * The reader's own choices, one set for every kind of collapsible block.
+ *
+ * One type rather than a pair of per-kind ones, because they are one reader's
+ * state: a state update carries all of them, a layout hint has to be enough on
+ * its own, and four copies of the same question is four places they can drift.
+ * The sets are separate because the ordinals are separate counts — a code
+ * ordinal counts code blocks, a table ordinal counts tables, and a details
+ * ordinal counts collapsible blocks — and one set mixing them would let a code
+ * toggle land on a table.
  *
  * Ordinals are counted as the segment plan is built, so they are stable across
  * append-only snapshots and a choice survives streaming.
  */
-struct CodeChoices {
-  /// The blocks whose layout differs from `props.wrap`.
+struct ReaderChoices {
+  /// The code blocks whose layout differs from `props.wrap`.
   std::vector<uint32_t> wrapToggles;
-  /// The blocks whose height cap the expand button lifted.
-  std::vector<uint32_t> expanded;
+  /// The code blocks whose height cap the expand button lifted.
+  std::vector<uint32_t> codeExpanded;
+  /// The tables whose height cap the expand button lifted.
+  std::vector<uint32_t> tableExpanded;
+  /// The collapsible blocks the reader opened, whatever the writer wrote. A
+  /// writer's `open` is the starting state, not a lock: this is the reader's
+  /// answer to it.
+  std::vector<uint32_t> detailsOpen;
 
-  bool operator==(const CodeChoices &) const = default;
+  bool operator==(const ReaderChoices &) const = default;
+
+  /// The same choices with one set's membership of `ordinal` toggled.
+  ReaderChoices toggled(ChoiceKind kind, uint32_t ordinal) const;
+
+  /// The same choices with `ordinal` added to, or removed from, one set.
+  ReaderChoices with(ChoiceKind kind, uint32_t ordinal, bool on) const;
 };
 
 /// Everything that decides how code lays out: the props and the reader's choices.
@@ -56,10 +88,18 @@ struct CodeChoices {
 /// would repeat the drift the refactor exists to remove.
 struct CodeLayout {
   CodeLayoutProps props;
-  CodeChoices choices;
+  ReaderChoices choices;
 
   bool operator==(const CodeLayout &) const = default;
 };
+
+/// The one set of reader choices, whichever props go with it. A convenience for
+/// the paths that have a hint rather than a layout: the view keeps whole layouts
+/// because it draws with them, and the worker keeps a hint because it measures
+/// with it, and neither should have to rebuild the other's bundle by hand.
+inline CodeLayout codeLayout(CodeLayoutProps props, const ReaderChoices &choices) {
+  return CodeLayout{std::move(props), choices};
+}
 
 /// How one code block lays out. The only place props, choices, and meta meet.
 struct CodeBlockLayout {
@@ -85,6 +125,26 @@ CodeBlockLayout resolveCodeBlock(const CodeLayout &layout, uint32_t ordinal, con
 /// True when `ordinal` is in `values`, which callers keep sorted.
 inline bool hasChoice(const std::vector<uint32_t> &values, uint32_t ordinal) {
   return std::binary_search(values.begin(), values.end(), ordinal);
+}
+
+/// The set one kind of choice lives in.
+inline std::vector<uint32_t> &choiceSet(ReaderChoices &choices, ChoiceKind kind) {
+  switch (kind) {
+    case ChoiceKind::Wrap:
+      return choices.wrapToggles;
+    case ChoiceKind::CodeExpand:
+      return choices.codeExpanded;
+    case ChoiceKind::TableExpand:
+      return choices.tableExpanded;
+    case ChoiceKind::DetailsOpen:
+      return choices.detailsOpen;
+  }
+  return choices.codeExpanded;
+}
+
+/// The same set, read-only, so a `const` decision reads the same way as a change.
+inline const std::vector<uint32_t> &choiceSet(const ReaderChoices &choices, ChoiceKind kind) {
+  return choiceSet(const_cast<ReaderChoices &>(choices), kind);
 }
 
 /// Adds or removes `ordinal`, keeping the set sorted, and returns whether it is

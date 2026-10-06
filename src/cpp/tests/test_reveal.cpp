@@ -543,9 +543,9 @@ void testCaret() {
   // A layout hint that differs only in the caret is a different layout, because
   // the placeholder is in the measured text.
   LayoutHint plain(1, 320);
-  LayoutHint withCaret(1, 320, kChromeNone, CodeLayout{}, PlacedCaret{CaretKind::Block, CaretPlace::AfterText});
+  LayoutHint withCaret(1, 320, kChromeNone, CodeLayoutProps{}, ReaderChoices{}, PlacedCaret{CaretKind::Block, CaretPlace::AfterText});
   CHECK(!(plain == withCaret), "the caret is part of a layout hint");
-  LayoutHint ownLine(1, 320, kChromeNone, CodeLayout{}, PlacedCaret{CaretKind::Block, CaretPlace::OwnLine});
+  LayoutHint ownLine(1, 320, kChromeNone, CodeLayoutProps{}, ReaderChoices{}, PlacedCaret{CaretKind::Block, CaretPlace::OwnLine});
   CHECK(!(withCaret == ownLine), "an own-line caret is a different layout");
   PlacedCaret resolved;
   resolved.kind = CaretKind::None;

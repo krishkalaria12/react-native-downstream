@@ -39,11 +39,12 @@ public:
   DownstreamMarkdownState() = default;
 
   DownstreamMarkdownState(downstream::DocumentHandle document, Float fontSizeMultiplier, uint32_t chrome = 0,
-                          downstream::CodeLayout code = {}, downstream::Theme::Handle theme = nullptr,
+                          downstream::CodeLayoutProps code = {}, downstream::Theme::Handle theme = nullptr,
                           downstream::PlacedCaret caret = {},
                           downstream::ImageStateLayout images = {},
                           downstream::HostLayout hosts = {},
-                          downstream::TableLayout tables = {})
+                          downstream::TableLayoutProps tables = {},
+                          downstream::ReaderChoices choices = {})
       : document(std::move(document)),
         fontSizeMultiplier(fontSizeMultiplier),
         chrome(chrome),
@@ -52,21 +53,19 @@ public:
         caret(caret),
         images(std::move(images)),
         hosts(std::move(hosts)),
-        tables(std::move(tables)) {}
+        tables(std::move(tables)),
+        choices(std::move(choices)) {}
 
   downstream::DocumentHandle document;
   Float fontSizeMultiplier{1.0};
   /// See `chromeForProps`. The resolved value travels with the state so the view
   /// lays out at the height the node measured.
   uint32_t chrome{downstream::kChromeNone};
-  /// The code layout: the `lineNumbers`, `codeBlockWrap`, and `codeBlockMaxHeight`
-  /// props, plus the reader's own per-block wrap and expand choices.
-  ///
-  /// The choices are the reader's state rather than a revision of it, because
-  /// the platforms need the decisions themselves, not a number that says they
-  /// changed. `chrome` cannot stand in for them: it says every code block wraps
-  /// or that not all of them do, and a document with a mix needs the sets.
-  downstream::CodeLayout code;
+  /// The code block's props: `lineNumbers`, `codeBlockWrap`, and
+  /// `codeBlockMaxHeight`. The reader's own choices are beside it in `choices`
+  /// rather than inside it, because they are the same set for every kind of
+  /// collapsible block and one set is what travels in one state update.
+  downstream::CodeLayoutProps code;
   /// The theme the node measured with. It travels with the state so a mounted
   /// frame cannot mix sizes from one theme with drawing from another, the same
   /// way `chrome` does. Null means the default theme.
@@ -92,14 +91,28 @@ public:
   /// changes size is a change to this view and not to the Markdown, and it is
   /// re-measured and re-mounted without a React render.
   downstream::HostLayout hosts;
-  /// The table layout: the `tableMaxHeight` prop and the reader's own per-table
-  /// expand choices.
+  /// The table's prop: `tableMaxHeight`.
   ///
   /// In the state for the reason `code` is: a table's height is a decision the
   /// view and the measurement have to make the same way, and the reader's choice
   /// is state rather than a revision of it, so it reaches the platform through
   /// the one path a native view has for changing its own layout.
-  downstream::TableLayout tables;
+  downstream::TableLayoutProps tables;
+  /// The reader's own choices, every kind together: which code blocks wrap or
+  /// are uncapped, which tables are uncapped, and which collapsible blocks are
+  /// open.
+  ///
+  /// The choices rather than a revision of them, because the platforms need the
+  /// decisions themselves, not a number that says they changed. `chrome` cannot
+  /// stand in for them: it says every code block wraps or that not all of them
+  /// do, and a document with a mix needs the sets.
+  downstream::ReaderChoices choices;
+
+  /// The code bundle for `code` and `choices`, which is what the platforms
+  /// resolve a block against.
+  downstream::CodeLayout codeLayout() const { return downstream::codeLayout(code, choices); }
+  /// The table bundle, likewise.
+  downstream::TableLayout tableLayout() const { return downstream::tableLayout(tables, choices); }
 
   /// The theme to draw with, resolving null to the default so a platform never
   /// has to check.
@@ -113,7 +126,7 @@ public:
   /// The layout of the code block at `ordinal`, from the code layout and that
   /// block's own fence meta. The one definition both platforms call.
   downstream::CodeBlockLayout layoutOf(uint32_t ordinal, const downstream::FenceMeta &meta) const {
-    return downstream::resolveCodeBlock(code, ordinal, meta);
+    return downstream::resolveCodeBlock(codeLayout(), ordinal, meta);
   }
 
   /// Whether the code block at `ordinal` is drawn by a React child rather than
@@ -123,8 +136,8 @@ public:
   /// A copy with `ordinal` toggled and its chrome resolved again.
   DownstreamMarkdownState toggledWrap(uint32_t ordinal, uint32_t controls) const {
     DownstreamMarkdownState next(*this);
-    downstream::toggleChoice(next.code.choices.wrapToggles, ordinal);
-    next.chrome = chromeForProps(controls, next.code);
+    next.choices = next.choices.toggled(downstream::ChoiceKind::Wrap, ordinal);
+    next.chrome = chromeForProps(controls, next.code, next.choices);
     return next;
   }
 
@@ -132,8 +145,8 @@ public:
   /// resolved again.
   DownstreamMarkdownState toggledExpand(uint32_t ordinal, uint32_t controls) const {
     DownstreamMarkdownState next(*this);
-    downstream::toggleChoice(next.code.choices.expanded, ordinal);
-    next.chrome = chromeForProps(controls, next.code);
+    next.choices = next.choices.toggled(downstream::ChoiceKind::CodeExpand, ordinal);
+    next.chrome = chromeForProps(controls, next.code, next.choices);
     return next;
   }
 
@@ -145,29 +158,43 @@ public:
   /// know which list a caller meant and could get it wrong silently.
   DownstreamMarkdownState toggledTableExpand(uint32_t ordinal) const {
     DownstreamMarkdownState next(*this);
-    downstream::toggleChoice(next.tables.choices.expanded, ordinal);
+    next.choices = next.choices.toggled(downstream::ChoiceKind::TableExpand, ordinal);
+    return next;
+  }
+
+  /// A copy with one collapsible block's body shown or hidden.
+  ///
+  /// Its own method for the same reason `toggledTableExpand` is one: the
+  /// ordinal counts collapsible blocks, so a call that took a bare ordinal would
+  /// not say which of the reader's four sets it meant.
+  DownstreamMarkdownState toggledDetails(uint32_t ordinal) const {
+    DownstreamMarkdownState next(*this);
+    next.choices = next.choices.toggled(downstream::ChoiceKind::DetailsOpen, ordinal);
     return next;
   }
 
   /// A copy with a new table cap, which is what the `tableMaxHeight` prop needs.
   DownstreamMarkdownState withTableCap(downstream::TableLayoutProps props) const {
     DownstreamMarkdownState next(*this);
-    next.tables.props = props;
+    next.tables = props;
     return next;
   }
 
   /// The layout of the table at `ordinal`. The one definition both platforms
   /// call, beside `layoutOf` for a code block.
+  ///
+  /// `writtenOpen` is the writer's `open` attribute, which the reader's own
+  /// answer overrides either way.
   downstream::TableBlockLayout tableLayoutOf(uint32_t ordinal) const {
-    return downstream::resolveTable(tables, ordinal);
+    return downstream::resolveTable(tableLayout(), ordinal);
   }
 
   /// A copy with the same choices and a chrome resolved for different props,
   /// which is what a change to `controls` or a code layout prop needs.
   DownstreamMarkdownState recoded(uint32_t controls, downstream::CodeLayoutProps props) const {
     DownstreamMarkdownState next(*this);
-    next.code.props = props;
-    next.chrome = chromeForProps(controls, next.code);
+    next.code = props;
+    next.chrome = chromeForProps(controls, next.code, next.choices);
     return next;
   }
 
@@ -199,7 +226,8 @@ public:
         caret(previous.caret),
         images(previous.images),
         hosts(previous.hosts),
-        tables(previous.tables) {
+        tables(previous.tables),
+        choices(previous.choices) {
     if (!data.isObject()) {
       return;
     }
@@ -207,25 +235,28 @@ public:
       chrome = static_cast<uint32_t>(value->asDouble());
     }
     if (auto value = data.get_ptr("codeBlockWrap")) {
-      code.props.wrap = value->asDouble() != 0;
+      code.wrap = value->asDouble() != 0;
     }
     if (auto value = data.get_ptr("lineNumbers")) {
-      code.props.lineNumbers = value->asDouble() != 0;
+      code.lineNumbers = value->asDouble() != 0;
     }
     if (auto value = data.get_ptr("codeBlockMaxHeight")) {
-      code.props.maxHeight = static_cast<float>(value->asDouble());
+      code.maxHeight = static_cast<float>(value->asDouble());
     }
     if (auto value = data.get_ptr("wrapToggles")) {
-      code.choices.wrapToggles = readOrdinals(*value);
+      choices.wrapToggles = readOrdinals(*value);
     }
     if (auto value = data.get_ptr("expanded")) {
-      code.choices.expanded = readOrdinals(*value);
+      choices.codeExpanded = readOrdinals(*value);
     }
     if (auto value = data.get_ptr("tableMaxHeight")) {
-      tables.props.maxHeight = static_cast<float>(value->asDouble());
+      tables.maxHeight = static_cast<float>(value->asDouble());
     }
     if (auto value = data.get_ptr("tableExpanded")) {
-      tables.choices.expanded = readOrdinals(*value);
+      choices.tableExpanded = readOrdinals(*value);
+    }
+    if (auto value = data.get_ptr("detailsOpen")) {
+      choices.detailsOpen = readOrdinals(*value);
     }
     if (auto value = data.get_ptr("caretKind")) {
       caret.kind = static_cast<downstream::CaretKind>(static_cast<int>(value->asDouble()));
@@ -258,13 +289,14 @@ public:
         "fontScale", static_cast<double>(fontSizeMultiplier))("chrome", static_cast<double>(chrome))(
         // The booleans travel as numbers, so the whole state crosses JNI as one
         // type.
-        "codeBlockWrap", code.props.wrap ? 1.0 : 0.0)("lineNumbers", code.props.lineNumbers ? 1.0 : 0.0)(
-        "codeBlockMaxHeight", static_cast<double>(code.props.maxHeight))(
-        "wrapToggles", writeOrdinals(code.choices.wrapToggles))("expanded", writeOrdinals(code.choices.expanded))(
-        // The table cap and its reader's choices, beside the code block's: a table
-        // is the second block kind with a height of its own.
-        "tableMaxHeight", static_cast<double>(tables.props.maxHeight))(
-        "tableExpanded", writeOrdinals(tables.choices.expanded))(
+        "codeBlockWrap", code.wrap ? 1.0 : 0.0)("lineNumbers", code.lineNumbers ? 1.0 : 0.0)(
+        "codeBlockMaxHeight", static_cast<double>(code.maxHeight))(
+        "wrapToggles", writeOrdinals(choices.wrapToggles))("expanded", writeOrdinals(choices.codeExpanded))(
+        // The table cap and the reader's choices, beside the code block's. Every
+        // choice set travels in one map, which is what lets a details toggle
+        // reach the platforms without a fourth state key of its own kind.
+        "tableMaxHeight", static_cast<double>(tables.maxHeight))(
+        "tableExpanded", writeOrdinals(choices.tableExpanded))("detailsOpen", writeOrdinals(choices.detailsOpen))(
         // The caret's two small enums travel as numbers, so the whole state is
         // still one type crossing JNI.
         "caretKind", static_cast<double>(caret.kind))("caretPlace", static_cast<double>(caret.place))(

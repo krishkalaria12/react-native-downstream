@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace downstream {
@@ -49,10 +50,15 @@ struct TableChoices {
 /// Everything that decides how a table lays out: the props and the reader's choices.
 struct TableLayout {
   TableLayoutProps props;
-  TableChoices choices;
+  ReaderChoices choices;
 
   bool operator==(const TableLayout &) const = default;
 };
+
+/// The table bundle for a set of props and the reader's one set of choices.
+inline TableLayout tableLayout(TableLayoutProps props, const ReaderChoices &choices) {
+  return TableLayout{std::move(props), choices};
+}
 
 /// How one table lays out. The only place props, choices, and props meet.
 struct TableBlockLayout {

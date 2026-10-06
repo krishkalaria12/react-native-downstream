@@ -98,20 +98,27 @@ public:
   /// The theme keys on `themeLayoutKey` and not on `id`, so a color-only change
   /// reuses every measured size and Yoga sees nothing at all: the drawing
   /// objects are rebuilt, but no measurement is.
+  ///
+  /// The props of every block kind that has one, and the reader's one set of
+  /// choices, rather than a bundle per kind: a collapsible block's toggle and a
+  /// code block's wrap are the same reader's state, and a cache key that carried
+  /// four copies of it would compare four times to answer one question.
   DocumentMeasurement measure(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
                               const LayoutConstraints &layoutConstraints, SurfaceId surfaceId, uint32_t chrome,
-                              const downstream::CodeLayout &code, const downstream::PlacedCaret &caret,
+                              const downstream::CodeLayoutProps &code, const downstream::PlacedCaret &caret,
                               const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
                               const downstream::Theme::Handle &theme,
-                              const downstream::TableLayout &tables = {}) const;
+                              const downstream::TableLayoutProps &tables = {},
+                              const downstream::ReaderChoices &choices = {}) const;
 
 private:
   DocumentMeasurement measurePlatform(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
                                       Float maximumWidth, SurfaceId surfaceId, uint32_t chrome,
-                                      const downstream::CodeLayout &code, const downstream::PlacedCaret &caret,
+                                      const downstream::CodeLayoutProps &code,
+                                      const downstream::ReaderChoices &choices, const downstream::PlacedCaret &caret,
                                       const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
                                       const downstream::Theme::Handle &theme,
-                                      const downstream::TableLayout &tables = {}) const;
+                                      const downstream::TableLayoutProps &tables = {}) const;
 
   /// The theme's id, or 0 for the default theme, which is its id too.
   static uint64_t themeKey(const downstream::Theme::Handle &theme);
@@ -121,16 +128,21 @@ private:
     Float fontSizeMultiplier;
     Float maximumWidth;
     uint32_t chrome;
-    downstream::CodeLayout code;
+    downstream::CodeLayoutProps code;
     /// The caret, resolved. A caret after the last block is in the measured
     /// text, so two layouts that differ only in the caret are two layouts.
     downstream::PlacedCaret caret;
     downstream::ImageLayout images;
     downstream::HostLayout hosts;
-    /// The table layout, for the same reason `code` is in the key: a capped table
+    /// The table's cap, for the same reason `code` is in the key: a capped table
     /// and an expanded one are different heights, so they are different
     /// measurements.
-    downstream::TableLayout tables;
+    downstream::TableLayoutProps tables;
+    /// The reader's one set of choices. In the key for the reason the two props
+    /// above are: a wrapped and an unwrapped code block, a capped and an
+    /// uncapped table, and an open and a closed collapsible block are all
+    /// different heights.
+    downstream::ReaderChoices choices;
     /// The theme's layout key, which is 0 for the default theme.
     uint64_t themeLayoutKey;
     DocumentMeasurement measurement;

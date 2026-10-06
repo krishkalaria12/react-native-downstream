@@ -134,11 +134,11 @@ private:
   /// than baked into a segment's text.
   uint32_t chromeFor(const DownstreamMarkdownState &state) const;
 
-  /// The table layout the props and the state's choices together describe. Its
-  /// own function beside `codeLayout`, for the same reason: the two choices are
-  /// keyed by different ordinals, and one function taking both would have to be
-  /// told which a caller meant.
-  downstream::TableLayout tableLayout(const DownstreamMarkdownState &state) const;
+  /// The table's cap. Its own function beside `codeProps` for the same reason
+  /// one takes props and the reader's choices elsewhere: a prop change lands in
+  /// props a revision before the state that records it does, so measurement
+  /// reads props rather than the state's copy of them.
+  downstream::TableLayoutProps tableProps(const DownstreamMarkdownState &state) const;
 
   /// The theme these theme props resolve to. Interned only when the props
   /// change, so an unchanged theme costs nothing per revision, and the handle is
@@ -150,10 +150,9 @@ private:
   bool themeUnchanged(const DownstreamMarkdownViewProps &previous) const;
   /// The theme's id, or 0 for the default one, which is its id too.
   uint64_t themeId() const;
-  /// The code layout the props and the state's choices together describe. The
-  /// props are read here rather than from the state, because a prop change
-  /// lands in props a revision before the state that records it does.
-  downstream::CodeLayout codeLayout(const DownstreamMarkdownState &state) const;
+  /// The code block's props. Read here rather than from the state, for the same
+  /// reason `tableProps` reads the table's.
+  downstream::CodeLayoutProps codeProps(const DownstreamMarkdownState &state) const;
   /// What each image in the document is, from the process-wide size cache and
   /// the props. Rebuilt on every measurement, which is cheap: the cache is a
   /// lookup per image and a document has as many images as it has pictures.

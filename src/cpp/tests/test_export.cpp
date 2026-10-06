@@ -228,26 +228,26 @@ void testWrapChoices() {
 
   // The chrome bit says only whether every block wraps, and the toggle set is
   // what fills in a mixed document.
-  CHECK((chromeForProps(ControlBits::CodeWrap, wrapped) & kChromeCodeWrap) != 0,
+  CHECK((chromeForProps(ControlBits::CodeWrap, CodeLayoutProps{true, true, 400}, ReaderChoices{}) & kChromeCodeWrap) != 0,
         "no toggles with the prop on is all-wrapping chrome");
-  CHECK((chromeForProps(ControlBits::CodeWrap, mixedWrapped) & kChromeCodeWrap) == 0,
+  CHECK((chromeForProps(ControlBits::CodeWrap, CodeLayoutProps{true, true, 400}, mixedWrapped.choices) & kChromeCodeWrap) == 0,
         "any toggle clears the all-wrapping bit");
-  CHECK((chromeForProps(ControlBits::CodeWrap, mixedUnwrapped) & kChromeCodeWrap) == 0,
+  CHECK((chromeForProps(ControlBits::CodeWrap, CodeLayoutProps{}, mixedUnwrapped.choices) & kChromeCodeWrap) == 0,
         "the prop off is never all-wrapping chrome");
 
   // The header and the toolbar do not depend on any of this.
-  CHECK((chromeForProps(ControlBits::CodeCopy, mixedUnwrapped) & kChromeCodeHeader) != 0,
+  CHECK((chromeForProps(ControlBits::CodeCopy, CodeLayoutProps{}, mixedUnwrapped.choices) & kChromeCodeHeader) != 0,
         "a copy control still gives a code block its header");
-  CHECK((chromeForProps(ControlBits::CodeExpand, unwrapped) & kChromeCodeHeader) != 0,
+  CHECK((chromeForProps(ControlBits::CodeExpand, CodeLayoutProps{}, ReaderChoices{}) & kChromeCodeHeader) != 0,
         "an expand control alone still gives a code block its header");
-  CHECK((chromeForProps(ControlBits::TableDownload, unwrapped) & kChromeTableToolbar) != 0,
+  CHECK((chromeForProps(ControlBits::TableDownload, CodeLayoutProps{}, ReaderChoices{}) & kChromeTableToolbar) != 0,
         "a table download still gives a table its toolbar");
-  CHECK((chromeForProps(0, unwrapped) & (kChromeCodeHeader | kChromeTableToolbar)) == 0,
+  CHECK((chromeForProps(0, CodeLayoutProps{}, ReaderChoices{}) & (kChromeCodeHeader | kChromeTableToolbar)) == 0,
         "no controls means no chrome at all");
 
   // The wrap control being off is a different thing from the prop being off: the
   // button disappears but the layout the prop asked for stays.
-  CHECK((chromeForProps(0, wrapped) & kChromeCodeWrap) == 0, "no wrap control means no wrap bit");
+  CHECK((chromeForProps(0, CodeLayoutProps{true, true, 400}, ReaderChoices{}) & kChromeCodeWrap) == 0, "no wrap control means no wrap bit");
 }
 
 // ----------------------------------------------------------- line numbers
@@ -285,7 +285,7 @@ void testCodeBlockLayout() {
   // The cap, and the expand choice that removes it for one block.
   CHECK(numbers(capped, 0, plain).maxHeight == 400.0f, "the cap prop reaches the block");
   CodeLayout expanded = capped;
-  expanded.choices.expanded = {1};
+  expanded.choices.codeExpanded = {1};
   CHECK(numbers(expanded, 1, plain).maxHeight == 0.0f, "an expanded block has no cap");
   CHECK(numbers(expanded, 0, plain).maxHeight == 400.0f, "one expanded block does not cap its neighbour");
   CHECK(numbers(capped, 0, plain).maxHeight == 400.0f, "an uncapped layout leaves the cap alone");
@@ -302,7 +302,7 @@ void testCodeBlockLayout() {
   // With no cap there is nothing to collapse back to, so a leftover choice does
   // not turn into a collapse button.
   CodeLayout staleExpand = uncapped;
-  staleExpand.choices.expanded = {0};
+  staleExpand.choices.codeExpanded = {0};
   CHECK(!numbers(staleExpand, 0, plain).expanded, "a block with no cap is never expanded");
 }
 
@@ -324,7 +324,7 @@ void testTableLayout() {
   CHECK(!tables(capped, 0).expanded, "no choice means no expansion");
 
   TableLayout expanded = capped;
-  expanded.choices.expanded = {1};
+  expanded.choices.tableExpanded = {1};
   CHECK(tables(expanded, 1).maxHeight == 0.0f, "an expanded table has no cap");
   CHECK(tables(expanded, 1).expanded, "an expanded table says so, so it can collapse again");
   CHECK(tables(expanded, 0).maxHeight == 300.0f, "one expanded table does not cap its neighbour");
@@ -340,8 +340,17 @@ void testTableLayout() {
   // With no cap there is nothing to collapse back to, so a leftover choice does
   // not turn into a collapse button.
   TableLayout staleExpand = uncapped;
-  staleExpand.choices.expanded = {0};
+  staleExpand.choices.tableExpanded = {0};
   CHECK(!tables(staleExpand, 0).expanded, "a table with no cap is never expanded");
+
+  // The two caps read different sets of the reader's one choice bundle, so
+  // expanding a code block never uncaps a table that happens to share its
+  // ordinal. This is the property that lets one set of choices replace two.
+  TableLayout codeOnly = capped;
+  codeOnly.choices.codeExpanded = {1};
+  CHECK(!tables(codeOnly, 1).expanded, "a code expand does not uncap a table");
+  CHECK(resolveCodeBlock(CodeLayout{CodeLayoutProps{true, true, 400}, codeOnly.choices}, 1, FenceMeta{}).expanded,
+        "and the code block is the one that expands");
 
   // A negative ordinal is a caller that does not know which table this is, and
   // the answer is the same one an uncapped table gets: no cap, and nothing to

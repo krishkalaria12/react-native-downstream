@@ -122,6 +122,15 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    * drawn one cannot disagree about a cap.
    */
   private var tableLayout = TableLayout()
+
+  /**
+   * The reader's one set of choices, beside the two layouts that carry it.
+   *
+   * A collapsible block's toggle reads from here rather than from either layout,
+   * because it is neither a code block's nor a table's decision, and putting it
+   * in one of them would make that kind's state a place the other two are read.
+   */
+  private var readerChoices = ReaderChoices()
   private var csvSeparator = ","
   private var codeFilename = "file"
   private var tableFilename = "table"
@@ -474,9 +483,17 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     requestLayout()
   }
 
-  /** The reader's own per-block choices, as the state carries them. */
+  /**
+   * The reader's own per-block choices, as the state carries them.
+   *
+   * Only the two code sets are replaced. A state update carries all four, so the
+   * other two arrive again on the next one, and reading them from the current
+   * value rather than from `{}` is what keeps a table toggle from being undone by
+   * a code state update that happened to land later.
+   */
   fun setCodeChoices(wrapToggles: IntArray, expanded: IntArray) {
-    val choices = CodeChoices(wrapToggles, expanded)
+    val choices = codeLayout.choices.replace(ChoiceKind.Wrap, wrapToggles)
+      .replace(ChoiceKind.CodeExpand, expanded)
     if (choices == codeLayout.choices) return
     codeLayout = CodeLayout(codeLayout.props, choices)
     applySettledState()
@@ -498,9 +515,18 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   /** The reader's own per-table choices, as the state carries them. */
   fun setTableChoices(expanded: IntArray) {
-    val choices = TableChoices(expanded)
+    val choices = tableLayout.choices.replace(ChoiceKind.TableExpand, expanded)
     if (choices == tableLayout.choices) return
-    tableLayout = TableLayout(tableLayout.props, choices)
+    tableLayout = tableLayout.withChoices(choices)
+    applySettledState()
+    requestLayout()
+  }
+
+  /** The collapsible blocks the reader opened, as the state carries them. */
+  fun setDetailsChoices(open: IntArray) {
+    val choices = readerChoices.replace(ChoiceKind.DetailsOpen, open)
+    if (choices == readerChoices) return
+    readerChoices = choices
     applySettledState()
     requestLayout()
   }
@@ -1085,10 +1111,10 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    * render. The whole code layout travels with it, because together the props and
    * the sets decide each block's height.
    */
-  fun toggleWrap(ordinal: Int) = updateChoice { it.copyWith(ordinal) }
+  fun toggleWrap(ordinal: Int) = updateChoice { it.copyWith(ChoiceKind.Wrap, ordinal) }
 
   /** The same, for the cap the expand button lifts. */
-  fun toggleExpand(ordinal: Int) = updateChoice { it.copyWithExpand(ordinal) }
+  fun toggleExpand(ordinal: Int) = updateChoice { it.copyWith(ChoiceKind.CodeExpand, ordinal) }
 
   /**
    * The same, for the cap a table's expand button lifts. Separate from
@@ -1098,7 +1124,9 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    */
   fun toggleTableExpand(ordinal: Int) {
     if (stateWrapper == null) return
-    val layout = tableLayout.copy(choices = tableLayout.choices.copyWithExpand(ordinal))
+    val layout = tableLayout.withChoices(
+      tableLayout.choices.copyWith(ChoiceKind.TableExpand, ordinal),
+    )
     // The chrome is recomputed from the code layout, which did not change: a
     // table's cap and a code card's wrap are separate bits and this press moved
     // neither, so there is nothing to recompute here.
@@ -1108,7 +1136,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     pushTableState(layout)
   }
 
-  private fun updateChoice(toggle: (CodeChoices) -> CodeChoices) {
+  private fun updateChoice(toggle: (ReaderChoices) -> ReaderChoices) {
     if (stateWrapper == null) return
     val choices = toggle(codeLayout.choices)
     val layout = CodeLayout(codeLayout.props, choices)
@@ -1137,7 +1165,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     // shadow node use; this side converts to pixels when it lays out.
     map.putDouble("codeBlockMaxHeight", PixelUtil.toDIPFromPixel(layout.props.maxHeight).toDouble())
     map.putArray("wrapToggles", intArrayOf(choices.wrapToggles))
-    map.putArray("expanded", intArrayOf(choices.expanded))
+    map.putArray("expanded", intArrayOf(choices.codeExpanded))
     wrapper.updateState(map)
   }
 
@@ -1156,10 +1184,11 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     map.putDouble("lineNumbers", if (codeLayout.props.lineNumbers) 1.0 else 0.0)
     map.putDouble("codeBlockMaxHeight", PixelUtil.toDIPFromPixel(codeLayout.props.maxHeight).toDouble())
     map.putArray("wrapToggles", intArrayOf(codeLayout.choices.wrapToggles))
-    map.putArray("expanded", intArrayOf(codeLayout.choices.expanded))
+    map.putArray("expanded", intArrayOf(codeLayout.choices.codeExpanded))
     // The cap crosses as points, for the same reason the code cap does.
     map.putDouble("tableMaxHeight", PixelUtil.toDIPFromPixel(layout.props.maxHeight).toDouble())
-    map.putArray("tableExpanded", intArrayOf(layout.choices.expanded))
+    map.putArray("tableExpanded", intArrayOf(layout.choices.tableExpanded))
+    map.putArray("detailsOpen", intArrayOf(layout.choices.detailsOpen))
     wrapper.updateState(map)
   }
 

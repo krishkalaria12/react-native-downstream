@@ -23,35 +23,23 @@ internal data class TableLayoutProps(
 }
 
 /**
- * The reader's own per-table choices, by table ordinal, each ascending.
- *
- * Ordinals are counted as the segment plan is built, so they are stable across
- * append-only snapshots and a choice survives streaming — the same property
- * `CodeChoices` has, and the same reason.
- */
-internal class TableChoices(
-  /** The tables whose height cap the expand button lifted. */
-  val expanded: IntArray = IntArray(0),
-) {
-  override fun equals(other: Any?): Boolean =
-    other is TableChoices && expanded.contentEquals(other.expanded)
-
-  override fun hashCode(): Int = expanded.contentHashCode()
-
-  /** The same choices with [ordinal]'s expand choice toggled, kept ascending. */
-  fun copyWithExpand(ordinal: Int): TableChoices = TableChoices(CodeChoices.toggled(expanded, ordinal))
-}
-
-/**
  * How one table lays out. The only place props, choices, and props meet.
  *
  * A data class rather than the three loose fields a `CodeLayout` has, because a
  * table's cap is one number and its choice is one set.
  */
-internal data class TableLayout(
+internal class TableLayout(
   val props: TableLayoutProps = TableLayoutProps(),
-  val choices: TableChoices = TableChoices(),
-)
+  val choices: ReaderChoices = ReaderChoices(),
+) {
+  override fun equals(other: Any?): Boolean =
+    other is TableLayout && props == other.props && choices == other.choices
+
+  override fun hashCode(): Int = 31 * props.hashCode() + choices.hashCode()
+
+  /** The same props with a new set of the reader's choices. */
+  fun withChoices(choices: ReaderChoices): TableLayout = TableLayout(props, choices)
+}
 
 /** How one table lays out, from the layout and its ordinal. Mirrors `resolveTable`. */
 internal data class TableBlockLayout(
@@ -73,7 +61,8 @@ internal fun resolveTable(layout: TableLayout, ordinal: Int): TableBlockLayout {
   if (ordinal < 0) {
     return TableBlockLayout()
   }
-  val expanded = layout.props.maxHeight > 0 && hasChoice(layout.choices.expanded, ordinal)
+  val expanded =
+    layout.props.maxHeight > 0 && hasChoice(layout.choices.set(ChoiceKind.TableExpand), ordinal)
   return TableBlockLayout(
     maxHeight = if (expanded) 0f else layout.props.maxHeight,
     expanded = expanded,

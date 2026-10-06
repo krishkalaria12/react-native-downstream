@@ -9,7 +9,8 @@ TableBlockLayout resolveTable(const TableLayout &layout, int32_t ordinal) {
   TableBlockLayout table;
   // Expanded only while there is a cap to lift, so a choice left over from
   // before the prop went to 0 does not offer to collapse an uncapped table.
-  table.expanded = layout.props.maxHeight > 0 && hasChoice(layout.choices.expanded, ordinal);
+  table.expanded =
+      layout.props.maxHeight > 0 && hasChoice(choiceSet(layout.choices, ChoiceKind::TableExpand), ordinal);
   // An expanded table has no cap, and so has an uncapped one: both reach the
   // view as the single "no cap" value, as a code block's does.
   table.maxHeight = table.expanded ? 0.0f : layout.props.maxHeight;

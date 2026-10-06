@@ -2,6 +2,7 @@
 
 #include "Caret.h"
 #include "CodeLayout.h"
+#include "DetailsLayout.h"
 #include "Document.h"
 #include "ImageLayout.h"
 #include "TableLayout.h"
@@ -35,25 +36,30 @@ struct LayoutHint {
   /// See `Chrome`. Height depends on it, so two layouts that differ only here
   /// are two layouts.
   uint32_t chrome{kChromeNone};
-  /// The code layout this measurement is at: the props and the reader's choices
-  /// together. Every input that changes a card's height travels in here, so a
-  /// worker measures the layout the view is about to draw.
-  ///
-  /// These are the reader's own choices rather than a revision of them: a
-  /// revision would separate two states that lay out identically (a block
-  /// toggled on and back off), and the hint has to be enough on its own for the
-  /// worker to measure the same heights the view draws. The choice sets are
-  /// almost always empty, so the comparison below is one size check in practice.
-  CodeLayout code;
   /**
-   * The table layout: the cap and the reader's per-table expand choices.
+   * The code block's props, from the app.
    *
-   * It travels beside `code` for the same reason and with the same property:
-   * every input that changes a table's height has to reach the worker, or the
-   * worker would measure a layout the view is not about to draw. A table's
-   * toolbar is already in `chrome`, so only the grid's cap is new here.
+   * Props and the reader's choices are separate fields rather than one
+   * `CodeLayout`, because the choices are the same set for every kind of
+   * collapsible block: holding them once is what lets a details toggle and a
+   * code toggle travel through one state update instead of two.
    */
-  TableLayout tables;
+  CodeLayoutProps code;
+  /**
+   * The table's props: the cap, and nothing else. A table's toolbar is already
+   * in `chrome`, so only the grid's cap is new here.
+   */
+  TableLayoutProps tables;
+  /**
+   * The reader's own choices, every kind together.
+   *
+   * These are the choices rather than a revision of them: a revision would
+   * separate two states that lay out identically (a block toggled on and back
+   * off), and the hint has to be enough on its own for the worker to measure the
+   * same heights the view draws. The sets are almost always empty, so the
+   * comparison below is a handful of size checks in practice.
+   */
+  ReaderChoices choices;
   /// The caret to draw, resolved against the document. It is a height, like
   /// `chrome`, because the caret's placeholder is in the measured text: only the
   /// last segment changes, but a layout measured without it and a layout drawn
@@ -85,21 +91,30 @@ struct LayoutHint {
    */
   BlockDirection direction{BlockDirection::Inherit};
 
+  /// The code bundle for `code` and `choices`, which is what a caller that has
+  /// a hint rather than a layout resolves against.
+  CodeLayout codeLayout() const { return downstream::codeLayout(code, choices); }
+  /// The table bundle for `tables` and `choices`.
+  TableLayout tableLayout() const { return downstream::tableLayout(tables, choices); }
+
   // Constructors rather than aggregate initialisation, so a caller that names
-  // only a width and a scale says so instead of leaving the chrome, the code
-  // layout and the theme to default, and a caller that names all of them cannot
-  // leave one out by accident.
+  // only a width and a scale says so instead of leaving the chrome, the props
+  // and the theme to default, and a caller that names all of them cannot leave
+  // one out by accident.
   LayoutHint() = default;
   LayoutHint(float scale, float at) : fontScale(scale), width(at) {}
-  LayoutHint(float scale, float at, uint32_t chromeIn, CodeLayout codeIn, Theme::Handle themeIn = nullptr)
-      : fontScale(scale), width(at), chrome(chromeIn), code(std::move(codeIn)), theme(std::move(themeIn)) {}
-  LayoutHint(float scale, float at, uint32_t chromeIn, CodeLayout codeIn, PlacedCaret caretIn,
+  LayoutHint(float scale, float at, uint32_t chromeIn, CodeLayoutProps codeIn, ReaderChoices choicesIn,
              Theme::Handle themeIn = nullptr)
-      : fontScale(scale), width(at), chrome(chromeIn), code(std::move(codeIn)), caret(caretIn), theme(std::move(themeIn)) {}
-  LayoutHint(float scale, float at, uint32_t chromeIn, CodeLayout codeIn, PlacedCaret caretIn, ImageLayout imagesIn,
-             Theme::Handle themeIn = nullptr)
-      : fontScale(scale), width(at), chrome(chromeIn), code(std::move(codeIn)), caret(caretIn),
-        images(std::move(imagesIn)), theme(std::move(themeIn)) {}
+      : fontScale(scale), width(at), chrome(chromeIn), code(std::move(codeIn)), choices(std::move(choicesIn)),
+        theme(std::move(themeIn)) {}
+  LayoutHint(float scale, float at, uint32_t chromeIn, CodeLayoutProps codeIn, ReaderChoices choicesIn,
+             PlacedCaret caretIn, Theme::Handle themeIn = nullptr)
+      : fontScale(scale), width(at), chrome(chromeIn), code(std::move(codeIn)), choices(std::move(choicesIn)),
+        caret(caretIn), theme(std::move(themeIn)) {}
+  LayoutHint(float scale, float at, uint32_t chromeIn, CodeLayoutProps codeIn, ReaderChoices choicesIn,
+             PlacedCaret caretIn, ImageLayout imagesIn, Theme::Handle themeIn = nullptr)
+      : fontScale(scale), width(at), chrome(chromeIn), code(std::move(codeIn)), choices(std::move(choicesIn)),
+        caret(caretIn), images(std::move(imagesIn)), theme(std::move(themeIn)) {}
 
   /// Equal when two layouts would draw the same sizes. The theme compares by
   /// id rather than by pointer, so two equal themes are one layout hint and a
@@ -107,8 +122,8 @@ struct LayoutHint {
   /// rendering rather than rebuilding them.
   bool operator==(const LayoutHint &other) const {
     return fontScale == other.fontScale && width == other.width && chrome == other.chrome &&
-           code == other.code && tables == other.tables && caret == other.caret && images == other.images &&
-           direction == other.direction && themeId() == other.themeId();
+           code == other.code && tables == other.tables && choices == other.choices && caret == other.caret &&
+           images == other.images && direction == other.direction && themeId() == other.themeId();
   }
 
   /// The theme's id, or 0 for the default one, which is its id too.

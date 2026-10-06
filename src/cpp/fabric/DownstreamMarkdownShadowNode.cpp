@@ -125,17 +125,20 @@ downstream::Theme::Handle DownstreamMarkdownShadowNode::resolveTheme() const {
 downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale, Float width,
                                                                const downstream::DocumentHandle &document) const {
   const auto &state = getStateData();
+  // The table's cap rides beside the code block's rather than inside it, because
+  // a table's height is a different block kind's decision and mixing them would
+  // make every code wrap toggle rebuild the table measurement. The reader's one
+  // set of choices goes in whole: it is the same set for every kind, so there is
+  // nothing to decide here beyond carrying it.
   downstream::LayoutHint hint{static_cast<float>(fontScale),
                               static_cast<float>(width),
                               chromeFor(state),
-                              codeLayout(state),
+                              codeProps(state),
+                              state.choices,
                               state.caret,
                               imageLayout(document),
                               theme_};
-  // The table layout rides beside the code one rather than inside it, because a
-  // table's height is a different block kind's decision and mixing them would
-  // make every code wrap toggle rebuild the table measurement.
-  hint.tables = tableLayout(state);
+  hint.tables = tableProps(state);
   return hint;
 }
 
@@ -310,32 +313,22 @@ void DownstreamMarkdownShadowNode::relayoutWhenPrepared() const {
   });
 }
 
-/// The code layout the props and the state's choices together describe.
-downstream::CodeLayout DownstreamMarkdownShadowNode::codeLayout(const DownstreamMarkdownState &state) const {
+/// The code block's props, which measurement reads rather than the state's copy
+/// of them, because a prop change lands in props a revision before the state
+/// that records it does.
+downstream::CodeLayoutProps DownstreamMarkdownShadowNode::codeProps(const DownstreamMarkdownState &) const {
   const auto &props = getConcreteProps();
-  downstream::CodeLayout code;
-  // Measuring reads the props rather than the state's copy of them, because a
-  // prop change lands in props a revision before the state that records it does.
-  code.props = {props.codeBlockWrap, props.lineNumbers, static_cast<float>(props.codeBlockMaxHeight)};
-  code.choices = state.code.choices;
-  return code;
+  return {props.codeBlockWrap, props.lineNumbers, static_cast<float>(props.codeBlockMaxHeight)};
 }
 
-/// The table layout the props and the state's choices together describe.
-downstream::TableLayout DownstreamMarkdownShadowNode::tableLayout(
-    const DownstreamMarkdownState &state) const {
+/// The table's cap, read for the same reason `codeProps` reads the code ones.
+downstream::TableLayoutProps DownstreamMarkdownShadowNode::tableProps(const DownstreamMarkdownState &) const {
   const auto &props = getConcreteProps();
-  downstream::TableLayout tables;
-  // Measuring reads the props rather than the state's copy of them, for the same
-  // reason `codeLayout` does: a prop change lands in props a revision before the
-  // state that records it does.
-  tables.props.maxHeight = static_cast<float>(props.tableMaxHeight);
-  tables.choices = state.tables.choices;
-  return tables;
+  return {static_cast<float>(props.tableMaxHeight)};
 }
 
 uint32_t DownstreamMarkdownShadowNode::chromeFor(const DownstreamMarkdownState &state) const {
-  return chromeForProps(getConcreteProps().controls, codeLayout(state));
+  return chromeForProps(getConcreteProps().controls, codeProps(state), state.choices);
 }
 
 /// The `allowedImagePrefixes` prop, as the list `imageUrlAllowed` reads.
@@ -557,8 +550,8 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
   measuredHosts_ = measureSlots(layoutContext, layoutConstraints);
   return layoutManager_
       ->measure(document, layoutContext.fontSizeMultiplier, layoutConstraints, getSurfaceId(), chrome,
-                codeLayout(state), caretFor(document), imageLayout(document), measuredHosts_, theme_,
-                tableLayout(state))
+                codeProps(state), caretFor(document), imageLayout(document), measuredHosts_, theme_,
+                tableProps(state), state.choices)
       .size;
 }
 
@@ -580,8 +573,8 @@ void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
                                 getLayoutMetrics().layoutDirection};
   const DocumentMeasurement measurement =
       layoutManager_->measure(document, layoutContext.fontSizeMultiplier, frame, getSurfaceId(), chromeFor(state),
-                              codeLayout(state), caretFor(document), imageLayout(document), measuredHosts_, theme_,
-                              tableLayout(state));
+                              codeProps(state), caretFor(document), imageLayout(document), measuredHosts_, theme_,
+                              tableProps(state), state.choices);
   if (measurement.slots.empty()) {
     return;
   }
@@ -639,7 +632,7 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   const uint32_t chrome = chromeFor(state);
   // The theme is compared by id rather than by pointer, so a view whose theme
   // resolved to an equal value it already had does not ask for a state update.
-  const downstream::CodeLayout code = codeLayout(state);
+  const downstream::CodeLayoutProps code = codeProps(state);
   // The caret and the image answers are both part of this comparison for the
   // same reason the code layout is: the node measured with one set and would
   // otherwise mount with another, which is a caret or a picture drawn at a
@@ -656,7 +649,7 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   // a capped table measures at one height and an expanded one at another, and a
   // view that mounted with the wrong set would scroll a table by a frame it was
   // not laid out for.
-  const downstream::TableLayout tables = tableLayout(state);
+  const downstream::TableLayoutProps tables = tableProps(state);
   if (document && state.document != document) {
     reportMathErrors(document, state.document);
   }

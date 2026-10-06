@@ -30,6 +30,20 @@ import com.facebook.react.uimanager.PixelUtil
 internal fun ReadableMap.numberAt(key: String, fallback: Double): Double =
   if (hasKey(key) && !isNull(key)) getDouble(key) else fallback
 
+/**
+ * The reader's one set of choices in the map.
+ *
+ * Read once and shared: the two layouts below and a collapsible block's toggle
+ * all draw from it, and reading it three times would let a map that carried one
+ * set produce three different ones.
+ */
+internal fun ReadableMap.toReaderChoices(): ReaderChoices = ReaderChoices(
+  wrapToggles = ordinalsAt("wrapToggles"),
+  codeExpanded = ordinalsAt("expanded"),
+  tableExpanded = ordinalsAt("tableExpanded"),
+  detailsOpen = ordinalsAt("detailsOpen"),
+)
+
 /** The code layout in the map, as the shadow node resolved it. */
 internal fun ReadableMap.toCodeLayout(): CodeLayout = CodeLayout(
   CodeLayoutProps(
@@ -37,13 +51,13 @@ internal fun ReadableMap.toCodeLayout(): CodeLayout = CodeLayout(
     numberAt("lineNumbers", 1.0) != 0.0,
     PixelUtil.toPixelFromDIP(numberAt("codeBlockMaxHeight", 400.0)).toFloat(),
   ),
-  CodeChoices(ordinalsAt("wrapToggles"), ordinalsAt("expanded")),
+  toReaderChoices(),
 )
 
 /** The table layout in the map, as the shadow node resolved it. */
 internal fun ReadableMap.toTableLayout(): TableLayout = TableLayout(
   TableLayoutProps(PixelUtil.toPixelFromDIP(numberAt("tableMaxHeight", 300.0)).toFloat()),
-  TableChoices(ordinalsAt("tableExpanded")),
+  toReaderChoices(),
 )
 
 /**

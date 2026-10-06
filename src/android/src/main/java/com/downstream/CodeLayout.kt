@@ -20,44 +20,96 @@ internal data class CodeLayoutProps(
 )
 
 /**
- * The reader's own per-block choices, by code ordinal, each ascending.
+ * Which of a reader's choice sets a toggle acts on.
+ *
+ * The ordinal in each set counts something different, so a toggle has to say
+ * which one it means: a bare ordinal would let a code wrap land on a table.
+ */
+internal enum class ChoiceKind { Wrap, CodeExpand, TableExpand, DetailsOpen }
+
+/**
+ * The reader's own choices, one set for every kind of collapsible block.
+ *
+ * One type rather than a pair of per-kind ones, because they are one reader's
+ * state: a state update carries all of them, and four copies of the same question
+ * is four places they can drift. The sets are separate because the ordinals are
+ * separate counts — a code ordinal counts code blocks, a table ordinal counts
+ * tables, and a details ordinal counts collapsible blocks.
  *
  * Ordinals are counted as the segment plan is built, so they are stable across
  * append-only snapshots and a choice survives streaming.
  */
-internal class CodeChoices(
+internal class ReaderChoices(
   val wrapToggles: IntArray = IntArray(0),
-  val expanded: IntArray = IntArray(0),
+  val codeExpanded: IntArray = IntArray(0),
+  val tableExpanded: IntArray = IntArray(0),
+  val detailsOpen: IntArray = IntArray(0),
 ) {
   override fun equals(other: Any?): Boolean =
-    other is CodeChoices && wrapToggles.contentEquals(other.wrapToggles) &&
-      expanded.contentEquals(other.expanded)
+    other is ReaderChoices && wrapToggles.contentEquals(other.wrapToggles) &&
+      codeExpanded.contentEquals(other.codeExpanded) &&
+      tableExpanded.contentEquals(other.tableExpanded) &&
+      detailsOpen.contentEquals(other.detailsOpen)
 
-  override fun hashCode(): Int =
-    31 * wrapToggles.contentHashCode() + expanded.contentHashCode()
+  override fun hashCode(): Int {
+    var hash = wrapToggles.contentHashCode()
+    hash = 31 * hash + codeExpanded.contentHashCode()
+    hash = 31 * hash + tableExpanded.contentHashCode()
+    return 31 * hash + detailsOpen.contentHashCode()
+  }
 
-  /** The same choices with [ordinal] toggled, kept ascending. */
-  fun copyWith(ordinal: Int): CodeChoices = CodeChoices(toggled(wrapToggles, ordinal), expanded)
+  /** The set one kind of choice lives in. */
+  fun set(kind: ChoiceKind): IntArray = when (kind) {
+    ChoiceKind.Wrap -> wrapToggles
+    ChoiceKind.CodeExpand -> codeExpanded
+    ChoiceKind.TableExpand -> tableExpanded
+    ChoiceKind.DetailsOpen -> detailsOpen
+  }
 
-  /** The same choices with [ordinal]'s expand choice toggled, kept ascending. */
-  fun copyWithExpand(ordinal: Int): CodeChoices = CodeChoices(wrapToggles, toggled(expanded, ordinal))
+  /** The same choices with one set replaced wholesale, as a state map gives it. */
+  fun replace(kind: ChoiceKind, values: IntArray): ReaderChoices = ReaderChoices(
+    wrapToggles = if (kind == ChoiceKind.Wrap) values else wrapToggles,
+    codeExpanded = if (kind == ChoiceKind.CodeExpand) values else codeExpanded,
+    tableExpanded = if (kind == ChoiceKind.TableExpand) values else tableExpanded,
+    detailsOpen = if (kind == ChoiceKind.DetailsOpen) values else detailsOpen,
+  )
 
-  companion object {
+  /** The same choices with [ordinal] toggled in one set, kept ascending. */
+  fun copyWith(kind: ChoiceKind, ordinal: Int): ReaderChoices = with(kind, ordinal, !set(kind).contains(ordinal))
+
+  /** The same choices with [ordinal] added to or removed from one set. */
+  fun with(kind: ChoiceKind, ordinal: Int, on: Boolean): ReaderChoices {
+    val next = set(kind)
+    if (next.contains(ordinal) == on) return this
+    val values = if (on) insert(next, ordinal) else remove(next, ordinal)
+    return ReaderChoices(
+      wrapToggles = if (kind == ChoiceKind.Wrap) values else wrapToggles,
+      codeExpanded = if (kind == ChoiceKind.CodeExpand) values else codeExpanded,
+      tableExpanded = if (kind == ChoiceKind.TableExpand) values else tableExpanded,
+      detailsOpen = if (kind == ChoiceKind.DetailsOpen) values else detailsOpen,
+    )
+  }
+
+  private companion object {
     /**
      * Adds or removes [ordinal], keeping the set ascending, and returns the new
      * set. Built by hand rather than with a list, because the sets hold one entry
      * per block the reader has touched and are almost always empty.
      */
-    fun toggled(values: IntArray, ordinal: Int): IntArray {
+    fun toggled(values: IntArray, ordinal: Int): IntArray =
+      if (values.contains(ordinal)) remove(values, ordinal) else insert(values, ordinal)
+
+    fun remove(values: IntArray, ordinal: Int): IntArray {
       val index = values.binarySearch(ordinal)
-      if (index >= 0) {
-        // The one copy that excludes it, so nothing else sees a stale set.
-        return IntArray(values.size - 1) { source ->
-          if (source < index) values[source] else values[source + 1]
-        }
+      // The one copy that excludes it, so nothing else sees a stale set.
+      return IntArray(values.size - 1) { source ->
+        if (source < index) values[source] else values[source + 1]
       }
+    }
+
+    fun insert(values: IntArray, ordinal: Int): IntArray {
       // A miss is `-(insertion point) - 1`, so the new entry goes there.
-      val insertAt = -index - 1
+      val insertAt = -values.binarySearch(ordinal) - 1
       val next = IntArray(values.size + 1)
       var source = 0
       for (target in next.indices) {
@@ -71,12 +123,15 @@ internal class CodeChoices(
 /** Everything that decides how code lays out: the props and the reader's choices. */
 internal class CodeLayout(
   val props: CodeLayoutProps = CodeLayoutProps(),
-  val choices: CodeChoices = CodeChoices(),
+  val choices: ReaderChoices = ReaderChoices(),
 ) {
   override fun equals(other: Any?): Boolean =
     other is CodeLayout && props == other.props && choices == other.choices
 
   override fun hashCode(): Int = 31 * props.hashCode() + choices.hashCode()
+
+  /** The same props with a new set of the reader's choices. */
+  fun withChoices(choices: ReaderChoices): CodeLayout = CodeLayout(props, choices)
 }
 
 /** How one code block lays out. */
@@ -141,7 +196,7 @@ internal fun resolveCodeBlock(
 
 /** Expanded only while there is a cap to lift. Mirrors `resolveCodeBlock`. */
 private fun isExpanded(layout: CodeLayout, ordinal: Int): Boolean =
-  layout.props.maxHeight > 0f && hasChoice(layout.choices.expanded, ordinal)
+  layout.props.maxHeight > 0f && hasChoice(layout.choices.set(ChoiceKind.CodeExpand), ordinal)
 
 /**
  * The digits a gutter needs for the widest number it will draw.

@@ -155,6 +155,10 @@ NSString *nameForFormat(NSString *format) {
   /// from the segment, because a control press resolves one table's own layout
   /// and a segment view has no access to the view's props.
   downstream::TableLayout _tableLayout;
+  /// The reader's one set of choices, which the two layouts above both carry.
+  /// Held beside them so a details toggle can be answered from the state without
+  /// either layout being the place it lives.
+  downstream::ReaderChoices _choices;
   std::string _codeFilename;
   std::string _tableFilename;
   std::string _imageFilename;
@@ -206,6 +210,7 @@ NSString *nameForFormat(NSString *format) {
     // The prop's own default, so a props update that never mentions the cap
     // compares equal rather than looking like a change.
     _tableLayout.props.maxHeight = static_cast<float>(defaultProps->tableMaxHeight);
+    _choices = downstream::ReaderChoices{};
     _codeFilename = "file";
     _tableFilename = "table";
     _imageFilename = "image";
@@ -252,15 +257,17 @@ NSString *nameForFormat(NSString *format) {
   // here rebuilds anything.
   const BOOL themeChanged = [self applyTheme];
   if (!themeChanged && data.document == _document && data.fontSizeMultiplier == _fontScale &&
-      data.chrome == _chrome && data.code == _codeLayout && data.tables == _tableLayout &&
-      data.images == _imageState && data.hosts == _hostLayout) {
+      data.chrome == _chrome && data.code == _codeLayout.props &&
+      data.tables == _tableLayout.props && data.choices == _choices && data.images == _imageState &&
+      data.hosts == _hostLayout) {
     return;
   }
   _document = data.document;
   _fontScale = data.fontSizeMultiplier;
   _chrome = data.chrome;
-  _codeLayout = data.code;
-  _tableLayout = data.tables;
+  _codeLayout = downstream::codeLayout(data.code, data.choices);
+  _tableLayout = downstream::tableLayout(data.tables, data.choices);
+  _choices = data.choices;
   _imageState = data.images;
   _hostLayout = data.hosts;
   _documentView.codeLayout = _codeLayout;

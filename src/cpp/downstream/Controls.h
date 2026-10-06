@@ -31,7 +31,19 @@ constexpr uint32_t TableExpand = 1u << 7;
 /// A table's full-screen button. It opens a modal holding a second view, so like
 /// the image's download button it draws nothing and changes no height.
 constexpr uint32_t TableFullscreen = 1u << 8;
+/// A collapsible block's toggle. It shows or hides a body rather than changing
+/// a cap, so it joins no chrome bit: `resolveDetails` answers per block, the
+/// same way the two caps above do.
+constexpr uint32_t DetailsToggle = 1u << 9;
 } // namespace ControlBits
+
+/// Every bit the native `controls` prop can carry. `src/controls.ts` sends the
+/// same number as its `CONTROL_ALL` default and the codegen prop's default, so
+/// the three cannot drift without one of them failing to compile or a test
+/// failing.
+constexpr uint32_t kControlAll = ControlBits::CodeCopy | ControlBits::CodeDownload | ControlBits::TableCopy |
+    ControlBits::TableDownload | ControlBits::CodeWrap | ControlBits::CodeExpand | ControlBits::ImageDownload |
+    ControlBits::TableExpand | ControlBits::TableFullscreen | ControlBits::DetailsToggle;
 
 /// True when any code control is on, so a code block gets a header.
 constexpr bool hasCodeControls(uint32_t controls) {
@@ -63,7 +75,7 @@ constexpr bool hasTableControls(uint32_t controls) {
  * gives that number per block; line numbers narrow the width a wrapped block
  * wraps at, which is a measurement input rather than a chrome row.
  */
-inline uint32_t chromeForProps(uint32_t controls, const CodeLayout &code) {
+inline uint32_t chromeForProps(uint32_t controls, const CodeLayoutProps &code, const ReaderChoices &choices) {
   uint32_t chrome = kChromeNone;
   if (hasCodeControls(controls)) {
     chrome |= kChromeCodeHeader;
@@ -71,7 +83,7 @@ inline uint32_t chromeForProps(uint32_t controls, const CodeLayout &code) {
   if (hasTableControls(controls)) {
     chrome |= kChromeTableToolbar;
   }
-  if ((controls & ControlBits::CodeWrap) != 0 && code.props.wrap && code.choices.wrapToggles.empty()) {
+  if ((controls & ControlBits::CodeWrap) != 0 && code.wrap && choices.wrapToggles.empty()) {
     chrome |= kChromeCodeWrap;
   }
   return chrome;
