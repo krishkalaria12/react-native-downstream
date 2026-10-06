@@ -1210,10 +1210,12 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
 @property (nonatomic) CGFloat contentLeading;
 @property (nonatomic) BOOL rightToLeft;
 @property (nonatomic) uint32_t tableIdentifier;
+@property (nonatomic) int32_t tableOrdinal;
 @property (nonatomic) NSString *firstRowText;
 @property (nonatomic) NSArray<DSContainerInfo *> *containers;
 @property (nonatomic) NSArray<NSNumber *> *columnWidths;
 @property (nonatomic) NSArray<NSNumber *> *rowHeights;
+@property (nonatomic) uint32_t rowCount;
 @property (nonatomic) CGSize tableSize;
 @property (nonatomic) UIEdgeInsets cellPadding;
 @property (nonatomic) NSInteger blockIndex;
@@ -1353,6 +1355,10 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   }
   segment.columnWidths = columnWidths;
   segment.rowHeights = rowHeights;
+  // Read once, at build time, because the cap is counted in rows and the
+  // measurement runs on a worker thread where touching a collection later would
+  // be a data race against the next snapshot's own build.
+  segment.rowCount = static_cast<uint32_t>(rows.count);
   // One border width for the closing grid line, so the last row and column are
   // not clipped by the view that draws the outer edge.
   segment.tableSize = CGSizeMake(std::ceil(tableWidth) + segment.borderWidth,
@@ -1406,6 +1412,9 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   /// component that draws it, so a frame cached for one component's height is
   /// wrong for another's.
   downstream::HostLayout _cachedHosts;
+  /// The table layout the cached frames were built at, for the same reason
+  /// `_cachedCode` is: a capped table and an expanded one are different heights.
+  downstream::TableLayout _cachedTables;
   bool _hasCachedFrames;
   /// Cache native geometry. Measurement needs no NSValue boxing, and each
   /// caller copies only the frames it consumes while holding the cache lock.
@@ -1645,6 +1654,9 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
     // The plan counted the code blocks, so the ordinal comes from there rather
     // than from a walk of the blocks. It is assigned here so a committed segment
     // taken from the cache gets it too, and cannot carry a stale one.
+    if ([built isKindOfClass:DSTableSegment.class] && segment.tableOrdinal >= 0) {
+      ((DSTableSegment *)built).tableOrdinal = segment.tableOrdinal;
+    }
     if ([built isKindOfClass:DSCodeSegment.class] && segment.codeOrdinal >= 0) {
       ((DSCodeSegment *)built).codeOrdinal = static_cast<uint32_t>(segment.codeOrdinal);
     }
@@ -1769,7 +1781,12 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                           card.lineHeight);
   }
   DSTableSegment *table = segment;
-  return table.tableSize.height + ((chrome & kChromeTableToolbar) != 0 ? theme_layout::kChromeRowHeight : 0);
+  // The one definition: the cap, the reader's per-table choice, and the row count
+  // all meet in `tableHeight`, which is what a measured table and a drawn table
+  // both call. A table taller than the cap is drawn in its own scroll view, so
+  // the frame is the cap rather than the grid.
+  const CGFloat toolbar = (chrome & kChromeTableToolbar) != 0 ? theme_layout::kChromeRowHeight : 0;
+  return tableHeight(resolveTable(tables, table.tableOrdinal), table.rowCount, toolbar);
 }
 
 /// The width an unconstrained measure takes: the widest thing that does not
@@ -1803,10 +1820,11 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                      chrome:(uint32_t)chrome
                                         code:(const downstream::CodeLayout &)code
                                       images:(const downstream::ImageStateLayout &)images
-                                       hosts:(const downstream::HostLayout &)hosts {
+                                       hosts:(const downstream::HostLayout &)hosts
+                                      tables:(const downstream::TableLayout &)tables {
   NSMutableArray<NSValue *> *frames = [NSMutableArray arrayWithCapacity:_segments.count];
   for (const CGRect frame : [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts
-                                      includeFrames:YES includeHosts:NO].frames) {
+                                    tables:tables includeFrames:YES includeHosts:NO].frames) {
     [frames addObject:[NSValue valueWithCGRect:frame]];
   }
   return frames;
@@ -1816,8 +1834,9 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                 chrome:(uint32_t)chrome
                    code:(const downstream::CodeLayout &)code
                  images:(const downstream::ImageStateLayout &)images
-                  hosts:(const downstream::HostLayout &)hosts {
-  return [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts
+                  hosts:(const downstream::HostLayout &)hosts
+                 tables:(const downstream::TableLayout &)tables {
+  return [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts tables:tables
                includeFrames:NO includeHosts:NO].size;
 }
 
@@ -1825,9 +1844,10 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                           chrome:(uint32_t)chrome
                              code:(const downstream::CodeLayout &)code
                           images:(const downstream::ImageStateLayout &)images
-                           hosts:(const downstream::HostLayout &)hosts {
+                           hosts:(const downstream::HostLayout &)hosts
+                          tables:(const downstream::TableLayout &)tables {
   DSMeasurement measurement;
-  DSStackedLayout stacked = [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts
+  DSStackedLayout stacked = [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts tables:tables
                                  includeFrames:NO includeHosts:YES];
   measurement.size = stacked.size;
   measurement.hosts = std::move(stacked.hosts);
@@ -1848,11 +1868,12 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                              code:(const downstream::CodeLayout &)code
                           images:(const downstream::ImageStateLayout &)images
                            hosts:(const downstream::HostLayout &)hosts
+                          tables:(const downstream::TableLayout &)tables
                    includeFrames:(BOOL)includeFrames
                     includeHosts:(BOOL)includeHosts {
   [_lock lock];
   if (_hasCachedFrames && _cachedWidth == width && _cachedChrome == chrome && _cachedCode == code &&
-      _cachedImages == images && _cachedHosts == hosts) {
+      _cachedImages == images && _cachedHosts == hosts && _cachedTables == tables) {
     DSStackedLayout cached;
     if (includeFrames) {
       cached.frames = _cachedLayout.frames;
@@ -1878,7 +1899,7 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
     y += _gaps[index];
     id segment = _segments[index];
     const CGFloat height =
-        [self heightOf:segment atWidth:width chrome:chrome code:code images:images hosts:hosts];
+        [self heightOf:segment atWidth:width chrome:chrome code:code images:images hosts:hosts tables:tables];
     if (!constrained) {
       unconstrainedWidth = std::max(unconstrainedWidth, [self unconstrainedWidthOf:segment
                                                                              atWidth:width
@@ -1930,6 +1951,7 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   _cachedCode = code;
   _cachedImages = images;
   _cachedHosts = hosts;
+  _cachedTables = tables;
   _hasCachedFrames = YES;
   _cachedLayout = stacked;
   [_lock unlock];

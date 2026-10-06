@@ -90,6 +90,13 @@ class DownstreamMarkdownViewManager :
     }
     view.onWrapToggle = { target, ordinal, wrapped -> dispatchWrapToggle(target, ordinal, wrapped) }
     view.onExpandToggle = { target, ordinal, expanded -> dispatchExpandToggle(target, ordinal, expanded) }
+    // Phase 2. A table's two buttons report as `table`, and the full-screen one
+    // carries no ordinal: JavaScript already holds the table's Markdown, and an
+    // event that repeated it would put a whole table into an event payload.
+    view.onTableExpandToggle = { target, ordinal, expanded ->
+      dispatchTableExpandToggle(target, ordinal, expanded)
+    }
+    view.onTableFullscreen = { target, ordinal -> dispatchTableFullscreen(target, ordinal) }
     return view
   }
 
@@ -292,6 +299,10 @@ class DownstreamMarkdownViewManager :
     // The hosted React children, in the same state: a fence with a child is drawn
     // as a host segment at that child's height, and one without keeps its card.
     view.setHostLayout(state.toHostLayout())
+    // The table layout arrives the same way the code layout does, because it is
+    // the same decision about a different block: a cap and the reader's choices.
+    view.setTableProps(state.numberAt("tableMaxHeight", 300.0))
+    view.setTableChoices(state.ordinalsAt("tableExpanded"))
     view.setChrome(state.numberAt("chrome", 0.0).toInt())
     // The caret is resolved in the node, against the document and its streaming
     // flag, so the view never decides where a caret goes. It is a state field
@@ -461,21 +472,80 @@ class DownstreamMarkdownViewManager :
     val toggled = view.nextToggledOrdinal()
     if (toggled < 0) return
     view.toggleWrap(ordinal)
-    dispatchControlAction(view, "wrap", wrapped = wrapped)
+    dispatchControlAction(view, "wrap", wrapped = wrapped, ordinal = ordinal.toDouble())
   }
 
   private fun dispatchExpandToggle(view: DownstreamMarkdownView, ordinal: Int, expanded: Boolean) {
     val toggled = view.nextToggledOrdinal()
     if (toggled < 0) return
     view.toggleExpand(ordinal)
-    dispatchControlAction(view, "expand", expanded = expanded)
+    dispatchControlAction(
+      view,
+      "expand",
+      expanded = expanded,
+      ordinal = ordinal.toDouble(),
+    )
+  }
+
+  /**
+   * A table's expand press. The same state round trip as a code card's, for the
+   * same reason: only Yoga and the chat list know the table's new height.
+   */
+  private fun dispatchTableExpandToggle(
+    view: DownstreamMarkdownView,
+    ordinal: Int,
+    expanded: Boolean,
+  ) {
+    val toggled = view.nextToggledOrdinal()
+    if (toggled < 0) return
+    view.toggleTableExpand(ordinal)
+    dispatchControlAction(
+      view,
+      "expand",
+      block = "table",
+      expanded = expanded,
+      ordinal = ordinal.toDouble(),
+    )
+  }
+
+  /**
+   * A table's full-screen press. No state update, because nothing about the
+   * message changes: a modal holding a second view is the whole of the effect,
+   * and the height that view needs is the width of the screen rather than the
+   * width of this column.
+   */
+  private fun dispatchTableFullscreen(view: DownstreamMarkdownView, ordinal: Int) {
+    val toggled = view.nextToggledOrdinal()
+    if (toggled < 0) return
+    val context = view.context as? ReactContext ?: return
+    dispatch(
+      view,
+      ControlActionEvent(
+        UIManagerHelper.getSurfaceId(context),
+        view.id,
+        "table",
+        "fullscreen",
+        "",
+        "",
+        "",
+        false,
+        false,
+        view.currentGeneration(),
+        ordinal = ordinal.toDouble(),
+      ),
+    )
   }
 
   private fun dispatchControlAction(
     view: DownstreamMarkdownView,
     action: String,
+    block: String = "code",
     wrapped: Boolean = false,
     expanded: Boolean = false,
+    // The block's ordinal among its own kind, because an app that keys a press
+    // needs to know which block was pressed and the three kinds count separately.
+    // -1 where a press has no ordinal to report.
+    ordinal: Double = -1.0,
   ) {
     val context = view.context as? ReactContext ?: return
     dispatch(
@@ -483,7 +553,7 @@ class DownstreamMarkdownViewManager :
       ControlActionEvent(
         UIManagerHelper.getSurfaceId(context),
         view.id,
-        "code",
+        block,
         action,
         "",
         "",
@@ -557,6 +627,15 @@ private class ControlActionEvent(
   private val expanded: Boolean = false,
   private val generation: Int,
   private val url: String = "",
+  /**
+   * The table this press belongs to, as its ordinal among the document's tables.
+   *
+   * A number rather than the Markdown, because JavaScript can identify the table
+   * and a whole table in an event payload is a whole table through the bridge for
+   * nothing: the modal is rendered from the `markdown` field of this same event,
+   * which the native side already had to build.
+   */
+  private val ordinal: Double = -1.0,
 ) : Event<ControlActionEvent>(surfaceId, viewTag) {
   override fun getEventName() = NAME
 
@@ -570,6 +649,7 @@ private class ControlActionEvent(
     putBoolean("wrapped", wrapped)
     putBoolean("expanded", expanded)
     putInt("generation", generation)
+    putDouble("ordinal", ordinal)
   }
 
   companion object {

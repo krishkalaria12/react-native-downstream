@@ -4,6 +4,7 @@
 #import "DSRenderedDocument.h"
 
 #include "Controls.h"
+#include "TableLayout.h"
 
 #include <algorithm>
 #include <vector>
@@ -14,10 +15,18 @@ using namespace downstream::ControlBits;
 // segment rather than as a rule to apply.
 using namespace downstream::theme;
 
+/// How far from the newest row a reader can be and still count as following it,
+/// in points. The same eight the code card and the Android table use, because it
+/// is one rule about one reader, not three.
+static const CGFloat kTablePinThreshold = 8;
+
 #pragma mark - Tables
 
 @interface DSTableGridView : UIView
 @property (nonatomic, nullable) DSTableSegment *segment;
+/// Draws only the header row, which is what the pinned strip is: the same grid,
+/// one row, so the two cannot disagree about a column's width.
+@property (nonatomic) BOOL headerOnly;
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
 /// Where the rows' fading alphas come from. A row is one reveal unit, so a new
 /// row brings its fill, its cells, and its grid lines with it.
@@ -103,50 +112,58 @@ using namespace downstream::theme;
   // laid out by this grid rather than by a text run, so there is nothing finer to
   // fade within one.
   NSUInteger firstDataRow = _segment.hasHeader ? 1 : 0;
-  [_segment.rows enumerateObjectsUsingBlock:^(NSArray<DSTableCell *> *row, NSUInteger rowIndex, BOOL *stop) {
-    if (self->_rowOffsets[rowIndex] > CGRectGetMaxY(rect)) {
-      *stop = YES;
-      return;
+  // The pinned strip draws one row, which is the same loop with a smaller bound:
+  // one code path draws the cells, so the header and the row it covers cannot
+  // disagree about a column's width.
+  const NSUInteger lastRow = self.headerOnly ? 1 : _segment.rows.count;
+  for (NSUInteger rowIndex = 0; rowIndex < MIN(lastRow, _segment.rows.count); rowIndex++) {
+    const CGFloat rowTop = _rowOffsets[rowIndex];
+    const CGFloat rowBottom = _rowOffsets[rowIndex + 1];
+    if (rowTop > CGRectGetMaxY(rect)) {
+      break;
     }
-    if (self->_rowOffsets[rowIndex + 1] < CGRectGetMinY(rect)) {
-      return;
+    if (rowBottom < CGRectGetMinY(rect)) {
+      continue;
     }
     const CGFloat alpha = self.revealProvider == nil
         ? 1
         : [self.revealProvider revealAlphaAtBlock:self.blockOffset
-                                            offset:(NSUInteger)rowIndex
+                                            offset:rowIndex
                                                now:CACurrentMediaTime()];
     if (alpha <= 0) {
-      return;
+      continue;
     }
     CGContextRef context = UIGraphicsGetCurrentContext();
     CGContextSaveGState(context);
     CGContextSetAlpha(context, alpha);
     if (rowIndex >= firstDataRow) {
-      UIColor *stripe = [self->_segment.theme colorForSlot:(rowIndex - firstDataRow) % 2 == 0
-                                                          ? kSlotTableRowEvenBackgroundColor
-                                                          : kSlotTableRowOddBackgroundColor
-                                                   fallback:nil];
+      UIColor *stripe = [_segment.theme colorForSlot:(rowIndex - firstDataRow) % 2 == 0
+                                                      ? kSlotTableRowEvenBackgroundColor
+                                                      : kSlotTableRowOddBackgroundColor
+                                               fallback:nil];
       if (stripe != nil) {
         [stripe setFill];
-        UIRectFill(CGRectMake(0, self->_rowOffsets[rowIndex], size.width,
-                              self->_rowOffsets[rowIndex + 1] - self->_rowOffsets[rowIndex]));
+        UIRectFill(CGRectMake(0, rowTop, size.width, rowBottom - rowTop));
       }
     }
-    [row enumerateObjectsUsingBlock:^(DSTableCell *cell, NSUInteger column, BOOL *innerStop) {
+    NSArray<DSTableCell *> *row = _segment.rows[rowIndex];
+    for (NSUInteger column = 0; column < row.count; column++) {
       const CGRect content = [self contentRectForRow:rowIndex column:column];
       if (CGRectIntersectsRect(content, rect)) {
-        [cell.text drawWithRect:content options:options context:nil];
+        [row[column].text drawWithRect:content options:options context:nil];
       }
-    }];
+    }
     CGContextRestoreGState(context);
-  }];
+  }
 
+  // The grid lines. A pinned strip draws only the line under its own row, or the
+  // header would appear to have lines running through it.
+  const NSUInteger lineRows = self.headerOnly ? MIN(2u, _segment.rowHeights.count) : _segment.rowHeights.count;
   [[_segment.theme colorForSlot:kSlotTableBorderColor fallback:UIColor.separatorColor] setFill];
   CGFloat y = 0;
   UIRectFill(CGRectMake(0, 0, size.width - hairline, hairline));
-  for (NSNumber *height in _segment.rowHeights) {
-    y += height.doubleValue;
+  for (NSUInteger index = 0; index < lineRows; index++) {
+    y += _segment.rowHeights[index].doubleValue;
     UIRectFill(CGRectMake(0, y - hairline, size.width - hairline, hairline));
   }
   CGFloat x = 0;
@@ -236,16 +253,159 @@ using namespace downstream::theme;
 
 @end
 
+/// The viewport around a table's grid, and what it hands a nested scroll.
+///
+/// A capped table scrolls on both axes inside its own frame, which is the one
+/// nested vertical scroll a chat has. The rule is the code card's: this view
+/// takes a drag only while it can scroll that way, and at an edge it refuses so
+/// the chat list's own pan takes it. `gestureRecognizerShouldBegin` is where that
+/// is decided, because a `UIScrollView` that refuses still consumes the touch.
+@interface DSTableViewport : UIScrollView <UIScrollViewDelegate>
+/// True while this table is still streaming, which is what makes a capped table
+/// follow its newest row.
+@property (nonatomic) BOOL streaming;
+/// Called on every scroll, so the pinned header can follow the horizontal offset.
+@property (nonatomic, copy, nullable) void (^onScroll)(void);
+/// Moves to the newest row after the next layout, unless the reader has scrolled
+/// away from the bottom.
+- (void)requestPin;
+/// Moves to the newest row now, unless the reader has left.
+- (void)followNewestRow;
+@end
+
+@implementation DSTableViewport {
+  /// A pinned table is one whose reader has not scrolled away from its newest
+  /// row. A table that starts streaming is pinned again, the way a code card is.
+  BOOL _pinned;
+  BOOL _pinAfterLayout;
+  /// Only a reader's own scroll unpins. A pin this view applied must not count
+  /// as the reader leaving, or a streaming table would unpin itself on the first
+  /// row that arrived.
+  BOOL _touchScrolling;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+  if (self = [super initWithFrame:frame]) {
+    // Its own delegate, because two of the things it has to observe happen inside
+    // `UIScrollView` and reach no public entry point: a reader's drag, which does
+    // not go through `setContentOffset:`, and its own scroll position, which the
+    // pinned header has to follow. Both funnel into the same one call.
+    self.delegate = self;
+  }
+  return self;
+}
+
+- (void)setContentOffset:(CGPoint)offset {
+  [super setContentOffset:offset];
+  // The programmatic half of the same observation the delegate provides.
+  [self notifyScrolled];
+}
+
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+  if (_touchScrolling) {
+    // Streamdown's threshold: this close to the bottom is still "following", so a
+    // reader who nudges the table does not lose the pin over a few points.
+    const CGFloat bottom = self.contentSize.height - self.bounds.size.height;
+    _pinned = bottom - self.contentOffset.y <= kTablePinThreshold;
+  }
+  [self notifyScrolled];
+}
+
+- (void)notifyScrolled {
+  if (self.onScroll != nil) {
+    self.onScroll();
+  }
+}
+
+- (void)setStreaming:(BOOL)streaming {
+  if (streaming == _streaming) {
+    return;
+  }
+  _streaming = streaming;
+  // A table that starts arriving follows its newest row, whether or not it is
+  // past its cap yet, so it follows from the moment it crosses.
+  if (streaming) {
+    _pinned = YES;
+    [self requestPin];
+  }
+}
+
+- (void)requestPin {
+  _pinAfterLayout = YES;
+  [self setNeedsLayout];
+}
+
+/// Moves to the newest row now, unless the reader has left. For this card's own
+/// layout pass, which has just given the content its new height: a layout asked
+/// for from inside a React Native view does not run until the next snapshot.
+- (void)followNewestRow {
+  _pinAfterLayout = NO;
+  if (_pinned) {
+    const CGFloat bottom = MAX(0, self.contentSize.height - self.bounds.size.height);
+    [self setContentOffset:CGPointMake(self.contentOffset.x, bottom) animated:NO];
+  }
+}
+
+- (void)gestureRecognizerDidBegin:(UIGestureRecognizer *)gestureRecognizer {
+  _touchScrolling = YES;
+}
+
+- (void)gestureRecognizerDidEnd:(UIGestureRecognizer *)gestureRecognizer {
+  _touchScrolling = NO;
+}
+
+- (void)layoutSubviews {
+  [super layoutSubviews];
+  if (_pinAfterLayout) {
+    _pinAfterLayout = NO;
+    // Only while the reader has not said otherwise: a reader who scrolled up to
+    // read an earlier row keeps that position while the rest of the table lands.
+    if (_pinned) {
+      const CGFloat bottom = MAX(0, self.contentSize.height - self.bounds.size.height);
+      [self setContentOffset:CGPointMake(self.contentOffset.x, bottom) animated:NO];
+    }
+  }
+}
+
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)recognizer {
+  if (![recognizer isKindOfClass:UIPanGestureRecognizer.class]) {
+    return [super gestureRecognizerShouldBegin:recognizer];
+  }
+  const UIPanGestureRecognizer *pan = (UIPanGestureRecognizer *)recognizer;
+  const CGPoint velocity = [pan velocityInView:self];
+  const CGFloat maximumY = MAX(0, self.contentSize.height - self.bounds.size.height);
+  const CGFloat maximumX = MAX(0, self.contentSize.width - self.bounds.size.width);
+  // A drag that starts here belongs to this scroll view only while it can scroll
+  // that way. Once it cannot, the chat list's own pan takes the drag, which is
+  // what stops a long table from trapping a reader in the message.
+  if (ABS(velocity.y) >= ABS(velocity.x)) {
+    return velocity.y < 0 ? self.contentOffset.y < maximumY : self.contentOffset.y > 0;
+  }
+  return velocity.x < 0 ? self.contentOffset.x < maximumX : self.contentOffset.x > 0;
+}
+
+@end
+
 @implementation DSTableSegmentView {
   DSTableSegment *_segment;
   UIView *_toolbar;
   UIStackView *_buttons;
-  UIScrollView *_scrollView;
+  DSTableViewport *_scrollView;
   DSTableGridView *_grid;
+  /// The header row, drawn over the grid and moved with the horizontal offset so
+  /// a reader scrolling sideways keeps the column names in front of them.
+  ///
+  /// A second grid rather than a copied layer: it reads the same segment and
+  /// draws the same cells through the same code, so the pinned header and the
+  /// row it covers cannot disagree about a column's width or a cell's text.
+  DSTableGridView *_header;
   NSArray<NSString *> *_labels;
   /// The labels the current buttons and menu items were built from, so a changed
   /// `translations` prop rebuilds them instead of leaving stale strings up.
   NSArray<NSString *> *_builtLabels;
+  /// The whole table layout, which is what decides this table's cap and whether
+  /// the reader has lifted it. The same value the measurement used.
+  downstream::TableLayout _tableLayout;
   BOOL _needsScrollRestore;
   BOOL _preserveScrollPosition;
   BOOL _forceScrollReset;
@@ -268,14 +428,26 @@ using namespace downstream::theme;
     _buttons.axis = UILayoutConstraintAxisHorizontal;
     _buttons.spacing = 2;
     [_toolbar addSubview:_buttons];
-    _scrollView = [UIScrollView new];
-    _scrollView.showsVerticalScrollIndicator = NO;
-    _scrollView.alwaysBounceVertical = NO;
+    _scrollView = [DSTableViewport new];
     _scrollView.directionalLockEnabled = YES;
     _grid = [DSTableGridView new];
     [_scrollView addSubview:_grid];
-    [self addSubview:_toolbar];
+    // The pinned header is a sibling of the scroll view rather than a subview of
+    // it: a scroll view's own subviews scroll with the content, and a header
+    // that scrolled away is the thing this phase exists to stop.
+    _header = [DSTableGridView new];
+    _header.clipsToBounds = YES;
+    // The strip takes no touches at all. It covers the row the grid already
+    // hit-tests, so letting it through is what makes a tap in the strip press the
+    // cell under it rather than nothing.
+    _header.userInteractionEnabled = NO;
+    __weak __typeof__(self) weakSelf = self;
+    _scrollView.onScroll = ^{
+      [weakSelf layoutPinnedHeader];
+    };
     [self addSubview:_scrollView];
+    [self addSubview:_header];
+    [self addSubview:_toolbar];
   }
   return self;
 }
@@ -318,6 +490,44 @@ using namespace downstream::theme;
   }
   _controls = controls;
   [self updateButtons];
+}
+
+/// The table's own layout: the cap and the reader's per-table expand choice.
+///
+/// Both arrive from the Markdown view rather than from the segment, because the
+/// choice is the view's state and the segment has no access to it. -1 for a
+/// segment that is not a table, which is every other segment view.
+- (void)setTableLayout:(downstream::TableLayout)tableLayout {
+  if (tableLayout == _tableLayout) {
+    return;
+  }
+  _tableLayout = tableLayout;
+  [self updateButtons];
+  [self setNeedsLayout];
+}
+
+/// True when this table is past its cap, which is the only table the expand
+/// button can do anything for.
+- (BOOL)capped {
+  if (_segment == nil || _segment.tableOrdinal < 0) {
+    return NO;
+  }
+  const downstream::TableBlockLayout table = resolveTable(_tableLayout, _segment.tableOrdinal);
+  return table.maxHeight > 0 && _segment.tableSize.height > table.maxHeight;
+}
+
+- (BOOL)tableExpanded {
+  if (_segment == nil || _segment.tableOrdinal < 0) {
+    return NO;
+  }
+  return resolveTable(_tableLayout, _segment.tableOrdinal).expanded;
+}
+
+- (CGFloat)tableMaxHeight {
+  if (_segment == nil || _segment.tableOrdinal < 0) {
+    return 0;
+  }
+  return resolveTable(_tableLayout, _segment.tableOrdinal).maxHeight;
 }
 
 - (void)setControlsEnabled:(BOOL)enabled {
@@ -379,13 +589,40 @@ using namespace downstream::theme;
   UIButton *download = [self menuButtonWithSymbol:kSymbolDownload
                                             label:[self label:DSControlLabelDownloadTable]
                                            action:@"download"];
+  // Expand appears only on a table past the cap, which is the only table it can
+  // do anything for, and full screen is offered always: a reader who cannot see
+  // the whole table can still leave the chat with it.
+  UIButton *expand = makeControlButton(symbolForExpand(NO), [self label:DSControlLabelExpandTable], @"expand", @"");
+  UIButton *fullscreen = makeControlButton(kSymbolMaximize, [self label:DSControlLabelViewFullscreen], @"fullscreen", @"");
   copy.tag = 0;
   download.tag = 1;
+  expand.tag = 2;
+  fullscreen.tag = 3;
   [_buttons addArrangedSubview:copy];
   [_buttons addArrangedSubview:download];
-  for (UIButton *button in @[copy, download]) {
+  [_buttons addArrangedSubview:expand];
+  [_buttons addArrangedSubview:fullscreen];
+  for (UIButton *button in @[copy, download, expand, fullscreen]) {
     button.accessibilityIdentifier = [NSString stringWithFormat:@"ds.table.%@", button.accessibilityLabel];
+    [button addTarget:self
+                  action:@selector(controlPressed:)
+        forControlEvents:UIControlEventTouchUpInside];
   }
+}
+
+- (void)controlPressed:(UIButton *)button {
+  if (_segment == nil) {
+    return;
+  }
+  if ([button.action isEqualToString:@"expand"]) {
+    [self.controlDelegate didToggleTableExpandAtOrdinal:static_cast<uint32_t>(_segment.tableOrdinal)
+                                                expanded:!self.tableExpanded];
+    return;
+  }
+  // The Markdown is the view's to build: it holds the document, and the segment
+  // holds only what was drawn. The export is the same one a copy produces, so a
+  // full-screen table is the table rather than a rebuild of it.
+  [self.controlDelegate didRequestTableFullscreenAtOrdinal:static_cast<uint32_t>(_segment.tableOrdinal)];
 }
 
 - (void)updateButtons {
@@ -398,9 +635,19 @@ using namespace downstream::theme;
   NSArray<UIButton *> *all = _buttons.arrangedSubviews;
   ((UIButton *)all[0]).hidden = (_controls & TableCopy) == 0;
   ((UIButton *)all[1]).hidden = (_controls & TableDownload) == 0;
+  // Expand appears only on a table past the cap and only while there is a cap to
+  // lift, which is the same rule the code card's expand button follows.
+  UIButton *expand = (UIButton *)all[2];
+  expand.hidden = (_controls & TableExpand) == 0 || !self.capped;
+  ((UIButton *)all[3]).hidden = (_controls & TableFullscreen) == 0;
   for (UIButton *button in all) {
     button.enabled = _controlsEnabled && !button.hidden;
   }
+  // The glyph follows the state, because the two buttons are the same button.
+  [expand setImage:controlImage(symbolForExpand(self.tableExpanded))
+          forState:UIControlStateNormal];
+  expand.accessibilityLabel = self.tableExpanded ? [self label:DSControlLabelCollapseTable]
+                                                 : [self label:DSControlLabelExpandTable];
 }
 
 - (void)pressFormat:(NSString *)format action:(NSString *)action {
@@ -448,6 +695,14 @@ using namespace downstream::theme;
   _grid.segment = segment;
   _grid.revealProvider = _revealProvider;
   _grid.blockOffset = _blockOffset;
+  // The strip reads the same segment and draws one row out of it, set here rather
+  // than on every scroll: the content changes when the table does, and a scroll
+  // does not change what the header says.
+  _header.segment = segment;
+  _header.headerOnly = YES;
+  _header.revealProvider = _revealProvider;
+  _header.blockOffset = _blockOffset;
+  [_header setNeedsDisplay];
   // The toolbar's buttons take the theme's own toolbar color when it set one.
   UIColor *toolbar = segment.toolbarButtonColor ?: UIColor.secondaryLabelColor;
   for (UIView *button in _buttons.arrangedSubviews) {
@@ -514,11 +769,23 @@ using namespace downstream::theme;
   _buttons.frame = CGRectMake(rightToLeft ? 4 : self.bounds.size.width - buttonsWidth - 4, 0, buttonsWidth,
                               toolbarHeight);
   const CGFloat leading = _segment.contentLeading;
-  _scrollView.frame = CGRectMake(_segment.rightToLeft ? 0 : leading, toolbarHeight,
+  // The pinned header takes a row of the card above the scroll view rather than
+  // floating over the first one, so a reader sees one header and never two, and a
+  // tap in that strip never lands on a row instead of the header.
+  const CGFloat headerHeight = self.headerRowHeight;
+  _scrollView.frame = CGRectMake(_segment.rightToLeft ? 0 : leading, toolbarHeight + headerHeight,
                                  std::max<CGFloat>(0, self.bounds.size.width - leading),
-                                 self.bounds.size.height - toolbarHeight);
+                                 std::max<CGFloat>(0, self.bounds.size.height - toolbarHeight - headerHeight));
   _grid.frame = CGRectMake(0, 0, _segment.tableSize.width, _segment.tableSize.height);
   _scrollView.contentSize = _segment.tableSize;
+  // The grid scrolls on both axes only while it is capped. An uncapped table has
+  // nothing to scroll vertically, and a scroll view that could would take a
+  // reader's drag away from the chat for no reason.
+  const BOOL capped = self.capped;
+  _scrollView.scrollEnabled = capped || _segment.tableSize.width > _scrollView.bounds.size.width;
+  _scrollView.alwaysBounceVertical = capped;
+  _scrollView.showsVerticalScrollIndicator = capped;
+  _scrollView.streaming = _streaming;
   if (_needsScrollRestore) {
     const CGFloat maximum = std::max<CGFloat>(0, _segment.tableSize.width - _scrollView.bounds.size.width);
     const CGFloat position = _preserveScrollPosition ? _savedScrollPosition : 0;
@@ -528,6 +795,54 @@ using namespace downstream::theme;
     _needsScrollRestore = NO;
     _forceScrollReset = NO;
   }
+  [self layoutPinnedHeader];
+  if (capped && _streaming) {
+    // Follow the newest row, and not a snapshot: the pin has to land after the
+    // content has its new height, which the layout above has now given it.
+    [_scrollView followNewestRow];
+  }
+}
+
+/// The header row's height, or 0 for a table with no header.
+///
+/// A table without a header row draws none and collapses the strip, so a header
+/// is never space a reader pays for and does not get.
+- (CGFloat)headerRowHeight {
+  if (_segment == nil || !_segment.hasHeader || _segment.rowHeights.count == 0) {
+    return 0;
+  }
+  return _segment.rowHeights[0].doubleValue;
+}
+
+/// The header row, pinned above the grid and moved with the horizontal offset.
+///
+/// A table is the one block where a column means nothing without its name, so a
+/// reader who scrolls sideways to see a column has to keep that name in front of
+/// them. The pinned strip is a sibling of the scroll view, because a scroll
+/// view's own subviews move with the content.
+///
+/// It is drawn by a second grid reading the same segment, not by a copied layer:
+/// one code path draws the cells, so the pinned header and the row it covers
+/// cannot disagree about a column's width or a cell's text.
+///
+/// A table with no header draws nothing and the strip collapses, so it never
+/// covers a row.
+- (void)layoutPinnedHeader {
+  const CGFloat headerHeight = self.headerRowHeight;
+  if (headerHeight <= 0) {
+    _header.hidden = YES;
+    _header.frame = CGRectZero;
+    return;
+  }
+  _header.hidden = NO;
+  // Above the scroll view, which is what makes it pinned, and offset sideways by
+  // whatever the grid has scrolled to so the strip and the row it covers stay in
+  // the same columns. Only the frame moves here: the strip draws the same content
+  // whatever the offset is, so a scroll costs one assignment rather than a
+  // redraw.
+  _header.frame = CGRectMake(_scrollView.frame.origin.x + _scrollView.contentOffset.x, _scrollView.frame.origin.y - headerHeight,
+                             _scrollView.bounds.size.width, headerHeight);
+  _header.bounds = CGRectMake(0, 0, _header.frame.size.width, headerHeight);
 }
 
 // Quote bars and the list marker live in the non-scrolling margin.
@@ -566,6 +881,16 @@ using namespace downstream::theme;
 
 - (NSInteger)linkIndexAtPoint:(CGPoint)point {
   return [_grid linkIndexAtPoint:[self convertPoint:point toView:_grid]];
+}
+
+/// True while this table is still streaming, which is what makes a capped table
+/// follow its newest row.
+- (void)setStreaming:(BOOL)streaming {
+  if (streaming == _streaming) {
+    return;
+  }
+  _streaming = streaming;
+  _scrollView.streaming = streaming;
 }
 
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {

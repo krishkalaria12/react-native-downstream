@@ -13,6 +13,7 @@
 #include "Document.h"
 #include "HostLayout.h"
 #include "ImageLayout.h"
+#include "TableLayout.h"
 #include "RenderPreparer.h"
 #include "math/MathLayout.h"
 #include "theme/Theme.h"
@@ -286,10 +287,18 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
 @property (nonatomic, readonly) BOOL rightToLeft;
 /// Identifies the table across snapshots while its first row is unchanged.
 @property (nonatomic, readonly) uint32_t tableIdentifier;
+/// The table's ordinal among the document's tables, which is what the reader's
+/// expand choice is keyed by. Counted as the segment plan is built, so it is
+/// stable across append-only snapshots.
+@property (nonatomic, readonly) int32_t tableOrdinal;
 @property (nonatomic, readonly) NSString *firstRowText;
 @property (nonatomic, readonly) NSArray<DSContainerInfo *> *containers;
 @property (nonatomic, readonly) NSArray<NSNumber *> *columnWidths;
 @property (nonatomic, readonly) NSArray<NSNumber *> *rowHeights;
+/// How many rows the table has, which is what the cap is counted in. A property
+/// rather than `rows.count` at the call site, so the measurement and the drawing
+/// cannot read a count from two different collections.
+@property (nonatomic, readonly) uint32_t rowCount;
 @property (nonatomic, readonly) CGSize tableSize;
 @property (nonatomic, readonly) UIEdgeInsets cellPadding;
 /// The theme this table was built with, plus the grid and header metrics that
@@ -367,12 +376,14 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
                                      chrome:(uint32_t)chrome
                                         code:(const downstream::CodeLayout &)code
                                       images:(const downstream::ImageStateLayout &)images
-                                       hosts:(const downstream::HostLayout &)hosts;
+                                       hosts:(const downstream::HostLayout &)hosts
+                                      tables:(const downstream::TableLayout &)tables;
 - (CGSize)sizeForWidth:(CGFloat)width
                 chrome:(uint32_t)chrome
                    code:(const downstream::CodeLayout &)code
                  images:(const downstream::ImageStateLayout &)images
-                  hosts:(const downstream::HostLayout &)hosts;
+                  hosts:(const downstream::HostLayout &)hosts
+                 tables:(const downstream::TableLayout &)tables;
 
 #ifdef __cplusplus
 /// The size and the hosted children's rectangles, from one stacking pass.
@@ -385,7 +396,8 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
                           chrome:(uint32_t)chrome
                              code:(const downstream::CodeLayout &)code
                           images:(const downstream::ImageStateLayout &)images
-                           hosts:(const downstream::HostLayout &)hosts;
+                           hosts:(const downstream::HostLayout &)hosts
+                          tables:(const downstream::TableLayout &)tables;
 #endif
 
 @end

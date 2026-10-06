@@ -12,10 +12,12 @@
 #include "InlineRuns.h"
 #include "MarkdownParser.h"
 #include "SegmentPlan.h"
+#include "TableLayout.h"
 #include "Unicode.h"
 #include "tests/check.h"
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -302,6 +304,119 @@ void testCodeBlockLayout() {
   CodeLayout staleExpand = uncapped;
   staleExpand.choices.expanded = {0};
   CHECK(!numbers(staleExpand, 0, plain).expanded, "a block with no cap is never expanded");
+}
+
+/// The table's cap and the reader's per-table expand choice.
+///
+/// The same rules `resolveCodeBlock` follows for a code block, deliberately: a
+/// table and a code card are the same decision about a different block, and one
+/// definition of "the reader lifted the cap" is what keeps them from drifting.
+/// The ordinals are separate sets, because a code ordinal counts code blocks and
+/// a table ordinal counts tables.
+void testTableLayout() {
+  TableLayout layout;
+  TableLayout capped = layout;
+  capped.props.maxHeight = 300;
+
+  auto tables = [](const TableLayout &value, uint32_t ordinal) { return resolveTable(value, ordinal); };
+
+  CHECK(tables(capped, 0).maxHeight == 300.0f, "the cap prop reaches the table");
+  CHECK(!tables(capped, 0).expanded, "no choice means no expansion");
+
+  TableLayout expanded = capped;
+  expanded.choices.expanded = {1};
+  CHECK(tables(expanded, 1).maxHeight == 0.0f, "an expanded table has no cap");
+  CHECK(tables(expanded, 1).expanded, "an expanded table says so, so it can collapse again");
+  CHECK(tables(expanded, 0).maxHeight == 300.0f, "one expanded table does not cap its neighbour");
+  CHECK(!tables(expanded, 0).expanded, "its neighbour is not expanded");
+
+  // A prop of 0 is no cap, and it must reach the table as the same 0 an expanded
+  // table uses rather than as a truthy "off".
+  TableLayout uncapped = layout;
+  uncapped.props.maxHeight = 0;
+  CHECK(tables(uncapped, 0).maxHeight == 0.0f, "a zero cap is no cap");
+  CHECK(tables(uncapped, 0).maxHeight == tables(expanded, 1).maxHeight,
+        "uncapped and expanded are the same value to the table");
+  // With no cap there is nothing to collapse back to, so a leftover choice does
+  // not turn into a collapse button.
+  TableLayout staleExpand = uncapped;
+  staleExpand.choices.expanded = {0};
+  CHECK(!tables(staleExpand, 0).expanded, "a table with no cap is never expanded");
+
+  // A negative ordinal is a caller that does not know which table this is, and
+  // the answer is the same one an uncapped table gets: no cap, and nothing to
+  // collapse. Reading it as a huge unsigned ordinal would silently apply the cap
+  // to a table the reader never chose.
+  CHECK(tables(capped, -1).maxHeight == 0.0f, "an unknown table has no cap");
+  CHECK(!tables(expanded, -1).expanded, "an unknown table is never expanded");
+
+  // A NaN cap must not make two identical props compare different, which is the
+  // same rule `TableLayoutProps` documents and for the same reason.
+  TableLayout nan = layout;
+  nan.props.maxHeight = std::nanf("");
+  TableLayout nanAgain = nan;
+  CHECK(nan == nanAgain, "two NaN props are equal");
+  CHECK(!(nan == layout), "a NaN prop is not the default");
+}
+
+/// The table box is `toolbar + min(rows * rowHeight, max(cap, floor))`.
+///
+/// The toolbar is outside the cap, because a capped table is still the one a
+/// reader uses to lift the cap; the floor is inside it, because a cap that would
+/// show one header row is not a cap anyone can use.
+void testTableHeight() {
+  const float toolbar = 36;
+  // Said explicitly rather than by default-construction, so this test pins the
+  // numbers it is about instead of the header's initialisers.
+  TableBlockLayout uncapped{0};
+  TableBlockLayout capped{300};
+
+  CHECK(tableHeight(uncapped, 2, toolbar) == toolbar + 2 * kTableRowHeight,
+        "a table under the cap is toolbar plus rows");
+  CHECK(tableHeight(capped, 100, toolbar) == toolbar + 300, "a table over the cap is capped");
+  CHECK(tableHeight(capped, 2, toolbar) == toolbar + 2 * kTableRowHeight,
+        "a table shorter than the cap is its own height, not the cap");
+
+  // The floor wins over the cap: a cap of one row still shows three, which is a
+  // header and two rows a reader can act on.
+  TableBlockLayout tiny{static_cast<float>(kTableRowHeight)};
+  CHECK(tableHeight(tiny, 100, toolbar) == toolbar + kMinVisibleTableRows * kTableRowHeight,
+        "a cap below the floor shows the floor");
+
+  // The floor never adds space to a small table: a two-row table is two rows.
+  CHECK(tableHeight(capped, kMinVisibleTableRows - 1, toolbar) == toolbar + (kMinVisibleTableRows - 1) * kTableRowHeight,
+        "the floor does not add space to a table shorter than itself");
+
+  // The toolbar is outside the cap in both directions, so a capped table is
+  // never shorter than an uncapped one with the same rows.
+  CHECK(tableHeight(capped, 100, toolbar) > tableHeight(capped, 100, 0),
+        "the toolbar is outside the cap");
+
+  // An expanded table's cap is already 0 by the time it gets here, and it lays
+  // out as uncapped rather than as a table at height 0.
+  TableBlockLayout expanded;
+  expanded.expanded = true;
+  CHECK(expanded.maxHeight == 0.0f, "a default-constructed block has no cap");
+  CHECK(tableHeight(expanded, 4, toolbar) == tableHeight(uncapped, 4, toolbar),
+        "an expanded table is laid out as uncapped");
+
+  // Every row count, capped and uncapped, is never below its own rows and never
+  // below the floor, which is the two invariants the platforms rely on.
+  const auto gridOf = [](uint32_t rows) { return static_cast<float>(rows) * kTableRowHeight; };
+  for (uint32_t rows = 0; rows <= 200; rows++) {
+    const float grid = gridOf(rows);
+    // Compared against the whole value rather than a difference: `a + b - a` is
+    // not `b` in floating point, and the platforms lay the toolbar out separately
+    // from the grid anyway, so the whole height is the thing that has to agree.
+    const float cappedHeight = tableHeight(capped, rows, toolbar);
+    CHECK(cappedHeight - toolbar >= std::min(grid, 300.0f) - 0.001f,
+          "a capped table is at least the smaller of its rows and its cap");
+    CHECK(cappedHeight - toolbar >= std::min(grid, kMinVisibleTableRows * kTableRowHeight) - 0.001f,
+          "a capped table is at least the smaller of its rows and the floor");
+    CHECK(cappedHeight <= toolbar + std::min(std::max(grid, kMinVisibleTableRows * kTableRowHeight), 300.0f) + 0.001f,
+          "a capped table is no taller than the cap or the floor needs");
+    CHECK(tableHeight(uncapped, rows, toolbar) == toolbar + grid, "an uncapped table is its own rows");
+  }
 }
 
 /// The gutter is as wide as the widest number it draws, and never narrower than
@@ -697,6 +812,8 @@ int main() {
   testMathDocuments();
   testWrapChoices();
   testCodeBlockLayout();
+  testTableLayout();
+  testTableHeight();
   testGutterDigits();
   testCodeCardHeight();
   testCodeLineStarts();

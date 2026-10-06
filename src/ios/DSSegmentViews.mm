@@ -143,6 +143,14 @@ NSString *const kSymbolUnwrap = @"text.alignleft";
 NSString *const kSymbolExpand = @"arrow.up.left.and.arrow.down.right";
 NSString *const kSymbolCollapse = @"arrow.down.left.and.arrow.up.right";
 
+/// Phase 2: a table's full-screen button, and the chevron a `<details>` summary
+/// opens and closes with. Both are Downstream's own names, because Streamdown's
+/// full-screen table is a browser viewport and its chevron belongs to the
+/// browser's own widget rather than to this library.
+NSString *const kSymbolMaximize = @"arrow.up.left.and.arrow.down.right";
+NSString *const kSymbolChevronDown = @"chevron.down";
+NSString *const kSymbolChevronRight = @"chevron.right";
+
 @implementation DSControlButton
 @end
 
@@ -195,6 +203,9 @@ NSString *symbolForExpand(BOOL expanded) {
   /// The whole code layout, which both the card views and the frame stack read,
   /// so a block's drawn layout and its measured height are the same decision.
   downstream::CodeLayout _codeLayout;
+  /// The whole table layout, which the table segments draw from and the frame
+  /// stack is keyed by, for the same reason `codeLayout` is.
+  downstream::TableLayout _tableLayout;
   /// What each image is, which the image views draw from and the frame stack is
   /// keyed by. A load changes an entry, which re-stacks the frames.
   downstream::ImageStateLayout _imageState;
@@ -326,6 +337,11 @@ static Class segmentViewClassFor(id segment) {
   table.showsToolbar = (_chrome & downstream::kChromeTableToolbar) != 0;
   table.controls = _controls;
   table.controlsEnabled = [self isSegmentSettledAtIndex:index];
+  // The same settled rule a code card follows, for the same reason: a table whose
+  // rows are still arriving follows its newest row, and one that has closed keeps
+  // the position the reader left it at.
+  table.streaming = ![self isSegmentSettledAtIndex:index];
+  table.tableLayout = _tableLayout;
 }
 
 /// Where the document's fading characters are. Set on every render because the
@@ -585,6 +601,19 @@ static Class segmentViewClassFor(id segment) {
   [self reapplyState];
 }
 
+- (void)setTableLayout:(downstream::TableLayout)tableLayout {
+  if (tableLayout == _tableLayout) {
+    return;
+  }
+  _tableLayout = tableLayout;
+  for (UIView<DSSegmentView> *view in _segmentViews) {
+    if ([view isKindOfClass:DSTableSegmentView.class]) {
+      ((DSTableSegmentView *)view).tableLayout = tableLayout;
+    }
+  }
+  [self setNeedsLayout];
+}
+
 - (void)setImageState:(downstream::ImageStateLayout)imageState {
   if (imageState == _imageState) {
     return;
@@ -695,7 +724,8 @@ static Class segmentViewClassFor(id segment) {
                                                           chrome:_chrome
                                                              code:_codeLayout
                                                            images:_imageState
-                                                              hosts:_hostLayout];
+                                                              hosts:_hostLayout
+                                                             tables:_tableLayout];
   for (NSUInteger index = 0; index < _segmentViews.count && index < frames.count; index++) {
     _segmentViews[index].frame = frames[index].CGRectValue;
   }

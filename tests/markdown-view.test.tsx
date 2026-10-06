@@ -15,6 +15,10 @@ import {
   CONTROL_ALL,
   CONTROL_CODE_DOWNLOAD,
   CONTROL_LABEL_KEYS,
+  CONTROL_TABLE_COPY,
+  CONTROL_TABLE_EXPAND,
+  CONTROL_TABLE_FULLSCREEN,
+  resolveControls,
 } from '../src/controls';
 import { presets } from '../src/presets';
 import { themeSlot } from '../src/themeSlots';
@@ -357,6 +361,9 @@ describe('DownstreamMarkdown controls', () => {
       language: string;
       filename: string;
       wrapped: boolean;
+      expanded: boolean;
+      markdown: string;
+      ordinal: number;
       generation: number;
     }> = {}
   ) {
@@ -368,6 +375,9 @@ describe('DownstreamMarkdown controls', () => {
         language: 'ts',
         filename: '',
         wrapped: false,
+        expanded: false,
+        markdown: '',
+        ordinal: -1,
         // The mounted document's own generation, so a press is recognised; the
         // tests about a superseded document override it.
         generation: Number(nativeView.last()?.generation ?? 0),
@@ -798,6 +808,167 @@ describe('DownstreamMarkdown controls', () => {
     }
     fire('onControlAction', controlEvent());
     expect(onCopy).toHaveBeenCalledTimes(1);
+  });
+
+  describe('DownstreamMarkdown table controls', () => {
+    const TABLE = [
+      '| name | unit |',
+      '| --- | --- |',
+      '| width | pt |',
+      '| height | pt |',
+      '',
+    ].join('\n');
+
+    it("routes an expand press to that table's own onToggle", () => {
+      const onToggle = vi.fn();
+      mount(
+        <DownstreamMarkdown
+          markdown={TABLE}
+          controls={{ table: { expand: { onToggle } } }}
+        />
+      );
+      fire(
+        'onControlAction',
+        controlEvent({
+          block: 'table',
+          action: 'expand',
+          expanded: true,
+          ordinal: 2,
+        })
+      );
+      expect(onToggle).toHaveBeenCalledWith({
+        block: 'table',
+        action: 'expand',
+        expanded: true,
+        // The block's ordinal among its own kind, so an app that keys a press does
+        // not have to count the tables itself.
+        ordinal: 2,
+        // The event's own language field, passed through as every other action's
+        // is. A table has no language; native sends an empty one and a test that
+        // left the default in place would be asserting a table block reads `ts`.
+        language: 'ts',
+      });
+    });
+
+    it('opens the full-screen modal with the table it was asked for', () => {
+      const markdown = '| a | b |\n| --- | --- |\n| 1 | 2 |\n';
+      mount(<DownstreamMarkdown markdown={TABLE} controls />);
+      fire(
+        'onControlAction',
+        controlEvent({
+          block: 'table',
+          action: 'fullscreen',
+          language: '',
+          markdown,
+          ordinal: 0,
+        })
+      );
+      // The modal renders the Markdown the export produced, so the reader sees a
+      // table rather than a dump of its source: the cells are there, and it is the
+      // same component that renders the table behind it.
+      const dialog = rendered().querySelector('[role="dialog"]');
+      expect(dialog).not.toBeNull();
+      expect(dialog?.querySelector('table')).not.toBeNull();
+      const cells = [...(dialog?.querySelectorAll('td') ?? [])].map(
+        (cell) => cell.textContent
+      );
+      expect(cells).toEqual(['a', 'b', '1', '2']);
+    });
+
+    it('closes the full-screen modal again', () => {
+      mount(<DownstreamMarkdown markdown={TABLE} controls />);
+      fire(
+        'onControlAction',
+        controlEvent({
+          block: 'table',
+          action: 'fullscreen',
+          language: '',
+          markdown: '| a | b |\n| --- | --- |\n| 1 | 2 |\n',
+        })
+      );
+      // The close button says the same thing the table's button did, so the reader
+      // can undo the press by name rather than by guessing which corner it is in.
+      const close = rendered().querySelector(
+        'button[aria-label="Exit fullscreen"]'
+      );
+      expect(close).not.toBeNull();
+      act(() => {
+        close?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+      expect(rendered().querySelector('[role="dialog"]')).toBeNull();
+    });
+
+    it('opens nothing for a full-screen press with no Markdown', () => {
+      mount(<DownstreamMarkdown markdown={TABLE} controls />);
+      // Native always sends the export, so an empty one means the table is gone:
+      // a modal over nothing is worse than no modal.
+      fire(
+        'onControlAction',
+        controlEvent({
+          block: 'table',
+          action: 'fullscreen',
+          language: '',
+          markdown: '',
+        })
+      );
+      expect(rendered().querySelector('[role="dialog"]')).toBeNull();
+    });
+
+    it('turns each table button off on its own', () => {
+      const tableCopy = vi.fn();
+      const both = resolveControls({
+        table: { copy: { onCopy: tableCopy } },
+      }).flags;
+      expect(both & CONTROL_TABLE_COPY).toBe(CONTROL_TABLE_COPY);
+      // Expand and full screen are separate switches, so a reader who wants copy
+      // without either keeps it.
+      expect(both & CONTROL_TABLE_EXPAND).toBe(CONTROL_TABLE_EXPAND);
+      expect(both & CONTROL_TABLE_FULLSCREEN).toBe(CONTROL_TABLE_FULLSCREEN);
+      const neither = resolveControls({
+        table: {
+          copy: { onCopy: tableCopy },
+          expand: false,
+          fullscreen: false,
+        },
+      }).flags;
+      expect(neither & CONTROL_TABLE_EXPAND).toBe(0);
+      expect(neither & CONTROL_TABLE_FULLSCREEN).toBe(0);
+      expect(neither & CONTROL_TABLE_COPY).toBe(CONTROL_TABLE_COPY);
+    });
+
+    it('sends the cap as a height in points, defaulting to 300', () => {
+      mount(<DownstreamMarkdown markdown={TABLE} />);
+      expect(nativeView.last()?.tableMaxHeight).toBe(300);
+      rerender(<DownstreamMarkdown markdown={TABLE} tableMaxHeight={180} />);
+      expect(nativeView.last()?.tableMaxHeight).toBe(180);
+      // The same "off" values the code cap accepts and the same fallbacks, because
+      // one function resolves both: a copy of the rule is a rule that can drift.
+      rerender(<DownstreamMarkdown markdown={TABLE} tableMaxHeight="none" />);
+      expect(nativeView.last()?.tableMaxHeight).toBe(0);
+      rerender(<DownstreamMarkdown markdown={TABLE} tableMaxHeight={-1} />);
+      expect(nativeView.last()?.tableMaxHeight).toBe(300);
+    });
+
+    it('lifts the cap inside the modal and drops the controls there', () => {
+      mount(<DownstreamMarkdown markdown={TABLE} controls />);
+      fire(
+        'onControlAction',
+        controlEvent({
+          block: 'table',
+          action: 'fullscreen',
+          language: '',
+          markdown: '| a | b |\n| --- | --- |\n| 1 | 2 |\n',
+        })
+      );
+      // The modal is a second view of the same table, so it draws it uncapped and
+      // without a toolbar: a button to leave a view that is already the whole
+      // screen is a way out of nowhere.
+      const inner = nativeView.last();
+      expect(inner?.tableMaxHeight).toBe(0);
+      // `false` resolves to the empty flag set rather than staying a boolean, which
+      // is what every other `controls={false}` in the library does.
+      expect(inner?.controls).toBe(0);
+    });
   });
 });
 

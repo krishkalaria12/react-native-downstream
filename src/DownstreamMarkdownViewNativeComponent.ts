@@ -62,6 +62,12 @@ type NativeControlActionEvent = Readonly<{
    */
   markdown: string;
   /**
+   * The block's ordinal among the document's blocks of its kind, for a press an
+   * app keys on. Code, table and image ordinals are three different counts, so
+   * this is the segment's own ordinal rather than a block index.
+   */
+  ordinal: CodegenTypes.Int32;
+  /**
    * The source generation the press belongs to, so an event from a document
    * that has since been replaced is dropped rather than delivered to the
    * handlers of the one that replaced it.

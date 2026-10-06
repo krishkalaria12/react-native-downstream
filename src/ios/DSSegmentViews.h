@@ -4,6 +4,7 @@
 #include "CodeLayout.h"
 #include "HostLayout.h"
 #include "ImageLayout.h"
+#include "TableLayout.h"
 #endif
 
 #import <UIKit/UIKit.h>
@@ -82,11 +83,28 @@ typedef NS_ENUM(NSInteger, DSControlLabel) {
   DSControlLabelDownloadImage = 18,
   DSControlLabelImage = 19,
   DSControlLabelImageBlocked = 20,
-  DSControlLabelCount = 21,
+  // Phase 1: the link confirmation's four strings.
+  DSControlLabelExternalLinkWarning = 21,
+  DSControlLabelOpenLink = 22,
+  DSControlLabelCopyLink = 23,
+  DSControlLabelClose = 24,
+  // Phase 2: the table's two buttons.
+  DSControlLabelViewFullscreen = 25,
+  DSControlLabelExitFullscreen = 26,
+  DSControlLabelExpandTable = 27,
+  DSControlLabelCollapseTable = 28,
+  // Phase 5: the details summary's chevron and its accessible name.
+  DSControlLabelExpandDetails = 29,
+  DSControlLabelCollapseDetails = 30,
+  DSControlLabelCount = 31,
 };
 
 extern NSString *const kSymbolCopy;
 extern NSString *const kSymbolDownload;
+/// A table's full-screen button, and the two states of a `<details>` chevron.
+extern NSString *const kSymbolMaximize;
+extern NSString *const kSymbolChevronDown;
+extern NSString *const kSymbolChevronRight;
 
 /// One action on a code block or a table. The view that owns the button sends
 /// the delegate a description rather than doing the work itself, because only
@@ -137,8 +155,17 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 /// A per-block wrap toggle. `ordinal` is the block's ordinal among the
 /// document's code blocks, which is what the choice is keyed by.
 - (void)didToggleWrapAtOrdinal:(uint32_t)ordinal language:(NSString *)language wrapped:(BOOL)wrapped;
-/// A per-block height-cap toggle, from the expand button.
+/// A per-block height-cap toggle, from the expand button. `ordinal` is the code
+/// block's ordinal among the document's code blocks.
 - (void)didToggleExpandAtOrdinal:(uint32_t)ordinal language:(NSString *)language expanded:(BOOL)expanded;
+/// A per-table height-cap toggle. `ordinal` is the table's ordinal among the
+/// document's tables, which is a different count from the code blocks'.
+- (void)didToggleTableExpandAtOrdinal:(uint32_t)ordinal expanded:(BOOL)expanded;
+/// A table's full-screen button.
+///
+/// The view that receives this owns the document, so it is the one that exports
+/// the table's Markdown for the second view to render.
+- (void)didRequestTableFullscreenAtOrdinal:(uint32_t)ordinal;
 /// A copy, a download, or a save that failed.
 - (void)didFailControlOfKind:(DSBlockKind)kind action:(NSString *)action message:(NSString *)message;
 @end
@@ -243,6 +270,13 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 @property (nonatomic) BOOL controlsEnabled;
 @property (nonatomic, readwrite) BOOL showsToolbar;
 @property (nonatomic) uint32_t controls;
+/// The whole table layout: the cap and the reader's per-table expand choices.
+/// One value, because a measurement and a draw both resolve it rather than each
+/// deciding for itself whether this table is capped.
+@property (nonatomic) downstream::TableLayout tableLayout;
+/// True while this table is still streaming, which is what makes a capped table
+/// follow its newest row until the reader scrolls away.
+@property (nonatomic) BOOL streaming;
 - (void)setSegment:(DSTableSegment *)segment;
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
 @end
@@ -309,6 +343,8 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 /// `codeBlockMaxHeight` props, plus the reader's own per-block wrap and expand
 /// choices. One value, so a frame and the layout drawn inside it cannot disagree.
 @property (nonatomic) downstream::CodeLayout codeLayout;
+/// The whole table layout: the cap and the reader's per-table expand choices.
+@property (nonatomic) downstream::TableLayout tableLayout;
 /// What each image is, which the image views draw from and the frames are
 /// stacked with.
 @property (nonatomic) downstream::ImageStateLayout imageState;

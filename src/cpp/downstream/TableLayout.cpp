@@ -2,7 +2,10 @@
 
 namespace downstream {
 
-TableBlockLayout resolveTable(const TableLayout &layout, uint32_t ordinal) {
+TableBlockLayout resolveTable(const TableLayout &layout, int32_t ordinal) {
+  if (ordinal < 0) {
+    return TableBlockLayout{};
+  }
   TableBlockLayout table;
   // Expanded only while there is a cap to lift, so a choice left over from
   // before the prop went to 0 does not offer to collapse an uncapped table.

@@ -134,6 +134,12 @@ private:
   /// than baked into a segment's text.
   uint32_t chromeFor(const DownstreamMarkdownState &state) const;
 
+  /// The table layout the props and the state's choices together describe. Its
+  /// own function beside `codeLayout`, for the same reason: the two choices are
+  /// keyed by different ordinals, and one function taking both would have to be
+  /// told which a caller meant.
+  downstream::TableLayout tableLayout(const DownstreamMarkdownState &state) const;
+
   /// The theme these theme props resolve to. Interned only when the props
   /// change, so an unchanged theme costs nothing per revision, and the handle is
   /// held beside the rest of the node's state so clones share it.

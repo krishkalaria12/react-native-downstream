@@ -194,6 +194,14 @@ internal class CodeSegment(
   /** The caret's shape, or 0 for none. */
   val caretKind: Int,
   gapBefore: Int,
+  /**
+   * This table's index among the document's tables, or -1 before it is known.
+   *
+   * The reader's expand choice is keyed by this rather than by the block index,
+   * because a block index counts rows and moves as a table streams, while an
+   * ordinal counts tables and does not.
+   */
+  val ordinal: Int = -1,
 ) : Segment(gapBefore) {
   private val digitAdvance: Float
   private val codeLineHeight: Int
@@ -326,6 +334,14 @@ internal class TableSegment(
    */
   val caretKind: Int,
   gapBefore: Int,
+  /**
+   * This table's index among the document's tables, or -1 before it is known.
+   *
+   * The reader's expand choice is keyed by this rather than by the block index,
+   * because a block index counts rows and moves as a table streams, while an
+   * ordinal counts tables and does not.
+   */
+  val ordinal: Int = -1,
 ) : Segment(gapBefore) {
   // One border width for the closing grid line, so the outer edge the view draws
   // sits inside the size the measurement produced.

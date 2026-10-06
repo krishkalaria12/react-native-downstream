@@ -840,6 +840,10 @@ Java_com_downstream_DownstreamNative_nativeSegmentPlan(JNIEnv *env, jclass /*cla
                                     // matches a picture to its state without walking the
                                     // document. -1 for every other segment.
                                     static_cast<jlong>(segment.imageOrdinal),
+                                    // The table ordinal, for the same reason and because a
+                                    // reader's expand choice is keyed by it: a block index
+                                    // counts rows and moves as a table streams.
+                                    static_cast<jlong>(segment.tableOrdinal),
                                 });
   }
   jlongArray array = env->NewLongArray(static_cast<jsize>(values.size()));

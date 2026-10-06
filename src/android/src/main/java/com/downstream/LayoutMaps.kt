@@ -40,6 +40,12 @@ internal fun ReadableMap.toCodeLayout(): CodeLayout = CodeLayout(
   CodeChoices(ordinalsAt("wrapToggles"), ordinalsAt("expanded")),
 )
 
+/** The table layout in the map, as the shadow node resolved it. */
+internal fun ReadableMap.toTableLayout(): TableLayout = TableLayout(
+  TableLayoutProps(PixelUtil.toPixelFromDIP(numberAt("tableMaxHeight", 300.0)).toFloat()),
+  TableChoices(ordinalsAt("tableExpanded")),
+)
+
 /**
  * The image layout in the map, as the shadow node resolved it.
  *

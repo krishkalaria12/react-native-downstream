@@ -389,6 +389,13 @@ internal class PlannedSegment(
    * holds exactly one block, so one ordinal is the whole of it.
    */
   val imageOrdinal: Int,
+  /**
+   * This table's ordinal among the document's tables, which a reader's expand
+   * choice is keyed by, or -1 for any other segment. Counted by the plan for the
+   * same reason [codeOrdinal] is: a measurement needs it, and a measurement runs
+   * before any view has walked the segments.
+   */
+  val tableOrdinal: Int,
 )
 
 /**
@@ -623,6 +630,7 @@ internal object DownstreamNative {
         values[it + 5].toInt(),
         SEGMENT_KINDS.getOrElse(values[it + 6].toInt()) { SEGMENT_TEXT },
         values[it + 7].toInt(),
+        values[it + 8].toInt(),
       )
     }
   }
@@ -795,7 +803,7 @@ internal object DownstreamNative {
     }
   }
 
-  private const val PLAN_STRIDE = 8
+  private const val PLAN_STRIDE = 9
 
   // Implemented in DownstreamJni.cpp, which links into libappmodules.so.
   @JvmStatic

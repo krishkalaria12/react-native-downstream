@@ -35,7 +35,8 @@ folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontSc
                               const downstream::ImageLayout &images,
                               const downstream::Theme::Handle &theme = nullptr,
                               const downstream::HostLayout &hosts = {},
-                              facebook::react::Float width = 0) {
+                              facebook::react::Float width = 0,
+                              const downstream::TableLayout &tables = {}) {
   // One array of five numbers per image rather than five parallel arrays: a
   // measurement copies this map, and parallel arrays make "which array is one
   // longer" a question the Kotlin side has to answer defensively. State codes
@@ -59,6 +60,11 @@ folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontSc
       "codeBlockWrap", code.props.wrap ? 1.0 : 0.0)("lineNumbers", code.props.lineNumbers ? 1.0 : 0.0)(
       "codeBlockMaxHeight", static_cast<double>(code.props.maxHeight))(
       "wrapToggles", ordinalArray(code.choices.wrapToggles))("expanded", ordinalArray(code.choices.expanded))(
+      // The table cap and its choices, beside the code block's: a table is the
+      // second block kind with a height of its own, and a capped table measures
+      // at one height and an expanded one at another.
+      "tableMaxHeight", static_cast<double>(tables.props.maxHeight))(
+      "tableExpanded", ordinalArray(tables.choices.expanded))(
       // The caret's two small enums and the images, the same way: the caret's
       // placeholder is part of the prepared text, so a worker has to reserve it
       // too or the view draws at a height the measurement did not measure.
@@ -295,7 +301,7 @@ DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
     const downstream::DocumentHandle &document, Float fontSizeMultiplier, Float maximumWidth, SurfaceId surfaceId,
     uint32_t chrome, const downstream::CodeLayout &code, const downstream::PlacedCaret &caret,
     const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
-    const downstream::Theme::Handle &theme) const {
+    const downstream::Theme::Handle &theme, const downstream::TableLayout &tables) const {
   // Java resolves the theme through the registry by id, the way it resolves the
   // document, so no slot value is copied across JNI on a measurement. Zero is
   // the default theme's own id.
@@ -317,7 +323,7 @@ DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
   // The same map shape is what the view manager reads in `updateState` and in
   // `measure`, so all three resolve one layout rather than three.
   auto localDataMap = ReadableNativeMap::newObjectCxxArgs(
-      codeLayoutData(document->id, fontSizeMultiplier, chrome, code, caret, images, theme, hosts));
+      codeLayoutData(document->id, fontSizeMultiplier, chrome, code, caret, images, theme, hosts, 0, tables));
 
   auto propsMap = ReadableNativeMap::newObjectCxxArgs(folly::dynamic::object());
   auto componentName = make_jstring("DownstreamMarkdownView");
@@ -382,7 +388,8 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
       // reader actually has.
       auto map = ReadableNativeMap::newObjectCxxArgs(codeLayoutData(document->id, hint.fontScale, hint.chrome,
                                                                      hint.code, hint.caret, hint.images, hint.theme,
-                                                                     downstream::HostLayout{}, hint.width));
+                                                                     downstream::HostLayout{}, hint.width,
+                                                                     hint.tables));
       env->CallStaticVoidMethod(nativeClass, prepareMethod, static_cast<jlong>(document->id),
                                 reinterpret_cast<ReadableMap::javaobject>(map.get()));
       if (env->ExceptionCheck()) {

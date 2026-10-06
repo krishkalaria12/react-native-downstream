@@ -266,6 +266,18 @@ export type MarkdownTagEvent = Readonly<{
   range: MarkdownSourceRange;
 }>;
 
+/** A table's full-screen button. */
+export type MarkdownTableFullscreenEvent = Readonly<{
+  /**
+   * The table's own Markdown, as the engine's export wrote it. A modal or a
+   * route renders this and gets the same table, rather than one rebuilt from the
+   * model.
+   */
+  markdown: string;
+  /** The table's ordinal among the document's tables, for an app that keys on it. */
+  ordinal: number;
+}>;
+
 /**
  * What a reader is asked before an external link opens.
  *
@@ -1116,6 +1128,15 @@ type MarkdownViewBaseProps = Readonly<{
    * `onTagPress` cares about.
    */
   onTagPress?: (event: MarkdownTagEvent) => void;
+  /**
+   * Replaces the full-screen table modal.
+   *
+   * It receives the table's own Markdown and nothing else about the view: an app
+   * that pushes a route needs the text, not this library's modal.
+   */
+  renderTableFullscreen?: (event: MarkdownTableFullscreenEvent) => ReactNode;
+  /** A table's full-screen button, for an app with its own handler. */
+  onTableFullscreen?: (event: MarkdownTableFullscreenEvent) => void;
   /**
    * Whether this document runs right to left, and what a neutral block inherits.
    * Unset means the engine decides from the text itself.

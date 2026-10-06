@@ -28,6 +28,9 @@ internal const val CONTROL_TABLE_DOWNLOAD = 8
 internal const val CONTROL_CODE_WRAP = 16
 internal const val CONTROL_CODE_EXPAND = 32
 internal const val CONTROL_IMAGE_DOWNLOAD = 64
+/** Phase 2: a table's expand and full-screen buttons. */
+internal const val CONTROL_TABLE_EXPAND = 128
+internal const val CONTROL_TABLE_FULLSCREEN = 256
 
 // How long a copy button shows its check before going back, as in Streamdown.
 internal const val COPIED_DURATION_MS = 2_000L
@@ -42,6 +45,12 @@ internal val DEFAULT_LABELS = listOf(
   "Download table", "Download table as CSV", "Download table as Markdown",
   "Markdown", "CSV", "TSV",
   "Image not available", "Download image", "Image", "Image blocked",
+  // Phase 1: the link confirmation's four strings.
+  "Open this link?", "Open", "Copy link", "Close",
+  // Phase 2: the table's two buttons.
+  "View fullscreen", "Exit fullscreen", "Show all rows", "Show fewer rows",
+  // Phase 5: the details summary's chevron and its accessible name.
+  "Show details", "Hide details",
 )
 
 internal const val LABEL_COPY_CODE = 0
@@ -59,6 +68,11 @@ internal const val LABEL_FORMAT_TSV = 16
 internal const val LABEL_IMAGE_NOT_AVAILABLE = 17
 internal const val LABEL_IMAGE_DOWNLOAD = 18
 internal const val LABEL_IMAGE_BLOCKED = 20
+internal const val LABEL_VIEW_FULLSCREEN = 25
+internal const val LABEL_EXPAND_TABLE = 27
+internal const val LABEL_COLLAPSE_TABLE = 28
+internal const val LABEL_EXPAND_DETAILS = 29
+internal const val LABEL_COLLAPSE_DETAILS = 30
 
 /**
  * What a control button did. The segment views hold no document, so they hand
@@ -76,6 +90,17 @@ internal interface ControlHost {
 
   fun onToggleWrap(ordinal: Int, language: String, wrapped: Boolean)
   fun onToggleExpand(ordinal: Int, language: String, expanded: Boolean)
+
+  /**
+   * A table's expand button. Its own method beside `onToggleExpand` because the
+   * two are keyed by different ordinals: a code ordinal counts code blocks and a
+   * table ordinal counts tables, so one method taking both would have to be told
+   * which a caller meant.
+   */
+  fun onToggleTableExpand(ordinal: Int, expanded: Boolean)
+
+  /** A table's full-screen button. The host owns the document and exports it. */
+  fun onTableFullscreen(ordinal: Int)
   fun onControlFailed(kind: Int, action: String, message: String)
 }
 

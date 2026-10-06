@@ -17,6 +17,7 @@
 #include "Export.h"
 #include "Reveal.h"
 #include "SegmentPlan.h"
+#include "TableLayout.h"
 #include "theme/Theme.h"
 #include "SessionTrace.h"
 #include "WorkerPool.h"
@@ -153,7 +154,7 @@ NSString *nameForFormat(NSString *format) {
   /// `tableMaxHeight` in points, 0 for no cap. A height rather than a prop read
   /// from the segment, because a control press resolves one table's own layout
   /// and a segment view has no access to the view's props.
-  float _tableMaxHeight{300};
+  downstream::TableLayout _tableLayout;
   std::string _codeFilename;
   std::string _tableFilename;
   std::string _imageFilename;
@@ -202,7 +203,9 @@ NSString *nameForFormat(NSString *format) {
     // compares equal rather than looking like a change.
     _codeLayout.props = {defaultProps->codeBlockWrap, defaultProps->lineNumbers,
                          static_cast<float>(defaultProps->codeBlockMaxHeight)};
-    _tableMaxHeight = static_cast<float>(defaultProps->tableMaxHeight);
+    // The prop's own default, so a props update that never mentions the cap
+    // compares equal rather than looking like a change.
+    _tableLayout.props.maxHeight = static_cast<float>(defaultProps->tableMaxHeight);
     _codeFilename = "file";
     _tableFilename = "table";
     _imageFilename = "image";
@@ -249,17 +252,19 @@ NSString *nameForFormat(NSString *format) {
   // here rebuilds anything.
   const BOOL themeChanged = [self applyTheme];
   if (!themeChanged && data.document == _document && data.fontSizeMultiplier == _fontScale &&
-      data.chrome == _chrome && data.code == _codeLayout && data.images == _imageState &&
-      data.hosts == _hostLayout) {
+      data.chrome == _chrome && data.code == _codeLayout && data.tables == _tableLayout &&
+      data.images == _imageState && data.hosts == _hostLayout) {
     return;
   }
   _document = data.document;
   _fontScale = data.fontSizeMultiplier;
   _chrome = data.chrome;
   _codeLayout = data.code;
+  _tableLayout = data.tables;
   _imageState = data.images;
   _hostLayout = data.hosts;
   _documentView.codeLayout = _codeLayout;
+  _documentView.tableLayout = _tableLayout;
   _documentView.imageState = _imageState;
   _documentView.hostLayout = _hostLayout;
   const uint64_t documentId = _document ? _document->id : 0;
@@ -482,9 +487,9 @@ NSString *nameForFormat(NSString *format) {
   }
   if (newProps.tableMaxHeight != previous.tableMaxHeight) {
     // A height, so it reaches the drawing through the shadow node's state on the
-    // next layout. Storing it here is what lets a control press resolve one
-    // table's own cap rather than reading a prop from the segment.
-    _tableMaxHeight = static_cast<float>(newProps.tableMaxHeight);
+    // next layout, and the shadow node remeasures against it. Nothing is applied
+    // here: the state that records it arrives in `applyState`, which is the one
+    // path a native view has for changing its own layout without a React render.
   }
   if (newProps.csvSeparator != previous.csvSeparator) {
     _csvSeparator = newProps.csvSeparator.empty() ? @"," : @(newProps.csvSeparator.c_str());
@@ -889,7 +894,8 @@ NSString *nameForFormat(NSString *format) {
                     filename:(NSString *)filename
                         url:(NSString *)url
                      wrapped:(BOOL)wrapped
-                    expanded:(BOOL)expanded {
+                    expanded:(BOOL)expanded
+                    markdown:(NSString *)markdown {
   const auto *emitter = [self emitter];
   if (emitter == nullptr) {
     return;
@@ -911,6 +917,14 @@ NSString *nameForFormat(NSString *format) {
       .url = std::string(url.UTF8String ?: ""),
       .wrapped = static_cast<bool>(wrapped),
       .expanded = static_cast<bool>(expanded),
+      // Only a full-screen table carries Markdown: the modal it opens holds a
+      // second view, and the text it renders is the table's own source rather
+      // than a rebuild of it. Empty for every other action.
+      .markdown = std::string(markdown.UTF8String ?: ""),
+      // Every press reports its block's ordinal among its own kind, because an
+      // app that keys a press needs to know which block was pressed and three
+      // kinds count separately. -1 where there is no ordinal to report.
+      .ordinal = -1,
       .generation = generation,
   });
 }
@@ -955,7 +969,8 @@ NSString *nameForFormat(NSString *format) {
                         filename:@""
                             url:@""
                          wrapped:NO
-                        expanded:NO];
+                        expanded:NO
+                        markdown:@""];
       return;
     }
     [self emitControlWithBlock:@"image"
@@ -965,7 +980,8 @@ NSString *nameForFormat(NSString *format) {
                       filename:filename
                           url:_pressedImageURL ?: @""
                        wrapped:NO
-                      expanded:NO];
+                      expanded:NO
+                        markdown:@""];
     return;
   }
   if (!_document) {
@@ -1033,7 +1049,8 @@ NSString *nameForFormat(NSString *format) {
                         filename:@""
                              url:@""
                          wrapped:NO
-                        expanded:NO];
+                        expanded:NO
+                        markdown:@""];
       return;
     }
     [view->_exporter saveData:data
@@ -1059,7 +1076,8 @@ NSString *nameForFormat(NSString *format) {
                              filename:name
                                  url:@""
                               wrapped:NO
-                             expanded:NO];
+                             expanded:NO
+                        markdown:@""];
       }
     }];
   };
@@ -1150,7 +1168,8 @@ NSString *nameForFormat(NSString *format) {
                     filename:@""
                         url:@""
                      wrapped:wrapped
-                    expanded:NO];
+                    expanded:NO
+                        markdown:@""];
 }
 
 - (void)didToggleExpandAtOrdinal:(uint32_t)ordinal language:(NSString *)language expanded:(BOOL)expanded {
@@ -1170,7 +1189,77 @@ NSString *nameForFormat(NSString *format) {
                     filename:@""
                         url:@""
                      wrapped:NO
-                    expanded:expanded];
+                    expanded:expanded
+                        markdown:@""];
+}
+
+- (void)didToggleTableExpandAtOrdinal:(uint32_t)ordinal expanded:(BOOL)expanded {
+  if (!_state) {
+    return;
+  }
+  // The same path as a code block's expand, and for the same reason: the table's
+  // height changes, and only Yoga and the chat list can know that.
+  DownstreamMarkdownState next = _state->getData().toggledTableExpand(ordinal);
+  _state->updateState(std::move(next));
+  [self emitControlWithBlock:@"table"
+                      action:@"expand"
+                      format:@""
+                    language:@""
+                    filename:@""
+                        url:@""
+                     wrapped:NO
+                    expanded:expanded
+                    markdown:@""];
+}
+
+- (void)didRequestTableFullscreenAtOrdinal:(uint32_t)ordinal {
+  const auto *emitter = [self emitter];
+  if (emitter == nullptr) {
+    return;
+  }
+  // Nothing is drawn here and nothing is torn down: the button opens a modal in
+  // JavaScript, holding a second view, and the table behind it keeps its own
+  // cap and its own scroll position. So the press only reports — the table's
+  // source, which is what the modal renders.
+  const int generation = _state
+      ? static_cast<int>(std::static_pointer_cast<const DownstreamMarkdownViewProps>(_props)->generation)
+      : 0;
+  emitter->onControlAction({
+      .block = std::string("table"),
+      .action = std::string("fullscreen"),
+      .format = std::string(),
+      .language = std::string(),
+      .filename = std::string(),
+      .url = std::string(),
+      .wrapped = false,
+      .expanded = false,
+      .markdown = std::string([self markdownForTableAtOrdinal:ordinal].UTF8String ?: ""),
+      .ordinal = static_cast<int32_t>(ordinal),
+      .generation = generation,
+  });
+}
+
+/// The table at `ordinal`'s own Markdown, as the export writes it.
+///
+/// The same `exportBlocks` a copy produces, so a full-screen table is the table
+/// rather than one rebuilt from the model — and a table whose columns were
+/// reordered comes back as the pipe table a reader would have written.
+- (NSString *)markdownForTableAtOrdinal:(uint32_t)ordinal {
+  const auto &document = _state ? _state->getData().document : nullptr;
+  if (document == nullptr) {
+    return @"";
+  }
+  const std::vector<SegmentPlan> plan = planSegments(*document);
+  uint32_t seen = 0;
+  for (const SegmentPlan &segment : plan) {
+    if (segment.kind != SegmentKind::Table) {
+      continue;
+    }
+    if (seen++ == ordinal) {
+      return toNSString(exportBlocks(*document, segment.from, segment.to, ExportFormat::Markdown));
+    }
+  }
+  return @"";
 }
 
 - (void)didFailControlOfKind:(DSBlockKind)kind action:(NSString *)action message:(NSString *)message {

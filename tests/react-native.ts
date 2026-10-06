@@ -6,6 +6,8 @@
  * the trace records. Everything else in the public surface is types, which
  * erase at build time, so nothing else needs stubbing.
  */
+import { createElement } from 'react';
+import type React from 'react';
 import { vi } from 'vitest';
 
 /** The TurboModule surface the stream controller calls. */
@@ -205,7 +207,6 @@ export function flattenStyle(style: unknown): unknown {
 export const View = 'View';
 export const Text = 'Text';
 export const ScrollView = 'ScrollView';
-export const Pressable = 'Pressable';
 export const TextInput = 'TextInput';
 export const FlatList = 'FlatList';
 export const SafeAreaView = 'SafeAreaView';
@@ -219,5 +220,60 @@ export const requireNativeComponent = vi.fn((name: string) => name);
 export const Animated = { View: 'Animated.View' };
 export const Easing = { linear: (t: number) => t };
 export const findNodeHandle = vi.fn();
+
+/**
+ * A pressable, as a real button.
+ *
+ * A component rather than a host name, because `accessibilityLabel` is how React
+ * Native names a control and `aria-label` is how the DOM does, and a test should
+ * be able to find a control by the same string a screen reader would read out.
+ * The props the platform reads are translated rather than passed through: a test
+ * DOM would render them as unknown attributes, and that noise says nothing about
+ * whether a reader can use the button.
+ */
+export function Pressable({
+  accessibilityLabel,
+  accessibilityRole,
+  onPress,
+  style,
+  children,
+  ...rest
+}: {
+  accessibilityLabel?: string;
+  accessibilityRole?: string;
+  onPress?: () => void;
+  style?: unknown;
+  children?: unknown;
+  [key: string]: unknown;
+}): React.ReactElement {
+  return createElement(
+    'button',
+    {
+      'aria-label': accessibilityLabel,
+      'data-role': accessibilityRole,
+      style,
+      'onClick': onPress,
+      ...rest,
+    },
+    children as React.ReactNode
+  );
+}
+
+/**
+ * A modal, as a dialog.
+ *
+ * A component rather than a host name, because `role="dialog"` is what an
+ * accessible modal is and the tests should be able to ask the question a reader
+ * would: is a dialog open, and what does it say. The props the platform reads are
+ * dropped rather than passed through, because a test DOM would read them as
+ * unknown attributes and that noise says nothing.
+ */
+export function Modal({
+  children,
+}: {
+  children?: unknown;
+}): React.ReactElement {
+  return createElement('div', { role: 'dialog' }, children as React.ReactNode);
+}
 
 export const __DEV__ = true;

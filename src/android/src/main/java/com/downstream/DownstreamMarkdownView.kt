@@ -78,6 +78,15 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   internal var onWrapToggle: ((view: DownstreamMarkdownView, ordinal: Int, wrapped: Boolean) -> Unit)? = null
   internal var onExpandToggle: ((view: DownstreamMarkdownView, ordinal: Int, expanded: Boolean) -> Unit)? = null
 
+  /**
+   * Phase 2. Both fire before the view applies its own choice, so the manager
+   * reads `nextToggledOrdinal` while it is still the press's ordinal.
+   */
+  internal var onTableExpandToggle: ((view: DownstreamMarkdownView, ordinal: Int, expanded: Boolean) -> Unit)? =
+    null
+
+  internal var onTableFullscreen: ((view: DownstreamMarkdownView, ordinal: Int) -> Unit)? = null
+
   private var documentId = 0L
   private var fontScale = 1f
   /** The interned theme the state carried, which the rendering was built with. */
@@ -106,6 +115,13 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    * decision, and so a measurement and a mount cannot disagree about a height.
    */
   private var codeLayout = CodeLayout()
+
+  /**
+   * The table layout, beside [codeLayout] and for the same reason: the shadow
+   * node measures with it and the view draws with it, so a measured table and a
+   * drawn one cannot disagree about a cap.
+   */
+  private var tableLayout = TableLayout()
   private var csvSeparator = ","
   private var codeFilename = "file"
   private var tableFilename = "table"
@@ -467,6 +483,28 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     requestLayout()
   }
 
+  /**
+   * The table cap, from `tableMaxHeight`. Separate from [setCodeProps] because the
+   * two caps are separate numbers with separate defaults, and one method taking
+   * both would have to be told which a caller meant.
+   */
+  fun setTableProps(maxHeightDp: Double) {
+    val props = TableLayoutProps(PixelUtil.toPixelFromDIP(maxHeightDp).toFloat())
+    if (props == tableLayout.props) return
+    tableLayout = TableLayout(props, tableLayout.choices)
+    applySettledState()
+    requestLayout()
+  }
+
+  /** The reader's own per-table choices, as the state carries them. */
+  fun setTableChoices(expanded: IntArray) {
+    val choices = TableChoices(expanded)
+    if (choices == tableLayout.choices) return
+    tableLayout = TableLayout(tableLayout.props, choices)
+    applySettledState()
+    requestLayout()
+  }
+
   fun setChrome(value: Int) {
     if (value == chrome) return
     chrome = value
@@ -592,9 +630,16 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
           child.setHeaderVisible(chrome and RenderedDocument.CHROME_CODE_HEADER != 0)
         }
         is TableSegmentView -> {
+          // The same two calls the measurement used, so the box this table is
+          // given and the cap it draws inside it are one decision.
           child.setControls(controls)
           child.setControlsEnabled(settled)
           child.setToolbarVisible(chrome and RenderedDocument.CHROME_TABLE_TOOLBAR != 0)
+          child.tableLayout = resolveTable(tableLayout, child.ordinal)
+          // Settled on the same rule a code card uses: the plan carries the
+          // parser's own settled count, so the card and the parser cannot
+          // disagree about whether the table closed.
+          child.isStreaming = !settled
         }
         is ImageSegmentView -> child.setDownloadControl(controls, settled, controlLabels[LABEL_IMAGE_DOWNLOAD])
       }
@@ -947,10 +992,13 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     sessionId = null
     sourceEpoch++
     codeLayout = CodeLayout()
+    tableLayout = TableLayout()
     onControl = null
     onControlFailure = null
     onWrapToggle = null
     onExpandToggle = null
+    onTableExpandToggle = null
+    onTableFullscreen = null
     // A recycled view has no emitter any more. Already opened saves finish,
     // while their callbacks drop events belonging to the previous source.
     exporter.release()
@@ -1018,6 +1066,16 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     onExpandToggle?.invoke(this, ordinal, expanded)
   }
 
+  override fun onToggleTableExpand(ordinal: Int, expanded: Boolean) {
+    nextOrdinal = ordinal
+    onTableExpandToggle?.invoke(this, ordinal, expanded)
+  }
+
+  override fun onTableFullscreen(ordinal: Int) {
+    nextOrdinal = ordinal
+    onTableFullscreen?.invoke(this, ordinal)
+  }
+
   /**
    * Hands a new state back with [ordinal]'s wrap choice toggled, through the same
    * Fabric state path the wrap button uses.
@@ -1031,6 +1089,24 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   /** The same, for the cap the expand button lifts. */
   fun toggleExpand(ordinal: Int) = updateChoice { it.copyWithExpand(ordinal) }
+
+  /**
+   * The same, for the cap a table's expand button lifts. Separate from
+   * [toggleExpand] because the two are keyed by different ordinals: a code
+   * ordinal counts code blocks and a table ordinal counts tables, so one set of
+   * choices cannot hold both without a caller being told which a press meant.
+   */
+  fun toggleTableExpand(ordinal: Int) {
+    if (stateWrapper == null) return
+    val layout = tableLayout.copy(choices = tableLayout.choices.copyWithExpand(ordinal))
+    // The chrome is recomputed from the code layout, which did not change: a
+    // table's cap and a code card's wrap are separate bits and this press moved
+    // neither, so there is nothing to recompute here.
+    tableLayout = layout
+    applySettledState()
+    requestLayout()
+    pushTableState(layout)
+  }
 
   private fun updateChoice(toggle: (CodeChoices) -> CodeChoices) {
     if (stateWrapper == null) return
@@ -1066,6 +1142,28 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   }
 
   /**
+   * The same, for the table layout. Only the table keys change, so the code keys
+   * are sent unchanged rather than dropped: the shadow node keeps one code
+   * layout, and a push that omitted them would reset the reader's code choices.
+   */
+  private fun pushTableState(layout: TableLayout) {
+    val wrapper = stateWrapper ?: return
+    val map = Arguments.createMap()
+    map.putDouble("documentId", documentId.toDouble())
+    map.putDouble("fontScale", fontScale.toDouble())
+    map.putDouble("chrome", chrome.toDouble())
+    map.putDouble("codeBlockWrap", if (codeLayout.props.wrap) 1.0 else 0.0)
+    map.putDouble("lineNumbers", if (codeLayout.props.lineNumbers) 1.0 else 0.0)
+    map.putDouble("codeBlockMaxHeight", PixelUtil.toDIPFromPixel(codeLayout.props.maxHeight).toDouble())
+    map.putArray("wrapToggles", intArrayOf(codeLayout.choices.wrapToggles))
+    map.putArray("expanded", intArrayOf(codeLayout.choices.expanded))
+    // The cap crosses as points, for the same reason the code cap does.
+    map.putDouble("tableMaxHeight", PixelUtil.toDIPFromPixel(layout.props.maxHeight).toDouble())
+    map.putArray("tableExpanded", intArrayOf(layout.choices.expanded))
+    wrapper.updateState(map)
+  }
+
+  /**
    * The chrome a layout draws with, with the same rule the shadow node uses: a
    * header and a toolbar are bits, and the wrap bit says every code block wraps,
    * which stops being true as soon as the reader has made one block differ from
@@ -1079,7 +1177,9 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     ) {
       chrome = chrome or RenderedDocument.CHROME_CODE_HEADER
     }
-    if (controls and (CONTROL_TABLE_COPY or CONTROL_TABLE_DOWNLOAD) != 0) {
+    if (controls and (CONTROL_TABLE_COPY or CONTROL_TABLE_DOWNLOAD or CONTROL_TABLE_EXPAND or
+      CONTROL_TABLE_FULLSCREEN) != 0
+    ) {
       chrome = chrome or RenderedDocument.CHROME_TABLE_TOOLBAR
     }
     if (controls and CONTROL_CODE_WRAP != 0 && layout.props.wrap && layout.choices.wrapToggles.isEmpty()) {
@@ -1313,7 +1413,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     if (width <= 0) {
       return
     }
-    val frames = document.frames(width, chrome, codeLayout, imageLayout, hostLayout)
+    val frames = document.frames(width, chrome, codeLayout, imageLayout, hostLayout, tableLayout)
     for (index in 0 until minOf(segmentViews.size, frames.size / 2)) {
       val child = segmentViews[index]
       val top = paddingTop + frames[index * 2]

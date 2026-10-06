@@ -125,13 +125,18 @@ downstream::Theme::Handle DownstreamMarkdownShadowNode::resolveTheme() const {
 downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale, Float width,
                                                                const downstream::DocumentHandle &document) const {
   const auto &state = getStateData();
-  return downstream::LayoutHint{static_cast<float>(fontScale),
-                                static_cast<float>(width),
-                                chromeFor(state),
-                                codeLayout(state),
-                                state.caret,
-                                imageLayout(document),
-                                theme_};
+  downstream::LayoutHint hint{static_cast<float>(fontScale),
+                              static_cast<float>(width),
+                              chromeFor(state),
+                              codeLayout(state),
+                              state.caret,
+                              imageLayout(document),
+                              theme_};
+  // The table layout rides beside the code one rather than inside it, because a
+  // table's height is a different block kind's decision and mixing them would
+  // make every code wrap toggle rebuild the table measurement.
+  hint.tables = tableLayout(state);
+  return hint;
 }
 
 /// The two small enums, mapped from the codegen ones.
@@ -314,6 +319,19 @@ downstream::CodeLayout DownstreamMarkdownShadowNode::codeLayout(const Downstream
   code.props = {props.codeBlockWrap, props.lineNumbers, static_cast<float>(props.codeBlockMaxHeight)};
   code.choices = state.code.choices;
   return code;
+}
+
+/// The table layout the props and the state's choices together describe.
+downstream::TableLayout DownstreamMarkdownShadowNode::tableLayout(
+    const DownstreamMarkdownState &state) const {
+  const auto &props = getConcreteProps();
+  downstream::TableLayout tables;
+  // Measuring reads the props rather than the state's copy of them, for the same
+  // reason `codeLayout` does: a prop change lands in props a revision before the
+  // state that records it does.
+  tables.props.maxHeight = static_cast<float>(props.tableMaxHeight);
+  tables.choices = state.tables.choices;
+  return tables;
 }
 
 uint32_t DownstreamMarkdownShadowNode::chromeFor(const DownstreamMarkdownState &state) const {
@@ -539,7 +557,8 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
   measuredHosts_ = measureSlots(layoutContext, layoutConstraints);
   return layoutManager_
       ->measure(document, layoutContext.fontSizeMultiplier, layoutConstraints, getSurfaceId(), chrome,
-                codeLayout(state), caretFor(document), imageLayout(document), measuredHosts_, theme_)
+                codeLayout(state), caretFor(document), imageLayout(document), measuredHosts_, theme_,
+                tableLayout(state))
       .size;
 }
 
@@ -561,7 +580,8 @@ void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
                                 getLayoutMetrics().layoutDirection};
   const DocumentMeasurement measurement =
       layoutManager_->measure(document, layoutContext.fontSizeMultiplier, frame, getSurfaceId(), chromeFor(state),
-                              codeLayout(state), caretFor(document), imageLayout(document), measuredHosts_, theme_);
+                              codeLayout(state), caretFor(document), imageLayout(document), measuredHosts_, theme_,
+                              tableLayout(state));
   if (measurement.slots.empty()) {
     return;
   }
@@ -632,18 +652,23 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   // not a second measurement: a child measured twice at two widths would put
   // the document and the view at two different heights.
   const downstream::HostLayout hosts = measuredHosts_;
+  // The table layout is in this comparison for the same reason the code one is:
+  // a capped table measures at one height and an expanded one at another, and a
+  // view that mounted with the wrong set would scroll a table by a frame it was
+  // not laid out for.
+  const downstream::TableLayout tables = tableLayout(state);
   if (document && state.document != document) {
     reportMathErrors(document, state.document);
   }
   if (state.document != document || state.fontSizeMultiplier != layoutContext.fontSizeMultiplier ||
-      state.chrome != chrome || state.code != code || state.caret != caret || state.images != images ||
-      state.hosts != hosts ||
-      state.themeId() != themeId()) {
+      state.chrome != chrome || state.code != code || state.tables != tables || state.caret != caret ||
+      state.images != images || state.hosts != hosts || state.themeId() != themeId()) {
     DownstreamMarkdownState next{state};
     next.document = document;
     next.fontSizeMultiplier = layoutContext.fontSizeMultiplier;
     next.chrome = chrome;
     next.code = code;
+    next.tables = tables;
     next.caret = caret;
     next.images = images;
     next.hosts = hosts;

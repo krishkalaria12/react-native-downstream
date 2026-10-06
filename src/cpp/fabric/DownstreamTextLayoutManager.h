@@ -6,6 +6,7 @@
 #include "HostLayout.h"
 #include "ImageLayout.h"
 #include "RenderPreparer.h"
+#include "TableLayout.h"
 #include "theme/Theme.h"
 
 #include <react/renderer/core/LayoutConstraints.h>
@@ -101,14 +102,16 @@ public:
                               const LayoutConstraints &layoutConstraints, SurfaceId surfaceId, uint32_t chrome,
                               const downstream::CodeLayout &code, const downstream::PlacedCaret &caret,
                               const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
-                              const downstream::Theme::Handle &theme) const;
+                              const downstream::Theme::Handle &theme,
+                              const downstream::TableLayout &tables = {}) const;
 
 private:
   DocumentMeasurement measurePlatform(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
                                       Float maximumWidth, SurfaceId surfaceId, uint32_t chrome,
                                       const downstream::CodeLayout &code, const downstream::PlacedCaret &caret,
                                       const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
-                                      const downstream::Theme::Handle &theme) const;
+                                      const downstream::Theme::Handle &theme,
+                                      const downstream::TableLayout &tables = {}) const;
 
   /// The theme's id, or 0 for the default theme, which is its id too.
   static uint64_t themeKey(const downstream::Theme::Handle &theme);
@@ -124,6 +127,10 @@ private:
     downstream::PlacedCaret caret;
     downstream::ImageLayout images;
     downstream::HostLayout hosts;
+    /// The table layout, for the same reason `code` is in the key: a capped table
+    /// and an expanded one are different heights, so they are different
+    /// measurements.
+    downstream::TableLayout tables;
     /// The theme's layout key, which is 0 for the default theme.
     uint64_t themeLayoutKey;
     DocumentMeasurement measurement;

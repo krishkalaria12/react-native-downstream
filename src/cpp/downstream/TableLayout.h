@@ -59,15 +59,25 @@ struct TableBlockLayout {
   /**
    * The cap this table actually has, in points. 0 when uncapped or expanded,
    * which is what makes "no cap" one case rather than two.
+   *
+   * Initialised to 0 rather than left to default-initialisation, because a
+   * default-constructed block is the natural way to say "no cap" and an
+   * indeterminate float here would be a height that differs run to run.
    */
-  float maxHeight;
+  float maxHeight{0};
   /// The reader lifted this table's cap. The toolbar keeps its button either
   /// way, so an expanded table can put the cap back.
   bool expanded = false;
 };
 
 /// The layout of the table at `ordinal`, from the props and the reader's choices.
-TableBlockLayout resolveTable(const TableLayout &layout, uint32_t ordinal);
+///
+/// A negative ordinal means the caller does not know which table this is, and the
+/// answer is "no cap": an unknown table has no reader's choice to apply and must
+/// not draw one the reader did not make. Both platforms read the same answer, so a
+/// segment that somehow lost its ordinal draws uncapped on either rather than
+/// capped on one and not the other.
+TableBlockLayout resolveTable(const TableLayout &layout, int32_t ordinal);
 
 /**
  * The lines a capped table still shows, whatever the font scale.

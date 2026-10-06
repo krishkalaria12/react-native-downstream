@@ -43,6 +43,11 @@ struct SegmentPlan {
   /// here, so this is the lookup's starting point rather than a second count
   /// that could disagree with the document's.
   int32_t imageOrdinal{-1};
+  /// Table segments only: the segment's ordinal among the document's tables.
+  /// Counted as the plan is built, for the same reason as `codeOrdinal`: a
+  /// reader's expand choice is keyed by it, so it has to survive the blocks
+  /// before it being rewritten. -1 for every other segment.
+  int32_t tableOrdinal{-1};
   /// Every block is committed. Committed blocks never change under their
   /// identity, so a committed segment is keyed by its first block's identity
   /// and its block count, and can be reused by later snapshots.

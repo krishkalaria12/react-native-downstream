@@ -38,6 +38,7 @@ import {
   warnAboutMissingMathEngine,
 } from './parseFlags';
 import { openLinkSafely, resolveLinkUrl, resolvesLinks } from './linkSafety';
+import { TableFullscreen, type InheritedTableProps } from './TableFullscreen';
 import { resolveTheme, type ResolvedTheme } from './theme';
 import type {
   MarkdownControlAction,
@@ -49,10 +50,15 @@ import type {
   MarkdownLinkPressEvent,
   MarkdownLinkSafetyOptions,
   MarkdownMathErrorEvent,
+  MarkdownTableFullscreenEvent,
   MarkdownTranslations,
   MarkdownViewProps,
 } from './types';
-import { defaultTableMaxHeight, resolveMaxHeight } from './types';
+import {
+  defaultTableMaxHeight,
+  defaultTranslations,
+  resolveMaxHeight,
+} from './types';
 
 export type DownstreamMarkdownProps = MarkdownViewProps;
 
@@ -88,6 +94,7 @@ type NativeControlAction = Readonly<{
   url: string;
   wrapped: boolean;
   expanded: boolean;
+  ordinal: number;
   /**
    * The block's own Markdown, for a full-screen table. Empty otherwise: the
    * other actions carry nothing a second view would need.
@@ -156,17 +163,22 @@ function toControlEvent(action: NativeControlAction) {
     filename?: string;
     url?: string;
     markdown?: string;
+    ordinal?: number;
   } = { block, action: which, language: action.language };
   if (which === 'wrap') {
     event.wrapped = action.wrapped;
   } else if (which === 'expand') {
     event.expanded = action.expanded;
+    // The block's ordinal among its own kind, which is what an app that keys a
+    // press on needs: code, table and image ordinals are three different counts.
+    event.ordinal = action.ordinal;
   } else if (which === 'fullscreen') {
     // The table's own Markdown, so a modal holding a second view is the same
     // table rather than one rebuilt from the model. Native writes it through
     // `Export.cpp`, so the modal sees exactly what a copy would produce.
     if (action.markdown !== '') {
       event.markdown = action.markdown;
+      event.ordinal = action.ordinal;
     }
   } else {
     if (CONTROL_FORMATS.has(action.format)) {
@@ -375,6 +387,17 @@ function useStableTheme(resolved: ResolvedTheme): ResolvedTheme {
 }
 
 /**
+ * A ref the control routing reads the full-screen opener through.
+ *
+ * The modal's state lives in the component and the routing lives in `useControls`,
+ * and a ref between them is what lets each own its half without either knowing
+ * about the other's lifecycle.
+ */
+type FullscreenRef = {
+  current: ((event: MarkdownTableFullscreenEvent) => void) | undefined;
+};
+
+/**
  * Resolves the shared control props and the callbacks that route native events
  * back to the caller's handlers.
  *
@@ -389,7 +412,8 @@ function useControls(
   controls: MarkdownControls | undefined,
   translations: Partial<MarkdownTranslations> | undefined,
   onError: ((error: MarkdownErrorEvent) => void) | undefined,
-  generationRef: { current: number }
+  generationRef: { current: number },
+  fullscreen: FullscreenRef
 ) {
   const fresh = useMemo(
     () => resolveControls(controls, translations),
@@ -399,8 +423,11 @@ function useControls(
   const latest = useRef({
     handlers: fresh.handlers,
     generation: generationRef,
+    fullscreen: fullscreen.current,
   });
-  latest.current = { handlers: fresh.handlers, generation: generationRef };
+  latest.current.handlers = fresh.handlers;
+  latest.current.generation = generationRef;
+  latest.current.fullscreen = fullscreen.current;
 
   const handleControlAction = useCallback(
     (native: NativeSyntheticEvent<NativeControlAction>) => {
@@ -411,7 +438,7 @@ function useControls(
       if (payload.generation !== latest.current.generation.current) return;
       const event = toControlEvent(payload);
       if (event === null) return;
-      const { handlers } = latest.current;
+      const { handlers, fullscreen: openFullscreen } = latest.current;
       if (event.action === 'wrap') {
         handlers.codeWrap?.(event);
       } else if (event.action === 'expand') {
@@ -419,6 +446,14 @@ function useControls(
           ? handlers.tableExpand
           : handlers.codeExpand)?.(event);
       } else if (event.action === 'fullscreen') {
+        // The modal is this view's, not a control handler's: the press has to
+        // open a second view, which only the component holding the first can do.
+        if (event.markdown !== undefined) {
+          openFullscreen?.({
+            markdown: event.markdown,
+            ordinal: event.ordinal ?? 0,
+          });
+        }
         handlers.tableFullscreen?.(event);
       } else if (event.block === 'image') {
         handlers.imageDownload?.(event);
@@ -470,6 +505,78 @@ function useControls(
   );
 
   return { resolved, controlError, handleControlAction };
+}
+
+/**
+ * The full-screen table modal.
+ *
+ * Mounted only while a table is open, so the whole second view — including the
+ * native one behind it — is unmounted when the reader closes it. The source is
+ * held rather than derived from the document because the press carried it: that
+ * is the table's own Markdown, which is what makes the modal the same table
+ * rather than a re-parse of a re-export.
+ */
+function useTableFullscreen(
+  onTableFullscreen:
+    | ((event: MarkdownTableFullscreenEvent) => void)
+    | undefined,
+  renderTableFullscreen:
+    | ((event: MarkdownTableFullscreenEvent) => ReactNode)
+    | undefined
+) {
+  const [open, setOpen] = useState<MarkdownTableFullscreenEvent | undefined>(
+    undefined
+  );
+  const latest = useRef({ onTableFullscreen, renderTableFullscreen });
+  latest.current = { onTableFullscreen, renderTableFullscreen };
+
+  // `renderTableFullscreen` is called during render rather than held in state,
+  // so a modal an app draws is a child of this view and gets its own updates,
+  // and closing it is this view's state rather than the app's.
+  const request = useCallback((event: MarkdownTableFullscreenEvent) => {
+    latest.current.onTableFullscreen?.(event);
+    setOpen(event);
+  }, []);
+  const close = useCallback(() => setOpen(undefined), []);
+  return { open, request, close, renderTableFullscreen };
+}
+
+/**
+ * Renders the full-screen table, or nothing.
+ *
+ * Mounted here rather than inside the press handler so the modal is a child of
+ * the view and shares its theme, and closed by the same state that opened it.
+ */
+function TableFullscreenHost({
+  open,
+  close,
+  render,
+  inherited,
+  translations,
+}: Readonly<{
+  open: MarkdownTableFullscreenEvent | undefined;
+  close: () => void;
+  render: ((event: MarkdownTableFullscreenEvent) => ReactNode) | undefined;
+  inherited: InheritedTableProps;
+  translations: Partial<MarkdownTranslations> | undefined;
+}>) {
+  if (open === undefined) {
+    return null;
+  }
+  const custom = render?.(open);
+  if (custom !== undefined && custom !== null) {
+    return <>{custom}</>;
+  }
+  return (
+    <TableFullscreen
+      markdown={open.markdown}
+      closeLabel={
+        translations?.exitFullscreen ?? defaultTranslations.exitFullscreen
+      }
+      inherited={inherited}
+      onClose={close}
+    />
+  );
 }
 
 /**
@@ -771,6 +878,84 @@ function useLinkSafety(
 }
 
 /**
+ * The full-screen table, wired into the control routing.
+ *
+ * One hook rather than three lines in each component: the two bodies are already
+ * near-identical for everything a table's modal needs, and a table's modal that
+ * worked in one and not the other would be a bug nobody would look for.
+ */
+function useFullscreenTable(
+  onTableFullscreen: MarkdownViewProps['onTableFullscreen'],
+  renderTableFullscreen: MarkdownViewProps['renderTableFullscreen'],
+  translations: Partial<MarkdownTranslations> | undefined,
+  inherited: InheritedTableProps
+) {
+  const {
+    open,
+    request,
+    close,
+    renderTableFullscreen: render,
+  } = useTableFullscreen(onTableFullscreen, renderTableFullscreen);
+  const ref = useMemo<FullscreenRef>(() => ({ current: request }), [request]);
+  const element = (
+    <TableFullscreenHost
+      open={open}
+      close={close}
+      render={render}
+      inherited={inherited}
+      translations={translations}
+    />
+  );
+  return { fullscreen: ref, element };
+}
+
+/**
+ * The props a full-screen table inherits from the view around it.
+ *
+ * Written out rather than spread from `props`, because every prop here is a
+ * decision: `style` does not travel because the modal fills the screen, and
+ * `controls` does not because the modal owns its own chrome. A spread would
+ * inherit both by accident and inherit whatever a later release adds without
+ * anyone deciding.
+ */
+function useInheritedTableProps(
+  props: Record<string, unknown>
+): InheritedTableProps {
+  const keys: ReadonlyArray<string> = [
+    'selectable',
+    'syntaxHighlighting',
+    'codeBlockWrap',
+    'lineNumbers',
+    'theme',
+    'markdownStyle',
+    'translations',
+    'math',
+    'onMathError',
+    'inlineHtml',
+    'syntax',
+    'cjk',
+    'links',
+    'disableAutolinkProtocols',
+    'allowedTags',
+    'literalTagContent',
+    'images',
+    'allowedImagePrefixes',
+    'onLinkPress',
+    'onImagePress',
+    'onTagPress',
+    'linkSafety',
+    'onError',
+  ];
+  const inherited = {} as Record<string, unknown>;
+  for (const key of keys) {
+    if (props[key] !== undefined) {
+      inherited[key] = props[key];
+    }
+  }
+  return inherited as InheritedTableProps;
+}
+
+/**
  * Renders Markdown with native text layout. Parsing and measurement happen in
  * native code; no parse tree crosses into JavaScript.
  */
@@ -805,8 +990,10 @@ function ControlledMarkdown({
   onLinkPress,
   linkSafety,
   tableMaxHeight,
+  onTableFullscreen,
+  renderTableFullscreen,
   onError,
-  ...mathAndImages
+  ...rest
 }: Extract<MarkdownViewProps, { markdown: string }>) {
   const [controlled, setControlled] = useState(() =>
     initialControlledSource(markdown)
@@ -829,17 +1016,24 @@ function ControlledMarkdown({
   }, [error]);
 
   const generationRef = useMemo(() => ({ current: generation }), [generation]);
+  const fullscreen = useFullscreenTable(
+    onTableFullscreen,
+    renderTableFullscreen,
+    translations,
+    useInheritedTableProps(rest)
+  );
   const { resolved, controlError, handleControlAction } = useControls(
     controls,
     translations,
     onError,
-    generationRef
+    generationRef,
+    fullscreen.fullscreen
   );
   const currentGeneration = useCallback(
     () => generationRef.current,
     [generationRef]
   );
-  const images = useMathAndImages(mathAndImages, currentGeneration);
+  const images = useMathAndImages(rest, currentGeneration);
   const resolvedTheme = useStableTheme(
     useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
   );
@@ -854,7 +1048,7 @@ function ControlledMarkdown({
 
   const handleLinkPress = useLinkPress(
     onLinkPress,
-    useLinkSafety(linkSafety, mathAndImages.links),
+    useLinkSafety(linkSafety, rest.links),
     translations
   );
 
@@ -920,6 +1114,7 @@ function ControlledMarkdown({
       onControlAction={handleControlAction}
     >
       {fences}
+      {fullscreen.element}
     </NativeDownstreamMarkdownView>
   );
 }
@@ -945,8 +1140,10 @@ function StreamMarkdown({
   onLinkPress,
   linkSafety,
   tableMaxHeight,
+  onTableFullscreen,
+  renderTableFullscreen,
   onError,
-  ...mathAndImages
+  ...rest
 }: Extract<
   MarkdownViewProps,
   { stream: NonNullable<MarkdownViewProps['stream']> }
@@ -966,17 +1163,24 @@ function StreamMarkdown({
     () => ({ current: binding.generation }),
     [binding.generation]
   );
+  const fullscreen = useFullscreenTable(
+    onTableFullscreen,
+    renderTableFullscreen,
+    translations,
+    useInheritedTableProps(rest)
+  );
   const { resolved, controlError, handleControlAction } = useControls(
     controls,
     translations,
     onError,
-    generationRef
+    generationRef,
+    fullscreen.fullscreen
   );
   const currentGeneration = useCallback(
     () => state.binding().generation,
     [state]
   );
-  const images = useMathAndImages(mathAndImages, currentGeneration);
+  const images = useMathAndImages(rest, currentGeneration);
   // A stream keeps its theme across a rebind, so a theme that has not changed
   // sends nothing however often a snapshot arrives.
   const resolvedTheme = useStableTheme(
@@ -1003,7 +1207,7 @@ function StreamMarkdown({
 
   const handleLinkPress = useLinkPress(
     onLinkPress,
-    useLinkSafety(linkSafety, mathAndImages.links),
+    useLinkSafety(linkSafety, rest.links),
     translations
   );
 
@@ -1076,6 +1280,7 @@ function StreamMarkdown({
       onControlAction={handleControlAction}
     >
       {fences}
+      {fullscreen.element}
     </NativeDownstreamMarkdownView>
   );
 }

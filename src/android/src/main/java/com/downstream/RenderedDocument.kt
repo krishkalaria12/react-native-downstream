@@ -47,6 +47,7 @@ internal class RenderedDocument(
   private var cachedCode: CodeLayout? = null
   private var cachedImages: ImageLayout? = null
   private var cachedHosts: HostLayout? = null
+  private var cachedTables: TableLayout? = null
   private var cachedFrames = IntArray(0)
 
   fun createTextLayout(segment: TextSegment, width: Int): StaticLayout =
@@ -66,6 +67,7 @@ internal class RenderedDocument(
     code: CodeLayout,
     images: ImageLayout,
     hosts: HostLayout,
+    tables: TableLayout,
   ): Int =
     when (segment) {
       is TextSegment -> segment.height(width, paint)
@@ -120,16 +122,26 @@ internal class RenderedDocument(
           )
         }
       }
-      is TableSegment ->
-        segment.tableHeight + (if (chrome and CHROME_TABLE_TOOLBAR != 0) style.chromeRowHeight else 0)
+      // The same rule as iOS: the cap is decided by the engine's `tableHeight`,
+      // which the shadow node also called, so a measured table and a drawn one are
+      // the same box. The toolbar stays outside the cap, because a capped table is
+      // still the one a reader uses to lift the cap.
+      is TableSegment -> {
+        val toolbar = if (chrome and CHROME_TABLE_TOOLBAR != 0) style.chromeRowHeight else 0
+        ceil(
+          tableHeight(resolveTable(tables, segment.ordinal), segment.cells.size, toolbar.toFloat())
+            .toDouble(),
+        ).toInt()
+      }
     }
 
   /**
    * Top and height of each segment at a width, as [top0, height0, top1, ...].
    *
-   * `chrome` and the reader's wrap choices are part of the key rather than the
-   * rendering, so a change to either restacks frames without rebuilding any
-   * spans. A measurement only holds for the choices it was made under.
+   * `chrome`, the reader's wrap choices, and the reader's table expand choices are
+   * all part of the key rather than the rendering, so a change to any of them
+   * restacks frames without rebuilding any spans. A measurement only holds for the
+   * choices it was made under.
    */
   @Synchronized
   fun frames(
@@ -138,6 +150,7 @@ internal class RenderedDocument(
     code: CodeLayout = CodeLayout(),
     images: ImageLayout = ImageLayout(),
     hosts: HostLayout = HostLayout(),
+    tables: TableLayout = TableLayout(),
   ): IntArray {
     // A measurement only holds for the layout it was made under, so the whole code
     // layout, the whole image layout, and the hosted heights are all part of the
@@ -147,7 +160,7 @@ internal class RenderedDocument(
     // old box was.
     if (
       width == cachedWidth && chrome == cachedChrome && code == cachedCode &&
-      images == cachedImages && hosts == cachedHosts
+      images == cachedImages && hosts == cachedHosts && tables == cachedTables
     ) {
       return cachedFrames
     }
@@ -156,7 +169,7 @@ internal class RenderedDocument(
     segments.forEachIndexed { index, segment ->
       y += segment.gapBefore
       frames[index * 2] = y
-      frames[index * 2 + 1] = heightOf(segment, width, chrome, code, images, hosts)
+      frames[index * 2 + 1] = heightOf(segment, width, chrome, code, images, hosts, tables)
       y += frames[index * 2 + 1]
     }
     cachedWidth = width
@@ -164,6 +177,7 @@ internal class RenderedDocument(
     cachedCode = code
     cachedImages = images
     cachedHosts = hosts
+    cachedTables = tables
     cachedFrames = frames
     return frames
   }
@@ -196,6 +210,7 @@ internal class RenderedDocument(
     code: CodeLayout = CodeLayout(),
     images: ImageLayout = ImageLayout(),
     hosts: HostLayout = HostLayout(),
+    tables: TableLayout = TableLayout(),
   ): IntArray {
     if (hosts.isEmpty()) {
       return IntArray(0)
@@ -389,7 +404,8 @@ internal class RenderedDocument(
           ?: DownstreamNative.readDocument(documentId, planned.from, planned.to, themeId)
             ?.let {
               buildSegment(
-                it, images, style, planned, ordinal, syntaxHighlighting, style.px(it.previousBottomMargin),
+                it, images, style, planned, ordinal, planned.tableOrdinal, syntaxHighlighting,
+                style.px(it.previousBottomMargin),
                 if (isLast) caret else PlacedCaret.NONE,
               )
             }
@@ -583,6 +599,7 @@ internal class RenderedDocument(
       style: Style,
       planned: PlannedSegment,
       codeOrdinal: Int,
+      tableOrdinal: Int,
       syntaxHighlighting: Boolean,
       previousBottom: Float,
       caret: PlacedCaret = PlacedCaret.NONE,
@@ -1004,7 +1021,7 @@ internal class RenderedDocument(
         // its bottom margin in; zero at the very top of the document.
         return buildTable(
           document, text, 0, document.blockCount, style, containersOf(0, -1),
-          style.gapAbove(document, 0, previousBottom).toInt(), identity, from, caret,
+          style.gapAbove(document, 0, previousBottom).toInt(), identity, from, tableOrdinal, caret,
         )
       }
       val caretOffset = appendCaret(text, document, style, caret)
@@ -1233,6 +1250,7 @@ internal class RenderedDocument(
       gapBefore: Int,
       identity: Long,
       blockIndex: Int,
+      tableOrdinal: Int,
       caret: PlacedCaret = PlacedCaret.NONE,
     ): TableSegment {
       val paint = style.paint
@@ -1310,6 +1328,7 @@ internal class RenderedDocument(
         blockCount = to - from,
         caretKind = caret.kind,
         gapBefore = gapBefore,
+        ordinal = tableOrdinal,
       )
     }
   }
