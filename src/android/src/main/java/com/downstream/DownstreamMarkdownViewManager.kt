@@ -100,6 +100,9 @@ class DownstreamMarkdownViewManager :
     view.onDetailsToggle = { target, containerId, open ->
       dispatchDetailsToggle(target, containerId, open)
     }
+    view.onTaskToggle = { target, containerId, checked ->
+      dispatchTaskToggle(target, containerId, checked)
+    }
     return view
   }
 
@@ -592,6 +595,26 @@ class DownstreamMarkdownViewManager :
     )
   }
 
+  /**
+   * A task checkbox press.
+   *
+   * No state update, because nothing about the message changes: the checkbox is
+   * drawn, not stored, and the app owns the source that flips it. The event is
+   * the whole of the effect.
+   */
+  private fun dispatchTaskToggle(view: DownstreamMarkdownView, containerId: Int, checked: Boolean) {
+    val toggled = view.nextToggledOrdinal()
+    if (toggled < 0) return
+    val context = view.context as? ReactContext ?: return
+    dispatch(view, TaskPressEvent(
+      UIManagerHelper.getSurfaceId(context),
+      view.id,
+      containerId,
+      checked,
+      view.currentGeneration(),
+    ))
+  }
+
   private fun dispatchControlAction(
     view: DownstreamMarkdownView,
     action: String,
@@ -710,6 +733,26 @@ private class ControlActionEvent(
 
   companion object {
     const val NAME = "topControlAction"
+  }
+}
+
+private class TaskPressEvent(
+  surfaceId: Int,
+  viewTag: Int,
+  private val containerId: Int,
+  private val checked: Boolean,
+  private val generation: Int,
+) : Event<TaskPressEvent>(surfaceId, viewTag) {
+  override fun getEventName() = NAME
+
+  override fun getEventData(): WritableMap = Arguments.createMap().apply {
+    putInt("containerId", containerId)
+    putBoolean("checked", checked)
+    putInt("generation", generation)
+  }
+
+  companion object {
+    const val NAME = "topTaskPress"
   }
 }
 

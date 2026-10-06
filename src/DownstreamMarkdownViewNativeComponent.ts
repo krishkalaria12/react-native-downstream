@@ -75,6 +75,19 @@ type NativeControlActionEvent = Readonly<{
   generation: CodegenTypes.Int32;
 }>;
 
+/**
+ * A press on a task list item's checkbox.
+ *
+ * `containerId` is the item's own container id, and `checked` is the state the
+ * press leaves it in. The document does not change: the app owns the source,
+ * which is the only thing that can flip the marker.
+ */
+export type NativeTaskPress = Readonly<{
+  containerId: CodegenTypes.Int32;
+  checked: boolean;
+  generation: CodegenTypes.Int32;
+}>;
+
 export interface NativeProps extends ViewProps {
   /** Complete canonical source, already validated by DownstreamMarkdown. */
   markdown: string;
@@ -232,6 +245,7 @@ export interface NativeProps extends ViewProps {
   onMathError?: CodegenTypes.DirectEventHandler<NativeMathErrorEvent>;
   onMarkdownError?: CodegenTypes.DirectEventHandler<NativeMarkdownErrorEvent>;
   onControlAction?: CodegenTypes.DirectEventHandler<NativeControlActionEvent>;
+  onTaskPress?: CodegenTypes.DirectEventHandler<NativeTaskPress>;
 }
 
 // The shadow node is hand-written C++ (src/cpp/fabric), so Codegen emits only the

@@ -170,6 +170,11 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 /// the same key the choice is stored under, so the press and the state cannot
 /// name different blocks.
 - (void)didToggleDetailsAtContainer:(uint32_t)containerId open:(BOOL)open;
+/// A press on a task list item's checkbox. `containerId` is the item's own
+/// container, and `checked` is the state the press leaves it in — which is the
+/// opposite of the state it found, because a checkbox is a toggle rather than a
+/// report.
+- (void)didToggleTaskAtContainer:(uint32_t)containerId checked:(BOOL)checked;
 /// A copy, a download, or a save that failed.
 - (void)didFailControlOfKind:(DSBlockKind)kind action:(NSString *)action message:(NSString *)message;
 @end

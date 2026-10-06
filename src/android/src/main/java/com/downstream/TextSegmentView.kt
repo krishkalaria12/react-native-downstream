@@ -87,6 +87,15 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   private val codePath = Path()
   private var pressedSummary: DetailsBlock? = null
   private var pressedSpoiler = false
+  private var pressedTask: TaskPress? = null
+
+/**
+ * A task checkbox: the container it belongs to and whether it is checked.
+ *
+ * A value rather than a view because the press is reported, not stored: the
+ * document does not change when a reader taps a box.
+ */
+private class TaskPress(val id: Int, val checked: Boolean)
   private val chevronPath = Path()
   private val codeBounds = RectF()
   private var readingParts = emptyList<TextReadingPart>()
@@ -739,10 +748,30 @@ internal class TextSegmentView(context: Context) : TextView(context) {
       }
       pressedLink = linkAt(layout, x, y)
       if (pressedLink < 0) {
+        // A task checkbox is the marker in the margin, and the whole line is not
+        // the control here the way a summary line is: a reader aiming at words
+        // beside a checkbox means to select them, so only the glyph itself counts.
+        val task = taskAt(layout, x, y)
+        if (task != null) {
+          pressedTask = task
+          return true
+        }
         // No link under the finger: a spoiler is the only other thing a press
         // can mean here, and it is hit-tested by range rather than by glyph
         // because hidden text has no ink to aim at.
         pressedSpoiler = spoilerAt(layout, x, y)
+      }
+    }
+    val task = pressedTask
+    if (task != null) {
+      when (event.actionMasked) {
+        MotionEvent.ACTION_UP -> {
+          pressedTask = null
+          findHost()?.onToggleTask(task.id, !task.checked)
+          return true
+        }
+        MotionEvent.ACTION_CANCEL -> pressedTask = null
+        else -> return true
       }
     }
     if (pressedSpoiler) {
@@ -788,6 +817,38 @@ internal class TextSegmentView(context: Context) : TextView(context) {
       MotionEvent.ACTION_CANCEL -> pressedLink = -1
     }
     return true
+  }
+
+  /**
+   * A task checkbox under the point, or null.
+   *
+   * Only the glyph itself counts: a reader aiming at words beside a checkbox
+   * means to select them. The glyph is drawn in the leading margin, so a touch
+   * left of the text's own start on the block's first line is a press on it.
+   * The container id and the checked state come from the block the offset lands
+   * in, which the document already knows.
+   */
+  private fun taskAt(layout: Layout, x: Float, y: Float): TaskPress? {
+    if (y < 0 || y > layout.height) return null
+    val line = layout.getLineForVertical(y.toInt())
+    val offset = layout.getOffsetForHorizontal(line, x)
+    val block = taskBlockAt(offset) ?: return null
+    // Right of the text's own start is the words, not the box — except in a
+    // right-to-left paragraph, where the margin is on the other side.
+    val textStart = layout.getLineLeft(line)
+    val rtl = layout.getParagraphDirection(line) == Layout.DIR_RIGHT_TO_LEFT
+    if (!rtl && x > textStart) return null
+    if (rtl && x < textStart) return null
+    return block
+  }
+
+  /** The task block holding `offset`, with its container id and state, or null. */
+  private fun taskBlockAt(offset: Int): TaskPress? {
+    val blocks = segment?.taskBlocks ?: return null
+    // The box is drawn on the item's first line only, so a press past the first
+    // line's end is a press on words however far into the item it still is.
+    val block = blocks.firstOrNull { offset in it.start until it.end } ?: return null
+    return TaskPress(block.containerId, !block.checked)
   }
 
   /** A spoiler run under the point, or null. Hidden text has no ink, so the range is the target. */

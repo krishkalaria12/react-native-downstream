@@ -52,6 +52,7 @@ import type {
   MarkdownLinkSafetyOptions,
   MarkdownMathErrorEvent,
   MarkdownTableFullscreenEvent,
+  MarkdownTaskPressEvent,
   MarkdownTranslations,
   MarkdownViewProps,
 } from './types';
@@ -996,6 +997,7 @@ function ControlledMarkdown({
   dir,
   icons,
   onTableFullscreen,
+  onTaskPress,
   renderTableFullscreen,
   onError,
   ...rest
@@ -1027,6 +1029,23 @@ function ControlledMarkdown({
     translations,
     useInheritedTableProps(rest)
   );
+  // A task checkbox is drawn, not stored: the document does not change when a
+  // reader taps one, so the press only reports. A press on a document that has
+  // since been replaced is dropped, which is the same generation rule every
+  // other event follows.
+  const handleTaskPress = useCallback(
+    (native: NativeSyntheticEvent<MarkdownTaskPressEvent>) => {
+      const payload = native.nativeEvent;
+      if (payload.generation !== generationRef.current) return;
+      onTaskPress?.({
+        containerId: payload.containerId,
+        checked: payload.checked,
+        generation: payload.generation,
+      } satisfies MarkdownTaskPressEvent);
+    },
+    [generationRef, onTaskPress]
+  );
+
   const { resolved, controlError, handleControlAction } = useControls(
     controls,
     translations,
@@ -1102,6 +1121,7 @@ function ControlledMarkdown({
       csvSeparator={resolved.csvSeparator}
       controlLabels={resolved.labels}
       controlIcons={resolveIcons(icons)}
+      onTaskPress={handleTaskPress}
       parseFlags={images.parseFlags}
       images={images.images}
       allowedImagePrefixes={images.allowedImagePrefixes}
@@ -1150,6 +1170,7 @@ function StreamMarkdown({
   dir,
   icons,
   onTableFullscreen,
+  onTaskPress,
   renderTableFullscreen,
   onError,
   ...rest
@@ -1178,6 +1199,23 @@ function StreamMarkdown({
     translations,
     useInheritedTableProps(rest)
   );
+  // A task checkbox is drawn, not stored: the document does not change when a
+  // reader taps one, so the press only reports. A press on a document that has
+  // since been replaced is dropped, which is the same generation rule every
+  // other event follows.
+  const handleTaskPress = useCallback(
+    (native: NativeSyntheticEvent<MarkdownTaskPressEvent>) => {
+      const payload = native.nativeEvent;
+      if (payload.generation !== generationRef.current) return;
+      onTaskPress?.({
+        containerId: payload.containerId,
+        checked: payload.checked,
+        generation: payload.generation,
+      } satisfies MarkdownTaskPressEvent);
+    },
+    [generationRef, onTaskPress]
+  );
+
   const { resolved, controlError, handleControlAction } = useControls(
     controls,
     translations,
@@ -1272,6 +1310,7 @@ function StreamMarkdown({
       csvSeparator={resolved.csvSeparator}
       controlLabels={resolved.labels}
       controlIcons={resolveIcons(icons)}
+      onTaskPress={handleTaskPress}
       parseFlags={images.parseFlags}
       images={images.images}
       allowedImagePrefixes={images.allowedImagePrefixes}

@@ -409,7 +409,7 @@ describe('DownstreamMarkdown controls', () => {
 
   /** Calls the native view's event handler as Fabric would. */
   function fire(
-    name: 'onControlAction' | 'onMarkdownError',
+    name: 'onControlAction' | 'onMarkdownError' | 'onTaskPress',
     event: unknown
   ): void {
     act(() => {
@@ -620,6 +620,47 @@ describe('DownstreamMarkdown controls', () => {
     );
     expect(onCopy).toHaveBeenCalledTimes(1);
     expect(onCopy.mock.calls[0]?.[0]).not.toHaveProperty('format');
+  });
+  describe('DownstreamMarkdown task press', () => {
+    const TASKS = ['- [ ] Alpha', '- [x] Beta', '', 'Done.', ''].join('\n');
+
+    function taskEvent(overrides: Record<string, unknown> = {}) {
+      return {
+        nativeEvent: {
+          containerId: 3,
+          checked: true,
+          generation: Number(nativeView.last()?.generation ?? 0),
+          ...overrides,
+        },
+      };
+    }
+
+    it('routes a checkbox press to onTaskPress with the state it leaves', () => {
+      const onTaskPress = vi.fn();
+      mount(<DownstreamMarkdown markdown={TASKS} onTaskPress={onTaskPress} />);
+      fire('onTaskPress', taskEvent());
+      expect(onTaskPress).toHaveBeenCalledWith({
+        containerId: 3,
+        checked: true,
+        generation: expect.any(Number),
+      });
+    });
+
+    it('reports the opposite state, because a checkbox is a toggle', () => {
+      const onTaskPress = vi.fn();
+      mount(<DownstreamMarkdown markdown={TASKS} onTaskPress={onTaskPress} />);
+      fire('onTaskPress', taskEvent({ containerId: 4, checked: false }));
+      expect(onTaskPress).toHaveBeenCalledWith(
+        expect.objectContaining({ containerId: 4, checked: false })
+      );
+    });
+
+    it('drops a press from a document that has since been replaced', () => {
+      const onTaskPress = vi.fn();
+      mount(<DownstreamMarkdown markdown={TASKS} onTaskPress={onTaskPress} />);
+      fire('onTaskPress', taskEvent({ generation: -1 }));
+      expect(onTaskPress).not.toHaveBeenCalled();
+    });
   });
 
   it('routes a control failure to that control onError', () => {

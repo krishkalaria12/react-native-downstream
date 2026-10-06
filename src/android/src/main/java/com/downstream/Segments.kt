@@ -105,6 +105,14 @@ internal class TextSegment(
    * common case, so the extra walk is nothing.
    */
   val detailsBlocks: List<DetailsBlock> = emptyList(),
+  /**
+   * The task items in this segment, with the character range each one occupies.
+   *
+   * Carried for the same reason the collapsible blocks are: the segment is the
+   * unit of layout and the document is not on the UI thread, and a press has to
+   * know which box it landed on without asking.
+   */
+  val taskBlocks: List<TaskBlock> = emptyList(),
   gapBefore: Int,
   /**
    * Where the caret's placeholder sits in [text], or -1 when this segment has
@@ -168,6 +176,19 @@ internal class TextSegment(
     return ranges
   }
 }
+
+/**
+ * One task item, as the text segment needs it to report a press on its box.
+ *
+ * `checked` is the state the press leaves behind, which is the opposite of the
+ * state the box draws — because a checkbox is a toggle rather than a report.
+ */
+internal class TaskBlock(
+  val start: Int,
+  val end: Int,
+  val containerId: Int,
+  val checked: Boolean,
+)
 
 /**
  * One block inside a `<details>`, as the text segment needs it to hide the body.

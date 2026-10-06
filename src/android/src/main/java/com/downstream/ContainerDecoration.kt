@@ -52,4 +52,13 @@ internal class ContainerDecoration(
    * things depending on the kind, and both mean "this leaf draws the chrome".
    */
   val summary: Boolean = false,
-)
+  /**
+   * The task state of a list item's checkbox: 0 for none, 1 for unchecked, 2 for
+   * checked. Only the container's own first leaf carries it, because the box is
+   * drawn there and a press anywhere else is a press on words.
+   */
+  val task: Int = 0,
+) {
+  /** Whether the box is checked, which is what a press reports the opposite of. */
+  val checked: Boolean get() = task == 2
+}

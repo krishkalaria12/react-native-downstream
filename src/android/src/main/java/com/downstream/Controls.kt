@@ -185,6 +185,12 @@ internal interface ControlHost {
    * order, and already on every frame a block carries.
    */
   fun onToggleDetails(containerId: Int, open: Boolean)
+
+  /**
+   * A press on a task list item's checkbox. The document does not change: the app
+   * owns the source, which is the only thing that can flip the marker.
+   */
+  fun onToggleTask(containerId: Int, checked: Boolean)
   fun onControlFailed(kind: Int, action: String, message: String)
 }
 

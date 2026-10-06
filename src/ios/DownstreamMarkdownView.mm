@@ -1251,6 +1251,24 @@ NSString *nameForFormat(NSString *format) {
                    markdown:@""];
 }
 
+- (void)didToggleTaskAtContainer:(uint32_t)containerId checked:(BOOL)checked {
+  const auto *emitter = [self emitter];
+  if (emitter == nullptr) {
+    return;
+  }
+  // A task checkbox is drawn, not stored: the document does not change when a
+  // reader taps one, so the press only reports. The app owns the source, which
+  // is the only thing that can flip `- [ ]` to `- [x]`.
+  const int generation = _state
+      ? static_cast<int>(std::static_pointer_cast<const DownstreamMarkdownViewProps>(_props)->generation)
+      : 0;
+  emitter->onTaskPress({
+      .containerId = static_cast<int32_t>(containerId),
+      .checked = static_cast<bool>(checked),
+      .generation = generation,
+  });
+}
+
 - (void)didRequestTableFullscreenAtOrdinal:(uint32_t)ordinal {
   const auto *emitter = [self emitter];
   if (emitter == nullptr) {

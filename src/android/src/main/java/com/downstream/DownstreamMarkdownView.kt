@@ -87,6 +87,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   internal var onTableFullscreen: ((view: DownstreamMarkdownView, ordinal: Int) -> Unit)? = null
   internal var onDetailsToggle: ((view: DownstreamMarkdownView, containerId: Int, open: Boolean) -> Unit)? = null
+  internal var onTaskToggle: ((view: DownstreamMarkdownView, containerId: Int, checked: Boolean) -> Unit)? = null
 
   private var documentId = 0L
   private var fontScale = 1f
@@ -1060,6 +1061,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     onTableExpandToggle = null
     onTableFullscreen = null
     onDetailsToggle = null
+    onTaskToggle = null
     // A recycled view has no emitter any more. Already opened saves finish,
     // while their callbacks drop events belonging to the previous source.
     exporter.release()
@@ -1140,6 +1142,11 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   override fun onToggleDetails(containerId: Int, open: Boolean) {
     nextOrdinal = containerId
     onDetailsToggle?.invoke(this, containerId, open)
+  }
+
+  override fun onToggleTask(containerId: Int, checked: Boolean) {
+    nextOrdinal = containerId
+    onTaskToggle?.invoke(this, containerId, checked)
   }
 
   /**

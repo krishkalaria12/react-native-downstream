@@ -649,6 +649,9 @@ internal class RenderedDocument(
       // reader's choice is resolved against these later, at measurement, because
       // a segment is built once and a toggle arrives as a new snapshot.
       val detailsBlocks = ArrayList<DetailsBlock>()
+      // Every task item, whether it is checked or not. A press reports rather
+      // than stores, so the segment only has to know which box is where.
+      val taskBlocks = ArrayList<TaskBlock>()
       val isTable = document.blockKind(0) == NativeDocument.KIND_TABLE_ROW
       val flags = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
 
@@ -671,7 +674,7 @@ internal class RenderedDocument(
               ContainerDecoration(
                 leading, style.quoteIndent, bar, continues, null, style.barWidth, style.markerGap,
                 kind = kind, id = document.containerId(block, depth), open = document.containerOpen(block, depth),
-                summary = document.showsMarker(block, depth),
+                summary = document.showsMarker(block, depth), task = document.taskState(block, depth),
               ),
             )
             leading += style.quoteIndent
@@ -698,7 +701,7 @@ internal class RenderedDocument(
                 leading, style.listIndent, null, continues, marker, style.barWidth, style.markerGap,
                 if (marker != null) markerColor else null,
                 kind = kind, id = document.containerId(block, depth), open = document.containerOpen(block, depth),
-                summary = document.showsMarker(block, depth),
+                summary = document.showsMarker(block, depth), task = document.taskState(block, depth),
               ),
             )
             leading += style.listIndent
@@ -734,6 +737,13 @@ internal class RenderedDocument(
               containers = containers,
             ),
           )
+        }
+        // The box is drawn in the margin of the container's own first leaf, so
+        // only that leaf reports it: a press on any other line of the item is a
+        // press on its words.
+        val task = containers.firstOrNull { it.task != 0 }
+        if (task != null && task.summary) {
+          taskBlocks.add(TaskBlock(start, end, task.id, task.checked))
         }
 
         // A code card is its own segment and draws its own padding, so its
@@ -1151,7 +1161,7 @@ internal class RenderedDocument(
         )
       }
       return TextSegment(
-        displayText, accessibleBlocks, detailsBlocks, gapBefore, caretOffset, caret.kind,
+        displayText, accessibleBlocks, detailsBlocks, taskBlocks, gapBefore, caretOffset, caret.kind,
       )
     }
 

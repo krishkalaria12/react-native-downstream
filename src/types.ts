@@ -418,6 +418,20 @@ export interface MarkdownStreamController {
 /** Which kind of block a control acted on. */
 export type MarkdownControlKind = 'code' | 'table' | 'image' | 'details';
 
+/**
+ * A press on a task list item's checkbox.
+ *
+ * `containerId` is the item's own container id, and `checked` is the state the
+ * press leaves it in. The document does not change: the app owns the source,
+ * which is the only thing that can flip the marker — so this is a report, and
+ * flipping the source and re-rendering is what moves the box.
+ */
+export type MarkdownTaskPressEvent = Readonly<{
+  containerId: number;
+  checked: boolean;
+  generation: number;
+}>;
+
 /** What a control button did. */
 export type MarkdownControlAction =
   | 'copy'
@@ -1229,6 +1243,14 @@ type MarkdownViewBaseProps = Readonly<{
   renderTableFullscreen?: (event: MarkdownTableFullscreenEvent) => ReactNode;
   /** A table's full-screen button, for an app with its own handler. */
   onTableFullscreen?: (event: MarkdownTableFullscreenEvent) => void;
+  /**
+   * A press on a task list item's checkbox.
+   *
+   * The document does not change: the app owns the source, which is the only
+   * thing that can flip the marker — so this is a report, and flipping the
+   * source and re-rendering is what moves the box.
+   */
+  onTaskPress?: (event: MarkdownTaskPressEvent) => void;
   /**
    * Glyphs for the control buttons, by key, as Streamdown's `icons`. A key here
    * replaces the platform's own glyph for that button; a key with no entry keeps
