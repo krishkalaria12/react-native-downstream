@@ -22,7 +22,6 @@
     "math/vendor/**",
     "patches/**",
     "tests/fixtures/**",
-    "docs/**",
     "src/cpp/theme/ThemeSlots.h",
     "src/themeSlots.ts",
     "src/android/src/main/java/com/downstream/ThemeSlots.kt"

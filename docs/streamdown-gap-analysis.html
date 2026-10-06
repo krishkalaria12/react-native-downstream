@@ -22,7 +22,7 @@
         --risk: #a64242;
         --risk-soft: #faeaea;
         --code: #e8f0ef;
-        --sans: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        --sans: 'Avenir Next', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
         --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       }
       @media (prefers-color-scheme: dark) {
@@ -44,52 +44,244 @@
           --code: #223a3b;
         }
       }
-      * { box-sizing: border-box; }
-      body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.58 var(--sans); }
-      a { color: var(--accent); text-underline-offset: 0.18em; }
-      :focus-visible { outline: 3px solid var(--tail); outline-offset: 3px; border-radius: 3px; }
-      .wrap { max-width: 72rem; padding: 3.5rem clamp(1rem, 4.8vw, 5rem) 6rem; margin: 0 auto; }
-      .mast { border-bottom: 2px solid var(--ink); padding-bottom: 2.2rem; margin-bottom: 1rem; }
-      .kicker { font: 700 0.77rem/1.3 var(--mono); color: var(--accent); letter-spacing: 0.02em; margin: 0 0 0.9rem; }
-      h1 { font-size: clamp(2.3rem, 5vw, 4.4rem); letter-spacing: -0.06em; line-height: 1; margin: 0 0 1.3rem; max-width: 16ch; font-weight: 760; }
-      .lede { font-size: clamp(1.05rem, 1.5vw, 1.25rem); line-height: 1.48; max-width: 50rem; margin: 0; color: var(--ink-soft); }
-      .meta-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 2rem; }
-      .meta-grid > div { background: var(--surface); padding: 1rem 1.1rem; }
-      .meta-grid b { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; }
-      .meta-grid span { color: var(--ink-soft); font-size: 0.9rem; }
-      section { padding: 2.4rem 0 1.6rem; border-top: 1px solid var(--line); }
-      section:first-of-type { border-top: 0; }
-      .section-head { display: grid; grid-template-columns: minmax(0, 2fr) minmax(12rem, 1fr); align-items: end; gap: 2rem; margin-bottom: 1.2rem; }
-      .section-head h2 { font-size: clamp(1.6rem, 2.6vw, 2.3rem); letter-spacing: -0.05em; line-height: 1.13; margin: 0; }
-      .section-head p { margin: 0; color: var(--ink-soft); font-size: 0.94rem; line-height: 1.45; }
-      p { max-width: 70ch; margin: 0.5rem 0 1rem; }
-      ul, ol { padding-left: 1.35rem; max-width: 78ch; }
-      li { margin: 0.4rem 0; }
-      code { font-family: var(--mono); background: var(--code); border-radius: 3px; padding: 0.08rem 0.25rem; font-size: 0.86em; overflow-wrap: anywhere; }
-      .table-wrap { max-width: 100%; overflow-x: auto; border: 1px solid var(--line); background: var(--surface); margin: 1rem 0 1.5rem; }
-      table { border-collapse: collapse; width: 100%; min-width: 680px; font-size: 0.88rem; line-height: 1.45; }
-      th, td { padding: 0.78rem 0.87rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
-      th { background: var(--surface-soft); font-size: 0.78rem; font-weight: 750; }
-      tr:last-child td { border-bottom: 0; }
-      td:first-child { font-weight: 700; width: 26%; }
-      td:nth-child(2) { width: 18%; color: var(--ink-soft); }
-      .tag { display: inline-block; font: 700 0.7rem/1 var(--mono); padding: 0.28rem 0.42rem; border-radius: 3px; margin: 0.1rem 0.25rem 0.1rem 0; white-space: nowrap; }
-      .tag.partial { background: var(--tail-soft); color: var(--tail); }
-      .tag.new { background: var(--accent-soft); color: var(--accent); }
-      .tag.scope { background: var(--risk-soft); color: var(--risk); }
-      .legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; font-size: 0.85rem; color: var(--ink-soft); margin: 0.4rem 0 0; }
-      .callout { padding: 1rem 1.25rem; background: var(--surface-soft); border-left: 4px solid var(--line-strong); margin: 1.3rem 0; }
-      .callout p { margin: 0; }
-      .order { counter-reset: step; list-style: none; padding: 0; display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); max-width: none; }
-      .order li { counter-increment: step; background: var(--surface); margin: 0; padding: 0.9rem 1rem 0.9rem 3.3rem; position: relative; }
-      .order li::before { content: counter(step); position: absolute; left: 1rem; top: 0.85rem; font: 800 1.05rem/1.4 var(--mono); color: var(--accent); }
-      .order li b { display: block; }
-      .order li span { color: var(--ink-soft); font-size: 0.9rem; }
-      .ahead { columns: 2; column-gap: 2.5rem; }
-      .ahead li { break-inside: avoid; }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font: 16px/1.58 var(--sans);
+      }
+      a {
+        color: var(--accent);
+        text-underline-offset: 0.18em;
+      }
+      :focus-visible {
+        outline: 3px solid var(--tail);
+        outline-offset: 3px;
+        border-radius: 3px;
+      }
+      .wrap {
+        max-width: 72rem;
+        padding: 3.5rem clamp(1rem, 4.8vw, 5rem) 6rem;
+        margin: 0 auto;
+      }
+      .mast {
+        border-bottom: 2px solid var(--ink);
+        padding-bottom: 2.2rem;
+        margin-bottom: 1rem;
+      }
+      .kicker {
+        font: 700 0.77rem/1.3 var(--mono);
+        color: var(--accent);
+        letter-spacing: 0.02em;
+        margin: 0 0 0.9rem;
+      }
+      h1 {
+        font-size: clamp(2.3rem, 5vw, 4.4rem);
+        letter-spacing: -0.06em;
+        line-height: 1;
+        margin: 0 0 1.3rem;
+        max-width: 16ch;
+        font-weight: 760;
+      }
+      .lede {
+        font-size: clamp(1.05rem, 1.5vw, 1.25rem);
+        line-height: 1.48;
+        max-width: 50rem;
+        margin: 0;
+        color: var(--ink-soft);
+      }
+      .meta-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1px;
+        background: var(--line);
+        border: 1px solid var(--line);
+        margin-top: 2rem;
+      }
+      .meta-grid > div {
+        background: var(--surface);
+        padding: 1rem 1.1rem;
+      }
+      .meta-grid b {
+        display: block;
+        font-size: 0.85rem;
+        margin-bottom: 0.25rem;
+      }
+      .meta-grid span {
+        color: var(--ink-soft);
+        font-size: 0.9rem;
+      }
+      section {
+        padding: 2.4rem 0 1.6rem;
+        border-top: 1px solid var(--line);
+      }
+      section:first-of-type {
+        border-top: 0;
+      }
+      .section-head {
+        display: grid;
+        grid-template-columns: minmax(0, 2fr) minmax(12rem, 1fr);
+        align-items: end;
+        gap: 2rem;
+        margin-bottom: 1.2rem;
+      }
+      .section-head h2 {
+        font-size: clamp(1.6rem, 2.6vw, 2.3rem);
+        letter-spacing: -0.05em;
+        line-height: 1.13;
+        margin: 0;
+      }
+      .section-head p {
+        margin: 0;
+        color: var(--ink-soft);
+        font-size: 0.94rem;
+        line-height: 1.45;
+      }
+      p {
+        max-width: 70ch;
+        margin: 0.5rem 0 1rem;
+      }
+      ul,
+      ol {
+        padding-left: 1.35rem;
+        max-width: 78ch;
+      }
+      li {
+        margin: 0.4rem 0;
+      }
+      code {
+        font-family: var(--mono);
+        background: var(--code);
+        border-radius: 3px;
+        padding: 0.08rem 0.25rem;
+        font-size: 0.86em;
+        overflow-wrap: anywhere;
+      }
+      .table-wrap {
+        max-width: 100%;
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        margin: 1rem 0 1.5rem;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 680px;
+        font-size: 0.88rem;
+        line-height: 1.45;
+      }
+      th,
+      td {
+        padding: 0.78rem 0.87rem;
+        text-align: left;
+        vertical-align: top;
+        border-bottom: 1px solid var(--line);
+      }
+      th {
+        background: var(--surface-soft);
+        font-size: 0.78rem;
+        font-weight: 750;
+      }
+      tr:last-child td {
+        border-bottom: 0;
+      }
+      td:first-child {
+        font-weight: 700;
+        width: 26%;
+      }
+      td:nth-child(2) {
+        width: 18%;
+        color: var(--ink-soft);
+      }
+      .tag {
+        display: inline-block;
+        font: 700 0.7rem/1 var(--mono);
+        padding: 0.28rem 0.42rem;
+        border-radius: 3px;
+        margin: 0.1rem 0.25rem 0.1rem 0;
+        white-space: nowrap;
+      }
+      .tag.partial {
+        background: var(--tail-soft);
+        color: var(--tail);
+      }
+      .tag.new {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+      .tag.scope {
+        background: var(--risk-soft);
+        color: var(--risk);
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem 1.2rem;
+        font-size: 0.85rem;
+        color: var(--ink-soft);
+        margin: 0.4rem 0 0;
+      }
+      .callout {
+        padding: 1rem 1.25rem;
+        background: var(--surface-soft);
+        border-left: 4px solid var(--line-strong);
+        margin: 1.3rem 0;
+      }
+      .callout p {
+        margin: 0;
+      }
+      .order {
+        counter-reset: step;
+        list-style: none;
+        padding: 0;
+        display: grid;
+        gap: 1px;
+        background: var(--line);
+        border: 1px solid var(--line);
+        max-width: none;
+      }
+      .order li {
+        counter-increment: step;
+        background: var(--surface);
+        margin: 0;
+        padding: 0.9rem 1rem 0.9rem 3.3rem;
+        position: relative;
+      }
+      .order li::before {
+        content: counter(step);
+        position: absolute;
+        left: 1rem;
+        top: 0.85rem;
+        font: 800 1.05rem/1.4 var(--mono);
+        color: var(--accent);
+      }
+      .order li b {
+        display: block;
+      }
+      .order li span {
+        color: var(--ink-soft);
+        font-size: 0.9rem;
+      }
+      .ahead {
+        columns: 2;
+        column-gap: 2.5rem;
+      }
+      .ahead li {
+        break-inside: avoid;
+      }
       @media (max-width: 760px) {
-        .meta-grid, .section-head { grid-template-columns: 1fr; gap: 0.6rem; }
-        .ahead { columns: 1; }
+        .meta-grid,
+        .section-head {
+          grid-template-columns: 1fr;
+          gap: 0.6rem;
+        }
+        .ahead {
+          columns: 1;
+        }
       }
     </style>
   </head>
@@ -99,14 +291,37 @@
         <p class="kicker">docs / streamdown-gap-analysis</p>
         <h1>What Streamdown has that Downstream does not</h1>
         <p class="lede">
-          A feature-by-feature comparison against Vercel's Streamdown, the web renderer this project is benchmarked against.
-          It lists what is still missing from the native renderer, what is only half built, and a suggested order for
-          closing them.
+          A feature-by-feature comparison against Vercel's Streamdown, the web
+          renderer this project is benchmarked against. It lists what is still
+          missing from the native renderer, what is only half built, and a
+          suggested order for closing them.
         </p>
         <div class="meta-grid">
-          <div><b>Compared against</b><span>Streamdown 2.6.0, <code>vercel/streamdown@455d32e</code>, with its <code>@streamdown/code</code>, <code>math</code>, <code>mermaid</code> and <code>cjk</code> plugins</span></div>
-          <div><b>Closed since the first pass</b><span>Syntax highlighting, code block chrome, copy and download controls, math, images, streaming animation, theming, fence renderers, and the <code>br</code>, <code>sub</code> and <code>sup</code> subset</span></div>
-          <div><b>Sources</b><span><code>src/types.ts</code>, the doc comments across <code>src/cpp</code>, and the native parser in <code>src/cpp/downstream</code></span></div>
+          <div>
+            <b>Compared against</b
+            ><span
+              >Streamdown 2.6.0, <code>vercel/streamdown@455d32e</code>, with
+              its <code>@streamdown/code</code>, <code>math</code>,
+              <code>mermaid</code> and <code>cjk</code> plugins</span
+            >
+          </div>
+          <div>
+            <b>Closed since the first pass</b
+            ><span
+              >Syntax highlighting, code block chrome, copy and download
+              controls, math, images, streaming animation, theming, fence
+              renderers, and the <code>br</code>, <code>sub</code> and
+              <code>sup</code> subset</span
+            >
+          </div>
+          <div>
+            <b>Sources</b
+            ><span
+              ><code>src/types.ts</code>, the doc comments across
+              <code>src/cpp</code>, and the native parser in
+              <code>src/cpp/downstream</code></span
+            >
+          </div>
         </div>
       </header>
 
@@ -116,55 +331,161 @@
           <p>Each row is tagged with how much of it exists today.</p>
         </div>
         <div class="legend">
-          <span><span class="tag partial">partial</span>part of the shape is here, the rest is not</span>
-          <span><span class="tag new">not planned</span>not mentioned in the contract yet</span>
-          <span><span class="tag scope">contract change</span>the contract rules it out today</span>
+          <span
+            ><span class="tag partial">partial</span>part of the shape is here,
+            the rest is not</span
+          >
+          <span
+            ><span class="tag new">not planned</span>not mentioned in the
+            contract yet</span
+          >
+          <span
+            ><span class="tag scope">contract change</span>the contract rules it
+            out today</span
+          >
         </div>
       </section>
 
       <section aria-labelledby="partial">
         <div class="section-head">
           <h2 id="partial">Partially done</h2>
-          <p>Rows where Downstream answers part of the shape and leaves the rest for later.</p>
+          <p>
+            Rows where Downstream answers part of the shape and leaves the rest
+            for later.
+          </p>
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Streamdown feature</th><th>Downstream today</th><th>What is left</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Streamdown feature</th>
+                <th>Downstream today</th>
+                <th>What is left</th>
+              </tr>
+            </thead>
             <tbody>
               <tr>
-                <td>Safe raw HTML subset<br /><span class="tag partial">partial</span></td>
-                <td><code>&lt;br&gt;</code>, <code>&lt;sub&gt;</code> and <code>&lt;sup&gt;</code> rendered; every other tag still shown as source</td>
-                <td>The allowlist is three strings in <code>src/cpp/downstream/Scan.cpp</code>, applied behind <code>inlineHtml</code> (on by default) with md4c's <code>superscript</code> and <code>subscript</code> syntax flags as an opt-in. Attributes are ignored and a self-closed <code>script</code> or a stray close tag is swallowed. Still out: <code>&lt;details&gt;</code>, <code>&lt;summary&gt;</code>, <code>&lt;kbd&gt;</code>, <code>&lt;mark&gt;</code>, and the configurable <code>allowedTags</code>, <code>literalTagContent</code>, <code>fallbackComponent</code> and <code>normalizeHtmlIndentation</code>.</td>
+                <td>
+                  Safe raw HTML subset<br /><span class="tag partial"
+                    >partial</span
+                  >
+                </td>
+                <td>
+                  <code>&lt;br&gt;</code>, <code>&lt;sub&gt;</code> and
+                  <code>&lt;sup&gt;</code> rendered; every other tag still shown
+                  as source
+                </td>
+                <td>
+                  The allowlist is three strings in
+                  <code>src/cpp/downstream/Scan.cpp</code>, applied behind
+                  <code>inlineHtml</code> (on by default) with md4c's
+                  <code>superscript</code> and <code>subscript</code> syntax
+                  flags as an opt-in. Attributes are ignored and a self-closed
+                  <code>script</code> or a stray close tag is swallowed. Still
+                  out: <code>&lt;details&gt;</code>,
+                  <code>&lt;summary&gt;</code>, <code>&lt;kbd&gt;</code>,
+                  <code>&lt;mark&gt;</code>, and the configurable
+                  <code>allowedTags</code>, <code>literalTagContent</code>,
+                  <code>fallbackComponent</code> and
+                  <code>normalizeHtmlIndentation</code>.
+                </td>
               </tr>
               <tr>
-                <td>Mermaid diagrams<br /><span class="tag partial">partial</span></td>
-                <td>No diagram engine; a fenced <code>mermaid</code> block can be drawn by the host</td>
-                <td><code>plugins.mermaid</code> with pan and zoom, full screen, and export as SVG, PNG or <code>.mmd</code> is not built in, and should not be. <code>plugins.renderers</code> is the supported path: a fenced block whose language is registered is drawn by that component in the same view, so pan, zoom, full screen and export are the adopter's own component rather than a core dependency.</td>
+                <td>
+                  Mermaid diagrams<br /><span class="tag partial">partial</span>
+                </td>
+                <td>
+                  No diagram engine; a fenced <code>mermaid</code> block can be
+                  drawn by the host
+                </td>
+                <td>
+                  <code>plugins.mermaid</code> with pan and zoom, full screen,
+                  and export as SVG, PNG or <code>.mmd</code> is not built in,
+                  and should not be. <code>plugins.renderers</code> is the
+                  supported path: a fenced block whose language is registered is
+                  drawn by that component in the same view, so pan, zoom, full
+                  screen and export are the adopter's own component rather than
+                  a core dependency.
+                </td>
               </tr>
               <tr>
-                <td>CJK handling<br /><span class="tag partial">partial</span></td>
+                <td>
+                  CJK handling<br /><span class="tag partial">partial</span>
+                </td>
                 <td>CJK text renders, and fades per character</td>
-                <td>Reveal units split on ideograph, kana, Hangul and fullwidth ranges (<code>src/cpp/downstream/Reveal.cpp</code>), and the highlighter offsets CJK runs correctly. Parsing is still plain CommonMark: no <code>@streamdown/cjk</code> equivalent for emphasis next to CJK punctuation, and autolinks still run past <code>。，）</code> and similar. md4c uses standard flanking rules, so text like <code>**太字**。</code> probably fails the same way. Worth a fixture test before deciding.</td>
+                <td>
+                  Reveal units split on ideograph, kana, Hangul and fullwidth
+                  ranges (<code>src/cpp/downstream/Reveal.cpp</code>), and the
+                  highlighter offsets CJK runs correctly. Parsing is still plain
+                  CommonMark: no <code>@streamdown/cjk</code> equivalent for
+                  emphasis next to CJK punctuation, and autolinks still run past
+                  <code>。，）</code> and similar. md4c uses standard flanking
+                  rules, so text like <code>**太字**。</code> probably fails the
+                  same way. Worth a fixture test before deciding.
+                </td>
               </tr>
               <tr>
-                <td>Code block line marks and token color overrides<br /><span class="tag partial">partial</span></td>
+                <td>
+                  Code block line marks and token color overrides<br /><span
+                    class="tag partial"
+                    >partial</span
+                  >
+                </td>
                 <td>Token colors override; line marks parsed but not drawn</td>
-                <td><code>theme.syntax</code> and <code>markdownStyle.codeBlock.syntaxColors</code> let a theme replace the highlighter's palette. <code>meta.marks</code> is parsed and kept, so a mark list can never reach a title, but it is not drawn as line backgrounds.</td>
+                <td>
+                  <code>theme.syntax</code> and
+                  <code>markdownStyle.codeBlock.syntaxColors</code> let a theme
+                  replace the highlighter's palette. <code>meta.marks</code> is
+                  parsed and kept, so a mark list can never reach a title, but
+                  it is not drawn as line backgrounds.
+                </td>
               </tr>
               <tr>
-                <td><code>translations</code> and <code>icons</code><br /><span class="tag partial">partial</span></td>
+                <td>
+                  <code>translations</code> and <code>icons</code><br /><span
+                    class="tag partial"
+                    >partial</span
+                  >
+                </td>
                 <td>Every control label is overridable; icons are fixed</td>
-                <td><code>translations</code> is a <code>Partial&lt;MarkdownTranslations&gt;</code> covering the control labels, including the failure and image states. There is no <code>icons</code> prop: the glyphs are hardcoded per platform (Android drawables, iOS symbol helpers), so an adopter restyles a control's label but not its icon.</td>
+                <td>
+                  <code>translations</code> is a
+                  <code>Partial&lt;MarkdownTranslations&gt;</code> covering the
+                  control labels, including the failure and image states. There
+                  is no <code>icons</code> prop: the glyphs are hardcoded per
+                  platform (Android drawables, iOS symbol helpers), so an
+                  adopter restyles a control's label but not its icon.
+                </td>
               </tr>
               <tr>
-                <td><code>dir="auto"</code><br /><span class="tag partial">partial</span></td>
+                <td>
+                  <code>dir="auto"</code><br /><span class="tag partial"
+                    >partial</span
+                  >
+                </td>
                 <td>Natural direction per paragraph</td>
-                <td>Close to Streamdown's behaviour, and code blocks already render left to right like Streamdown. Not modelled: counting strong characters across the paragraph, and ignoring code spans while deciding.</td>
+                <td>
+                  Close to Streamdown's behaviour, and code blocks already
+                  render left to right like Streamdown. Not modelled: counting
+                  strong characters across the paragraph, and ignoring code
+                  spans while deciding.
+                </td>
               </tr>
               <tr>
-                <td>React extension points<br /><span class="tag partial">partial</span></td>
+                <td>
+                  React extension points<br /><span class="tag partial"
+                    >partial</span
+                  >
+                </td>
                 <td>Native segments replace them</td>
-                <td><code>mode="static"</code>, <code>BlockComponent</code>, <code>parseMarkdownIntoBlocksFn</code> and <code>useIsCodeFenceInComplete</code> are React surfaces with no native analogue, and none is needed. The one thing the design did owe is a per-block incomplete flag, and fence renderers now receive it as <code>isIncomplete</code>.</td>
+                <td>
+                  <code>mode="static"</code>, <code>BlockComponent</code>,
+                  <code>parseMarkdownIntoBlocksFn</code> and
+                  <code>useIsCodeFenceInComplete</code> are React surfaces with
+                  no native analogue, and none is needed. The one thing the
+                  design did owe is a per-block incomplete flag, and fence
+                  renderers now receive it as <code>isIncomplete</code>.
+                </td>
               </tr>
             </tbody>
           </table>
@@ -178,33 +499,88 @@
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Streamdown feature</th><th>Downstream today</th><th>Notes</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Streamdown feature</th>
+                <th>Downstream today</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
             <tbody>
               <tr>
-                <td>Table height and full screen<br /><span class="tag new">not planned</span></td>
+                <td>
+                  Table height and full screen<br /><span class="tag new"
+                    >not planned</span
+                  >
+                </td>
                 <td>Horizontal scroll only</td>
-                <td><code>tableMaxHeight</code> (default 300) with vertical scroll, and a full-screen view. Column widths are already clamped through <code>markdownStyle.table.minColumnWidth</code> and <code>maxColumnWidth</code>, and code blocks have an expand control, so a table is the only block with no way out of a nested scroll. <code>fullscreen</code> is not among the four control actions, so an event naming it is dropped rather than reported.</td>
+                <td>
+                  <code>tableMaxHeight</code> (default 300) with vertical
+                  scroll, and a full-screen view. Column widths are already
+                  clamped through
+                  <code>markdownStyle.table.minColumnWidth</code> and
+                  <code>maxColumnWidth</code>, and code blocks have an expand
+                  control, so a table is the only block with no way out of a
+                  nested scroll. <code>fullscreen</code> is not among the four
+                  control actions, so an event naming it is dropped rather than
+                  reported.
+                </td>
               </tr>
               <tr>
-                <td>Link safety<br /><span class="tag new">not planned</span></td>
+                <td>
+                  Link safety<br /><span class="tag new">not planned</span>
+                </td>
                 <td><code>onLinkPress</code> only</td>
-                <td><code>linkSafety.onLinkCheck</code> plus a confirmation modal, on by default. Downstream never opens a URL itself, so a host app can already do this; what is missing is a documented example.</td>
+                <td>
+                  <code>linkSafety.onLinkCheck</code> plus a confirmation modal,
+                  on by default. Downstream never opens a URL itself, so a host
+                  app can already do this; what is missing is a documented
+                  example.
+                </td>
               </tr>
               <tr>
-                <td>Wider link policy<br /><span class="tag new">not planned</span></td>
-                <td>Absolute <code>http</code>, <code>https</code>, <code>mailto</code></td>
-                <td>Fixed in <code>src/cpp/downstream/LinkPolicy.cpp</code>, which rejects control characters and accepts those three schemes case-insensitively. Streamdown also allows <code>tel:</code>, and relative URLs resolved against a <code>defaultOrigin</code> through rehype-harden.</td>
+                <td>
+                  Wider link policy<br /><span class="tag new"
+                    >not planned</span
+                  >
+                </td>
+                <td>
+                  Absolute <code>http</code>, <code>https</code>,
+                  <code>mailto</code>
+                </td>
+                <td>
+                  Fixed in <code>src/cpp/downstream/LinkPolicy.cpp</code>, which
+                  rejects control characters and accepts those three schemes
+                  case-insensitively. Streamdown also allows <code>tel:</code>,
+                  and relative URLs resolved against a
+                  <code>defaultOrigin</code> through rehype-harden.
+                </td>
               </tr>
               <tr>
-                <td><code>disableAutolinkProtocols</code><br /><span class="tag new">not planned</span></td>
+                <td>
+                  <code>disableAutolinkProtocols</code><br /><span
+                    class="tag new"
+                    >not planned</span
+                  >
+                </td>
                 <td>Always on</td>
-                <td>For example, stop bare emails from becoming <code>mailto:</code> links. The parser runs with <code>MD_DIALECT_GITHUB</code>, which includes md4c's permissive-autolink bit, so this is not a flag that is currently off but a dialect constant that would have to change.</td>
+                <td>
+                  For example, stop bare emails from becoming
+                  <code>mailto:</code> links. The parser runs with
+                  <code>MD_DIALECT_GITHUB</code>, which includes md4c's
+                  permissive-autolink bit, so this is not a flag that is
+                  currently off but a dialect constant that would have to
+                  change.
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
         <ul>
-          <li><b><code>portal</code> and Tailwind <code>prefix</code>.</b> No React Native equivalent, and nothing to close.</li>
+          <li>
+            <b><code>portal</code> and Tailwind <code>prefix</code>.</b> No
+            React Native equivalent, and nothing to close.
+          </li>
         </ul>
       </section>
 
@@ -215,30 +591,93 @@
         </div>
         <ul class="ahead">
           <li>Admonitions, which Streamdown does not render.</li>
-          <li>Native accessibility: heading and link roles, spoken task state, table rows in reading order.</li>
-          <li>A typed error model with generations and sequences, so stale results are dropped.</li>
+          <li>
+            Native accessibility: heading and link roles, spoken task state,
+            table rows in reading order.
+          </li>
+          <li>
+            A typed error model with generations and sequences, so stale results
+            are dropped.
+          </li>
           <li>UTF-16 source ranges on link events.</li>
-          <li>Incremental parsing and text preparation on a native worker pool, off the JavaScript and UI threads.</li>
-          <li>Completed segments reused across snapshots, so only the active tail is rebuilt.</li>
-          <li>Theming as a slot table the engine reads directly, with a Shiki converter, so a host can restyle every element without a second render pass.</li>
+          <li>
+            Incremental parsing and text preparation on a native worker pool,
+            off the JavaScript and UI threads.
+          </li>
+          <li>
+            Completed segments reused across snapshots, so only the active tail
+            is rebuilt.
+          </li>
+          <li>
+            Theming as a slot table the engine reads directly, with a Shiki
+            converter, so a host can restyle every element without a second
+            render pass.
+          </li>
         </ul>
       </section>
 
       <section aria-labelledby="order">
         <div class="section-head">
           <h2 id="order">Suggested order</h2>
-          <p>All of these are contract changes or small parser work; none needs a heavy dependency.</p>
+          <p>
+            All of these are contract changes or small parser work; none needs a
+            heavy dependency.
+          </p>
         </div>
         <ol class="order">
-          <li><b>Table max height and a full-screen view</b><span>The only remaining block with no escape from a nested scroll.</span></li>
-          <li><b>A configurable HTML allowlist</b><span>Turns the fixed three-tag list into <code>allowedTags</code>, and opens up <code>&lt;details&gt;</code> and <code>&lt;kbd&gt;</code>.</span></li>
-          <li><b>Link policy: <code>tel:</code> and relative URLs</b><span>A widening of the contract's scheme list rather than a new mechanism.</span></li>
-          <li><b>Decide on autolink protocols</b><span>Needs a dialect change, so it wants a fixture first to show what a stricter mode would cost.</span></li>
-          <li><b>CJK emphasis and autolink boundaries</b><span>Same caveat: write the failing fixture before deciding whether it is worth it.</span></li>
-          <li><b>An <code>icons</code> prop</b><span>The last stub of Streamdown's <code>components</code> surface, and small once the control labels are already overridable.</span></li>
+          <li>
+            <b>Table max height and a full-screen view</b
+            ><span
+              >The only remaining block with no escape from a nested
+              scroll.</span
+            >
+          </li>
+          <li>
+            <b>A configurable HTML allowlist</b
+            ><span
+              >Turns the fixed three-tag list into <code>allowedTags</code>, and
+              opens up <code>&lt;details&gt;</code> and
+              <code>&lt;kbd&gt;</code>.</span
+            >
+          </li>
+          <li>
+            <b>Link policy: <code>tel:</code> and relative URLs</b
+            ><span
+              >A widening of the contract's scheme list rather than a new
+              mechanism.</span
+            >
+          </li>
+          <li>
+            <b>Decide on autolink protocols</b
+            ><span
+              >Needs a dialect change, so it wants a fixture first to show what
+              a stricter mode would cost.</span
+            >
+          </li>
+          <li>
+            <b>CJK emphasis and autolink boundaries</b
+            ><span
+              >Same caveat: write the failing fixture before deciding whether it
+              is worth it.</span
+            >
+          </li>
+          <li>
+            <b>An <code>icons</code> prop</b
+            ><span
+              >The last stub of Streamdown's <code>components</code> surface,
+              and small once the control labels are already overridable.</span
+            >
+          </li>
         </ol>
         <div class="callout">
-          <p>This keeps the rule the feature set was built on: plain prose stays independent of the heavier paths. Highlighting, images, math and diagrams must load only when a document uses them, and a document with no fenced code never loads a lexer. It is also why the heavy paths are absent from this list: they are opt-in packages, not a cost every adopter pays.</p>
+          <p>
+            This keeps the rule the feature set was built on: plain prose stays
+            independent of the heavier paths. Highlighting, images, math and
+            diagrams must load only when a document uses them, and a document
+            with no fenced code never loads a lexer. It is also why the heavy
+            paths are absent from this list: they are opt-in packages, not a
+            cost every adopter pays.
+          </p>
         </div>
       </section>
     </main>
