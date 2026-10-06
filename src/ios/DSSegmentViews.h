@@ -254,7 +254,26 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 @property (nonatomic) UIColor *selectionColor;
 - (void)setSegment:(DSCodeSegment *)segment;
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
+/// The `icons` prop's resolved names, in `CONTROL_ICON_KEYS` order. Empty is the
+/// platform's own glyph.
+- (void)setControlIcons:(NSArray<NSString *> *)icons;
 @end
+
+/// A control glyph name, resolved from the `icons` prop.
+///
+/// A name the platform knows is its own symbol or an asset name — anything with a
+/// dot in it is read as an asset. An empty string means no icon at all, which is
+/// how a text-only button is built.
+extern NSString *const DSControlIconCopy;
+extern NSString *const DSControlIconCheck;
+extern NSString *const DSControlIconDownload;
+extern NSString *const DSControlIconMaximize;
+extern NSString *const DSControlIconClose;
+extern NSString *const DSControlIconWrap;
+extern NSString *const DSControlIconExpand;
+extern NSString *const DSControlIconCollapse;
+extern NSString *const DSControlIconTableFullscreen;
+extern NSString *const DSControlIconDetailsChevron;
 
 /// The vertical viewport around a code card's gutter and body.
 ///
@@ -294,6 +313,9 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 @property (nonatomic) BOOL streaming;
 - (void)setSegment:(DSTableSegment *)segment;
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
+/// The `icons` prop's resolved names, in `CONTROL_ICON_KEYS` order. Empty is the
+/// platform's own glyph.
+- (void)setControlIcons:(NSArray<NSString *> *)icons;
 @end
 
 /**
@@ -312,6 +334,9 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 @property (nonatomic) uint32_t controls;
 /// Label strings in the order `src/controls.ts` sends them.
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
+/// The `icons` prop's resolved names, in `CONTROL_ICON_KEYS` order. Empty is the
+/// platform's own glyph.
+- (void)setControlIcons:(NSArray<NSString *> *)icons;
 /// The state each image is in, which is what the boxes are drawn from.
 - (void)setImageState:(const downstream::ImageStateLayout &)state;
 /// True when this block is settled, which is what turns a control on and stops a
@@ -375,6 +400,9 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 @property (nonatomic) CGFloat screenScale;
 /// Label strings in the order `src/controls.ts` sends them.
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
+/// The `icons` prop's resolved names, in `CONTROL_ICON_KEYS` order. Empty is the
+/// platform's own glyph.
+- (void)setControlIcons:(NSArray<NSString *> *)icons;
 - (void)setRendered:(nullable DSRenderedDocument *)rendered;
 - (void)setChrome:(uint32_t)chrome;
 /// Drops every reader scroll position, for a new generation.

@@ -168,6 +168,10 @@ NSString *nameForFormat(NSString *format) {
   NSString *_pressedImageURL;
   NSString *_csvSeparator;
   NSArray<NSString *> *_controlLabels;
+  /// The glyph names the `icons` prop resolved to, in `CONTROL_ICON_KEYS` order.
+  /// An empty string is a key the app removed, which the button reads as "draw no
+  /// icon" — a text-only button is how a quiet header is built.
+  NSArray<NSString *> *_controlIcons;
   CADisplayLink *_traceDisplayLink;
   uint64_t _traceDocumentId;
   uint64_t _controlEpoch;
@@ -216,6 +220,7 @@ NSString *nameForFormat(NSString *format) {
     _imageFilename = "image";
     _csvSeparator = @",";
     _controlLabels = @[];
+    _controlIcons = @[];
     _exporter = [DSFileExporter new];
     // One observer per view for the platform's own Reduce Motion setting, which a
     // reader can turn on while a message is still fading.
@@ -508,6 +513,14 @@ NSString *nameForFormat(NSString *format) {
     }
     _controlLabels = labels;
     [_documentView setControlLabels:_controlLabels];
+  }
+  if (newProps.controlIcons != previous.controlIcons) {
+    NSMutableArray<NSString *> *icons = [NSMutableArray arrayWithCapacity:newProps.controlIcons.size()];
+    for (const std::string &icon : newProps.controlIcons) {
+      [icons addObject:@(icon.c_str())];
+    }
+    _controlIcons = icons;
+    [_documentView setControlIcons:_controlIcons];
   }
   // The chrome itself is part of the state, because it is a height and the
   // shadow node is what measures; a prop change reaches it through a state

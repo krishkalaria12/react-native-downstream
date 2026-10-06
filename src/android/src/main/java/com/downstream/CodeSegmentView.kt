@@ -381,10 +381,10 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   /** The fence's parsed meta, so the host resolves the layout the same way. */
   val fenceMeta: FenceMeta get() = segment?.fenceMeta ?: FenceMeta()
 
-  private val copyButton = controlButton(R.drawable.ds_ic_copy, LABEL_COPY_CODE)
-  private val downloadButton = controlButton(R.drawable.ds_ic_download, LABEL_DOWNLOAD_FILE)
-  private val wrapButton = controlButton(R.drawable.ds_ic_wrap, LABEL_WRAP_CODE)
-  private val expandButton = controlButton(R.drawable.ds_ic_expand, LABEL_EXPAND_CODE)
+  private val copyButton = controlButton(controlDrawable("copy", R.drawable.ds_ic_copy), LABEL_COPY_CODE)
+  private val downloadButton = controlButton(controlDrawable("download", R.drawable.ds_ic_download), LABEL_DOWNLOAD_FILE)
+  private val wrapButton = controlButton(controlDrawable("wrap", R.drawable.ds_ic_wrap), LABEL_WRAP_CODE)
+  private val expandButton = controlButton(controlDrawable("expand", R.drawable.ds_ic_expand), LABEL_EXPAND_CODE)
 
   private val allButtons: List<ImageButton>
     get() = listOf(expandButton, wrapButton, downloadButton, copyButton)
@@ -615,14 +615,20 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
       button.isEnabled = controlsEnabled && button.visibility == View.VISIBLE
       button.alpha = if (button.isEnabled) 1f else 0.4f
     }
-    copyButton.setImageResource(if (copied) R.drawable.ds_ic_check else R.drawable.ds_ic_copy)
+    copyButton.setImageResource(
+      if (copied) controlDrawable("check", R.drawable.ds_ic_check)
+      else controlDrawable("copy", R.drawable.ds_ic_copy),
+    )
     copyButton.contentDescription = controlLabels[if (copied) LABEL_COPIED else LABEL_COPY_CODE]
     val wraps = layout?.wraps ?: false
     wrapButton.isSelected = wraps
     wrapButton.contentDescription = controlLabels[if (wraps) LABEL_UNWRAP_CODE else LABEL_WRAP_CODE]
     wrapButton.stateDescription = wrapButton.contentDescription
     expandButton.isSelected = expanded
-    expandButton.setImageResource(if (expanded) R.drawable.ds_ic_collapse else R.drawable.ds_ic_expand)
+    expandButton.setImageResource(
+      if (expanded) controlDrawable("collapse", R.drawable.ds_ic_collapse)
+      else controlDrawable("expand", R.drawable.ds_ic_expand),
+    )
     expandButton.contentDescription =
       controlLabels[if (expanded) LABEL_COLLAPSE_CODE else LABEL_EXPAND_CODE]
     expandButton.stateDescription = expandButton.contentDescription

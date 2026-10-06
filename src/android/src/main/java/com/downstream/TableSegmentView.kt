@@ -59,10 +59,10 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     orientation = LinearLayout.HORIZONTAL
     gravity = Gravity.END or Gravity.CENTER_VERTICAL
   }
-  private val copyButton = newControlButton(context, R.drawable.ds_ic_copy)
-  private val downloadButton = newControlButton(context, R.drawable.ds_ic_download)
-  private val expandButton = newControlButton(context, R.drawable.ds_ic_expand)
-  private val fullscreenButton = newControlButton(context, R.drawable.ds_ic_fullscreen)
+  private val copyButton = newControlButton(context, controlDrawable("copy", R.drawable.ds_ic_copy))
+  private val downloadButton = newControlButton(context, controlDrawable("download", R.drawable.ds_ic_download))
+  private val expandButton = newControlButton(context, controlDrawable("expand", R.drawable.ds_ic_expand))
+  private val fullscreenButton = newControlButton(context, controlDrawable("tableFullscreen", R.drawable.ds_ic_fullscreen))
   private var segment: TableSegment? = null
   private var sourceEpoch = -1
   private var pendingLeadingDistance: Int? = 0
@@ -170,7 +170,8 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     downloadButton.contentDescription = controlLabels[LABEL_DOWNLOAD_TABLE]
     fullscreenButton.contentDescription = controlLabels[LABEL_VIEW_FULLSCREEN]
     expandButton.setImageResource(
-      if (tableLayout.expanded) R.drawable.ds_ic_collapse else R.drawable.ds_ic_expand,
+      if (tableLayout.expanded) controlDrawable("collapse", R.drawable.ds_ic_collapse)
+      else controlDrawable("expand", R.drawable.ds_ic_expand),
     )
     expandButton.contentDescription = controlLabels[
       if (tableLayout.expanded) LABEL_COLLAPSE_TABLE else LABEL_EXPAND_TABLE,

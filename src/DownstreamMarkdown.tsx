@@ -38,6 +38,7 @@ import {
   warnAboutMissingMathEngine,
 } from './parseFlags';
 import { openLinkSafely, resolveLinkUrl, resolvesLinks } from './linkSafety';
+import { resolveIcons } from './icons';
 import { TableFullscreen, type InheritedTableProps } from './TableFullscreen';
 import { resolveTheme, type ResolvedTheme } from './theme';
 import type {
@@ -993,6 +994,7 @@ function ControlledMarkdown({
   linkSafety,
   tableMaxHeight,
   dir,
+  icons,
   onTableFullscreen,
   renderTableFullscreen,
   onError,
@@ -1099,6 +1101,7 @@ function ControlledMarkdown({
       imageFilename={resolved.imageFilename}
       csvSeparator={resolved.csvSeparator}
       controlLabels={resolved.labels}
+      controlIcons={resolveIcons(icons)}
       parseFlags={images.parseFlags}
       images={images.images}
       allowedImagePrefixes={images.allowedImagePrefixes}
@@ -1145,6 +1148,7 @@ function StreamMarkdown({
   linkSafety,
   tableMaxHeight,
   dir,
+  icons,
   onTableFullscreen,
   renderTableFullscreen,
   onError,
@@ -1267,6 +1271,7 @@ function StreamMarkdown({
       imageFilename={resolved.imageFilename}
       csvSeparator={resolved.csvSeparator}
       controlLabels={resolved.labels}
+      controlIcons={resolveIcons(icons)}
       parseFlags={images.parseFlags}
       images={images.images}
       allowedImagePrefixes={images.allowedImagePrefixes}

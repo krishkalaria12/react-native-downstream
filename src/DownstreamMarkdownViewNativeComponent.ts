@@ -176,6 +176,14 @@ export interface NativeProps extends ViewProps {
   /** Control labels in a fixed key order; see src/controls.ts. */
   controlLabels?: ReadonlyArray<string>;
   /**
+   * The control glyphs, as `src/icons.ts` resolves them: a name per button in a
+   * fixed order, which the platform maps to its own symbol or asset.
+   */
+  // A nullable element is not something codegen can express inside an array, so
+  // a removed glyph crosses as an empty string and the button reads it as "draw no
+  // icon". `src/icons.ts` is where that mapping happens.
+  controlIcons?: ReadonlyArray<string>;
+  /**
    * Slot ids from src/themeSlots.ts, sorted ascending, one entry per override.
    *
    * Three arrays rather than a codegen object prop: a struct of every field

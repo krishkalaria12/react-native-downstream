@@ -38,6 +38,80 @@ internal const val CONTROL_DETAILS_TOGGLE = 512
 // How long a copy button shows its check before going back, as in Streamdown.
 internal const val COPIED_DURATION_MS = 2_000L
 
+/**
+ * The glyph keys the `icons` prop resolves, in the order the native views read
+ * them. Mirrors `CONTROL_ICON_KEYS` in `src/icons.ts`, and append-only like it: the
+ * array travels positionally, so a key inserted in the middle would give every
+ * later button a different drawable on a release built against the older list.
+ */
+internal val ICON_KEYS = listOf(
+  "copy", "check", "download", "maximize", "close",
+  "wrap", "expand", "collapse", "tableFullscreen", "detailsChevron",
+)
+
+/**
+ * The drawable each default key stands for.
+ *
+ * A table rather than a name compared at each call site, because the default is
+ * the one thing a button cannot do without and a `when` in five places is five
+ * places to forget a key.
+ */
+private val DEFAULT_ICONS = mapOf(
+  "copy" to R.drawable.ds_ic_copy,
+  "check" to R.drawable.ds_ic_check,
+  "download" to R.drawable.ds_ic_download,
+  "maximize" to R.drawable.ds_ic_fullscreen,
+  "close" to R.drawable.ds_ic_check,
+  "wrap" to R.drawable.ds_ic_wrap,
+  "expand" to R.drawable.ds_ic_expand,
+  "collapse" to R.drawable.ds_ic_collapse,
+  "tableFullscreen" to R.drawable.ds_ic_fullscreen,
+  // The disclosure is the expand arrow turned: the same vector the code card's
+  // expand button draws, which is why there is no separate asset for it.
+  "detailsChevron" to R.drawable.ds_ic_expand,
+)
+
+/** The resolved glyph names, in [ICON_KEYS] order. An empty string is a removed key. */
+private var controlIcons: List<String> = emptyList()
+
+/**
+ * The glyph for one key, or the platform's default for an entry the app did not
+ * name.
+ *
+ * A name with a dot in it is a drawable the app added, resolved at run time from
+ * its own resources: an app that wants a different shape for one button names an
+ * asset rather than asking this library to ship every shape it might want.
+ */
+internal fun controlDrawable(key: String, fallback: Int): Int {
+  val index = ICON_KEYS.indexOf(key)
+  val named = if (index >= 0 && index < controlIcons.size) controlIcons[index] else ""
+  if (named.isEmpty()) {
+    return DEFAULT_ICONS[key] ?: fallback
+  }
+  if (!named.contains('.')) {
+    return fallback
+  }
+  return resolveDrawable(named) ?: DEFAULT_ICONS[key] ?: fallback
+}
+
+/** Sets the resolved names. Called from the view manager when the prop changes. */
+internal fun setControlIcons(icons: List<String>) {
+  controlIcons = icons
+}
+
+/**
+ * A drawable by name, looked up in this library's resources.
+ *
+ * Only this package's own resources, because a glyph is a shape rather than
+ * content and a name from a message is not a path this library should resolve.
+ */
+private fun resolveDrawable(name: String): Int? = try {
+  val id = com.downstream.R.drawable::class.java.getField(name).getInt(null)
+  if (id != 0) id else null
+} catch (_: java.lang.Exception) {
+  null
+}
+
 // Indexes into the label array `src/controls.ts` sends, in the same order.
 internal val DEFAULT_LABELS = listOf(
   "Copy Code", "Download file", "Copied", "Wrap lines", "Don't wrap lines",

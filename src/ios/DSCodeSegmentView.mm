@@ -490,6 +490,7 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
  * keeps its selection and its offsets.
  */
 @implementation DSCodeSegmentView {
+  NSArray<NSString *> *_icons;
   DSCodeSegment *_segmentStorage;
   UIView *_header;
   UILabel *_language;
@@ -613,6 +614,36 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
 - (void)setControlLabels:(NSArray<NSString *> *)labels {
   _labels = [labels copy];
   [self updateButtons];
+}
+
+- (void)setControlIcons:(NSArray<NSString *> *)icons {
+  _icons = [icons copy];
+  [self updateButtons];
+}
+
+/// The glyph for one key, or the platform's default for an entry the app did not
+/// name.
+///
+/// The name is resolved here rather than in JavaScript because a symbol name is
+/// platform-specific: the same `download` key is an SF Symbol on iOS and a
+/// drawable on Android, and neither is the other's spelling.
+- (NSString *)icon:(NSString *)key fallback:(NSString *)fallback {
+  NSUInteger index = [self indexOfIcon:key];
+  NSString *const named = index < _icons.count ? _icons[index] : @"";
+  return named.length > 0 ? named : fallback;
+}
+
+- (NSUInteger)indexOfIcon:(NSString *)key {
+  static NSArray<NSString *> *keys;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    keys = @[
+      DSControlIconCopy, DSControlIconCheck, DSControlIconDownload, DSControlIconMaximize,
+      DSControlIconClose, DSControlIconWrap, DSControlIconExpand, DSControlIconCollapse,
+      DSControlIconTableFullscreen, DSControlIconDetailsChevron,
+    ];
+  });
+  return [keys indexOfObject:key];
 }
 
 - (DSCodeSegment *)segment {
@@ -795,8 +826,11 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
     [view removeFromSuperview];
   }
   _builtLabels = [_labels copy];
-  UIButton *expand = makeControlButton(symbolForExpand(NO), [self label:DSControlLabelExpandCode], @"expand", @"");
-  UIButton *wrap = makeControlButton(symbolForWrap(NO), [self label:DSControlLabelWrapCode], @"wrap", @"");
+  UIButton *expand = makeControlButton(
+      [self icon:DSControlIconExpand fallback:symbolForExpand(NO)], [self label:DSControlLabelExpandCode],
+      @"expand", @"");
+  UIButton *wrap = makeControlButton(
+      [self icon:DSControlIconWrap fallback:symbolForWrap(NO)], [self label:DSControlLabelWrapCode], @"wrap", @"");
   UIButton *download =
       makeControlButton(kSymbolDownload, [self label:DSControlLabelDownloadFile], @"download", @"text");
   UIButton *copy = makeControlButton(kSymbolCopy, [self label:DSControlLabelCopyCode], @"copy", @"text");
@@ -844,7 +878,9 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
 
   UIButton *expand = (UIButton *)all[0];
   expand.selected = expanded;
-  [expand setImage:controlImage(symbolForExpand(expanded)) forState:UIControlStateNormal];
+  [expand setImage:controlImage([self icon:(expanded ? DSControlIconCollapse : DSControlIconExpand)
+                                    fallback:symbolForExpand(expanded)])
+            forState:UIControlStateNormal];
   expand.accessibilityLabel = expanded ? [self label:DSControlLabelCollapseCode]
                                        : [self label:DSControlLabelExpandCode];
   // No explicit traits: UIButton derives Selected and Not Enabled itself, and a
@@ -852,13 +888,17 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
 
   UIButton *wrap = (UIButton *)all[1];
   wrap.selected = _layout.wraps;
-  [wrap setImage:controlImage(symbolForWrap(_layout.wraps)) forState:UIControlStateNormal];
+  [wrap setImage:controlImage([self icon:(_layout.wraps ? DSControlIconCollapse : DSControlIconWrap)
+                                   fallback:symbolForWrap(_layout.wraps)])
+           forState:UIControlStateNormal];
   wrap.accessibilityLabel = _layout.wraps ? [self label:DSControlLabelUnwrapCode] : [self label:DSControlLabelWrapCode];
 
   UIButton *download = (UIButton *)all[2];
   download.accessibilityLabel = [self label:DSControlLabelDownloadFile];
   UIButton *copy = (UIButton *)all[3];
-  [copy setImage:controlImage(symbolForCopy(_copied)) forState:UIControlStateNormal];
+  [copy setImage:controlImage([self icon:(_copied ? DSControlIconCheck : DSControlIconCopy)
+                                  fallback:symbolForCopy(_copied)])
+           forState:UIControlStateNormal];
   copy.accessibilityLabel = _copied ? [self label:DSControlLabelCopied] : [self label:DSControlLabelCopyCode];
   [self updateCopiedSpokenText];
 }

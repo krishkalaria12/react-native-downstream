@@ -57,7 +57,7 @@ internal class ImageSegmentView(context: Context) : FrameLayout(context) {
     maxLines = 1
     ellipsize = TextUtils.TruncateAt.END
   }
-  private val download = newControlButton(context, R.drawable.ds_ic_download).apply {
+  private val download = newControlButton(context, controlDrawable("download", R.drawable.ds_ic_download)).apply {
     visibility = GONE
     styleDownload(this, context.resources.configuration)
     setOnClickListener {

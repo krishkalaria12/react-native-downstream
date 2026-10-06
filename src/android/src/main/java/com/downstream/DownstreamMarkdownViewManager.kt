@@ -277,6 +277,21 @@ class DownstreamMarkdownViewManager :
     view.setCsvSeparator(value ?: ",")
   }
 
+  /**
+   * The `icons` prop's resolved names, which the button builders read for their
+   * glyph.
+   *
+   * A name the app set to an empty string is a removed glyph, and a text-only
+   * button is what that is for. Anything this library does not recognise falls
+   * back to the platform's own, so a name an app invented cannot leave a button
+   * with no icon at all.
+   */
+  override fun setControlIcons(view: DownstreamMarkdownView, value: ReadableArray?) {
+    setControlIcons(value?.let { array ->
+      List(array.size()) { index -> array.getString(index).orEmpty() }
+    } ?: emptyList())
+  }
+
   override fun setControlLabels(view: DownstreamMarkdownView, value: ReadableArray?) {
     view.setControlLabels(value?.let { array ->
       List(array.size()) { index -> array.getString(index).orEmpty() }

@@ -387,6 +387,7 @@ static const CGFloat kTablePinThreshold = 8;
 @end
 
 @implementation DSTableSegmentView {
+  NSArray<NSString *> *_icons;
   DSTableSegment *_segment;
   UIView *_toolbar;
   UIStackView *_buttons;
@@ -473,6 +474,28 @@ static const CGFloat kTablePinThreshold = 8;
 - (void)setControlLabels:(NSArray<NSString *> *)labels {
   _labels = [labels copy];
   [self updateButtons];
+}
+
+- (void)setControlIcons:(NSArray<NSString *> *)icons {
+  _icons = [icons copy];
+  [self updateButtons];
+}
+
+/// The glyph for one key, or the platform's default for an entry the app did not
+/// name.
+- (NSString *)icon:(NSString *)key fallback:(NSString *)fallback {
+  static NSArray<NSString *> *keys;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    keys = @[
+      DSControlIconCopy, DSControlIconCheck, DSControlIconDownload, DSControlIconMaximize,
+      DSControlIconClose, DSControlIconWrap, DSControlIconExpand, DSControlIconCollapse,
+      DSControlIconTableFullscreen, DSControlIconDetailsChevron,
+    ];
+  });
+  const NSUInteger index = [keys indexOfObject:key];
+  NSString *const named = index < _icons.count ? _icons[index] : @"";
+  return named.length > 0 ? named : fallback;
 }
 
 - (void)setShowsToolbar:(BOOL)showsToolbar {
@@ -592,8 +615,11 @@ static const CGFloat kTablePinThreshold = 8;
   // Expand appears only on a table past the cap, which is the only table it can
   // do anything for, and full screen is offered always: a reader who cannot see
   // the whole table can still leave the chat with it.
-  UIButton *expand = makeControlButton(symbolForExpand(NO), [self label:DSControlLabelExpandTable], @"expand", @"");
-  UIButton *fullscreen = makeControlButton(kSymbolMaximize, [self label:DSControlLabelViewFullscreen], @"fullscreen", @"");
+  UIButton *expand = makeControlButton(
+      [self icon:DSControlIconExpand fallback:symbolForExpand(NO)], [self label:DSControlLabelExpandTable],
+      @"expand", @"");
+  UIButton *fullscreen = makeControlButton([self icon:DSControlIconTableFullscreen fallback:kSymbolMaximize],
+                                          [self label:DSControlLabelViewFullscreen], @"fullscreen", @"");
   copy.tag = 0;
   download.tag = 1;
   expand.tag = 2;
@@ -644,8 +670,9 @@ static const CGFloat kTablePinThreshold = 8;
     button.enabled = _controlsEnabled && !button.hidden;
   }
   // The glyph follows the state, because the two buttons are the same button.
-  [expand setImage:controlImage(symbolForExpand(self.tableExpanded))
-          forState:UIControlStateNormal];
+  [expand setImage:controlImage([self icon:(self.tableExpanded ? DSControlIconCollapse : DSControlIconExpand)
+                                    fallback:symbolForExpand(self.tableExpanded)])
+            forState:UIControlStateNormal];
   expand.accessibilityLabel = self.tableExpanded ? [self label:DSControlLabelCollapseTable]
                                                  : [self label:DSControlLabelExpandTable];
 }

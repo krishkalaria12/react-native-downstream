@@ -178,6 +178,46 @@ UIButton *makeControlButton(NSString *symbol, NSString *label, NSString *action,
   return button;
 }
 
+NSString *const DSControlIconCopy = @"copy";
+NSString *const DSControlIconCheck = @"check";
+NSString *const DSControlIconDownload = @"download";
+NSString *const DSControlIconMaximize = @"maximize";
+NSString *const DSControlIconClose = @"close";
+NSString *const DSControlIconWrap = @"wrap";
+NSString *const DSControlIconExpand = @"expand";
+NSString *const DSControlIconCollapse = @"collapse";
+NSString *const DSControlIconTableFullscreen = @"tableFullscreen";
+NSString *const DSControlIconDetailsChevron = @"detailsChevron";
+
+/// The SF Symbol each default name stands for.
+///
+/// A table rather than a switch in the drawing code, because a symbol name is the
+/// one thing about a button that is neither a colour nor a size, and it is read
+/// once per button rather than once per frame.
+NSString *defaultSymbolForIconName(NSString *name) {
+  static NSDictionary<NSString *, NSString *> *symbols;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    symbols = @{
+      DSControlIconCopy : kSymbolCopy,
+      DSControlIconCheck : kSymbolCheck,
+      DSControlIconDownload : kSymbolDownload,
+      DSControlIconMaximize : kSymbolMaximize,
+      DSControlIconClose : kSymbolClose,
+      DSControlIconWrap : kSymbolWrap,
+      DSControlIconExpand : kSymbolExpand,
+      DSControlIconCollapse : kSymbolCollapse,
+      DSControlIconTableFullscreen : kSymbolMaximize,
+      // Both chevrons are the same glyph here: the drawing rotates it a quarter
+      // turn when the body is open, which is the same glyph the code card's
+      // expand arrow is built from.
+      DSControlIconDetailsChevron : kSymbolChevronDown,
+    };
+  });
+  NSString *const symbol = symbols[name];
+  return symbol != nil ? symbol : name;
+}
+
 NSString *symbolForCopy(BOOL copied) {
   return copied ? kSymbolCheck : kSymbolCopy;
 }
@@ -196,6 +236,8 @@ NSString *symbolForExpand(BOOL expanded) {
   DSRenderedDocument *_rendered;
   NSMutableArray<UIView<DSSegmentView> *> *_segmentViews;
   NSArray<NSString *> *_labels;
+  /// The `icons` prop's resolved names, handed to every segment view on the way.
+  NSArray<NSString *> *_icons;
   uint32_t _chrome;
   /// A code block's ordinals, so a wrap or expand choice can be applied by
   /// ordinal rather than by segment index, which moves as blocks stream in.

@@ -1,5 +1,6 @@
 /** Public API types. The stream controller types describe the planned session API. */
 import type { ComponentType, ReactNode } from 'react';
+
 import type {
   ColorValue,
   ImageSourcePropType,
@@ -951,6 +952,26 @@ export type MarkdownControlIcon =
   | 'tableFullscreen'
   | 'detailsChevron';
 
+/**
+ * Every icon key, in the order the native views read them.
+ *
+ * Appended at the end and never reordered: the array travels positionally beside
+ * `controlLabels`, so a key added in the middle would give every later button a
+ * different glyph on a release built against the older list.
+ */
+export const CONTROL_ICON_KEYS = [
+  'copy',
+  'check',
+  'download',
+  'maximize',
+  'close',
+  'wrap',
+  'expand',
+  'collapse',
+  'tableFullscreen',
+  'detailsChevron',
+] as const;
+
 /** One value, or values merged left to right the way a style array is. */
 type Composable<T> = T | ReadonlyArray<T | null | false | undefined>;
 
@@ -1148,6 +1169,7 @@ type MarkdownViewBaseProps = Readonly<{
    * opened with inline code and then Arabic came out two different ways.
    */
   dir?: 'ltr' | 'rtl' | 'auto';
+
   /**
    * What a reader is asked before a link opens, when the app passed no
    * `onLinkPress`. On by default.
@@ -1177,6 +1199,7 @@ type MarkdownViewBaseProps = Readonly<{
    * it.
    */
   icons?: Partial<Record<MarkdownControlIcon, MarkdownIconSource>>;
+
   /**
    * Load images. On by default, as in Streamdown.
    *
