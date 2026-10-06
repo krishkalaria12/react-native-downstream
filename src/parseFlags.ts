@@ -10,7 +10,12 @@
  * that writes those bits.
  */
 import NativeDownstreamSession from './NativeDownstreamSession';
-import type { MarkdownMathOptions, MarkdownSyntaxOptions } from './types';
+import type {
+  MarkdownAutolinkProtocols,
+  MarkdownLinksOptions,
+  MarkdownMathOptions,
+  MarkdownSyntaxOptions,
+} from './types';
 
 /**
  * Bits of the native `parseFlags` prop. Parsing and drawing both read them, so
@@ -23,6 +28,18 @@ export const PARSE_FLAG_BRACKETS = 1 << 2;
 export const PARSE_FLAG_INLINE_HTML = 1 << 3;
 export const PARSE_FLAG_SUPERSCRIPT_SYNTAX = 1 << 4;
 export const PARSE_FLAG_SUBSCRIPT_SYNTAX = 1 << 5;
+/** `/…`, `./…`, `../…`, `?…` and `#…` are links. See `MarkdownLinksOptions`. */
+export const PARSE_FLAG_LINK_RELATIVE = 1 << 6;
+export const PARSE_FLAG_NO_AUTOLINK_MAILTO = 1 << 7;
+export const PARSE_FLAG_NO_AUTOLINK_HTTP = 1 << 8;
+export const PARSE_FLAG_NO_AUTOLINK_HTTPS = 1 << 9;
+/**
+ * CJK-friendly emphasis and autolink boundaries. On by default, and off by
+ * `cjk: false`. The engine runs the CJK range table only when neither
+ * neighbour is whitespace, so a document with no CJK in it parses identically
+ * either way — which is what `tests/parse-options.test.ts` asserts.
+ */
+export const PARSE_FLAG_CJK = 1 << 10;
 
 /** Every flag the engine understands. */
 export const PARSE_FLAGS_ALL =
@@ -31,7 +48,12 @@ export const PARSE_FLAGS_ALL =
   PARSE_FLAG_BRACKETS |
   PARSE_FLAG_INLINE_HTML |
   PARSE_FLAG_SUPERSCRIPT_SYNTAX |
-  PARSE_FLAG_SUBSCRIPT_SYNTAX;
+  PARSE_FLAG_SUBSCRIPT_SYNTAX |
+  PARSE_FLAG_LINK_RELATIVE |
+  PARSE_FLAG_NO_AUTOLINK_MAILTO |
+  PARSE_FLAG_NO_AUTOLINK_HTTP |
+  PARSE_FLAG_NO_AUTOLINK_HTTPS |
+  PARSE_FLAG_CJK;
 
 export type ResolvedMath = Readonly<{
   /** Bitmask for the native `parseFlags` prop. */
@@ -141,30 +163,78 @@ export function resetMathEngineWarning(): void {
   warnedAboutMissingEngine = false;
 }
 
+/** The props that decide which syntaxes a parse recognizes. */
+export type MarkdownParseInput = Readonly<{
+  math: boolean | MarkdownMathOptions | undefined;
+  inlineHtml: boolean | undefined;
+  syntax: MarkdownSyntaxOptions | undefined;
+  cjk: boolean | undefined;
+  links: MarkdownLinksOptions | undefined;
+  autolinkProtocols: MarkdownAutolinkProtocols | undefined;
+}>;
+
 /**
- * Resolves `math`, `inlineHtml` and `syntax` into the parse flag bitmask.
+ * Resolves the parse-affecting props into the flag bitmask.
  *
  * One resolver, so the JS default and the parser default cannot disagree:
- * `inlineHtml` is on unless explicitly false, and the two syntax bits are set
- * only when the caller names them. `resolveMath`'s answer is the base, so a
- * document with no inline tags parses identically under any combination.
+ * `inlineHtml` and `cjk` are on unless explicitly false, the syntax bits are set
+ * only when the caller names them, and the three autolink bits are set only when
+ * a protocol is named. `resolveMath`'s answer is the base, so a document with no
+ * math parses identically under any combination of the others.
+ *
+ * An options object rather than six positional arguments, because the last
+ * three read identically to `undefined` at every call site and a caller would
+ * have to count them.
  */
 export function resolveParseFlags(
-  math: boolean | MarkdownMathOptions | undefined,
-  inlineHtml: boolean | undefined,
-  syntax: MarkdownSyntaxOptions | undefined,
+  input: MarkdownParseInput,
   available: boolean = mathAvailable()
 ): ResolvedMath {
-  const base = resolveMath(math, available);
+  const base = resolveMath(input.math, available);
   let flags = base.flags;
-  if (inlineHtml !== false) {
+  if (input.inlineHtml !== false) {
     flags |= PARSE_FLAG_INLINE_HTML;
   }
-  if (syntax?.superscript === true) {
+  if (input.cjk !== false) {
+    flags |= PARSE_FLAG_CJK;
+  }
+  if (input.syntax?.superscript === true) {
     flags |= PARSE_FLAG_SUPERSCRIPT_SYNTAX;
   }
-  if (syntax?.subscript === true) {
+  if (input.syntax?.subscript === true) {
     flags |= PARSE_FLAG_SUBSCRIPT_SYNTAX;
   }
+  if (
+    input.links?.relative === true ||
+    typeof input.links?.defaultOrigin === 'string'
+  ) {
+    flags |= PARSE_FLAG_LINK_RELATIVE;
+  }
+  const disabled = normalizeAutolinkProtocols(input.autolinkProtocols);
+  if (disabled.has('mailto')) flags |= PARSE_FLAG_NO_AUTOLINK_MAILTO;
+  if (disabled.has('http')) flags |= PARSE_FLAG_NO_AUTOLINK_HTTP;
+  if (disabled.has('https')) flags |= PARSE_FLAG_NO_AUTOLINK_HTTPS;
   return { flags, enabled: base.enabled };
+}
+
+/**
+ * Streamdown's normalization of a `disableAutolinkProtocols` list: trimmed,
+ * lower cased, and with the trailing colon optional, so `mailto`, `MailTo:` and
+ * `mailto:` are one entry.
+ *
+ * A protocol this engine has no bit for is kept in the set rather than dropped,
+ * so a caller disabling `ftp` is not silently told it worked; it simply has no
+ * effect, because there was no autolink for it to stop in the first place.
+ */
+function normalizeAutolinkProtocols(
+  value: MarkdownAutolinkProtocols | undefined
+): ReadonlySet<string> {
+  const out = new Set<string>();
+  if (!Array.isArray(value)) return out;
+  for (const entry of value) {
+    if (typeof entry !== 'string') continue;
+    const scheme = entry.trim().toLowerCase().replace(/:$/, '');
+    if (scheme !== '') out.add(scheme);
+  }
+  return out;
 }

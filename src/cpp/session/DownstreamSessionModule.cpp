@@ -1,5 +1,6 @@
 #include "DownstreamSessionModule.h"
 
+#include "Clipboard.h"
 #include "ControlledSlots.h"
 #include "FenceSlots.h"
 #include "MarkdownParser.h"
@@ -249,6 +250,12 @@ bool DownstreamSessionModule::mathAvailable(jsi::Runtime & /*rt*/) {
   // binary does, which is a relaunch, so caching it here would be a second place
   // that could disagree with the layout pass about whether there is an engine.
   return downstream::MathEngine::available();
+}
+
+AsyncPromise<bool> DownstreamSessionModule::copyText(jsi::Runtime & /*rt*/, std::string text) {
+  // The write is synchronous on both platforms, so the answer is known before
+  // this returns and the promise is settled immediately rather than queued.
+  return AsyncPromise<bool>{[text = std::move(text)] { return downstream::copyTextToClipboard(text); }};
 }
 
 namespace {

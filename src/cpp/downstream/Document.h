@@ -60,6 +60,24 @@ enum class CellAlign : uint8_t {
   Right = 3,
 };
 
+/**
+ * Which way a block's text is laid out.
+ *
+ * Decided once in C++ rather than twice on the platforms, because "the first
+ * strong letter" is not the same rule anywhere: iOS took it from a fixed range
+ * list, Android from `Character.getDirectionality`, and neither skipped inline
+ * code — so a paragraph that opens with `` `x` `` then Arabic was laid out
+ * differently on the two. The rule below is the Unicode one both were reaching
+ * for.
+ */
+enum class BlockDirection : uint8_t {
+  /// No strong character of its own. The block inherits the one before it, which
+  /// is why this is a value rather than a resolved direction.
+  Inherit = 0,
+  LeftToRight,
+  RightToLeft,
+};
+
 namespace InlineStyle {
 constexpr uint32_t Strong = 1u << 0;
 constexpr uint32_t Emphasis = 1u << 1;
@@ -237,6 +255,16 @@ struct Block {
   BlockKind kind{BlockKind::Paragraph};
   uint8_t headingLevel{0};
   bool tableHeader{false};
+  /**
+   * How this block's text is laid out.
+   *
+   * `Inherit` for a block with no strong character of its own, and for every
+   * block whose text the writer never decided: a heading, a table cell's
+   * content, and a run of punctuation all take the direction of the block before
+   * them rather than the document's first strong character, which is what a
+   * reader comparing two lines expects.
+   */
+  BlockDirection direction{BlockDirection::Inherit};
   /// True when md4c ended this fenced block at the end of the input with no
   /// closing fence after its last line. That is what makes it the block a
   /// writer is still typing into, which is where a caret belongs and where a

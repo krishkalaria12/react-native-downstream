@@ -56,6 +56,12 @@ type NativeControlActionEvent = Readonly<{
   /** Expand only: whether the block's height cap is lifted after the press. */
   expanded: boolean;
   /**
+   * Full screen only: the table's own Markdown, as `Export.cpp` writes it, so a
+   * modal holding a second view renders the table rather than a rebuild of it.
+   * Empty for every other action.
+   */
+  markdown: string;
+  /**
    * The source generation the press belongs to, so an event from a document
    * that has since been replaced is dropped rather than delivered to the
    * handlers of the one that replaced it.
@@ -86,11 +92,11 @@ export interface NativeProps extends ViewProps {
    */
   codeBlockWrap?: CodegenTypes.WithDefault<boolean, false>;
   /**
-   * Which control buttons to build, as a bitmask of code copy, code
-   * download, table copy, table download, code wrap, code expand, and image
-   * download.
+   * Which control buttons to build, as a bitmask of code copy, code download,
+   * table copy, table download, code wrap, code expand, image download, table
+   * expand, and table fullscreen.
    */
-  controls?: CodegenTypes.WithDefault<CodegenTypes.Int32, 127>;
+  controls?: CodegenTypes.WithDefault<CodegenTypes.Int32, 511>;
   /**
    * Draw line numbers beside code. Layout only, and they are never copied,
    * selected, or spoken.
@@ -101,6 +107,31 @@ export interface NativeProps extends ViewProps {
    * its card. 0 means no cap.
    */
   codeBlockMaxHeight?: CodegenTypes.WithDefault<CodegenTypes.Double, 400>;
+  /**
+   * The tallest a table grows, in points, before it scrolls inside its own
+   * frame. 0 means no cap.
+   *
+   * The same rule as a code block's cap, and for the same reason: a table is
+   * the one block kind with no way to leave the document without a scroll of its
+   * own.
+   */
+  tableMaxHeight?: CodegenTypes.WithDefault<CodegenTypes.Double, 300>;
+  /**
+   * The origin a relative link resolves against, or empty for the default.
+   *
+   * One string rather than a resolved URL: the engine keeps the source's own
+   * `href` on the press event, so resolution happens where the press lands and
+   * a changed origin changes what a press opens without a reparse.
+   */
+  linkOrigin?: string;
+  /**
+   * Which HTML tags the source may use beyond the built-in table, as
+   * `name,attribute,name,attribute` in the order `src/allowedTags.ts` writes it.
+   *
+   * A flat list of strings because a codegen object prop would need a struct
+   * field per attribute, and this compares as a vector for free.
+   */
+  allowedTags?: ReadonlyArray<string>;
   /** Base name for a code download, without an extension. */
   codeFilename?: string;
   /** Base name for a table download, without an extension. */

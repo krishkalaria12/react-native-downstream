@@ -4,6 +4,7 @@
 #include "CodeLayout.h"
 #include "Document.h"
 #include "ImageLayout.h"
+#include "TableLayout.h"
 #include "theme/Theme.h"
 
 #include <cstdint>
@@ -44,6 +45,15 @@ struct LayoutHint {
   /// worker to measure the same heights the view draws. The choice sets are
   /// almost always empty, so the comparison below is one size check in practice.
   CodeLayout code;
+  /**
+   * The table layout: the cap and the reader's per-table expand choices.
+   *
+   * It travels beside `code` for the same reason and with the same property:
+   * every input that changes a table's height has to reach the worker, or the
+   * worker would measure a layout the view is not about to draw. A table's
+   * toolbar is already in `chrome`, so only the grid's cap is new here.
+   */
+  TableLayout tables;
   /// The caret to draw, resolved against the document. It is a height, like
   /// `chrome`, because the caret's placeholder is in the measured text: only the
   /// last segment changes, but a layout measured without it and a layout drawn
@@ -63,6 +73,17 @@ struct LayoutHint {
   /// the hint: without it the worker would prepare an unthemed layout that
   /// Fabric measures again on the JavaScript thread.
   Theme::Handle theme;
+
+  /**
+   * Which way blocks are laid out, and what one with no strong character of its
+   * own inherits.
+   *
+   * Here rather than a prop because a right-to-left document is not the
+   * left-to-right one measured the other way round: its lines break in different
+   * places and its trailing gutter is not trailing, so a worker that prepared
+   * the wrong direction prepared a height the view never draws.
+   */
+  BlockDirection direction{BlockDirection::Inherit};
 
   // Constructors rather than aggregate initialisation, so a caller that names
   // only a width and a scale says so instead of leaving the chrome, the code
@@ -86,7 +107,8 @@ struct LayoutHint {
   /// rendering rather than rebuilding them.
   bool operator==(const LayoutHint &other) const {
     return fontScale == other.fontScale && width == other.width && chrome == other.chrome &&
-           code == other.code && caret == other.caret && images == other.images && themeId() == other.themeId();
+           code == other.code && tables == other.tables && caret == other.caret && images == other.images &&
+           direction == other.direction && themeId() == other.themeId();
   }
 
   /// The theme's id, or 0 for the default one, which is its id too.

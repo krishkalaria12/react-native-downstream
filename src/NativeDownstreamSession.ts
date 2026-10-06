@@ -90,6 +90,15 @@ export interface Spec extends TurboModule {
    */
   mathAvailable(): boolean;
   /**
+   * Puts `text` on the system clipboard.
+   *
+   * React Native core has no clipboard API, and a confirmation dialog that
+   * offers "Copy link" has to keep that promise on both platforms. iOS uses
+   * `UIPasteboard`, Android the clipboard manager, and neither is reachable from
+   * JavaScript without this.
+   */
+  copyText(text: string): Promise<boolean>;
+  /**
    * The fence slots a controlled source holds, answered from this thread.
    *
    * A source the engine has already prepared answers from that preparation; a

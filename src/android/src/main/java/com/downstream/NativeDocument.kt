@@ -463,6 +463,7 @@ internal fun interface NativeControlExportCallback {
 internal object DownstreamNative {
   init {
     nativeInstallPreparer()
+    nativeInstallClipboard()
   }
 
   /**
@@ -471,6 +472,30 @@ internal object DownstreamNative {
    */
   @Volatile
   var preparationContext: WeakReference<Context>? = null
+
+  /**
+   * Puts [text] on the system clipboard, for the link-safety confirmation's
+   * "Copy link".
+   *
+   * Called from C++ (`Clipboard.h`'s writer) on whatever thread JavaScript asked
+   * from, so it attaches rather than assuming it is on a Java thread. The
+   * clipboard manager is process-wide and holds no reference to the context it
+   * was given, so the context here is the preparation one and a reader who has
+   * never rendered a Markdown view copies nothing rather than crashing.
+   */
+  @JvmStatic
+  @DoNotStrip
+  fun writeClipboard(text: String): Boolean {
+    val context = preparationContext?.get() ?: return false
+    return try {
+      val manager =
+        context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager ?: return false
+      manager.setPrimaryClip(android.content.ClipData.newPlainText(null, text))
+      true
+    } catch (error: RuntimeException) {
+      false
+    }
+  }
 
   /**
    * Builds and measures a document's rendering on a worker thread after it is
@@ -928,4 +953,7 @@ internal object DownstreamNative {
 
   @JvmStatic
   private external fun nativeInstallPreparer()
+
+  @JvmStatic
+  private external fun nativeInstallClipboard()
 }

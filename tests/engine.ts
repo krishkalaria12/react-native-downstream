@@ -212,7 +212,14 @@ export const PARSE_BRACKETS = 1 << 2;
 export const PARSE_INLINE_HTML = 1 << 3;
 export const PARSE_SUPERSCRIPT_SYNTAX = 1 << 4;
 export const PARSE_SUBSCRIPT_SYNTAX = 1 << 5;
-export const PARSE_FLAGS_DEFAULT = PARSE_ENABLED | PARSE_BRACKETS;
+/** `/…`, `./…`, `../…`, `?…` and `#…` are links. */
+export const PARSE_LINK_RELATIVE = 1 << 6;
+export const PARSE_NO_AUTOLINK_MAILTO = 1 << 7;
+export const PARSE_NO_AUTOLINK_HTTP = 1 << 8;
+export const PARSE_NO_AUTOLINK_HTTPS = 1 << 9;
+/** The markdown-cjk-friendly amendment. On unless `cjk` is false. */
+export const PARSE_CJK = 1 << 10;
+export const PARSE_FLAGS_DEFAULT = PARSE_ENABLED | PARSE_BRACKETS | PARSE_CJK;
 
 function sessionBinary(): string {
   return compile(TARGETS['downstream-session'], 'downstream-session');

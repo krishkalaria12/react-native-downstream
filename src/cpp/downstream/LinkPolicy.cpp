@@ -18,9 +18,49 @@ bool startsWithIgnoringCase(std::string_view text, std::string_view prefix) {
   return true;
 }
 
+/// Whether `url` is `scheme:` followed by something. The scheme's own grammar
+/// is not checked: a scheme this policy does not know is refused further down,
+/// and one whose body is empty is not a target of anything.
+bool hasScheme(std::string_view url, std::string_view prefix, size_t *bodyStart) {
+  if (!startsWithIgnoringCase(url, prefix)) {
+    return false;
+  }
+  *bodyStart = prefix.size();
+  return url.size() > *bodyStart;
+}
+
+/// `tel:` is followed by `+` or a digit. A scheme that accepts anything after it
+/// would let `tel:` alone — or `tel:<script>` — reach the platform's handler as
+/// a number-shaped string, and the two rules above it are the whole point of
+/// narrowing the scheme list at all.
+bool isTelTarget(std::string_view body) {
+  return body[0] == '+' || (body[0] >= '0' && body[0] <= '9');
+}
+
 } // namespace
 
-bool isActionableUrl(std::string_view url) {
+bool isRelativeLink(std::string_view url) {
+  if (url.empty()) {
+    return false;
+  }
+  if (url[0] == '#' || url[0] == '/') {
+    return true;
+  }
+  if (url[0] == '?') {
+    return true;
+  }
+  // `./` and `../`, and only with the separator: a lone `.` is a sentence and a
+  // `..` is an ellipsis.
+  if (url[0] != '.') {
+    return false;
+  }
+  if (url.size() > 1 && url[1] == '/') {
+    return true;
+  }
+  return url.size() > 2 && url[1] == '.' && url[2] == '/';
+}
+
+bool isActionableUrl(std::string_view url, bool allowRelative) {
   for (const char c : url) {
     const auto byte = static_cast<unsigned char>(c);
     if (byte < 0x20 || byte == 0x7F) {
@@ -28,15 +68,33 @@ bool isActionableUrl(std::string_view url) {
     }
   }
 
+  size_t body = 0;
   for (const std::string_view prefix : {std::string_view("https://"), std::string_view("http://")}) {
-    if (startsWithIgnoringCase(url, prefix)) {
-      return url.size() > prefix.size();
+    if (hasScheme(url, prefix, &body)) {
+      return true;
     }
   }
-  if (startsWithIgnoringCase(url, "mailto:")) {
-    return url.size() > 7;
+  if (hasScheme(url, "mailto:", &body)) {
+    return true;
   }
-  return false;
+  if (hasScheme(url, "tel:", &body)) {
+    return isTelTarget(url.substr(body));
+  }
+  // Streamdown's set, and the reason they are here rather than left out: an app
+  // that has these handlers installed expects a chat client to follow them, and
+  // every one of them takes a name rather than a page, so the same
+  // reader-controlled-string argument that keeps images HTTPS-only does not
+  // apply.
+  for (const std::string_view prefix :
+       {std::string_view("irc:"), std::string_view("ircs:"), std::string_view("xmpp:")}) {
+    if (hasScheme(url, prefix, &body)) {
+      return true;
+    }
+  }
+  // A relative reference is opt-in because it has no meaning without a base:
+  // `docs/a` and `/docs/a` are the same words, and only the second says which
+  // document it means once the app has resolved it.
+  return allowRelative && isRelativeLink(url);
 }
 
 bool isLoadableImageUrl(std::string_view url) {

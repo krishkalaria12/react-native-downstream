@@ -73,6 +73,20 @@ public:
   bool mathAvailable(jsi::Runtime &rt);
 
   /**
+   * Puts `text` on the system clipboard.
+   *
+   * React Native core has no clipboard, and the link-safety confirmation offers
+   * "Copy link", so a promise that keeps that promise. The platform installed the
+   * writer when its module loaded; a binary without one resolves `false` rather
+   * than rejecting, because a reader on a platform with no clipboard still gets
+   * the confirmation and its Open button.
+   *
+   * As with the fence slots, the promise is created here and settled here: the
+   * generated binding requires a promise-returning method to return one.
+   */
+  AsyncPromise<bool> copyText(jsi::Runtime &rt, std::string text);
+
+  /**
    * The fenced blocks a controlled source holds that name a registered
    * language, as the renderer props JavaScript passes on.
    *

@@ -1,5 +1,6 @@
 #include "DownstreamTextLayoutManager.h"
 
+#include "Clipboard.h"
 #include "DocumentRegistry.h"
 #include "ImageLoaderRegistry.h"
 #include "theme/Theme.h"
@@ -91,6 +92,14 @@ jclass nativeClass = nullptr;
 jmethodID prepareMethod = nullptr;
 jmethodID hostFramesMethod = nullptr;
 std::atomic<bool> javaReady{false};
+
+/// `DownstreamNative.writeClipboard`, resolved once on a Java thread.
+///
+/// Held as a global reference so the writer below can use it from any thread:
+/// the TurboModule that answers `copyText` runs on the JavaScript thread, which
+/// is a Java thread, but a reader who calls the exported helper from a worker
+/// would attach and then need a class loader it does not have.
+jmethodID clipboardMethod = nullptr;
 
 /// The JNIEnv for a pool thread, attaching it for the rest of its life.
 JNIEnv *attachedEnv() {
@@ -218,6 +227,50 @@ Java_com_downstream_DownstreamNative_nativeInstallPreparer(JNIEnv *env, jclass c
   prepareMethod = method;
   hostFramesMethod = frames;
   javaReady.store(true, std::memory_order_release);
+}
+
+namespace {
+
+/// Hands the text to the Android clipboard manager, through Kotlin.
+///
+/// Returns false rather than throwing when no context has been recorded yet or
+/// the manager refuses the clip: a reader whose platform has no clipboard still
+/// gets the confirmation, and its Open button.
+bool writeClipboard(std::string_view text) {
+  JNIEnv *env = attachedEnv();
+  if (env == nullptr || nativeClass == nullptr || clipboardMethod == nullptr) {
+    return false;
+  }
+  jstring value = env->NewStringUTF(text.data());
+  if (value == nullptr) {
+    env->ExceptionClear();
+    return false;
+  }
+  const jboolean written = env->CallStaticBooleanMethod(nativeClass, clipboardMethod, value);
+  if (env->ExceptionCheck()) {
+    env->ExceptionClear();
+    return false;
+  }
+  env->DeleteLocalRef(value);
+  return written == JNI_TRUE;
+}
+
+} // namespace
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_downstream_DownstreamNative_nativeInstallClipboard(JNIEnv *env, jclass clazz) {
+  std::lock_guard<std::mutex> lock(installMutex);
+  if (clipboardMethod != nullptr) {
+    return;
+  }
+  clipboardMethod = env->GetStaticMethodID(clazz, "writeClipboard", "(Ljava/lang/String;)Z");
+  // A failed lookup leaves a NoSuchMethodError pending, and any further JNI call
+  // with one pending aborts the process.
+  env->ExceptionClear();
+  // Installed even when the lookup failed: the writer is the one that reports
+  // the failure, rather than the TurboModule having to know whether Android has
+  // a clipboard at all.
+  downstream::installClipboardWriter(&writeClipboard);
 }
 
 namespace facebook::react {

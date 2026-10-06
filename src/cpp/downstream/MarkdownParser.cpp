@@ -360,7 +360,7 @@ public:
           // unfinished destination has to be left as text. A real link owns its
           // destination, so it can be recorded straight away.
           frame.autolinkUrl = std::move(url);
-        } else if (isActionableUrl(url)) {
+        } else if (isActionableUrl(url, options_.relativeLinks())) {
           frame.link = static_cast<int32_t>(document_->links.size());
           document_->links.push_back({std::move(url), {}});
         }
@@ -1313,7 +1313,8 @@ private:
           // next chunk can extend the URL, or close the construct and remove it.
           // A completed link or image consumes its own destination, so only an
           // unfinished one leaves the `](` behind, and that one stays text.
-          if (!isUnfinishedDestination(begin) && isActionableUrl(span.autolinkUrl)) {
+          if (!isUnfinishedDestination(begin) && isActionableUrl(span.autolinkUrl, options_.relativeLinks()) &&
+              autolinkAllowed(span.autolinkUrl)) {
             span.link = static_cast<int32_t>(document_->links.size());
             document_->links.push_back({std::move(span.autolinkUrl), {}});
           }
@@ -1322,6 +1323,46 @@ private:
       span.lastTextEnd = span.lastTextEnd == kUnknownOffset ? end : std::max(span.lastTextEnd, end);
     }
     cursor_ = end;
+  }
+
+  /**
+   * Whether an autolink's protocol survived the three `disableAutolinkProtocols`
+   * bits.
+   *
+   * Streamdown normalizes a configured protocol before comparing it: trimmed,
+   * lower cased, and with the colon optional. This reads the protocol the same
+   * way, because `mailto` and `MAILTO:` are the same answer to "is this
+   * disabled" and a caller who wrote one of them must not get the other.
+   *
+   * A `www.` autolink is judged by `http`, because that is the scheme md4c gave
+   * it, and a `tel:`-or-relative one never reaches here: md4c autolinks only
+   * `http`, `https` and bare addresses.
+   */
+  bool autolinkAllowed(std::string_view url) const {
+    const bool mailto = options_.autolinksMailto();
+    const bool http = options_.autolinksHttp();
+    const bool https = options_.autolinksHttps();
+    if (mailto && http && https) {
+      return true;
+    }
+    size_t schemeEnd = url.find(':');
+    if (schemeEnd == std::string_view::npos) {
+      return true;
+    }
+    std::string scheme(url.substr(0, schemeEnd));
+    for (char &c : scheme) {
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    if (scheme == "www") {
+      return http;
+    }
+    if (scheme == "http" || scheme == "https") {
+      return scheme == "http" ? http : https;
+    }
+    if (scheme == "mailto") {
+      return mailto;
+    }
+    return true;
   }
 
   /// True when a bare URL starting at `at` is the destination of a link or
@@ -1567,6 +1608,9 @@ DocumentBuilder builder(source, options);
   }
   if (options.subscriptSyntax()) {
     parser.flags |= MD_FLAG_SUBSCRIPTS;
+  }
+  if (options.cjk()) {
+    parser.flags |= MD_FLAG_CJKFRIENDLY;
   }
   parser.enter_block = [](MD_BLOCKTYPE type, void *detail, void *userdata) {
     return static_cast<DocumentBuilder *>(userdata)->enterBlock(type, detail);

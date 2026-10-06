@@ -10,10 +10,32 @@ namespace downstream {
 /// what reaches a loader rather than what a reader can write.
 inline constexpr size_t kMaxImageUrlBytes = 8 * 1024;
 
-/// The built-in link policy: only absolute http:, https:, and mailto: targets
-/// without control characters are actionable. Scheme matching ignores case.
-/// Everything else renders as plain text and never emits a link event.
-bool isActionableUrl(std::string_view url);
+/**
+ * Whether `url` is a reference to another document rather than a target this app
+ * can act on: it starts at a path root, at `.`, or at a fragment.
+ *
+ * The shape rehype-harden resolves against a `defaultOrigin`, and the four forms
+ * are the ones a Markdown writer means by them: `/docs/a`, `./a`, `../a` and
+ * `#section`. A bare `docs/a` is deliberately not one of them: without a base
+ * there is nothing to resolve it against, and treating it as relative would make
+ * every stray slash-free word in prose a tappable link.
+ *
+ * A query-only reference, `?page=2`, is one of them too, and is handled here so
+ * the three callers that need to know agree.
+ */
+bool isRelativeLink(std::string_view url);
+
+/**
+ * The built-in link policy: only absolute http:, https:, mailto: and tel:
+ * targets without control characters are actionable, plus the relative forms
+ * when `allowRelative` says the app resolved them. Scheme matching ignores
+ * case. Everything else renders as plain text and never emits a link event.
+ *
+ * `irc:`, `ircs:` and `xmpp:` are accepted as well, which is Streamdown's set:
+ * an app that ships a chat client has those handlers installed, and a reader
+ * following `irc:` meant it.
+ */
+bool isActionableUrl(std::string_view url, bool allowRelative = false);
 
 /// The built-in image policy: only an absolute https: URL is fetched.
 ///

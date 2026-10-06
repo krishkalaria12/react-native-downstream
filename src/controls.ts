@@ -25,6 +25,17 @@ export const CONTROL_TABLE_DOWNLOAD = 1 << 3;
 export const CONTROL_CODE_WRAP = 1 << 4;
 export const CONTROL_CODE_EXPAND = 1 << 5;
 export const CONTROL_IMAGE_DOWNLOAD = 1 << 6;
+/** Per-table expand, which lifts `tableMaxHeight` for one table. */
+export const CONTROL_TABLE_EXPAND = 1 << 7;
+/**
+ * Per-table full screen. `controls.table.fullscreen` is Streamdown's key.
+ *
+ * The button opens a JavaScript modal holding a second view rather than a
+ * native screen, so there is no new native drawing behind it — but it changes
+ * nothing about a table's height either, for the same reason the image
+ * download button does not: the table keeps its cap.
+ */
+export const CONTROL_TABLE_FULLSCREEN = 1 << 8;
 
 /** Every control on, which is the default and the codegen default. */
 export const CONTROL_ALL =
@@ -34,7 +45,9 @@ export const CONTROL_ALL =
   CONTROL_TABLE_DOWNLOAD |
   CONTROL_CODE_WRAP |
   CONTROL_CODE_EXPAND |
-  CONTROL_IMAGE_DOWNLOAD;
+  CONTROL_IMAGE_DOWNLOAD |
+  CONTROL_TABLE_EXPAND |
+  CONTROL_TABLE_FULLSCREEN;
 
 export type CsvSeparator = ',' | ';' | '\t' | 'auto';
 
@@ -69,6 +82,19 @@ export const CONTROL_LABEL_KEYS = [
   'downloadImage',
   'image',
   'imageBlocked',
+  // Phase 1: the link-safety confirmation.
+  'externalLinkWarning',
+  'openLink',
+  'copyLink',
+  'close',
+  // Phase 2: the table's two new buttons.
+  'viewFullscreen',
+  'exitFullscreen',
+  'expandTable',
+  'collapseTable',
+  // Phase 5: the details summary's chevron and its accessible name.
+  'expandDetails',
+  'collapseDetails',
 ] as const satisfies readonly (keyof MarkdownTranslations)[];
 
 /** One handler per button, so routing an event is a table lookup. */
@@ -83,6 +109,8 @@ export type ControlHandlers = Readonly<{
   tableCopyError?: (error: MarkdownErrorEvent) => void;
   tableDownload?: (event: MarkdownControlEvent) => void;
   tableDownloadError?: (error: MarkdownErrorEvent) => void;
+  tableExpand?: (event: MarkdownControlEvent) => void;
+  tableFullscreen?: (event: MarkdownControlEvent) => void;
   imageDownload?: (event: MarkdownControlEvent) => void;
   imageDownloadError?: (error: MarkdownErrorEvent) => void;
 }>;
@@ -154,11 +182,25 @@ export function shouldShowCodeExpand(controls: MarkdownControls): boolean {
   return section(controls, 'code')?.expand !== false;
 }
 
+/** True when the table toolbar's per-table expand button is on. */
+export function shouldShowTableExpand(controls: MarkdownControls): boolean {
+  if (typeof controls === 'boolean') return controls;
+  if (!sectionEnabled(controls, 'table')) return false;
+  return section(controls, 'table')?.expand !== false;
+}
+
+/** True when the table toolbar's full-screen button is on. */
+export function shouldShowTableFullscreen(controls: MarkdownControls): boolean {
+  if (typeof controls === 'boolean') return controls;
+  if (!sectionEnabled(controls, 'table')) return false;
+  return section(controls, 'table')?.fullscreen !== false;
+}
+
 /** A control's object form, or undefined when it is a boolean or absent. */
 function detail(
   controls: MarkdownControls,
   key: 'code' | 'table' | 'image',
-  control: 'copy' | 'download' | 'wrap' | 'expand'
+  control: 'copy' | 'download' | 'wrap' | 'expand' | 'fullscreen'
 ): Section | undefined {
   return section(controls, key)?.[control] as Section | undefined;
 }
@@ -216,6 +258,8 @@ export function resolveControls(
   }
   if (shouldShowCodeWrap(controls)) flags |= CONTROL_CODE_WRAP;
   if (shouldShowCodeExpand(controls)) flags |= CONTROL_CODE_EXPAND;
+  if (shouldShowTableExpand(controls)) flags |= CONTROL_TABLE_EXPAND;
+  if (shouldShowTableFullscreen(controls)) flags |= CONTROL_TABLE_FULLSCREEN;
 
   const codeCopy = detail(controls, 'code', 'copy');
   const codeDownload = detail(controls, 'code', 'download');
@@ -223,6 +267,8 @@ export function resolveControls(
   const codeExpand = detail(controls, 'code', 'expand');
   const tableCopy = detail(controls, 'table', 'copy');
   const tableDownload = detail(controls, 'table', 'download');
+  const tableExpand = detail(controls, 'table', 'expand');
+  const tableFullscreen = detail(controls, 'table', 'fullscreen');
   const imageDownload = detail(controls, 'image', 'download');
 
   return {
@@ -243,6 +289,8 @@ export function resolveControls(
       tableCopyError: of(tableCopy, 'onError'),
       tableDownload: of(tableDownload, 'onDownload'),
       tableDownloadError: of(tableDownload, 'onError'),
+      tableExpand: of(tableExpand, 'onToggle'),
+      tableFullscreen: of(tableFullscreen, 'onToggle'),
       imageDownload: of(imageDownload, 'onDownload'),
       imageDownloadError: of(imageDownload, 'onError'),
     },

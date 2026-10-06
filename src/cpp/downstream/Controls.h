@@ -24,6 +24,13 @@ constexpr uint32_t CodeExpand = 1u << 5;
 /// drawn over the image rather than in a row above it, so turning it on changes
 /// no block's height and therefore nothing about a document's layout.
 constexpr uint32_t ImageDownload = 1u << 6;
+/// A table's expand button, which lifts `tableMaxHeight` for one table. It
+/// changes a table's height only when that table is taller than the cap, so it
+/// joins no chrome bit either — `resolveTable` gives that number per table.
+constexpr uint32_t TableExpand = 1u << 7;
+/// A table's full-screen button. It opens a modal holding a second view, so like
+/// the image's download button it draws nothing and changes no height.
+constexpr uint32_t TableFullscreen = 1u << 8;
 } // namespace ControlBits
 
 /// True when any code control is on, so a code block gets a header.
@@ -34,7 +41,8 @@ constexpr bool hasCodeControls(uint32_t controls) {
 
 /// True when any table control is on, so a table gets a toolbar.
 constexpr bool hasTableControls(uint32_t controls) {
-  return (controls & (ControlBits::TableCopy | ControlBits::TableDownload)) != 0;
+  return (controls & (ControlBits::TableCopy | ControlBits::TableDownload | ControlBits::TableExpand |
+                      ControlBits::TableFullscreen)) != 0;
 }
 
 /**

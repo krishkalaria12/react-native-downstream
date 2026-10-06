@@ -127,9 +127,14 @@ class StreamState implements MarkdownStreamController {
     this.mode = mode;
     this.onError = options.onError;
     this.parseFlags = resolveParseFlags(
-      options.math,
-      options.inlineHtml,
-      options.syntax,
+      {
+        math: options.math,
+        inlineHtml: options.inlineHtml,
+        syntax: options.syntax,
+        cjk: options.cjk,
+        links: options.links,
+        autolinkProtocols: options.disableAutolinkProtocols,
+      },
       mathAvailable()
     ).flags;
     NativeDownstreamSession.create(this.sessionId, mode, this.parseFlags);

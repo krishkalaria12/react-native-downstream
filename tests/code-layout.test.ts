@@ -83,28 +83,46 @@ describe('the expand control', () => {
 });
 
 describe('the label keys', () => {
-  it('appends the expand pair without moving the existing ones', () => {
+  it('appends every new label without moving the existing ones', () => {
     // The platforms read this array positionally, so a new key goes at the end
-    // rather than shifting every later label by one.
-    expect(CONTROL_LABEL_KEYS.length).toBe(21);
+    // rather than shifting every later label by one. Phase 1 added four keys,
+    // phase 2 four more, and phase 5 two.
+    expect(CONTROL_LABEL_KEYS.length).toBe(31);
     expect(CONTROL_LABEL_KEYS[5]).toBe('expandCode');
     expect(CONTROL_LABEL_KEYS[6]).toBe('collapseCode');
-    // Every key before the new pair must still hold what it did.
+    // Every key before the new pairs must still hold what it did.
     expect(CONTROL_LABEL_KEYS[3]).toBe('wrapCode');
     expect(CONTROL_LABEL_KEYS[4]).toBe('unwrapCode');
     expect(CONTROL_LABEL_KEYS[7]).toBe('copyTable');
-    // The image keys were appended the same way, after every existing one.
+    // The image keys came first, then link safety, then the table's two buttons,
+    // then the details chevron.
     expect(CONTROL_LABEL_KEYS[16]).toBe('tableFormatTsv');
     expect(CONTROL_LABEL_KEYS[17]).toBe('imageNotAvailable');
     expect(CONTROL_LABEL_KEYS[20]).toBe('imageBlocked');
+    expect(CONTROL_LABEL_KEYS[21]).toBe('externalLinkWarning');
+    expect(CONTROL_LABEL_KEYS[24]).toBe('close');
+    expect(CONTROL_LABEL_KEYS[25]).toBe('viewFullscreen');
+    expect(CONTROL_LABEL_KEYS[28]).toBe('collapseTable');
+    expect(CONTROL_LABEL_KEYS[29]).toBe('expandDetails');
+    expect(CONTROL_LABEL_KEYS[30]).toBe('collapseDetails');
   });
 
-  it('has a default for each new key', () => {
+  it('has a default for each key the platforms read', () => {
     expect(defaultTranslations.expandCode).toBe('Show all lines');
     expect(defaultTranslations.collapseCode).toBe('Show fewer lines');
     expect(defaultTranslations.imageNotAvailable).toBe('Image not available');
     expect(defaultTranslations.downloadImage).toBe('Download image');
     expect(defaultTranslations.image).toBe('Image');
     expect(defaultTranslations.imageBlocked).toBe('Image blocked');
+    expect(defaultTranslations.externalLinkWarning).toBe('Open this link?');
+    expect(defaultTranslations.openLink).toBe('Open');
+    expect(defaultTranslations.copyLink).toBe('Copy link');
+    expect(defaultTranslations.close).toBe('Close');
+    expect(defaultTranslations.viewFullscreen).toBe('View fullscreen');
+    expect(defaultTranslations.exitFullscreen).toBe('Exit fullscreen');
+    expect(defaultTranslations.expandTable).toBe('Show all rows');
+    expect(defaultTranslations.collapseTable).toBe('Show fewer rows');
+    expect(defaultTranslations.expandDetails).toBe('Show details');
+    expect(defaultTranslations.collapseDetails).toBe('Hide details');
   });
 });

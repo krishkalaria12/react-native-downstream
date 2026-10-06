@@ -10,6 +10,10 @@ import { vi } from 'vitest';
 
 /** The TurboModule surface the stream controller calls. */
 export interface TurboModuleStub {
+  /** `src/parseFlags.ts` settles the `math` default from this. */
+  mathAvailable(): boolean;
+  /** `src/linkSafety.ts`'s confirmation offers "Copy link" through this. */
+  copyText(text: string): Promise<boolean>;
   create(sessionId: string, mode: string): void;
   append(
     sessionId: string,
@@ -34,6 +38,7 @@ export const TurboModuleRegistry: {
   get: vi.fn(() => null),
   getEnforcing: vi.fn(() => ({
     mathAvailable: () => false,
+    copyText: vi.fn(async () => true),
     create: vi.fn(),
     append: vi.fn(),
     reset: vi.fn(),
@@ -71,8 +76,43 @@ export const StyleSheet = {
 };
 
 export const Linking = {
-  openURL: vi.fn(),
+  openURL: vi.fn(async () => true),
+  canOpenURL: vi.fn(async () => true),
   getInitialURL: vi.fn(async () => null),
+};
+
+/**
+ * A native alert, recorded rather than shown.
+ *
+ * `src/linkSafety.ts` uses one for the link confirmation, so a test needs to
+ * answer it. The recorded call is what a test asserts on, and `answer` lets it
+ * press one of the buttons the way a reader would.
+ */
+export interface AlertButton {
+  text?: string;
+  style?: string;
+  onPress?: () => void;
+}
+
+export const Alert = {
+  alert: vi.fn(
+    (
+      title: string,
+      message?: string,
+      buttons?: AlertButton[],
+      options?: { cancelable?: boolean; onDismiss?: () => void }
+    ) => {
+      void title;
+      void message;
+      void options;
+      // `alert.answer` is a test hook: the index of the button to press, or -1
+      // to dismiss. Absent, the alert is recorded and nothing is pressed.
+      const answer = (Alert as unknown as { answer?: number }).answer;
+      if (answer !== undefined && buttons?.[answer]?.onPress) {
+        buttons[answer].onPress?.();
+      }
+    }
+  ),
 };
 export const Settings = { get: vi.fn(), set: vi.fn() };
 export const I18nManager = { isRTL: false };

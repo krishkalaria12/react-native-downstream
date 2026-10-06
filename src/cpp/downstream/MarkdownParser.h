@@ -38,11 +38,35 @@ constexpr uint32_t InlineHtml = 1u << 3;
 constexpr uint32_t SuperscriptSyntax = 1u << 4;
 /// md4c's `~x~` subscripts. Off by default.
 constexpr uint32_t SubscriptSyntax = 1u << 5;
+/// `/…`, `./…`, `../…` and `#…` are links rather than plain text. Off by
+/// default, because a relative reference names no target until the app has
+/// resolved it against an origin it was given, and Streamdown shows it as text
+/// until it has one too.
+constexpr uint32_t LinkRelative = 1u << 6;
+/// A bare address is not a `mailto:` link. Off by default: a reader who wrote
+/// one meant to write it, and Streamdown has no way to turn it off either.
+constexpr uint32_t NoAutolinkMailto = 1u << 7;
+/// A bare `http://` address, and the `http://` a `www.` autolink is rewritten
+/// to, is not a link.
+constexpr uint32_t NoAutolinkHttp = 1u << 8;
+/// A bare `https://` address is not a link.
+constexpr uint32_t NoAutolinkHttps = 1u << 9;
+/// CJK-friendly emphasis and autolink boundaries, as the
+/// [markdown-cjk-friendly](https://github.com/tats-u/markdown-cjk-friendly)
+/// amendment defines them. On by default: a document without CJK in it parses
+/// identically either way, which is what the differential test proves.
+constexpr uint32_t Cjk = 1u << 10;
 
 /// What `undefined` resolves to, and therefore what the codegen default is.
-constexpr uint32_t Default = Enabled | Brackets;
+///
+/// `Cjk` is in the default because it costs nothing for the text it does not
+/// change, and the differential test is what keeps that promise checkable. The
+/// link bits are not: they change what a reader can tap, which is an app's
+/// decision.
+constexpr uint32_t Default = Enabled | Brackets | Cjk;
 
-constexpr uint32_t All = Enabled | SingleDollar | Brackets | InlineHtml | SuperscriptSyntax | SubscriptSyntax;
+constexpr uint32_t All = Enabled | SingleDollar | Brackets | InlineHtml | SuperscriptSyntax |
+    SubscriptSyntax | LinkRelative | NoAutolinkMailto | NoAutolinkHttp | NoAutolinkHttps | Cjk;
 
 } // namespace ParseFlags
 
@@ -56,6 +80,21 @@ struct ParseOptions {
   bool inlineHtml() const { return (flags & ParseFlags::InlineHtml) != 0; }
   bool superscriptSyntax() const { return (flags & ParseFlags::SuperscriptSyntax) != 0; }
   bool subscriptSyntax() const { return (flags & ParseFlags::SubscriptSyntax) != 0; }
+  bool relativeLinks() const { return (flags & ParseFlags::LinkRelative) != 0; }
+  bool cjk() const { return (flags & ParseFlags::Cjk) != 0; }
+
+  /**
+   * Whether a bare address of this protocol may become a link.
+   *
+   * The one place the three autolink bits are read, so the builder, a link's
+   * own record and a test cannot disagree about which protocol is allowed. An
+   * explicit `[text](mailto:…)` never comes through here: it is not an autolink,
+   * and a writer who typed the brackets meant the link.
+   */
+  bool autolinksMailto() const { return (flags & ParseFlags::NoAutolinkMailto) == 0; }
+  bool autolinksHttp() const { return (flags & ParseFlags::NoAutolinkHttp) == 0; }
+  bool autolinksHttps() const { return (flags & ParseFlags::NoAutolinkHttps) == 0; }
+
   /// True when a document under these options parses exactly as it did before
   /// math existed. The flag is the only thing that has to be off, because every
   /// other bit is read through it.

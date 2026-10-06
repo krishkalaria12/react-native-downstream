@@ -75,6 +75,7 @@ export const ENGINE = [
     'ImageLoaderRegistry.cpp',
     'ImageSizeCache.cpp',
     'MathScan.cpp',
+    'TableLayout.cpp',
   ].map((name) => join(CPP, 'downstream', name)),
   ...[
     'MathLayout.cpp',

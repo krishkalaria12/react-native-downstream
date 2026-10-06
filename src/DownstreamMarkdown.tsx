@@ -36,6 +36,7 @@ import {
   resolveParseFlags,
   warnAboutMissingMathEngine,
 } from './parseFlags';
+import { openLinkSafely, resolveLinkUrl, resolvesLinks } from './linkSafety';
 import { resolveTheme, type ResolvedTheme } from './theme';
 import type {
   MarkdownControlAction,
@@ -45,11 +46,12 @@ import type {
   MarkdownErrorEvent,
   MarkdownImageEvent,
   MarkdownLinkPressEvent,
+  MarkdownLinkSafetyOptions,
   MarkdownMathErrorEvent,
   MarkdownTranslations,
   MarkdownViewProps,
 } from './types';
-import { resolveMaxHeight } from './types';
+import { defaultTableMaxHeight, resolveMaxHeight } from './types';
 
 export type DownstreamMarkdownProps = MarkdownViewProps;
 
@@ -85,6 +87,11 @@ type NativeControlAction = Readonly<{
   url: string;
   wrapped: boolean;
   expanded: boolean;
+  /**
+   * The block's own Markdown, for a full-screen table. Empty otherwise: the
+   * other actions carry nothing a second view would need.
+   */
+  markdown: string;
   generation: number;
 }>;
 
@@ -102,12 +109,14 @@ const CONTROL_BLOCKS: ReadonlySet<string> = new Set<MarkdownControlKind>([
   'code',
   'table',
   'image',
+  'details',
 ]);
 const CONTROL_ACTIONS: ReadonlySet<string> = new Set<MarkdownControlAction>([
   'copy',
   'download',
   'wrap',
   'expand',
+  'fullscreen',
 ]);
 const CONTROL_FORMATS = new Set(['text', 'markdown', 'csv', 'tsv']);
 
@@ -145,11 +154,19 @@ function toControlEvent(action: NativeControlAction) {
     expanded?: boolean;
     filename?: string;
     url?: string;
+    markdown?: string;
   } = { block, action: which, language: action.language };
   if (which === 'wrap') {
     event.wrapped = action.wrapped;
   } else if (which === 'expand') {
     event.expanded = action.expanded;
+  } else if (which === 'fullscreen') {
+    // The table's own Markdown, so a modal holding a second view is the same
+    // table rather than one rebuilt from the model. Native writes it through
+    // `Export.cpp`, so the modal sees exactly what a copy would produce.
+    if (action.markdown !== '') {
+      event.markdown = action.markdown;
+    }
   } else {
     if (CONTROL_FORMATS.has(action.format)) {
       event.format = action.format as 'text' | 'markdown' | 'csv' | 'tsv';
@@ -397,7 +414,11 @@ function useControls(
       if (event.action === 'wrap') {
         handlers.codeWrap?.(event);
       } else if (event.action === 'expand') {
-        handlers.codeExpand?.(event);
+        (event.block === 'table'
+          ? handlers.tableExpand
+          : handlers.codeExpand)?.(event);
+      } else if (event.action === 'fullscreen') {
+        handlers.tableFullscreen?.(event);
       } else if (event.block === 'image') {
         handlers.imageDownload?.(event);
       } else if (event.action === 'copy') {
@@ -451,8 +472,8 @@ function useControls(
 }
 
 /**
- * Resolves the math and image props, and the callbacks that route their native
- * events back to the caller.
+ * Resolves the props that reach the parser and the image loader, and the
+ * callbacks that route their native events back to the caller.
  *
  * The math default is settled once per process rather than per render, because
  * it is a question about the binary and not about the document: a view that
@@ -461,7 +482,9 @@ function useControls(
  *
  * `allowedImagePrefixes` is normalized and kept by value for the same reason
  * `controls` is: it is almost always an inline literal, and a new array on every
- * render would send a props update for a policy that has not changed.
+ * render would send a props update for a policy that has not changed. The link
+ * options are the same case, which is why the origin is a trimmed string rather
+ * than the object the caller passed.
  */
 function useMathAndImages(
   props: {
@@ -472,6 +495,9 @@ function useMathAndImages(
     onImagePress?: (event: MarkdownImageEvent) => void;
     inlineHtml?: boolean;
     syntax?: MarkdownViewProps['syntax'];
+    cjk?: boolean;
+    links?: MarkdownViewProps['links'];
+    disableAutolinkProtocols?: MarkdownViewProps['disableAutolinkProtocols'];
   },
   currentGeneration: () => number
 ) {
@@ -483,6 +509,9 @@ function useMathAndImages(
     onImagePress,
     inlineHtml,
     syntax,
+    cjk,
+    links,
+    disableAutolinkProtocols,
   } = props;
 
   // One read of the platform's answer for the lifetime of the process. A test
@@ -491,8 +520,19 @@ function useMathAndImages(
   if (engine.current === undefined) engine.current = mathAvailable();
 
   const resolved = useMemo(
-    () => resolveParseFlags(math, inlineHtml, syntax, engine.current),
-    [math, inlineHtml, syntax]
+    () =>
+      resolveParseFlags(
+        {
+          math,
+          inlineHtml,
+          syntax,
+          cjk,
+          links,
+          autolinkProtocols: disableAutolinkProtocols,
+        },
+        engine.current
+      ),
+    [math, inlineHtml, syntax, cjk, links, disableAutolinkProtocols]
   );
   const resolvedStable = useRef(resolved);
   if (resolvedStable.current.flags !== resolved.flags) {
@@ -638,6 +678,82 @@ function useFenceRenderers(
 }
 
 /**
+ * What a link press does.
+ *
+ * With an `onLinkPress` the app decides and this is a straight report: the
+ * source's own `href` and, for a relative destination, the `url` it resolves to
+ * beside it. Without one, the press does nothing at all today, which no reader
+ * expects from something drawn as a link, so the view opens it — behind link
+ * safety, which is on by default and asks first.
+ *
+ * The safety config is read through a ref rather than captured, so a caller
+ * writing `linkSafety={{ onLinkCheck }}` inline does not re-register the native
+ * handler on every render. The handler itself is created once.
+ */
+function useLinkPress(
+  onLinkPress: ((event: MarkdownLinkPressEvent) => void) | undefined,
+  safety: {
+    enabled: boolean;
+    origin: string;
+    onLinkCheck?: (url: string) => boolean | Promise<boolean>;
+    renderModal?: MarkdownLinkSafetyOptions['renderModal'];
+  },
+  translations: Partial<MarkdownTranslations> | undefined
+) {
+  const latest = useRef({ onLinkPress, safety, translations });
+  latest.current = { onLinkPress, safety, translations };
+
+  return useCallback((event: NativeSyntheticEvent<NativeLinkPress>) => {
+    const { url: href, start, end } = event.nativeEvent;
+    const current = latest.current;
+    if (current.onLinkPress) {
+      const payload: MarkdownLinkPressEvent = {
+        url: resolveLinkUrl(href, current.safety.origin),
+        href,
+        range: { start, end },
+      };
+      current.onLinkPress(payload);
+      return;
+    }
+    void openLinkSafely(href, {
+      enabled: current.safety.enabled,
+      origin: current.safety.origin,
+      onLinkCheck: current.safety.onLinkCheck,
+      renderModal: current.safety.renderModal,
+      translations: current.translations,
+    });
+  }, []);
+}
+
+/**
+ * Resolves `linkSafety` into what a press needs.
+ *
+ * `true`, `undefined` and `{ enabled: true }` are the same configuration, and
+ * `false` is the only way to turn the confirmation off — which is why a falsy
+ * value is read as "no interception" rather than as "no options".
+ */
+function useLinkSafety(
+  linkSafety: MarkdownViewProps['linkSafety'],
+  links: MarkdownViewProps['links']
+) {
+  const options: MarkdownLinkSafetyOptions | undefined =
+    typeof linkSafety === 'object' && linkSafety !== null
+      ? linkSafety
+      : undefined;
+  const origin = useMemo(
+    () => (resolvesLinks(links) ? (links?.defaultOrigin?.trim() ?? '') : ''),
+    [links]
+  );
+  const enabled = linkSafety !== false && options?.enabled !== false;
+  const onLinkCheck = options?.onLinkCheck;
+  const renderModal = options?.renderModal;
+  return useMemo(
+    () => ({ enabled, origin, onLinkCheck, renderModal }),
+    [enabled, origin, onLinkCheck, renderModal]
+  );
+}
+
+/**
  * Renders Markdown with native text layout. Parsing and measurement happen in
  * native code; no parse tree crosses into JavaScript.
  */
@@ -670,6 +786,8 @@ function ControlledMarkdown({
   onAnimationStart,
   onAnimationEnd,
   onLinkPress,
+  linkSafety,
+  tableMaxHeight,
   onError,
   ...mathAndImages
 }: Extract<MarkdownViewProps, { markdown: string }>) {
@@ -717,13 +835,10 @@ function ControlledMarkdown({
     isAnimating ? 'on' : 'off'
   );
 
-  const handleLinkPress = useCallback(
-    (event: NativeSyntheticEvent<NativeLinkPress>) => {
-      const { url, start, end } = event.nativeEvent;
-      const payload: MarkdownLinkPressEvent = { url, range: { start, end } };
-      onLinkPress?.(payload);
-    },
-    [onLinkPress]
+  const handleLinkPress = useLinkPress(
+    onLinkPress,
+    useLinkSafety(linkSafety, mathAndImages.links),
+    translations
   );
 
   const handleError = useCallback(
@@ -762,6 +877,7 @@ function ControlledMarkdown({
       codeBlockWrap={codeBlockWrap}
       lineNumbers={lineNumbers}
       codeBlockMaxHeight={resolveMaxHeight(codeBlockMaxHeight)}
+      tableMaxHeight={resolveMaxHeight(tableMaxHeight, defaultTableMaxHeight)}
       controls={resolved.flags}
       codeFilename={resolved.codeFilename}
       tableFilename={resolved.tableFilename}
@@ -779,7 +895,7 @@ function ControlledMarkdown({
       animationTiming={animation.animationTiming}
       animating={animation.animating}
       caret={animation.caret}
-      onLinkPress={onLinkPress ? handleLinkPress : undefined}
+      onLinkPress={handleLinkPress}
       onImagePress={images.onImagePress}
       onMathError={images.onMathError}
       onMarkdownError={handleError}
@@ -809,6 +925,8 @@ function StreamMarkdown({
   onAnimationStart,
   onAnimationEnd,
   onLinkPress,
+  linkSafety,
+  tableMaxHeight,
   onError,
   ...mathAndImages
 }: Extract<
@@ -865,12 +983,10 @@ function StreamMarkdown({
     isAnimating === undefined ? 'auto' : isAnimating ? 'on' : 'off'
   );
 
-  const handleLinkPress = useCallback(
-    (event: NativeSyntheticEvent<NativeLinkPress>) => {
-      const { url, start, end } = event.nativeEvent;
-      onLinkPress?.({ url, range: { start, end } });
-    },
-    [onLinkPress]
+  const handleLinkPress = useLinkPress(
+    onLinkPress,
+    useLinkSafety(linkSafety, mathAndImages.links),
+    translations
   );
 
   const handleError = useCallback(
@@ -916,6 +1032,7 @@ function StreamMarkdown({
       codeBlockWrap={codeBlockWrap}
       lineNumbers={lineNumbers}
       codeBlockMaxHeight={resolveMaxHeight(codeBlockMaxHeight)}
+      tableMaxHeight={resolveMaxHeight(tableMaxHeight, defaultTableMaxHeight)}
       controls={resolved.flags}
       codeFilename={resolved.codeFilename}
       tableFilename={resolved.tableFilename}
@@ -933,7 +1050,7 @@ function StreamMarkdown({
       animationTiming={animation.animationTiming}
       animating={animation.animating}
       caret={animation.caret}
-      onLinkPress={onLinkPress ? handleLinkPress : undefined}
+      onLinkPress={handleLinkPress}
       onImagePress={images.onImagePress}
       onMathError={images.onMathError}
       onMarkdownError={handleError}
