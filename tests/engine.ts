@@ -437,15 +437,52 @@ export function replayReveal(
 }
 
 /** Parses a complete document with the engine that ships in the app. */
-export function parse(source: string | Buffer, parseFlags = 0): RenderModel {
+export function parse(
+  source: string | Buffer,
+  parseFlags = 0,
+  allowedTags?: Record<string, readonly string[]>
+): RenderModel {
   const input =
     typeof source === 'string' ? Buffer.from(source, 'utf8') : source;
+  // The tag policy travels as the flat list `src/allowedTags.ts` writes, sent to
+  // the engine through its own reader rather than built here, so a test exercises
+  // the wire format the library actually sends.
+  const policy =
+    allowedTags === undefined ? '' : encodeAllowedTags(allowedTags);
   return JSON.parse(
-    execFileSync(engineBinary(), parseFlags ? [String(parseFlags)] : [], {
-      input,
-      maxBuffer: 256 << 20,
-    }).toString('utf8')
+    execFileSync(
+      engineBinary(),
+      parseFlags || policy ? [String(parseFlags), policy] : [],
+      {
+        input,
+        maxBuffer: 256 << 20,
+      }
+    ).toString('utf8')
   );
+}
+
+/**
+ * The `allowedTags` wire form, exactly as `src/allowedTags.ts` writes it:
+ * `-1,name,attribute,…,-1,name,…`, sorted by name so the engine's binary search
+ * finds every row.
+ *
+ * Exported so a test can assert on the form itself, not only on what the engine
+ * does with it — a policy that silently stopped being sorted would still work for
+ * one tag and would be invisible to a test that only counted blocks.
+ */
+export function encodeAllowedTags(
+  tags: Record<string, readonly string[]>
+): string {
+  const names = Object.keys(tags).sort();
+  const flat: string[] = [];
+  for (const name of names) {
+    flat.push(
+      '-1',
+      name.toLowerCase(),
+      ...(tags[name] ?? []).map((a) => a.toLowerCase())
+    );
+  }
+  return flat.join(',');
 }
 
 /** One fenced block the engine would hand a renderer, as the module returns it. */

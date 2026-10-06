@@ -756,19 +756,50 @@ private:
       Summary,
       /// Not a container tag. The line's text, delimiters included.
       Other,
+      /// A tag the app allowed, used as a block container. `allowedTag` is its
+      /// index in `ParseOptions::tags`, and the container it opens carries the
+      /// document's own record of it.
+      Allowed,
     };
 
     Kind kind{Kind::Other};
     bool open{false};
+    int32_t allowedTag{-1};
+    /// The tag's own name, lowercased. A closer carries it so it can be matched
+    /// against the frame it is meant to end rather than against whatever frame
+    /// happens to be innermost.
+    std::u16string name;
     std::u16string summary;
     std::u16string text;
   };
+
+  /// The index in `ParseOptions::tags` of `name`, or -1.
+  ///
+  /// A binary search because the policy is sorted by name, which is what makes it
+  /// the same shape as the lookup `Scan.cpp` does for an inline tag — the block and
+  /// inline paths read one list rather than two.
+  int32_t policyIndexOf(std::u16string_view name) const {
+    const auto found = std::lower_bound(
+        options_.tags.tags.begin(), options_.tags.tags.end(), name, [](const AllowedTag &tag, std::u16string_view key) {
+          return std::lexicographical_compare(
+              tag.name.begin(), tag.name.end(), key.begin(), key.end(), [](char a, char16_t b) {
+                return static_cast<unsigned char>(a) < b;
+              });
+        });
+    if (found == options_.tags.tags.end()) {
+      return -1;
+    }
+    // Compared through UTF-16 rather than by pointer: the policy's names are
+    // `std::string` and the tag's is a slice of the source, so there is no
+    // substring for a pointer comparison to find.
+    return utf16ToUtf8(name) == found->name ? static_cast<int32_t>(found - options_.tags.tags.begin()) : -1;
+  }
 
   /// Classifies one line of an HTML block.
   ///
   /// A tag counts only when the line is *nothing but* that tag, so a line of
   /// prose that merely mentions `<details>` stays the prose the writer wrote.
-  static ContainerTagLine classifyContainerLine(std::u16string_view line) {
+  ContainerTagLine classifyContainerLine(std::u16string_view line) {
     ContainerTagLine result;
     const std::u16string trimmed = trimAscii(line);
     if (trimmed.size() < 3 || trimmed.front() != u'<' || trimmed.back() != u'>') {
@@ -801,7 +832,18 @@ private:
           std::u16string_view(trimmed.data() + nameEnd, trimmed.size() - nameEnd), u"open");
       return result;
     }
-    if (closing && bare == u"details") {
+    // The app's own tags, used as *block* containers. A `<details>` is the same
+    // kind of frame: the pair brackets the blocks between them, and the container
+    // names the tag so a React child can be mounted in its place.
+    if (!closing) {
+      const int32_t allowed = policyIndexOf(bare);
+      if (allowed >= 0) {
+        result.kind = ContainerTagLine::Kind::Allowed;
+        result.allowedTag = allowed;
+        return result;
+      }
+    }
+    if (closing && (bare == u"details" || policyIndexOf(bare) >= 0)) {
       result.kind = ContainerTagLine::Kind::Close;
       return result;
     }
@@ -920,9 +962,34 @@ private:
       // was built with and `promoteLeaf` promotes it as an ordinary HTML block.
       return;
     }
-    // The leftovers are written back *before* anything is emitted, because
-    // emitting a summary finishes this leaf — and this leaf is the HTML block
-    // whose text has to be the leftovers by then.
+    // The lines are acted on in two passes, and the order is the whole trick.
+    //
+    // Emitting a summary finishes this very leaf, and this leaf is the HTML block
+    // whose text has to be the leftovers by then — so every frame is pushed and
+    // popped first, the text is written back, and only then is anything emitted.
+    // A closer pops the innermost frame this parser opened, whichever tag named
+    // it: HTML has no rule for a mismatched closer and CommonMark's own containers
+    // behave the same way, so `</user>` inside a `<details>` ends the details.
+    for (const ContainerTagLine &line : lines) {
+      switch (line.kind) {
+        case ContainerTagLine::Kind::Open:
+          pushContainer(ContainerKind::Details, u"", TaskState::None);
+          containers_.back().container.open = line.open;
+          break;
+        case ContainerTagLine::Kind::Allowed:
+          pushCustom(line.allowedTag);
+          break;
+        case ContainerTagLine::Kind::Close:
+          // A closer with nothing open is dropped, and so is the whole line: the
+          // frame it belongs to is not here, and a reader cannot act on a tag.
+          (void)popFrame();
+          break;
+        case ContainerTagLine::Kind::Summary:
+        case ContainerTagLine::Kind::Other:
+          break;
+      }
+    }
+
     std::u16string leftover;
     for (const ContainerTagLine &line : lines) {
       if (line.kind != ContainerTagLine::Kind::Other || line.text.empty()) {
@@ -936,29 +1003,47 @@ private:
     current_->text = leftover;
 
     for (const ContainerTagLine &line : lines) {
-      switch (line.kind) {
-        case ContainerTagLine::Kind::Open:
-          pushContainer(ContainerKind::Details, u"", TaskState::None);
-          containers_.back().container.open = line.open;
-          break;
-        case ContainerTagLine::Kind::Close:
-          // A closer with nothing open is dropped, and so is the whole line: the
-          // frame it belongs to is not here, and a reader cannot act on a tag.
-          (void)popDetails();
-          break;
-        case ContainerTagLine::Kind::Summary:
-          emitSummary(line.summary);
-          break;
-        case ContainerTagLine::Kind::Other:
-          break;
+      if (line.kind == ContainerTagLine::Kind::Summary) {
+        emitSummary(line.summary);
       }
     }
   }
 
-  /// Pops the nearest `<details>` frame, if there is one. Returns whether it did.
-  bool popDetails() {
+  /// Opens the frame for a block tag the app allowed.
+  ///
+  /// The container names the tag by its index in the document's own tag list, so
+  /// a React child that replaces the block knows which tag it is standing in and
+  /// the reader's press on the tag maps back to where it was written. The record
+  /// is made here, at the opener, because that is the one point in the parse at
+  /// which the whole tag is known.
+  void pushCustom(int32_t policyIndex) {
+    const int32_t tag = recordAllowedTagAt(policyIndex, leafStart_ == kUnknownOffset ? source_.size() : leafStart_);
+    pushContainer(ContainerKind::Custom, u"", TaskState::None);
+    containers_.back().container.tag = tag;
+  }
+
+  /// A document record for one of the app's own tags, by its policy index.
+  int32_t recordAllowedTagAt(int32_t policyIndex, size_t at) {
+    if (policyIndex < 0 || static_cast<size_t>(policyIndex) >= options_.tags.tags.size()) {
+      return -1;
+    }
+    const AllowedTag &allowed = options_.tags.tags[policyIndex];
+    Tag record;
+    record.name = allowed.name;
+    record.block = true;
+    record.range.start = offsets_.toUtf16(at);
+    document_->tags.push_back(std::move(record));
+    return static_cast<int32_t>(document_->tags.size() - 1);
+  }
+
+  /// Pops the nearest frame this parser opened, if there is one.
+  ///
+  /// Either kind: a `<details>` and an app's own block tag are both containers,
+  /// and a closer for one inside the other closes the inner one. Returns whether
+  /// it did, which is what lets a stray closer be dropped rather than shown.
+  bool popFrame() {
     for (auto frame = containers_.rbegin(); frame != containers_.rend(); ++frame) {
-      if (frame->container.kind == ContainerKind::Details) {
+      if (frame->container.kind == ContainerKind::Details || frame->container.kind == ContainerKind::Custom) {
         containers_.erase(std::next(frame).base());
         return true;
       }

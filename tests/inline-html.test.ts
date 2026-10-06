@@ -448,3 +448,56 @@ describe('<details>', () => {
     ]);
   });
 });
+
+/**
+ * A tag the app allowed, used as a *block* container.
+ *
+ * The same frame a `<details>` is: the pair brackets the blocks between them, and
+ * the container names the tag so a React child can be mounted in its place. What
+ * makes it different is that the app chose the tag, so the policy has to name it
+ * — without one, the tag is an unknown element and the source stays the source.
+ */
+describe('an allowed block tag', () => {
+  const USER = { user: [] as readonly string[] };
+
+  it('brackets the blocks between the pair', () => {
+    const model = parse('<user>\n\nHello **there**.\n\n</user>\n', ON, USER);
+    expect(visibleText(model)).toBe('Hello there.');
+    // One block, inside one container that names the tag: the index is the
+    // document's own record, so a child knows what it is standing in.
+    expect(model.blocks).toHaveLength(1);
+    expect(model.blocks[0]!.containers.map((c) => [c.kind, c.tag])).toEqual([
+      [CONTAINER.custom, 0],
+    ]);
+  });
+
+  it('leaves an unallowed tag as the source it was', () => {
+    // The same document with no policy: an unknown element is unwrapped as
+    // source, which is what phase 4 decided and 5.2 does not change.
+    expect(visibleText(parse('<user>\n\nHello.\n\n</user>\n', ON))).toBe(
+      '<user>\nHello.\n</user>'
+    );
+  });
+
+  it('closes the innermost frame whatever tag named the closer', () => {
+    // HTML has no rule for a mismatched closer and CommonMark's own containers
+    // behave the same way, so `</user>` inside a `<details>` ends the details. The
+    // alternative — matching closers by name — costs a line that then has to be put
+    // back into the block, and buys a case no writer means.
+    const model = parse(
+      '<details>\n<summary>S</summary>\n\n</user>\n\nBody.\n\n</details>\n',
+      ON,
+      USER
+    );
+    expect(visibleText(model)).toBe('S\nBody.');
+    // The details was popped by the stray closer, so the closing `</details>` had
+    // nothing left to close and `Body.` is back at the top level.
+    expect(
+      model.blocks[1]!.containers.some((c) => c.kind === CONTAINER.details)
+    ).toBe(false);
+  });
+
+  it('holds every case to the incremental rule', () => {
+    assertStreamingMatchesFullParse([...'<user>\n\nHello.\n\n</user>\n']);
+  });
+});

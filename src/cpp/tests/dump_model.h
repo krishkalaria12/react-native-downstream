@@ -233,6 +233,31 @@ inline ParseOptions parseFlagsFromArg(int argc, char **argv, int at) {
   return options;
 }
 
+/// The tag policy from argv[at], as `src/allowedTags.ts` writes it, so a driver
+/// exercises the engine's own reader rather than hand-building a policy. Absent
+/// is the empty policy, which is what the built-in table on its own means.
+inline ParseOptions parseOptionsFromArgs(int argc, char **argv) {
+  ParseOptions options = parseFlagsFromArg(argc, argv, 1);
+  if (argc <= 2) {
+    return options;
+  }
+  const std::string joined(argv[2] == nullptr ? "" : argv[2]);
+  if (joined.empty()) {
+    return options;
+  }
+  std::vector<std::string> flat;
+  size_t start = 0;
+  while (start <= joined.size()) {
+    const size_t comma = joined.find(',', start);
+    flat.push_back(joined.substr(start, comma == std::string::npos ? std::string::npos : comma - start));
+    if (comma == std::string::npos) {
+      break;
+    }
+    start = comma + 1;
+  }
+  return ParseOptions(options.flags, tagPolicyFromStrings(flat));
+}
+
 /// The registered languages from argv[at], comma separated and unnormalized,
 /// exactly as JavaScript sends them, so a driver exercises the engine's own
 /// normalization. Absent or empty is no languages.
