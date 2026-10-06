@@ -12,6 +12,7 @@
 #include "InlineRuns.h"
 #include "MarkdownParser.h"
 #include "SegmentPlan.h"
+#include "DetailsLayout.h"
 #include "TableLayout.h"
 #include "Unicode.h"
 #include "tests/check.h"
@@ -428,6 +429,90 @@ void testTableHeight() {
   }
 }
 
+/// A collapsible block's open state, and the height a closed body takes.
+///
+/// The reader's answer is the later of the two, so a reader who closes a block
+/// the writer opened keeps it closed: the summary is a control, not a caption.
+void testDetailsLayout() {
+  ReaderChoices none;
+  CHECK(!resolveDetails(none, 1, false).open, "a block with neither answer is closed");
+  CHECK(resolveDetails(none, 1, true).open, "the writer's open is the starting state");
+
+  ReaderChoices opened = none.with(ChoiceKind::DetailsOpen, 1, true);
+  CHECK(resolveDetails(opened, 1, false).open, "a reader's choice opens a block the writer closed");
+  CHECK(!resolveDetails(opened, 1, true).open, "and closes one they did not");
+  CHECK(!resolveDetails(opened, 2, false).open, "one opened block does not open its neighbour");
+
+  // Closing a block the writer opened is the case that decides the order the two
+  // answers are read in: the reader's is the later one, so it wins.
+  ReaderChoices closedByReader = none.with(ChoiceKind::DetailsOpen, 3, true);
+  CHECK(resolveDetails(closedByReader, 3, false).open, "a reader can open a block the writer left closed");
+  ReaderChoices noRecord = none.with(ChoiceKind::DetailsOpen, 4, false);
+  CHECK(resolveDetails(noRecord, 4, true).open, "the writer's open stands when the reader said nothing");
+  CHECK(resolveDetails(none, 5, true).open, "with no choice at all, the writer decides");
+  // A reader can also close a block the writer opened, which is what makes a
+  // recorded choice a flip rather than only an open.
+  ReaderChoices readerClosed = none.with(ChoiceKind::DetailsOpen, 6, true);
+  CHECK(!resolveDetails(readerClosed, 6, true).open, "a reader can close a block the writer opened");
+
+  // The choice sets are separate, so a code toggle cannot open a collapsible
+  // block and a collapsible block's toggle cannot unwrap a code block. They share
+  // a container id space, which is exactly why they may not share a set.
+  ReaderChoices codeOnly = none.with(ChoiceKind::CodeExpand, 1, true);
+  CHECK(!resolveDetails(codeOnly, 1, false).open, "a code expand does not open a details block");
+
+  // A closed body is zero tall, whatever the body measured to.
+  CHECK(detailsBodyHeight(true, 120) == 120, "an open body is its own height");
+  CHECK(detailsBodyHeight(false, 120) == 0, "a closed body takes no space at all");
+  CHECK(detailsBodyHeight(false, 0) == 0, "and a body that was empty stays empty");
+}
+
+/// The height a text segment shows once its closed bodies are taken out.
+///
+/// The rule is one sentence — a line goes when its first character is inside a
+/// collapsed range — and the rest of this is what that sentence has to be true of.
+void testVisibleTextHeight() {
+  // Four lines of ten points each, laid out from a paragraph with a blank line
+  // between every block: line starts are at the block boundaries.
+  const std::vector<float> tops = {0, 10, 30, 50, 60};
+  const std::vector<uint32_t> starts = {0, 12, 30, 46};
+
+  CHECK(visibleTextHeight(60, tops, starts, {}) == 60, "nothing hidden is the whole height");
+  // The middle block is lines 1 and 2.
+  CHECK(visibleTextHeight(60, tops, starts, {{12, 30}}) == 40, "a collapsed block takes its own lines");
+
+  // The first block, which is a summary but could be some other block's body.
+  CHECK(visibleTextHeight(60, tops, starts, {{0, 12}}) == 50, "a leading block goes too");
+  // The last block: line 3 only, since its range ends at the text's end.
+  CHECK(visibleTextHeight(60, tops, starts, {{46, 1000}}) == 50, "a trailing block goes too");
+
+  // Two collapsed blocks add up, and a block that starts on the same line as
+  // another is counted once.
+  CHECK(visibleTextHeight(60, tops, starts, {{12, 30}, {46, 1000}}) == 30, "two collapsed blocks both go");
+  CHECK(visibleTextHeight(60, tops, starts, {{12, 30}, {13, 30}}) == 40, "overlapping ranges count once");
+
+  // A range that ends exactly where a line starts does not take that line, which
+  // is what makes a block's last line its own rather than the next block's first.
+  CHECK(visibleTextHeight(60, tops, starts, {{12, 30}}) == 40, "a range ending on a line start leaves it");
+
+  // A range that lies wholly inside one line hides nothing: the line belongs to
+  // whatever ran into it, and taking it would remove the last line of a visible
+  // block along with a body that was never on it. This is what a one-line
+  // paragraph between two visible ones does.
+  CHECK(visibleTextHeight(60, tops, starts, {{13, 14}}) == 60,
+        "a range inside one line leaves that line");
+  // One character earlier does take the line, because the line now begins inside
+  // the block — which is the ordinary case of a block that starts a line.
+  CHECK(visibleTextHeight(60, tops, starts, {{12, 14}}) == 40, "and takes it once the line starts inside");
+
+  // A segment with one line hides it when its only block is collapsed, and a
+  // caller with no line table gets the whole height rather than a crash: this is
+  // the measurement path, where a crash would be worse than a wrong number.
+  CHECK(visibleTextHeight(20, {0, 20}, {0}, {{0, 5}}) == 0, "a one-line segment hides its only line");
+  CHECK(visibleTextHeight(20, {}, {}, {{0, 5}}) == 20, "no line table is the whole height");
+  CHECK(visibleTextHeight(20, {0}, {0}, {}) == 20, "a single line top is the whole height");
+}
+
 /// The gutter is as wide as the widest number it draws, and never narrower than
 /// two digits, which is what keeps Streamdown's "over 100" bug out.
 void testGutterDigits() {
@@ -823,6 +908,8 @@ int main() {
   testCodeBlockLayout();
   testTableLayout();
   testTableHeight();
+  testDetailsLayout();
+  testVisibleTextHeight();
   testGutterDigits();
   testCodeCardHeight();
   testCodeLineStarts();

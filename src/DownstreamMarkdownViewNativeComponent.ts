@@ -102,7 +102,7 @@ export interface NativeProps extends ViewProps {
    * table copy, table download, code wrap, code expand, image download, table
    * expand, and table fullscreen.
    */
-  controls?: CodegenTypes.WithDefault<CodegenTypes.Int32, 511>;
+  controls?: CodegenTypes.WithDefault<CodegenTypes.Int32, 1023>;
   /**
    * Draw line numbers beside code. Layout only, and they are never copied,
    * selected, or spoken.

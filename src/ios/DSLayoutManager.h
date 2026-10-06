@@ -3,6 +3,7 @@
 #ifdef __cplusplus
 #include <vector>
 
+#include "DetailsLayout.h"
 #include "Reveal.h"
 #endif
 
@@ -81,6 +82,15 @@ typedef struct {
 /// Where this layout's fading characters are. Nil means nothing is fading, which
 /// is every draw pass when the animation is off.
 @property (nonatomic, weak, nullable) id<DSRevealProvider> revealProvider;
+
+/// Whether a `<details>` summary draws its disclosure chevron, and the reader's
+/// choices, which say which way it points and whether the body is showing.
+///
+/// Two setters rather than one value because the bit comes from the `controls`
+/// prop and the choices come from the reader's own state, and they change on
+/// different events.
+- (void)setDetailsToggle:(BOOL)toggle;
+- (void)setDetailsChoices:(const downstream::ReaderChoices &)choices;
 
 /// The document block index of this layout's first character, so a reveal unit's
 /// block-and-offset pair maps into this layout's own text.

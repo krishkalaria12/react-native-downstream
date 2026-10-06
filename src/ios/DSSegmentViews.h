@@ -166,6 +166,10 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 /// The view that receives this owns the document, so it is the one that exports
 /// the table's Markdown for the second view to render.
 - (void)didRequestTableFullscreenAtOrdinal:(uint32_t)ordinal;
+/// A `<details>` summary press. `containerId` is the container's own id, which is
+/// the same key the choice is stored under, so the press and the state cannot
+/// name different blocks.
+- (void)didToggleDetailsAtContainer:(uint32_t)containerId open:(BOOL)open;
 /// A copy, a download, or a save that failed.
 - (void)didFailControlOfKind:(DSBlockKind)kind action:(NSString *)action message:(NSString *)message;
 @end
@@ -202,8 +206,11 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 
 /// A text segment drawn by UITextView on the same TextKit 1 configuration
 /// that measured it, which gives selection and text navigation.
-@interface DSTextSegmentView : UITextView <DSSegmentView, DSRevealInvalidatable>
+@interface DSTextSegmentView : UITextView <DSSegmentView, DSRevealInvalidatable, UIGestureRecognizerDelegate>
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
+/// Where a `<details>` summary press goes. Weak, like every other delegate here,
+/// because the document view owns this view's place in the tree.
+@property (nonatomic, weak, nullable) id<DSControlDelegate> controlDelegate;
 /// The theme's selection highlight. TextKit draws the selection itself, so this
 /// is the only way a themed `colors.selection` reaches the platform's drawing.
 @property (nonatomic) UIColor *selectionColor;
@@ -213,8 +220,16 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 /// The document block this view's first character belongs to, which is what maps
 /// a reveal unit's block-and-offset pair into this view's own text.
 @property (nonatomic) NSInteger blockOffset;
+/// Whether a `<details>` summary draws its chevron, and the reader's choices,
+/// which say which way it points. Both reach the layout manager, which is what
+/// draws the decoration beside the text.
+@property (nonatomic) BOOL detailsToggle;
+@property (nonatomic) downstream::ReaderChoices detailsChoices;
 - (instancetype)init;
 - (void)setSegment:(DSTextSegment *)segment;
+/// The `<details>` container a touch lands on, or 0. Zero for every touch that is
+/// not on a summary, which is nearly all of them.
+- (uint32_t)detailsContainerAtPoint:(CGPoint)point;
 @end
 
 /// One code block: a header row above a card that scrolls sideways and, when the

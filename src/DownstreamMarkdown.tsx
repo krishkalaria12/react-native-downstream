@@ -444,7 +444,9 @@ function useControls(
       } else if (event.action === 'expand') {
         (event.block === 'table'
           ? handlers.tableExpand
-          : handlers.codeExpand)?.(event);
+          : event.block === 'details'
+            ? handlers.detailsExpand
+            : handlers.codeExpand)?.(event);
       } else if (event.action === 'fullscreen') {
         // The modal is this view's, not a control handler's: the press has to
         // open a second view, which only the component holding the first can do.

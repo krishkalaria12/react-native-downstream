@@ -206,6 +206,10 @@ NSString *symbolForExpand(BOOL expanded) {
   /// The whole table layout, which the table segments draw from and the frame
   /// stack is keyed by, for the same reason `codeLayout` is.
   downstream::TableLayout _tableLayout;
+  /// The reader's one set of choices. A text segment's chevron reads it directly
+  /// rather than through either layout, because a collapsible block is neither a
+  /// code block's nor a table's decision.
+  downstream::ReaderChoices _detailsChoices;
   /// What each image is, which the image views draw from and the frame stack is
   /// keyed by. A load changes an entry, which re-stacks the frames.
   downstream::ImageStateLayout _imageState;
@@ -290,7 +294,13 @@ static Class segmentViewClassFor(id segment) {
 
 - (void)applyStateToSegmentView:(UIView<DSSegmentView> *)view atIndex:(NSUInteger)index {
   if ([view isKindOfClass:DSTextSegmentView.class]) {
-    ((DSTextSegmentView *)view).selectable = _selectable && [self isSegmentSettledAtIndex:index];
+    DSTextSegmentView *text = (DSTextSegmentView *)view;
+    text.selectable = _selectable && [self isSegmentSettledAtIndex:index];
+    // The chevron is the control's own glyph, so it appears with the control and
+    // points the way the body will move.
+    text.detailsToggle = (_controls & downstream::ControlBits::DetailsToggle) != 0;
+    text.detailsChoices = _detailsChoices;
+    text.controlDelegate = _controlDelegate;
     return;
   }
   if ([view isKindOfClass:DSCodeSegmentView.class]) {
@@ -606,9 +616,14 @@ static Class segmentViewClassFor(id segment) {
     return;
   }
   _tableLayout = tableLayout;
+  // The one set of choices rides along with the props it belongs to, so a table
+  // prop that did not change still carries a collapsed body to the chevrons.
+  _detailsChoices = tableLayout.choices;
   for (UIView<DSSegmentView> *view in _segmentViews) {
     if ([view isKindOfClass:DSTableSegmentView.class]) {
       ((DSTableSegmentView *)view).tableLayout = tableLayout;
+    } else if ([view isKindOfClass:DSTextSegmentView.class]) {
+      ((DSTextSegmentView *)view).detailsChoices = _detailsChoices;
     }
   }
   [self setNeedsLayout];

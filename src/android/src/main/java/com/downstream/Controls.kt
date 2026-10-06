@@ -32,6 +32,9 @@ internal const val CONTROL_IMAGE_DOWNLOAD = 64
 internal const val CONTROL_TABLE_EXPAND = 128
 internal const val CONTROL_TABLE_FULLSCREEN = 256
 
+/** Phase 5: a collapsible block's toggle. */
+internal const val CONTROL_DETAILS_TOGGLE = 512
+
 // How long a copy button shows its check before going back, as in Streamdown.
 internal const val COPIED_DURATION_MS = 2_000L
 
@@ -101,6 +104,13 @@ internal interface ControlHost {
 
   /** A table's full-screen button. The host owns the document and exports it. */
   fun onTableFullscreen(ordinal: Int)
+
+  /**
+   * A collapsible block's toggle. Its own method because the key is a container
+   * id rather than an ordinal: it is already unique, already counted in source
+   * order, and already on every frame a block carries.
+   */
+  fun onToggleDetails(containerId: Int, open: Boolean)
   fun onControlFailed(kind: Int, action: String, message: String)
 }
 

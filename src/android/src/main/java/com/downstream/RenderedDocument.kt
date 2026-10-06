@@ -48,6 +48,7 @@ internal class RenderedDocument(
   private var cachedImages: ImageLayout? = null
   private var cachedHosts: HostLayout? = null
   private var cachedTables: TableLayout? = null
+  private var cachedChoices: ReaderChoices? = null
   private var cachedFrames = IntArray(0)
 
   fun createTextLayout(segment: TextSegment, width: Int): StaticLayout =
@@ -68,9 +69,13 @@ internal class RenderedDocument(
     images: ImageLayout,
     hosts: HostLayout,
     tables: TableLayout,
+    choices: ReaderChoices,
   ): Int =
     when (segment) {
-      is TextSegment -> segment.height(width, paint)
+      // The reader's one set of choices reaches the measurement whole, because a
+      // collapsed body is a height like any other and the view below draws from
+      // the same set.
+      is TextSegment -> segment.height(width, paint, choices)
       // A picture's box is the state and the theme, and nothing else: there is no
       // text to lay out and the bytes are not here. The same `imageBox` the
       // shadow node measured with, or the two disagree by the height of a
@@ -151,6 +156,7 @@ internal class RenderedDocument(
     images: ImageLayout = ImageLayout(),
     hosts: HostLayout = HostLayout(),
     tables: TableLayout = TableLayout(),
+    choices: ReaderChoices = ReaderChoices(),
   ): IntArray {
     // A measurement only holds for the layout it was made under, so the whole code
     // layout, the whole image layout, and the hosted heights are all part of the
@@ -160,7 +166,8 @@ internal class RenderedDocument(
     // old box was.
     if (
       width == cachedWidth && chrome == cachedChrome && code == cachedCode &&
-      images == cachedImages && hosts == cachedHosts && tables == cachedTables
+      images == cachedImages && hosts == cachedHosts && tables == cachedTables &&
+      choices == cachedChoices
     ) {
       return cachedFrames
     }
@@ -169,7 +176,7 @@ internal class RenderedDocument(
     segments.forEachIndexed { index, segment ->
       y += segment.gapBefore
       frames[index * 2] = y
-      frames[index * 2 + 1] = heightOf(segment, width, chrome, code, images, hosts, tables)
+      frames[index * 2 + 1] = heightOf(segment, width, chrome, code, images, hosts, tables, choices)
       y += frames[index * 2 + 1]
     }
     cachedWidth = width
@@ -178,6 +185,7 @@ internal class RenderedDocument(
     cachedImages = images
     cachedHosts = hosts
     cachedTables = tables
+    cachedChoices = choices
     cachedFrames = frames
     return frames
   }
@@ -188,8 +196,10 @@ internal class RenderedDocument(
     code: CodeLayout = CodeLayout(),
     images: ImageLayout = ImageLayout(),
     hosts: HostLayout = HostLayout(),
+    tables: TableLayout = TableLayout(),
+    choices: ReaderChoices = ReaderChoices(),
   ): Int {
-    val frames = frames(width, chrome, code, images, hosts)
+    val frames = frames(width, chrome, code, images, hosts, tables, choices)
     return if (frames.isEmpty()) 0 else frames[frames.size - 2] + frames[frames.size - 1]
   }
 
@@ -211,6 +221,7 @@ internal class RenderedDocument(
     images: ImageLayout = ImageLayout(),
     hosts: HostLayout = HostLayout(),
     tables: TableLayout = TableLayout(),
+    choices: ReaderChoices = ReaderChoices(),
   ): IntArray {
     if (hosts.isEmpty()) {
       return IntArray(0)
@@ -633,6 +644,10 @@ internal class RenderedDocument(
       val text = SpannableStringBuilder(document.text)
       val textLanguage = document.blockLanguage(0)
       val accessibleBlocks = ArrayList<AccessibleBlock>(document.blockCount)
+      // Every block inside a `<details>`, whether its body is showing or not. The
+      // reader's choice is resolved against these later, at measurement, because
+      // a segment is built once and a toggle arrives as a new snapshot.
+      val detailsBlocks = ArrayList<DetailsBlock>()
       val isTable = document.blockKind(0) == NativeDocument.KIND_TABLE_ROW
       val flags = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
 
@@ -652,7 +667,11 @@ internal class RenderedDocument(
               colors.quoteBar
             }
             containers.add(
-              ContainerDecoration(leading, style.quoteIndent, bar, continues, null, style.barWidth, style.markerGap),
+              ContainerDecoration(
+                leading, style.quoteIndent, bar, continues, null, style.barWidth, style.markerGap,
+                kind = kind, id = document.containerId(block, depth), open = document.containerOpen(block, depth),
+                summary = document.showsMarker(block, depth),
+              ),
             )
             leading += style.quoteIndent
           } else {
@@ -677,6 +696,8 @@ internal class RenderedDocument(
               ContainerDecoration(
                 leading, style.listIndent, null, continues, marker, style.barWidth, style.markerGap,
                 if (marker != null) markerColor else null,
+                kind = kind, id = document.containerId(block, depth), open = document.containerOpen(block, depth),
+                summary = document.showsMarker(block, depth),
               ),
             )
             leading += style.listIndent
@@ -704,6 +725,15 @@ internal class RenderedDocument(
         val spanEnd = if (block + 1 < document.blockCount) end + 1 else end
         val previous = block - 1
         val (containers, leading, inQuote) = containersOf(block, previous)
+        if (containers.any { it.kind == CONTAINER_DETAILS }) {
+          detailsBlocks.add(
+            DetailsBlock(
+              start, end,
+              summary = isDetailsSummary(containers),
+              containers = containers,
+            ),
+          )
+        }
 
         // A code card is its own segment and draws its own padding, so its
         // block never reserves any here, and the block that follows one starts
@@ -1066,7 +1096,9 @@ internal class RenderedDocument(
           caret.kind,
         )
       }
-      return TextSegment(displayText, accessibleBlocks, gapBefore, caretOffset, caret.kind)
+      return TextSegment(
+        displayText, accessibleBlocks, detailsBlocks, gapBefore, caretOffset, caret.kind,
+      )
     }
 
     /**

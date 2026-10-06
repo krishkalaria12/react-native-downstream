@@ -86,6 +86,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     null
 
   internal var onTableFullscreen: ((view: DownstreamMarkdownView, ordinal: Int) -> Unit)? = null
+  internal var onDetailsToggle: ((view: DownstreamMarkdownView, containerId: Int, open: Boolean) -> Unit)? = null
 
   private var documentId = 0L
   private var fontScale = 1f
@@ -639,7 +640,15 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       val planned = plan[index]
       val settled = planned.from + 1 <= planned.settledBlocks
       when (val child = segmentViews[index]) {
-        is TextSegmentView -> child.setSelectable(selectable && settled)
+        is TextSegmentView -> {
+          child.setSelectable(selectable && settled)
+          // The chevron is the control's own glyph, so it appears with the control
+          // and points the way the body will move.
+          child.setDetailsState(
+            controls and CONTROL_DETAILS_TOGGLE != 0,
+            child.isSummaryOpen(readerChoices),
+          )
+        }
         is CodeSegmentView -> {
           // The same two calls the measurement used, so the frame this card is
           // given and the layout it draws inside it are one decision.
@@ -1025,6 +1034,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     onExpandToggle = null
     onTableExpandToggle = null
     onTableFullscreen = null
+    onDetailsToggle = null
     // A recycled view has no emitter any more. Already opened saves finish,
     // while their callbacks drop events belonging to the previous source.
     exporter.release()
@@ -1100,6 +1110,28 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   override fun onTableFullscreen(ordinal: Int) {
     nextOrdinal = ordinal
     onTableFullscreen?.invoke(this, ordinal)
+  }
+
+  override fun onToggleDetails(containerId: Int, open: Boolean) {
+    nextOrdinal = containerId
+    onDetailsToggle?.invoke(this, containerId, open)
+  }
+
+  /**
+   * The reader's own answer for one collapsible block, through the same Fabric
+   * state path a code block's wrap takes.
+   *
+   * Only Yoga and the chat list around the message can know the message's new
+   * height, and nothing else has to be involved: the choice is state, so the node
+   * is cloned, measured again and remounted with no React render and no re-parse.
+   */
+  fun toggleDetails(containerId: Int) {
+    if (stateWrapper == null) return
+    val choices = readerChoices.copyWith(ChoiceKind.DetailsOpen, containerId)
+    readerChoices = choices
+    applySettledState()
+    requestLayout()
+    pushTableState(tableLayout.withChoices(choices))
   }
 
   /**
@@ -1442,7 +1474,9 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     if (width <= 0) {
       return
     }
-    val frames = document.frames(width, chrome, codeLayout, imageLayout, hostLayout, tableLayout)
+    val frames = document.frames(
+      width, chrome, codeLayout, imageLayout, hostLayout, tableLayout, readerChoices,
+    )
     for (index in 0 until minOf(segmentViews.size, frames.size / 2)) {
       val child = segmentViews[index]
       val top = paddingTop + frames[index * 2]

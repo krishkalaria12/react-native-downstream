@@ -37,6 +37,16 @@ export const CONTROL_TABLE_EXPAND = 1 << 7;
  */
 export const CONTROL_TABLE_FULLSCREEN = 1 << 8;
 
+/**
+ * A collapsible block's toggle, which shows or hides a `<details>` body.
+ *
+ * Bit 9 rather than the next free one, because the layout that changed shape with
+ * the table's full-screen button kept the numbering contiguous. The native
+ * default is `1023`, and `kControlAll` in the engine is the same set, so the
+ * three cannot drift without one of them failing to compile.
+ */
+export const CONTROL_DETAILS_TOGGLE = 1 << 9;
+
 /** Every control on, which is the default and the codegen default. */
 export const CONTROL_ALL =
   CONTROL_CODE_COPY |
@@ -47,7 +57,8 @@ export const CONTROL_ALL =
   CONTROL_CODE_EXPAND |
   CONTROL_IMAGE_DOWNLOAD |
   CONTROL_TABLE_EXPAND |
-  CONTROL_TABLE_FULLSCREEN;
+  CONTROL_TABLE_FULLSCREEN |
+  CONTROL_DETAILS_TOGGLE;
 
 export type CsvSeparator = ',' | ';' | '\t' | 'auto';
 
@@ -113,6 +124,14 @@ export type ControlHandlers = Readonly<{
   tableFullscreen?: (event: MarkdownControlEvent) => void;
   imageDownload?: (event: MarkdownControlEvent) => void;
   imageDownloadError?: (error: MarkdownErrorEvent) => void;
+  /**
+   * A `<details>` body was shown or hidden.
+   *
+   * The event's `ordinal` is the container's own id rather than an index into the
+   * document's collapsible blocks, which is the same number the engine keyed the
+   * choice on: one id for the press, the state and the drawing.
+   */
+  detailsExpand?: (event: MarkdownControlEvent) => void;
 }>;
 
 export type ResolvedControls = Readonly<{
@@ -131,7 +150,7 @@ type Section = Readonly<Record<string, unknown>>;
 
 function section(
   controls: MarkdownControls,
-  key: 'code' | 'table' | 'image'
+  key: 'code' | 'table' | 'image' | 'details'
 ): Section | undefined {
   if (typeof controls !== 'object' || controls === null) return undefined;
   const value = (controls as Section)[key];
@@ -143,7 +162,7 @@ function section(
 /** True when a section is absent or not `false`, so `true` and `{}` both mean on. */
 function sectionEnabled(
   controls: MarkdownControls,
-  key: 'code' | 'table' | 'image'
+  key: 'code' | 'table' | 'image' | 'details'
 ): boolean {
   if (typeof controls === 'boolean') return controls;
   // `null` is not one of the shapes `MarkdownControls` allows, but a value from
@@ -160,7 +179,7 @@ function sectionEnabled(
  */
 function controlEnabled(
   controls: MarkdownControls,
-  key: 'code' | 'table' | 'image',
+  key: 'code' | 'table' | 'image' | 'details',
   control: 'copy' | 'download'
 ): boolean {
   if (typeof controls === 'boolean') return controls;
@@ -196,10 +215,23 @@ export function shouldShowTableFullscreen(controls: MarkdownControls): boolean {
   return section(controls, 'table')?.fullscreen !== false;
 }
 
+/**
+ * True when a `<details>` body can be shown and hidden.
+ *
+ * Its own section rather than one of the existing three, because a collapsible
+ * block is not a code block and not a table: an app that turned every control
+ * off for its code and tables would otherwise lose the ability to open a body its
+ * writers used.
+ */
+export function shouldShowDetailsToggle(controls: MarkdownControls): boolean {
+  if (typeof controls === 'boolean') return controls;
+  return sectionEnabled(controls, 'details');
+}
+
 /** A control's object form, or undefined when it is a boolean or absent. */
 function detail(
   controls: MarkdownControls,
-  key: 'code' | 'table' | 'image',
+  key: 'code' | 'table' | 'image' | 'details',
   control: 'copy' | 'download' | 'wrap' | 'expand' | 'fullscreen'
 ): Section | undefined {
   return section(controls, key)?.[control] as Section | undefined;
@@ -260,6 +292,7 @@ export function resolveControls(
   if (shouldShowCodeExpand(controls)) flags |= CONTROL_CODE_EXPAND;
   if (shouldShowTableExpand(controls)) flags |= CONTROL_TABLE_EXPAND;
   if (shouldShowTableFullscreen(controls)) flags |= CONTROL_TABLE_FULLSCREEN;
+  if (shouldShowDetailsToggle(controls)) flags |= CONTROL_DETAILS_TOGGLE;
 
   const codeCopy = detail(controls, 'code', 'copy');
   const codeDownload = detail(controls, 'code', 'download');
@@ -270,6 +303,7 @@ export function resolveControls(
   const tableExpand = detail(controls, 'table', 'expand');
   const tableFullscreen = detail(controls, 'table', 'fullscreen');
   const imageDownload = detail(controls, 'image', 'download');
+  const detailsExpand = detail(controls, 'details', 'expand');
 
   return {
     flags,
@@ -293,6 +327,7 @@ export function resolveControls(
       tableFullscreen: of(tableFullscreen, 'onToggle'),
       imageDownload: of(imageDownload, 'onDownload'),
       imageDownloadError: of(imageDownload, 'onError'),
+      detailsExpand: of(detailsExpand, 'onToggle'),
     },
   };
 }

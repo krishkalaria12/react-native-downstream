@@ -39,6 +39,21 @@ internal class TextSegmentView(context: Context) : TextView(context) {
    */
   private var blockOffset = 0
   private var pressedLink = -1
+
+  /**
+   * The `<details>` summary this view draws, if it draws one.
+   *
+   * A field rather than a lookup because the chevron is drawn on every frame and
+   * a press is hit-tested against it: the summary is the container's first leaf,
+   * so it is the same answer every time and there is one per text view at most.
+   */
+  private var summary: DetailsBlock? = null
+
+  /** True while the summary's body is showing, which is which way the chevron points. */
+  private var summaryOpen = false
+
+  /** The toggle control's bit, so a document with `controls={false}` draws no chevron. */
+  private var detailsToggle = false
   private val codePaint = Paint()
   private val decorationPaint = TextPaint()
 
@@ -53,6 +68,8 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   private val caretMetrics = Paint.FontMetrics()
   private val revealClipBounds = Rect()
   private val codePath = Path()
+  private var pressedSummary: DetailsBlock? = null
+  private val chevronPath = Path()
   private val codeBounds = RectF()
   private var readingParts = emptyList<TextReadingPart>()
   private var readingBlocks = emptyList<AccessibleBlock>()
@@ -127,6 +144,24 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     // setContent also serves code bodies and clears this field. Retain the
     // identity afterwards so settled text keeps its layout and selection.
     this.segment = segment
+    // The summary is the container's own first leaf, so at most one of a
+    // segment's collapsible blocks is it, and it is the one a chevron belongs to.
+    summary = segment.detailsBlocks.firstOrNull { it.summary }
+    invalidate()
+  }
+
+  /**
+   * Whether the summary's body is showing, and whether the control is on at all.
+   *
+   * Both in one setter because both change the chevron and nothing else: the
+   * glyph points the way the body will move, and a document with the control off
+   * draws no glyph and takes no touches.
+   */
+  fun setDetailsState(toggle: Boolean, open: Boolean) {
+    if (toggle == detailsToggle && open == summaryOpen) return
+    detailsToggle = toggle
+    summaryOpen = open
+    invalidate()
   }
 
   /**
@@ -143,6 +178,7 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   fun setContent(text: Spanned, accessibleBlocks: List<AccessibleBlock>, rendered: RenderedDocument) {
     bandFrame = null
     segment = null
+    summary = null
     readingBlocks = accessibleBlocks
     val precomputed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
       PrecomputedTexts.show(this, text, rendered.paint.color)
@@ -294,6 +330,9 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && text is PrecomputedText) {
       drawDecorations(canvas)
     }
+    // Drawn after the text because the chevron sits in the leading margin and a
+    // text layout that starts flush to the edge would otherwise paint over it.
+    drawSummaryChevron(canvas)
   }
 
   /**
@@ -467,6 +506,55 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   // A TextView drawing PrecomputedText leaves out underline and
   // strikethrough, so link underlines and strikethrough lines are drawn here
   // at the font's own positions, under or through each line's run.
+  /**
+   * The `<details>` chevron, drawn in the leading margin of the summary's line.
+   *
+   * In the margin rather than in the line because the line is the text: a reader
+   * who selected the summary and copied it should get the words they wrote, not a
+   * glyph. It is drawn here, with the list markers and the quote bars, rather than
+   * as a child view because a `TextView` has no place to put one that follows its
+   * own line breaking — and this one has to follow the line it belongs to.
+   *
+   * The glyph is a path rather than a glyph from a font, so it is the same shape
+   * at every density and needs no asset: two strokes that meet, turned a quarter
+   * either way.
+   */
+  private fun drawSummaryChevron(canvas: Canvas) {
+    val summary = summary ?: return
+    if (!detailsToggle) return
+    val layout = layout ?: return
+    val first = layout.getLineForOffset(summary.start)
+    val line = layout.getLineForOffset((summary.end - 1).coerceAtLeast(summary.start))
+    val baseline = layout.getLineBaseline(line).toFloat()
+    // The line's own ascent and descent rather than the paragraph's, so a
+    // summary line that is shorter than its neighbours gets a chevron sized to
+    // itself. The text is centred in that box, which is where a reader's eye is
+    // already looking.
+    val ascent = layout.getLineAscent(first).toFloat()
+    val descent = layout.getLineDescent(line).toFloat()
+    val centerY = baseline - (ascent - descent) / 2
+    val size = baseline - ascent
+    val half = size * 0.22f
+    val tip = if (summaryOpen) centerY + half else centerY - half
+    codePaint.color = currentTextColor
+    codePaint.style = Paint.Style.STROKE
+    codePaint.strokeWidth = maxOf(1f, size * 0.06f)
+    codePaint.strokeCap = Paint.Cap.ROUND
+    codePaint.strokeJoin = Paint.Join.ROUND
+    chevronPath.reset()
+    // In the leading margin, on the side the text itself starts: a right-to-left
+    // paragraph puts the chevron at its right, where a reader of that script
+    // expects the disclosure to be. `getLineLeft` is the horizontal origin of the
+    // line including its indent, which is what the margin is measured from.
+    val x = layout.getLineLeft(line) - size * 0.45f
+    chevronPath.moveTo(x - half, tip - (if (summaryOpen) half else -half))
+    chevronPath.lineTo(x, tip)
+    chevronPath.lineTo(x + half, tip - (if (summaryOpen) half else -half))
+    canvas.drawPath(chevronPath, codePaint)
+    codePaint.style = Paint.Style.FILL
+    codePaint.strokeCap = Paint.Cap.BUTT
+  }
+
   private fun drawDecorations(canvas: Canvas) {
     val layout = layout ?: return
     val text = layout.text as? Spanned ?: return
@@ -558,7 +646,33 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     val x = event.x - totalPaddingLeft + scrollX
     val y = event.y - totalPaddingTop + scrollY
     if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+      // The summary is hit-tested before the links under it: the whole line is the
+      // control, and a link inside a summary is still a summary a reader meant to
+      // open. Everything else falls through to the link, then to selection.
+      val summary = this.summary
+      if (detailsToggle && summary != null && onSummaryLine(layout, summary, y)) {
+        pressedSummary = summary
+        return true
+      }
       pressedLink = linkAt(layout, x, y)
+    }
+    val pressed = pressedSummary
+    if (pressed != null) {
+      when (event.actionMasked) {
+        MotionEvent.ACTION_UP -> {
+          pressedSummary = null
+          if (pressed === summary) {
+            // The innermost frame is the block's own container, which is the one
+            // whose body the press opens. A summary inside another summary opens
+            // the inner one, the same way pressing it reads.
+            val container = pressed.containers.last { it.kind == CONTAINER_DETAILS }
+            findHost()?.toggleDetails(container.id)
+          }
+          return true
+        }
+        MotionEvent.ACTION_CANCEL -> pressedSummary = null
+        else -> return true
+      }
     }
     if (pressedLink < 0) {
       return super.onTouchEvent(event)
@@ -574,6 +688,22 @@ internal class TextSegmentView(context: Context) : TextView(context) {
       MotionEvent.ACTION_CANCEL -> pressedLink = -1
     }
     return true
+  }
+
+  /** The summary line under `y`, or null. The whole line is the control. */
+  private fun onSummaryLine(layout: Layout, block: DetailsBlock, y: Float): Boolean {
+    val first = layout.getLineForOffset(block.start)
+    val last = layout.getLineForOffset((block.end - 1).coerceAtLeast(block.start))
+    return y >= layout.getLineTop(first) && y <= layout.getLineBottom(last)
+  }
+
+  /** Whether this view's summary has its body showing under [choices]. */
+  fun isSummaryOpen(choices: ReaderChoices): Boolean {
+    val summary = summary ?: return true
+    return resolveDetails(
+      choices, summary.containers.last { it.kind == CONTAINER_DETAILS }.id,
+      summary.containers.last { it.kind == CONTAINER_DETAILS }.open,
+    ).open
   }
 
   private fun findHost(): DownstreamMarkdownView? {

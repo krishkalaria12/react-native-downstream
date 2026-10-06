@@ -53,6 +53,10 @@ typedef NS_ENUM(NSInteger, DSContainerKind) {
   DSContainerKindListItem = 1,
   DSContainerKindAdmonition = 2,
   DSContainerKindFootnote = 3,
+  /// `<details>`: the frame a collapsible block's body sits inside.
+  DSContainerKindDetails = 4,
+  /// An app-allowed block tag, drawn by the React child that replaced it.
+  DSContainerKindCustom = 5,
 };
 
 /// Decoration for one nesting level around a block. Leading offsets are in
@@ -71,6 +75,15 @@ typedef NS_ENUM(NSInteger, DSContainerKind) {
 /// Zero-width gaps and bars are what a theme that sets them to zero draws.
 @property (nonatomic, readonly) CGFloat barWidth;
 @property (nonatomic, readonly) CGFloat markerGap;
+/// The container's own id, which is what a reader's choice for a `<details>` is
+/// keyed by. Zero for the levels that have no choice of their own.
+@property (nonatomic, readonly) uint32_t containerId;
+/// `<details open>`: the writer's starting state, which the reader's own choice
+/// overrides either way.
+@property (nonatomic, readonly) BOOL writtenOpen;
+/// True on the container's own first leaf, which is where a list item's marker and
+/// a `<details>`'s chevron are drawn.
+@property (nonatomic, readonly) BOOL summary;
 @end
 
 typedef NS_ENUM(NSInteger, DSBlockDecoration) {

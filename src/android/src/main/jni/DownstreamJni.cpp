@@ -700,6 +700,13 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
                                               container.showsMarker ? 1 : 0,
                                               static_cast<jint>(container.task),
                                               marker,
+                                              // The `<details open>` attribute, and only a
+                                              // `<details>` carries it. It crosses with the
+                                              // rest of the frame rather than as its own read,
+                                              // because a view that has to decide whether a
+                                              // body is showing is asking about the frame it is
+                                              // already drawing.
+                                              container.open ? 1 : 0,
                                           });
     }
     for (const InlineRun &run : block.runs) {

@@ -117,28 +117,6 @@ internal class ThemedStrikeSpan(val color: Int) : UnderlineSpan() {
   }
 }
 
-/**
- * One nesting level's decoration: its indent, the bar or marker it draws in that
- * indent, and the two metrics the drawing reads off it.
- *
- * The bar's width and the marker gap are here rather than in the view because
- * they are the theme's, and a view that read its own would be a second place
- * the values could differ from the measurement's.
- */
-internal class ContainerDecoration(
-  val leading: Float,
-  val width: Float,
-  val barColor: Int?,
-  val continuesPrevious: Boolean,
-  val marker: String?,
-  val barWidth: Float = 0f,
-  val markerGap: Float = 0f,
-  /**
-   * The marker's own color, which a theme can set apart from the list's: a
-   * bullet from a number, or a finished task from an unfinished one.
-   */
-  val markerColor: Int? = null,
-)
 
 /** One native block's reading order and role inside a shared text layout. */
 internal class AccessibleBlock(val start: Int, val end: Int, val heading: Boolean, val taskState: Int)

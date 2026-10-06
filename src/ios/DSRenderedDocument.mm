@@ -315,6 +315,9 @@ void applyTokens(NSMutableAttributedString *text, const Block &block, DSThemeCol
 @property (nonatomic, nullable) UIColor *barColor;
 @property (nonatomic) CGFloat barWidth;
 @property (nonatomic) CGFloat markerGap;
+@property (nonatomic) uint32_t containerId;
+@property (nonatomic) BOOL writtenOpen;
+@property (nonatomic) BOOL summary;
 @end
 
 @implementation DSContainerInfo
@@ -470,6 +473,9 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
         previous != nullptr && previous->containers.size() > depth && previous->containers[depth].id == container.id;
     info.barWidth = quoteBarWidth(theme) * scale;
     info.markerGap = markerGap(theme) * scale;
+    info.containerId = container.id;
+    info.writtenOpen = container.open;
+    info.summary = container.showsMarker;
     if (container.kind == ContainerKind::Quote || container.kind == ContainerKind::Admonition) {
       *inQuote = true;
       info.width = containerIndent(theme, container.kind) * scale;
@@ -739,6 +745,76 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   if (usedWidth != nullptr) {
     *usedWidth = CGRectGetWidth(used);
   }
+}
+
+/// The height a text segment shows, with every closed body's lines taken out.
+///
+/// The layout is the *whole* text's, laid out once per width, so the visible
+/// lines wrap exactly as they would if the body were open — which is what makes
+/// opening a body a pure height change rather than a re-measure. Only the
+/// subtraction depends on the reader's choices.
+///
+/// `downstream::visibleTextHeight` is the rule, so Android and iOS subtract the
+/// same lines from the same layout rather than each deciding what a collapsed
+/// block costs. The frames are this platform's own type, so the one call that
+/// reads them is here; `testDetailsLayout` and `testVisibleTextHeight` in
+/// `test_export.cpp` are what both sides have to agree on.
+static CGFloat visibleHeight(DSTextSegment *segment, CGFloat width,
+                             const downstream::ReaderChoices &choices) {
+  std::vector<downstream::HiddenRange> hidden;
+  for (DSBlockInfo *info in segment.blocks) {
+    // A block inside two collapsible blocks, the outer of which is closed, is not
+    // visible however open the inner one is — so any closed frame is enough.
+    bool hidden_ = false;
+    bool summary = false;
+    for (DSContainerInfo *frame in info.containers) {
+      if (frame.kind != DSContainerKindDetails) {
+        continue;
+      }
+      if (frame.summary) {
+        summary = true;
+      }
+      if (!downstream::resolveDetails(choices, frame.containerId, frame.writtenOpen).open) {
+        hidden_ = true;
+      }
+    }
+    // The summary is the visible line a reader taps to open the body, so it is
+    // never in a hidden range however its body resolves.
+    if (summary || !hidden_) {
+      continue;
+    }
+    const NSRange range = segment.blockRanges[info.index].rangeValue;
+    hidden.push_back({static_cast<uint32_t>(range.location),
+                      static_cast<uint32_t>(range.location + range.length)});
+  }
+  if (hidden.empty()) {
+    return [segment heightForWidth:width];
+  }
+  DSTextKitStack *stack = [[DSTextKitStack alloc] initWithLayoutManager:[NSLayoutManager new]];
+  stack.textContainer.size = CGSizeMake(std::isfinite(width) ? width : CGFLOAT_MAX, CGFLOAT_MAX);
+  [stack.textStorage setAttributedString:segment.attributedString];
+  NSLayoutManager *layout = stack.layoutManager;
+  [layout ensureLayoutForTextContainer:stack.textContainer];
+  std::vector<float> tops;
+  std::vector<uint32_t> starts;
+  tops.reserve(layout.numberOfGlyphs + 1);
+  starts.reserve(layout.numberOfGlyphs);
+  NSUInteger glyph = 0;
+  CGFloat lastBottom = 0;
+  while (glyph < layout.numberOfGlyphs) {
+    NSRange line;
+    // The effective range is the whole line, which is the one call that gets a
+    // line's extent and its character offset together.
+    const CGRect rect = [layout lineFragmentRectForGlyphAtIndex:glyph effectiveRange:&line];
+    tops.push_back(static_cast<float>(CGRectGetMinY(rect)));
+    starts.push_back(static_cast<uint32_t>([layout characterIndexForGlyphAtIndex:line.location]));
+    lastBottom = CGRectGetMaxY(rect);
+    glyph = NSMaxRange(line);
+  }
+  // One more top than lines, because subtracting a line needs the line after it.
+  tops.push_back(static_cast<float>(lastBottom));
+  const CGFloat total = [segment heightForWidth:width];
+  return downstream::visibleTextHeight(static_cast<float>(total), tops, starts, hidden);
 }
 
 /// Measures at `width` if this width has not been measured yet, and hands back
@@ -1415,6 +1491,10 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   /// The table layout the cached frames were built at, for the same reason
   /// `_cachedCode` is: a capped table and an expanded one are different heights.
   downstream::TableLayout _cachedTables;
+  /// The reader's own choices, which the cache is keyed on for the same reason
+  /// the code layout is: a closed and an open body are different heights, so they
+  /// are different measurements.
+  downstream::ReaderChoices _cachedChoices;
   bool _hasCachedFrames;
   /// Cache native geometry. Measurement needs no NSValue boxing, and each
   /// caller copies only the frames it consumes while holding the cache lock.
@@ -1742,9 +1822,10 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
              chrome:(uint32_t)chrome
                 code:(const downstream::CodeLayout &)code
               images:(const downstream::ImageStateLayout &)images
-               hosts:(const downstream::HostLayout &)hosts {
+               hosts:(const downstream::HostLayout &)hosts
+             choices:(const downstream::ReaderChoices &)choices {
   if ([segment isKindOfClass:DSTextSegment.class]) {
-    return [(DSTextSegment *)segment heightForWidth:width];
+    return visibleHeight((DSTextSegment *)segment, width, choices);
   }
   if ([segment isKindOfClass:DSMathSegment.class]) {
     DSMathSegment *formula = segment;
@@ -1824,7 +1905,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                       tables:(const downstream::TableLayout &)tables {
   NSMutableArray<NSValue *> *frames = [NSMutableArray arrayWithCapacity:_segments.count];
   for (const CGRect frame : [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts
-                                    tables:tables includeFrames:YES includeHosts:NO].frames) {
+                                    tables:tables choices:code.choices includeFrames:YES
+                                   includeHosts:NO].frames) {
     [frames addObject:[NSValue valueWithCGRect:frame]];
   }
   return frames;
@@ -1837,7 +1919,7 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                   hosts:(const downstream::HostLayout &)hosts
                  tables:(const downstream::TableLayout &)tables {
   return [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts tables:tables
-               includeFrames:NO includeHosts:NO].size;
+               choices:code.choices includeFrames:NO includeHosts:NO].size;
 }
 
 - (DSMeasurement)measureForWidth:(CGFloat)width
@@ -1848,6 +1930,7 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                           tables:(const downstream::TableLayout &)tables {
   DSMeasurement measurement;
   DSStackedLayout stacked = [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts tables:tables
+                                      choices:code.choices
                                  includeFrames:NO includeHosts:YES];
   measurement.size = stacked.size;
   measurement.hosts = std::move(stacked.hosts);
@@ -1869,11 +1952,13 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                           images:(const downstream::ImageStateLayout &)images
                            hosts:(const downstream::HostLayout &)hosts
                           tables:(const downstream::TableLayout &)tables
+                         choices:(const downstream::ReaderChoices &)choices
                    includeFrames:(BOOL)includeFrames
                     includeHosts:(BOOL)includeHosts {
   [_lock lock];
   if (_hasCachedFrames && _cachedWidth == width && _cachedChrome == chrome && _cachedCode == code &&
-      _cachedImages == images && _cachedHosts == hosts && _cachedTables == tables) {
+      _cachedImages == images && _cachedHosts == hosts && _cachedTables == tables &&
+      _cachedChoices == choices) {
     DSStackedLayout cached;
     if (includeFrames) {
       cached.frames = _cachedLayout.frames;
@@ -1899,7 +1984,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
     y += _gaps[index];
     id segment = _segments[index];
     const CGFloat height =
-        [self heightOf:segment atWidth:width chrome:chrome code:code images:images hosts:hosts tables:tables];
+        [self heightOf:segment atWidth:width chrome:chrome code:code images:images hosts:hosts tables:tables
+               choices:choices];
     if (!constrained) {
       unconstrainedWidth = std::max(unconstrainedWidth, [self unconstrainedWidthOf:segment
                                                                              atWidth:width
@@ -1952,6 +2038,7 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   _cachedImages = images;
   _cachedHosts = hosts;
   _cachedTables = tables;
+  _cachedChoices = choices;
   _hasCachedFrames = YES;
   _cachedLayout = stacked;
   [_lock unlock];

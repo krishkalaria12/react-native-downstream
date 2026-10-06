@@ -231,6 +231,9 @@ internal class NativeDocument(
   fun taskState(block: Int, depth: Int) = containers[container(block, depth) + 3]
   fun marker(block: Int, depth: Int): String? = containers[container(block, depth) + 4].let { if (it >= 0) strings[it] else null }
 
+  /** `<details open>`: the writer's starting state. False for every other kind. */
+  fun containerOpen(block: Int, depth: Int) = containers[container(block, depth) + 5] != 0
+
   fun runStart(run: Int) = runs[run * RUN_STRIDE]
   fun runEnd(run: Int) = runs[run * RUN_STRIDE + 1]
   fun runStyles(run: Int) = runs[run * RUN_STRIDE + 2]
@@ -243,7 +246,7 @@ internal class NativeDocument(
   companion object {
     private const val BLOCK_STRIDE = 16
     private const val CELL_STRIDE = 3
-    private const val CONTAINER_STRIDE = 5
+    private const val CONTAINER_STRIDE = 6
     private const val RUN_STRIDE = 4
     private const val TOKEN_STRIDE = 3
     /**

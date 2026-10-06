@@ -74,6 +74,18 @@ const suites = [
     sources: [kotlin('HostLayout.kt'), join(here, 'HostLayoutCheck.kt')],
   },
   {
+    // The platform's own files rather than a copy: `CodeLayout.kt` for
+    // `ReaderChoices` and `hasChoice`, `ContainerDecoration.kt` for the frame the
+    // rules read, and `DetailsLayout.kt` for the rules themselves.
+    jar: 'details_layout',
+    sources: [
+      ...kotlin('CodeLayout.kt'),
+      ...kotlin('ContainerDecoration.kt'),
+      ...kotlin('DetailsLayout.kt'),
+      join(here, 'DetailsLayoutCheck.kt'),
+    ],
+  },
+  {
     jar: 'math_render',
     sources: [
       ...kotlin('MathLayout.kt', 'MathDisplayList.kt', 'MathSegmentView.kt'),

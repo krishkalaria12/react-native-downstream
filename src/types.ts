@@ -511,6 +511,26 @@ export type MarkdownControls =
                   onError?: (error: MarkdownErrorEvent) => void;
                 }>;
           }>;
+      /**
+       * The toggle on a `<details>` summary, which shows and hides the body.
+       *
+       * Its own section because a collapsible block is neither a code block nor
+       * a table: an app that turned both of those off for a quiet document keeps
+       * the ability to open a body its writers used.
+       */
+      details?:
+        | boolean
+        | Readonly<{
+            expand?:
+              | boolean
+              | Readonly<{
+                  /**
+                   * Called after the body is shown or hidden. `expanded` on the
+                   * event says which of the two happened.
+                   */
+                  onToggle?: (event: MarkdownControlEvent) => void;
+                }>;
+          }>;
     }>;
 
 /**

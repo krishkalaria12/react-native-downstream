@@ -97,6 +97,9 @@ class DownstreamMarkdownViewManager :
       dispatchTableExpandToggle(target, ordinal, expanded)
     }
     view.onTableFullscreen = { target, ordinal -> dispatchTableFullscreen(target, ordinal) }
+    view.onDetailsToggle = { target, containerId, open ->
+      dispatchDetailsToggle(target, containerId, open)
+    }
     return view
   }
 
@@ -303,6 +306,7 @@ class DownstreamMarkdownViewManager :
     // the same decision about a different block: a cap and the reader's choices.
     view.setTableProps(state.numberAt("tableMaxHeight", 300.0))
     view.setTableChoices(state.ordinalsAt("tableExpanded"))
+    view.setDetailsChoices(state.ordinalsAt("detailsOpen"))
     view.setChrome(state.numberAt("chrome", 0.0).toInt())
     // The caret is resolved in the node, against the document and its streaming
     // flag, so the view never decides where a caret goes. It is a state field
@@ -533,6 +537,31 @@ class DownstreamMarkdownViewManager :
         view.currentGeneration(),
         ordinal = ordinal.toDouble(),
       ),
+    )
+  }
+
+  /**
+   * A `<details>` summary press.
+   *
+   * The same shape as a wrap or an expand press: the view has already applied its
+   * own answer, the state update is the thing that makes the chat list re-measure,
+   * and the event reports which way it went. `block` is `details` because the
+   * three kinds of collapsible choice are three different blocks.
+   */
+  private fun dispatchDetailsToggle(
+    view: DownstreamMarkdownView,
+    containerId: Int,
+    open: Boolean,
+  ) {
+    val toggled = view.nextToggledOrdinal()
+    if (toggled < 0) return
+    view.toggleDetails(containerId)
+    dispatchControlAction(
+      view,
+      "expand",
+      block = "details",
+      expanded = open,
+      ordinal = containerId.toDouble(),
     )
   }
 

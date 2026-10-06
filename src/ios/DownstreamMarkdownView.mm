@@ -1219,6 +1219,25 @@ NSString *nameForFormat(NSString *format) {
                     markdown:@""];
 }
 
+- (void)didToggleDetailsAtContainer:(uint32_t)containerId open:(BOOL)open {
+  if (!_state) {
+    return;
+  }
+  // The same path as a code block's expand, and for the same reason: the body's
+  // height changes, and only Yoga and the chat list can know that.
+  DownstreamMarkdownState next = _state->getData().toggledDetails(containerId);
+  _state->updateState(std::move(next));
+  [self emitControlWithBlock:@"details"
+                      action:@"expand"
+                      format:@""
+                    language:@""
+                   filename:@""
+                        url:@""
+                     wrapped:NO
+                    expanded:open
+                   markdown:@""];
+}
+
 - (void)didRequestTableFullscreenAtOrdinal:(uint32_t)ordinal {
   const auto *emitter = [self emitter];
   if (emitter == nullptr) {

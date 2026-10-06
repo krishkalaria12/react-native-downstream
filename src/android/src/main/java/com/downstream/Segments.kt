@@ -94,6 +94,17 @@ internal class MathSegment(
 internal class TextSegment(
   val text: Spanned,
   val accessibleBlocks: List<AccessibleBlock>,
+  /**
+   * The blocks that sit inside a `<details>`, with the character range each one
+   * occupies.
+   *
+   * Carried here rather than read from the document at draw time because the
+   * segment is the unit of layout and the document is not on the UI thread: a
+   * collapsed body is a height question, and the height is asked for on every
+   * measurement. Empty for a document with no collapsible block, which is the
+   * common case, so the extra walk is nothing.
+   */
+  val detailsBlocks: List<DetailsBlock> = emptyList(),
   gapBefore: Int,
   /**
    * Where the caret's placeholder sits in [text], or -1 when this segment has
@@ -106,17 +117,72 @@ internal class TextSegment(
 ) : Segment(gapBefore) {
   private var heightWidth = -1
   private var height = 0
+  private var hidden = emptyList<HiddenRange>()
 
-  /** Layout height at a width. Committed segments are shared by snapshots, so this is cached. */
+  /**
+   * Layout height at a width, with every closed body's lines taken out.
+   *
+   * The layout itself is built once per width whatever the reader's choices are,
+   * because the visible text has to wrap exactly as it would if the body were
+   * open — opening a body is then a pure height change rather than a re-measure.
+   * Only the subtraction depends on the choices.
+   *
+   * Cached per width *and* per choice set, because committed segments are shared
+   * between snapshots and a toggle arrives as a new snapshot rather than a new
+   * segment.
+   */
   @Synchronized
-  fun height(width: Int, paint: TextPaint): Int {
-    if (width != heightWidth) {
-      height = RenderedDocument.buildLayout(text, paint, width.coerceAtLeast(1), Layout.Alignment.ALIGN_NORMAL).height
+  fun height(width: Int, paint: TextPaint, choices: ReaderChoices = ReaderChoices()): Int {
+    val hiddenRanges = hiddenRanges(choices)
+    if (width != heightWidth || hiddenRanges != hidden) {
+      val layout = RenderedDocument.buildLayout(
+        text, paint, width.coerceAtLeast(1), Layout.Alignment.ALIGN_NORMAL,
+      )
+      hidden = hiddenRanges
+      height = if (hiddenRanges.isEmpty()) {
+        layout.height
+      } else {
+        visibleTextHeight(
+          layout.height, layout.lineCount, { layout.getLineTop(it) }, { layout.getLineStart(it) }, hiddenRanges,
+        )
+      }
       heightWidth = width
     }
     return height
   }
+
+  /**
+   * The character ranges this segment hides under `choices`.
+   *
+   * The summary is never in one: it is the visible line a reader taps to open the
+   * body, so hiding it would leave nothing to press.
+   */
+  private fun hiddenRanges(choices: ReaderChoices): List<HiddenRange> {
+    if (detailsBlocks.isEmpty()) return emptyList()
+    val ranges = ArrayList<HiddenRange>(detailsBlocks.size)
+    for (block in detailsBlocks) {
+      if (!block.summary && insideHiddenDetails(block.containers, choices)) {
+        ranges.add(HiddenRange(block.start, block.end))
+      }
+    }
+    return ranges
+  }
 }
+
+/**
+ * One block inside a `<details>`, as the text segment needs it to hide the body.
+ *
+ * `containers` is a copy rather than a reference into the document: the segment
+ * outlives the slice it was built from, and the reader's answer is resolved
+ * against these frames long after that slice is gone.
+ */
+internal class DetailsBlock(
+  val start: Int,
+  val end: Int,
+  /** True for the container's summary line, which is never hidden. */
+  val summary: Boolean,
+  val containers: List<ContainerDecoration>,
+)
 
 /**
  * One code block: a header row above a horizontally scrolling body. The body is
