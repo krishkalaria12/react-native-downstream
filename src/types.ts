@@ -195,6 +195,14 @@ export type MarkdownPreviewOptions = Readonly<{
    * Off by default, as every preview feature.
    */
   htmlTags?: boolean;
+  /**
+   * Hide a table whose rows are still arriving, until it is complete.
+   *
+   * A half-drawn grid is what this mode exists to prevent: not even the rows
+   * that have settled are shown, and when the table completes its rows arrive
+   * together. Off by default, as every preview feature.
+   */
+  tables?: boolean;
 }>;
 
 /**

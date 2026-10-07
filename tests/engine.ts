@@ -210,13 +210,15 @@ export const PREVIEW_LINKS = 1 << 2;
 export const PREVIEW_IMAGES = 1 << 3;
 export const PREVIEW_MATH = 1 << 4;
 export const PREVIEW_HTML_TAGS = 1 << 5;
+export const PREVIEW_TABLES = 1 << 6;
 export const PREVIEW_ALL =
   PREVIEW_EMPHASIS |
   PREVIEW_INLINE_CODE |
   PREVIEW_LINKS |
   PREVIEW_IMAGES |
   PREVIEW_MATH |
-  PREVIEW_HTML_TAGS;
+  PREVIEW_HTML_TAGS |
+  PREVIEW_TABLES;
 
 /**
  * Bits of the parse-level `parseFlags` prop, mirroring `src/parseFlags.ts` and

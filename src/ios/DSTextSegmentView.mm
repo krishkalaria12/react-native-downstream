@@ -112,6 +112,67 @@ NSString *const kPlaceholder = @"\u200b";
 
 /// The layout manager is what splits the glyph runs, so the provider is its as
 /// well as this view's.
+/// Extra items on the text selection menu, and copy as Markdown.
+///
+/// A `UIMenu` built from the text view's own, so the platform's items keep
+/// working and this only adds. "Copy as Markdown" copies the blocks the
+/// selection touches as the Markdown that produced them — because blocks are the
+/// unit the exporter reads, a selection that starts mid-paragraph copies the
+/// whole block rather than a fragment no paste would render as seen.
+- (void)buildMenuWithBuilder:(id<UIMenuBuilder>)builder {
+  [super buildMenuWithBuilder:builder];
+  if (_segment == nil) {
+    return;
+  }
+  UIAction *copyMarkdown =
+      [UIAction actionWithTitle:@"Copy as Markdown"
+                         image:nil
+                    identifier:@"com.downstream.copy-markdown"
+                       handler:^(__kindof UIAction *_Nonnull action) {
+                         [self copySelectionAsMarkdown];
+                       }];
+  UIMenu *menu = [UIMenu menuWithTitle:@""
+                                 image:nil
+                            identifier:UIMenuNone
+                               options:UIMenuOptionsDisplayInline
+                              children:@[ copyMarkdown ]];
+  [builder insertSiblingMenu:menu afterMenuForAction:@selector(copy:)];
+}
+
+/// The selection as the Markdown that produced it, or nothing when there is no
+/// selection to copy.
+- (void)copySelectionAsMarkdown {
+  if (self.selectedRange.length == 0 || _segment == nil) {
+    return;
+  }
+  const NSRange selected = self.selectedRange;
+  NSInteger first = -1;
+  NSInteger last = -1;
+  for (NSUInteger index = 0; index < _segment.blockRanges.count; index++) {
+    const NSRange block = _segment.blockRanges[index].rangeValue;
+    if (NSMaxRange(block) > selected.location && block.location < NSMaxRange(selected)) {
+      if (first < 0) {
+        first = (NSInteger)index;
+      }
+      last = (NSInteger)index;
+    }
+  }
+  if (first < 0) {
+    return;
+  }
+  // `blockOffset` is the document block this view's first block is, so the
+  // view's own ranges map onto the document by position. The export is the same
+  // one a copy produces, so both platforms can only ever produce identical
+  // bytes.
+  const uint32_t from = static_cast<uint32_t>(_blockOffset + first);
+  const uint32_t to = static_cast<uint32_t>(_blockOffset + last + 1);
+  NSString *markdown = [self.controlDelegate markdownForBlocksFrom:from to:to];
+  if (markdown.length == 0) {
+    return;
+  }
+  [UIPasteboard.generalPasteboard setString:markdown];
+}
+
 - (void)setLinkPreview:(BOOL)linkPreview {
   if ([self respondsToSelector:@selector(setAllowsLinkPreview:)]) {
     self.allowsLinkPreview = linkPreview;

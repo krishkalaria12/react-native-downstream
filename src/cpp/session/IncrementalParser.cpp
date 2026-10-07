@@ -253,17 +253,30 @@ void IncrementalParser::resetScan() {
   lineAttempted_ = 0;
 }
 
+static void hideIncompleteTable(Document *document);
+
 const DocumentHandle &IncrementalParser::publish(DocumentHandle document, uint32_t settled) {
+  // A trailing table whose rows are still arriving is withheld whole when the
+  // mode asks for it: not even its settled rows are shown, because a half-drawn
+  // grid is what the mode exists to prevent. Done here rather than in either
+  // parse path so full and incremental snapshots agree, and only on a copy: the
+  // rows are still in the parse, so they come back — together — as soon as the
+  // table completes.
+  //
   // The two flags a snapshot carries that its blocks do not: how many leading
   // blocks no later input can change, and whether a stream is still arriving.
   // The second is how an `isAnimating` prop reaches the native rendering. A pass
   // that built its document sets both in place; only a document shared with an
   // earlier snapshot is copied here.
   const bool streaming = !finished_;
-  if (document && (document->settledBlocks != settled || document->streaming != streaming)) {
+  const bool hideTables = streaming && preview_.options().has(remend::PreviewFeature::Tables);
+  if (document && (document->settledBlocks != settled || document->streaming != streaming || hideTables)) {
     auto copy = std::make_shared<Document>(*document);
     copy->settledBlocks = settled;
     copy->streaming = streaming;
+    if (hideTables) {
+      hideIncompleteTable(copy.get());
+    }
     document = std::move(copy);
   }
   document_ = std::move(document);
@@ -545,6 +558,69 @@ ParseResult IncrementalParser::parseTail() {
   result.document = publish(combined, combined->settledBlocks);
   watchOpenFence(source, committedBytes_, committed);
   return result;
+}
+
+/**
+ * Drops a trailing table that has not completed yet.
+ *
+ * Only the tail is ever touched: the settled prefix is what md4c proved no
+ * later input can change, and the tail is rebuilt on every snapshot anyway, so
+ * withholding rows from it cannot lose a reader's text. Links and images that
+ * belonged only to the dropped rows go with them, because a press on a link the
+ * reader cannot see is a press on nothing.
+ *
+ * A table is complete when a non-row block follows it or the stream finishes.
+ * Anything else — rows still arriving — means the grid is half-drawn, which is
+ * exactly what is hidden.
+ */
+static void hideIncompleteTable(Document *document) {
+  const size_t count = document->blocks.size();
+  const uint32_t settled = document->settledBlocks;
+  size_t keep = count;
+  // Trailing rows that no later input can still change are complete enough to
+  // keep: only the rows past the settled prefix are still arriving.
+  while (keep > 0 && keep > settled && document->blocks[keep - 1].kind == BlockKind::TableRow) {
+    keep--;
+  }
+  if (keep == count) {
+    return;
+  }
+  // The table is withheld whole, not row by row: showing its settled rows while
+  // its tail is still arriving is still a half-drawn grid.
+  while (keep > 0 && document->blocks[keep - 1].kind == BlockKind::TableRow) {
+    keep--;
+  }
+  int32_t maxLink = -1;
+  int32_t maxImage = -1;
+  for (size_t index = 0; index < keep; index++) {
+    const Block &block = document->blocks[index];
+    for (const InlineRun &run : block.runs) {
+      maxLink = std::max(maxLink, run.link);
+    }
+    for (uint32_t image : block.images) {
+      maxImage = std::max(maxImage, static_cast<int32_t>(image));
+    }
+  }
+  // Links and images are appended in block order, so everything past the
+  // highest index a kept block names belonged to a dropped row. Copied out
+  // rather than spliced because the lists only move forward: a forward iterator
+  // is all they offer, and the tail is small.
+  std::vector<Block> blocks;
+  blocks.reserve(keep);
+  for (size_t index = 0; index < keep; index++) {
+    blocks.push_back(document->blocks[index]);
+  }
+  std::vector<Link> links;
+  for (int32_t index = 0; index <= maxLink; index++) {
+    links.push_back(document->links[static_cast<size_t>(index)]);
+  }
+  std::vector<Image> images;
+  for (int32_t index = 0; index <= maxImage; index++) {
+    images.push_back(document->images[static_cast<size_t>(index)]);
+  }
+  document->blocks = SharedList<Block>(document->blocks.prefix(), std::move(blocks));
+  document->links = SharedList<Link>(document->links.prefix(), std::move(links));
+  document->images = SharedList<Image>(document->images.prefix(), std::move(images));
 }
 
 void IncrementalParser::tryCommit() {

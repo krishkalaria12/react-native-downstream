@@ -175,6 +175,12 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 /// opposite of the state it found, because a checkbox is a toggle rather than a
 /// report.
 - (void)didToggleTaskAtContainer:(uint32_t)containerId checked:(BOOL)checked;
+/// Blocks as the Markdown that produced them, for "Copy as Markdown".
+///
+/// The exporter reads block indices, so the caller maps its selection onto the
+/// document first: this only exports, because exporting is the one thing the
+/// engine does identically on both platforms.
+- (NSString *)markdownForBlocksFrom:(uint32_t)from to:(uint32_t)to;
 /// A copy, a download, or a save that failed.
 - (void)didFailControlOfKind:(DSBlockKind)kind action:(NSString *)action message:(NSString *)message;
 @end

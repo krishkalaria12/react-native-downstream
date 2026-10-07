@@ -32,13 +32,15 @@ const PREVIEW_LINKS = 1 << 2;
 const PREVIEW_IMAGES = 1 << 3;
 const PREVIEW_MATH = 1 << 4;
 const PREVIEW_HTML_TAGS = 1 << 5;
+const PREVIEW_TABLES = 1 << 6;
 const PREVIEW_ALL =
   PREVIEW_EMPHASIS |
   PREVIEW_INLINE_CODE |
   PREVIEW_LINKS |
   PREVIEW_IMAGES |
   PREVIEW_MATH |
-  PREVIEW_HTML_TAGS;
+  PREVIEW_HTML_TAGS |
+  PREVIEW_TABLES;
 
 /**
  * Resolves the public `preview` option to a bitmask.
@@ -65,6 +67,7 @@ function previewFeatures(options: boolean | MarkdownPreviewOptions): number {
   if (options.images) features |= PREVIEW_IMAGES;
   if (options.math) features |= PREVIEW_MATH;
   if (options.htmlTags) features |= PREVIEW_HTML_TAGS;
+  if (options.tables) features |= PREVIEW_TABLES;
   return features;
 }
 const controllers = new Map<string, StreamState>();

@@ -1334,6 +1334,18 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   }
 
   /**
+   * Blocks as the Markdown that produced them, for "Copy as Markdown".
+   *
+   * The exporter reads block indices, so the caller maps its selection onto
+   * the document first: this only exports, because exporting is the one thing
+   * the engine does identically on both platforms.
+   */
+  internal fun exportMarkdown(from: Int, to: Int): String? {
+    if (documentId == 0L || from < 0 || to <= from) return null
+    return DownstreamNative.export(documentId, from, to, EXPORT_MARKDOWN, ',')
+  }
+
+  /**
    * A hold on a link, reported rather than acted on.
    *
    * A tap opens (or asks, through link safety); a hold is the app's: copy the

@@ -90,6 +90,16 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   private var longPress: LongPress? = null
   private var pressedTask: TaskPress? = null
 
+  private companion object {
+    /**
+     * The selection menu's "Copy as Markdown" item.
+     *
+     * A fixed id rather than a resource because the menu is built at runtime
+     * and the id only has to be unique within it.
+     */
+    const val MENU_COPY_MARKDOWN = 0xD0E5
+  }
+
 /**
  * A task checkbox: the container it belongs to and whether it is checked.
  *
@@ -139,6 +149,76 @@ private class TaskPress(val id: Int, val checked: Boolean)
     }
   }
 
+  /**
+   * Extra items on the text selection menu, and copy as Markdown.
+   *
+   * Installed once, because the menu is built per selection and the callback
+   * would otherwise stack: the wrapper delegates to whatever was there, so the
+   * platform's own items keep working and this only adds.
+   */
+  private var selectionCallbackInstalled = false
+
+  private fun installSelectionCallback() {
+    if (selectionCallbackInstalled) return
+    selectionCallbackInstalled = true
+    val previous = customSelectionActionModeCallback
+    customSelectionActionModeCallback = object : android.view.ActionMode.Callback {
+      override fun onCreateActionMode(mode: android.view.ActionMode?, menu: android.view.Menu?): Boolean {
+        val created = previous?.onCreateActionMode(mode, menu) ?: true
+        menu?.add(0, MENU_COPY_MARKDOWN, 0, "Copy as Markdown")?.apply {
+          setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_NEVER)
+        }
+        return created
+      }
+
+      override fun onPrepareActionMode(mode: android.view.ActionMode?, menu: android.view.Menu?): Boolean {
+        return previous?.onPrepareActionMode(mode, menu) ?: true
+      }
+
+      override fun onActionItemClicked(mode: android.view.ActionMode?, item: android.view.MenuItem?): Boolean {
+        if (item?.itemId == MENU_COPY_MARKDOWN) {
+          copySelectionAsMarkdown()
+          mode?.finish()
+          return true
+        }
+        return previous?.onActionItemClicked(mode, item) ?: false
+      }
+
+      override fun onDestroyActionMode(mode: android.view.ActionMode?) {
+        previous?.onDestroyActionMode(mode)
+      }
+    }
+  }
+
+  /**
+   * The selection as the Markdown that produced it.
+   *
+   * Blocks are the unit the exporter reads, so a selection that starts
+   * mid-paragraph copies the whole block: partial Markdown is not Markdown, and
+   * a paste of it would render as something the reader never saw.
+   */
+  private fun copySelectionAsMarkdown() {
+    if (selectionStart == selectionEnd) return
+    val start = minOf(selectionStart, selectionEnd)
+    val end = maxOf(selectionStart, selectionEnd)
+    val blocks = readingBlocks
+    var first = -1
+    var last = -1
+    for ((index, block) in blocks.withIndex()) {
+      if (block.end > start && block.start < end) {
+        if (first < 0) first = index
+        last = index
+      }
+    }
+    if (first < 0) return
+    val host = findHost() ?: return
+    // `blockOffset` is the document block this view's first block is, so the
+    // accessible blocks map onto the document by position.
+    val markdown = host.exportMarkdown(blockOffset + first, blockOffset + last + 1) ?: return
+    ControlDelivery.copyText(context, COPIED_LABEL, markdown)
+    ControlDelivery.beginCopy()
+  }
+
   override fun onTextContextMenuItem(id: Int): Boolean {
     // A copy that would take the caret's placeholder is written here instead,
     // because the platform's own copy reads the text verbatim and the placeholder
@@ -161,6 +241,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
   }
 
   fun setSegment(segment: TextSegment, rendered: RenderedDocument, firstBlock: Int) {
+    installSelectionCallback()
     if (segment === this.segment && firstBlock == blockOffset) {
       return
     }

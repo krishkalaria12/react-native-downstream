@@ -1342,6 +1342,14 @@ NSString *nameForFormat(NSString *format) {
                    markdown:@""];
 }
 
+- (NSString *)markdownForBlocksFrom:(uint32_t)from to:(uint32_t)to {
+  const auto &document = _state ? _state->getData().document : nullptr;
+  if (!document || from >= to || to > document->blocks.size()) {
+    return @"";
+  }
+  return toNSString(exportBlocks(*document, from, to, ExportFormat::Markdown));
+}
+
 - (void)didToggleTaskAtContainer:(uint32_t)containerId checked:(BOOL)checked {
   const auto *emitter = [self emitter];
   if (emitter == nullptr) {
