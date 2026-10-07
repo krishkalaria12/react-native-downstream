@@ -88,6 +88,14 @@ public:
     return true;
   }
 
+  /// The canonical source, for slicing a tag slot's inner Markdown. Read
+  /// under the same lock as the snapshot, so the bytes always match the
+  /// document they are sliced for.
+  std::string source() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::string(parser_.source());
+  }
+
   DocumentHandle snapshot(uint64_t generation, uint64_t sequence) const {
     std::lock_guard<std::mutex> lock(mutex_);
     return generation == readyGeneration_ && sequence == readySequence_ && generation == generation_
@@ -353,6 +361,14 @@ void SessionRegistry::dispose(const std::string &id) {
 DocumentHandle SessionRegistry::snapshot(const std::string &id, uint64_t generation, uint64_t sequence) {
   const auto session = findSession(id);
   return session ? session->snapshot(generation, sequence) : nullptr;
+}
+
+std::string SessionRegistry::source(const std::string &id) {
+  const auto session = findSession(id);
+  if (!session) {
+    return "";
+  }
+  return session ? session->source() : "";
 }
 
 bool SessionRegistry::isFinished(const std::string &id) {

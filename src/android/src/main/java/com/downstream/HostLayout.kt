@@ -21,6 +21,20 @@ internal data class HostEntry(
 )
 
 /**
+ * One hosted custom tag: a container an app's component draws instead of text.
+ *
+ * A separate key space from [HostEntry] because the two count different things:
+ * a fence ordinal counts code blocks and a tag key is a container id, so one
+ * list mixing them would let a fence claim a tag's height.
+ */
+internal data class TagHostEntry(
+  /** The custom container's own id, which is also what the slot is keyed by. */
+  val container: Int,
+  /** The height the component measured at, in points as the node measures. */
+  val height: Float,
+)
+
+/**
  * Every React child this view mounts into a fence.
  *
  * Sorted by ordinal, exactly as the engine writes it, so [heightFor] can binary
@@ -29,6 +43,12 @@ internal data class HostEntry(
  */
 internal data class HostLayout(
   val entries: List<HostEntry> = emptyList(),
+  /**
+   * Every React child mounted into a custom tag, by container id. Empty means
+   * no tag asked to be hosted, which is every view that registers no tag
+   * renderers.
+   */
+  val tags: List<TagHostEntry> = emptyList(),
 ) {
   fun isEmpty(): Boolean = entries.isEmpty()
 
@@ -60,4 +80,18 @@ internal data class HostLayout(
    * fence, so the card stays away because the app said so.
    */
   fun hosts(ordinal: Int): Boolean = find(ordinal) != null
+
+  /**
+   * Whether the custom container is drawn by a React child rather than as
+   * text. Presence, not height, for the same reason a fence's hosting is: a
+   * component that renders nothing still owns its container.
+   */
+  fun hostsTag(container: Int): Boolean =
+    tags.binarySearchBy(container) { it.container } >= 0
+
+  /** The height for a hosted tag's container, or 0 when nothing hosts it. */
+  fun tagHeightFor(container: Int): Float {
+    val index = tags.binarySearchBy(container) { it.container }
+    return if (index >= 0) tags[index].height else 0f
+  }
 }

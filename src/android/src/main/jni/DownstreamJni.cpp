@@ -731,6 +731,11 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
                                   start + static_cast<jint>(run.end),
                                   static_cast<jint>(run.styles),
                                   run.link,
+                                  // The app-allowed tag that styled this run,
+                                  // or -1. Crosses with the run rather than as
+                                  // its own read, because a press has to know
+                                  // which tag it landed on without asking.
+                                  run.tag,
                               });
     }
     for (const TokenRun &run : block.tokens) {
@@ -987,6 +992,43 @@ Java_com_downstream_DownstreamNative_nativeReadLink(JNIEnv *env, jclass /*clazz*
 /// Serializes blocks [from, to) of a document, as a String, or null when the
 /// document is gone. The same call serves a clipboard write and a saved file,
 /// so both platforms can only ever produce identical bytes.
+/**
+ * One app-allowed tag as `[name, attributes, range]`, where attributes is a
+ * flat `[name, value, …]` list and range is `[start, end]` in UTF-16 source
+ * offsets. Null when the document is gone or the index is not a tag.
+ *
+ * Read one tag at a time because a press names one tag: a bulk table would
+ * cross every tag of every document for a press that reads one.
+ */
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_downstream_DownstreamNative_nativeReadTag(
+    JNIEnv *env, jclass /*clazz*/, jlong id, jint index) {
+  const DocumentHandle document = DocumentRegistry::find(static_cast<uint64_t>(id));
+  if (!document || index < 0 || static_cast<size_t>(index) >= document->tags.size()) {
+    return nullptr;
+  }
+  const Tag &tag = document->tags[static_cast<size_t>(index)];
+  jclass objectClass = env->FindClass("java/lang/Object");
+  jobjectArray result = env->NewObjectArray(3, objectClass, nullptr);
+  jstring name = toJavaString(env, utf8ToUtf16(tag.name));
+  env->SetObjectArrayElement(result, 0, name);
+  env->DeleteLocalRef(name);
+  jobjectArray attributes = env->NewObjectArray(static_cast<jsize>(tag.attributes.size() * 2), objectClass, nullptr);
+  jsize attr = 0;
+  for (const auto &pair : tag.attributes) {
+    jstring key = toJavaString(env, utf8ToUtf16(pair.first));
+    env->SetObjectArrayElement(attributes, attr++, key);
+    env->DeleteLocalRef(key);
+    jstring value = toJavaString(env, utf8ToUtf16(pair.second));
+    env->SetObjectArrayElement(attributes, attr++, value);
+    env->DeleteLocalRef(value);
+  }
+  env->SetObjectArrayElement(result, 1, attributes);
+  env->DeleteLocalRef(attributes);
+  env->SetObjectArrayElement(result, 2, toJavaArray(env, {static_cast<jint>(tag.range.start),
+                                                          static_cast<jint>(tag.range.end)}));
+  return result;
+}
+
 extern "C" JNIEXPORT jstring JNICALL Java_com_downstream_DownstreamNative_nativeExport(
     JNIEnv *env, jclass /*clazz*/, jlong id, jint from, jint to, jint format, jint separator) {
   const DocumentHandle document = DocumentRegistry::find(static_cast<uint64_t>(id));

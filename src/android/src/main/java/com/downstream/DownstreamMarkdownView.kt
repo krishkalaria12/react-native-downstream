@@ -89,6 +89,13 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   internal var onDetailsToggle: ((view: DownstreamMarkdownView, containerId: Int, open: Boolean) -> Unit)? = null
   internal var onTaskToggle: ((view: DownstreamMarkdownView, containerId: Int, checked: Boolean) -> Unit)? = null
   internal var onLinkLongPress: ((view: DownstreamMarkdownView, url: String, start: Int, end: Int) -> Unit)? = null
+  internal var onTagPress: ((
+    view: DownstreamMarkdownView,
+    name: String,
+    attributes: List<String>,
+    text: String,
+    range: IntRange,
+  ) -> Unit)? = null
 
   private var documentId = 0L
   private var fontScale = 1f
@@ -699,6 +706,12 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       val settled = planned.from + 1 <= planned.settledBlocks
       when (val child = segmentViews[index]) {
         is TextSegmentView -> {
+          // A hosted tag replaces its whole segment: the child owns the range
+          // now, so the text underneath draws nothing. Only a segment the plan
+          // grouped for one container is ever hosted, which is what makes the
+          // container id the key rather than a block range.
+          val custom = (rendered?.segments?.getOrNull(index) as? TextSegment)?.customContainer ?: -1
+          child.hosted = custom >= 0 && hostLayout.hostsTag(custom)
           child.setSelectable(selectable && settled)
           child.textDirection = direction
           // The chevron is the control's own glyph, so it appears with the control
@@ -1355,6 +1368,18 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   internal fun longPressLink(index: Int) {
     val link = DownstreamNative.readLink(documentId, index) ?: return
     onLinkLongPress?.invoke(this, link.url, link.start, link.end)
+  }
+
+  /**
+   * A press on an app-allowed tag's run.
+   *
+   * Reported with the tag's name, its attributes, the pressed text, and the
+   * source range — everything `onTagPress` promises, read here rather than in
+   * JavaScript because the document is what knows them.
+   */
+  internal fun pressTag(index: Int, text: String) {
+    val tag = DownstreamNative.readTag(documentId, index) ?: return
+    onTagPress?.invoke(this, tag.name, tag.attributes, text, tag.range)
   }
 
   // The segment views this view is currently holding, in document order. Every

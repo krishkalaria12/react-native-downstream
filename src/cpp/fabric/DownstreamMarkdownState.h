@@ -277,6 +277,11 @@ public:
     if (auto value = data.get_ptr("hostEntries")) {
       readHosts(*value, &hosts);
     }
+    // The hosted tags, beside the hosted fences: a container id rather than a
+    // code ordinal, because the two count different things.
+    if (auto value = data.get_ptr("tagHostEntries")) {
+      readTagHosts(*value, &hosts);
+    }
   }
 
   /// Java resolves the document through the native registry by id rather than
@@ -305,7 +310,8 @@ public:
         "themeId", static_cast<double>(themeId()))(
         // The same keys the Android measure map uses, because the view reads
         // this state and that map through one function.
-        "imagesEnabled", images.enabled ? 1.0 : 0.0)("imageEntries", writeImages(images))("hostEntries", writeHosts(hosts));
+        "imagesEnabled", images.enabled ? 1.0 : 0.0)("imageEntries", writeImages(images))("hostEntries", writeHosts(hosts))(
+        "tagHostEntries", writeTagHosts(hosts));
   }
 
 private:
@@ -373,12 +379,49 @@ private:
               });
   }
 
+  /// One object per hosted tag, as the measure map writes them: a container id
+  /// rather than a code ordinal, because the two count different things.
+  static void readTagHosts(const folly::dynamic &array, downstream::HostLayout *out) {
+    out->tags.clear();
+    if (!array.isArray()) {
+      return;
+    }
+    out->tags.reserve(array.size());
+    for (const auto &object : array) {
+      if (!object.isObject()) {
+        continue;
+      }
+      const auto *container = object.get_ptr("container");
+      const auto *height = object.get_ptr("height");
+      if (container == nullptr || height == nullptr || !container->isNumber() || !height->isNumber()) {
+        continue;
+      }
+      downstream::TagHostEntry entry;
+      entry.container = static_cast<uint32_t>(container->asDouble());
+      entry.height = static_cast<float>(height->asDouble());
+      out->tags.push_back(entry);
+    }
+    std::sort(out->tags.begin(), out->tags.end(),
+              [](const downstream::TagHostEntry &a, const downstream::TagHostEntry &b) {
+                return a.container < b.container;
+              });
+  }
+
   /// One object per hosted child, as the measure map writes them.
   static folly::dynamic writeHosts(const downstream::HostLayout &hosts) {
     auto array = folly::dynamic::array();
     for (const downstream::HostEntry &entry : hosts.entries) {
       array.push_back(
           folly::dynamic::object("ordinal", static_cast<double>(entry.ordinal))("height", static_cast<double>(entry.height)));
+    }
+    return array;
+  }
+
+  static folly::dynamic writeTagHosts(const downstream::HostLayout &hosts) {
+    auto array = folly::dynamic::array();
+    for (const downstream::TagHostEntry &entry : hosts.tags) {
+      array.push_back(folly::dynamic::object("container", static_cast<double>(entry.container))(
+          "height", static_cast<double>(entry.height)));
     }
     return array;
   }

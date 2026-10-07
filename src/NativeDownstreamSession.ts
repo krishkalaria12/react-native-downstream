@@ -56,6 +56,22 @@ export type FenceSlotsResult = Readonly<{
   slots: ReadonlyArray<FenceSlot>;
 }>;
 
+/**
+ * One custom container the app could draw, as the slot query reports it.
+ *
+ * Beside `FenceSlot` because the two answer different questions: a fence slot
+ * names a code block by ordinal with the code to draw, and a tag slot names a
+ * container by id with the source it holds and the tag that named it.
+ */
+export type TagSlot = Readonly<{
+  container: CodegenTypes.Int32;
+  tag: CodegenTypes.Int32;
+  name: string;
+  attributes: ReadonlyArray<ReadonlyArray<string>>;
+  markdown: string;
+  incomplete: boolean;
+}>;
+
 export interface Spec extends TurboModule {
   /**
    * Creates a session. `parseFlags` is the parse option bitmask, read once here
@@ -142,6 +158,28 @@ export interface Spec extends TurboModule {
     sequence: CodegenTypes.Int32,
     languages: ReadonlyArray<string>
   ): ReadonlyArray<FenceSlot>;
+  /**
+   * The tag slots a controlled source holds, answered from this thread.
+   *
+   * Only containers whose tag the app named are reported: a tag with no
+   * renderer draws its children natively, so there is nothing to mount for it.
+   */
+  tagSlots(
+    source: string,
+    parseFlags: CodegenTypes.Int32,
+    names: ReadonlyArray<string>
+  ): ReadonlyArray<TagSlot>;
+  /**
+   * The tag slots of one published snapshot, which is the snapshot the view is
+   * mounting for `sessionSequence`. Walks blocks and never parses, so it is
+   * safe to call on every snapshot of a stream from render.
+   */
+  sessionTagSlots(
+    sessionId: string,
+    generation: CodegenTypes.Int32,
+    sequence: CodegenTypes.Int32,
+    names: ReadonlyArray<string>
+  ): ReadonlyArray<TagSlot>;
   readonly onSnapshotReady: CodegenTypes.EventEmitter<SnapshotReadyEvent>;
   readonly onSessionError: CodegenTypes.EventEmitter<SessionErrorEvent>;
   readonly onTrace: CodegenTypes.EventEmitter<NativeTraceEvent>;

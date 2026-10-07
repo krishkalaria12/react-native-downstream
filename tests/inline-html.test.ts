@@ -138,6 +138,40 @@ describe('the three tags', () => {
     expect(model.images[0]!.alt).toBe('a2b');
   });
 
+  it('splits the one-block form: summary from the tag, body as Markdown', () => {
+    // No blank lines, so md4c delivers one HTML block — and the body is parsed
+    // as Markdown rather than shown as source, which goes past GitHub and
+    // Streamdown. Models write it this way.
+    const model = parse(
+      '<details><summary>Click</summary>Body **text**.</details>\n',
+      ON
+    );
+    expect(visibleText(model)).toBe('Click\nBody text.');
+    expect(model.blocks).toHaveLength(2);
+    const [summary, body] = model.blocks as [Block, Block];
+    expect(
+      summary.containers.find((c) => c.kind === CONTAINER.details)?.showsMarker
+    ).toBe(true);
+    // The body's emphasis parsed: this is what "parsed as Markdown" proves.
+    expect(body.text).toBe('Body text.');
+  });
+
+  it("reads the writer's open attribute in the one-block form", () => {
+    const model = parse('<details open><summary>A</summary>B.</details>\n', ON);
+    expect(
+      model.blocks[0]!.containers.find((c) => c.kind === CONTAINER.details)
+        ?.open
+    ).toBe(true);
+    expect(visibleText(model)).toBe('A\nB.');
+  });
+
+  it('summarises a summary-less one-block form as Details', () => {
+    // What a browser shows for `<details>body</details>`: the disclosure still
+    // needs a name.
+    const model = parse('<details>Body only.</details>\n', ON);
+    expect(visibleText(model)).toBe('Details\nBody only.');
+  });
+
   it('holds every case to the incremental rule', () => {
     for (const [source] of GRAMMAR) {
       assertStreamingMatchesFullParse([...source]);
@@ -440,11 +474,48 @@ describe('<details>', () => {
     ]);
   });
 
+  it('splits the one-block form: summary from the tag, body as Markdown', () => {
+    // No blank lines, so md4c delivers one HTML block — and the body is parsed
+    // as Markdown rather than shown as source, which goes past GitHub and
+    // Streamdown. Models write it this way.
+    const model = parse(
+      '<details><summary>Click</summary>Body **text**.</details>\n',
+      ON
+    );
+    expect(visibleText(model)).toBe('Click\nBody text.');
+    expect(model.blocks).toHaveLength(2);
+    const [summary, body] = model.blocks as [Block, Block];
+    expect(
+      summary.containers.find((c) => c.kind === CONTAINER.details)?.showsMarker
+    ).toBe(true);
+    // The body's emphasis parsed: this is what "parsed as Markdown" proves.
+    expect(body.text).toBe('Body text.');
+  });
+
+  it("reads the writer's open attribute in the one-block form", () => {
+    const model = parse('<details open><summary>A</summary>B.</details>\n', ON);
+    expect(
+      model.blocks[0]!.containers.find((c) => c.kind === CONTAINER.details)
+        ?.open
+    ).toBe(true);
+    expect(visibleText(model)).toBe('A\nB.');
+  });
+
+  it('summarises a summary-less one-block form as Details', () => {
+    // What a browser shows for `<details>body</details>`: the disclosure still
+    // needs a name.
+    const model = parse('<details>Body only.</details>\n', ON);
+    expect(visibleText(model)).toBe('Details\nBody only.');
+  });
+
   it('holds every case to the incremental rule', () => {
     // One byte at a time, because a collapsible block is the case the rule exists
     // for: the tags arrive as their own blocks, so an unstable tail that committed
     // between them would show a summary with no body and a body with no summary.
     assertStreamingMatchesFullParse([...DETAILS]);
+    assertStreamingMatchesFullParse([
+      ...'<details><summary>Click</summary>Body **text**.</details>\n',
+    ]);
     assertStreamingMatchesFullParse([
       ...'<details open>\n<summary>a <code>b</code></summary>\n\nBody.\n\n</details>\n',
     ]);

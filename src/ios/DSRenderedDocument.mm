@@ -23,6 +23,7 @@ using namespace downstream::theme_layout;
 
 NSAttributedStringKey const DSBlockInfoAttributeName = @"DSBlockInfo";
 NSAttributedStringKey const DSLinkIndexAttributeName = @"DSLinkIndex";
+NSAttributedStringKey const DSTagIndexAttributeName = @"DSTagIndex";
 NSAttributedStringKey const DSCaretKindAttributeName = @"DSCaretKind";
 
 /// The character a caret reserves its space with.
@@ -107,7 +108,7 @@ bool hasInlineMath(const Block &block) { return !block.math.empty(); }
 /// contrast and appearance changes, which a frozen `UIColor` would not.
 void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockFont &font, const Theme &theme,
                DSThemeColors *colors, NSUInteger offset, CGFloat size, bool monospaced, uint32_t clampStart,
-               uint32_t clampEnd) {
+               uint32_t clampEnd, const Document &document, DSLinkVariants *variants, DSTagStyles *tagStyles) {
   const auto runs = inlineRunsInRange(block.runs, clampStart, clampEnd);
   if (runs.empty()) {
     return;
@@ -122,6 +123,7 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
   struct RunAttributes {
     uint32_t styles;
     int32_t link;
+    int32_t tag;
     NSDictionary<NSAttributedStringKey, id> *attributes;
   };
   std::array<RunAttributes, 16> cachedAttributes{};
@@ -135,7 +137,8 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
     const NSRange range = NSMakeRange(offset + start - clampStart, end - start);
     NSDictionary<NSAttributedStringKey, id> *cached = nil;
     for (size_t index = 0; index < cachedCount; ++index) {
-      if (cachedAttributes[index].styles == run.styles && cachedAttributes[index].link == run.link) {
+      if (cachedAttributes[index].styles == run.styles && cachedAttributes[index].link == run.link &&
+          cachedAttributes[index].tag == run.tag) {
         cached = cachedAttributes[index].attributes;
         break;
       }
@@ -150,16 +153,29 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
     const bool sub = (run.styles & InlineStyle::Subscript) != 0;
     const bool bold = (run.styles & InlineStyle::Strong) != 0;
     const bool italic = (run.styles & InlineStyle::Emphasis) != 0;
+    // An app-styled tag's traits, read here so the face below takes them: the
+    // name comes from the document's own tag table, which is the same string a
+    // press reports. Color is applied with the other colors below, because it
+    // writes the attributes directly rather than going through the face.
+    long long tagFlags = 0;
+    if (tagStyles != nil && !tagStyles.isEmpty && run.tag >= 0 &&
+        static_cast<size_t>(run.tag) < document.tags.size()) {
+      const std::string &tagName = document.tags[static_cast<size_t>(run.tag)].name;
+      NSDictionary *tagStyle = [tagStyles styleForTag:@(tagName.c_str())];
+      tagFlags = tagStyle != nil ? [tagStyle[@"flags"] longLongValue] : 0;
+    }
+    const bool tagBold = (tagFlags & 1) != 0;
+    const bool tagItalic = (tagFlags & 2) != 0;
 
     // The run's face starts as its block's and takes the inline kind's slots on
     // top, so a `strong` in a themed heading is a heavier heading rather than a
     // heading that drops back to the body face.
     BlockFont runTypeface = font;
     CGFloat runSize = size;
-    if (bold) {
+    if (bold || tagBold) {
       runTypeface = strongFont(theme, runTypeface);
     }
-    if (italic) {
+    if (italic || tagItalic) {
       runTypeface = emFont(theme, runTypeface);
     }
     if (code) {
@@ -303,10 +319,29 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
       }
       attributes[DSLinkIndexAttributeName] = @(run.link);
     }
+    if (run.tag >= 0) {
+      attributes[DSTagIndexAttributeName] = @(run.tag);
+      // An app-styled tag draws with its entry's color and traits; anything it
+      // does not name stays the surrounding text's. The name comes from the
+      // document's own tag table, which is the same string a press reports.
+      if (tagStyles != nil && !tagStyles.isEmpty &&
+          static_cast<size_t>(run.tag) < document.tags.size()) {
+        const std::string &tagName = document.tags[static_cast<size_t>(run.tag)].name;
+        NSDictionary *style = [tagStyles styleForTag:@(tagName.c_str())];
+        const long long tagColor = [style[@"color"] longLongValue];
+        if (style != nil && tagColor >= 0) {
+          attributes[NSForegroundColorAttributeName] = [UIColor
+              colorWithRed:((tagColor >> 16) & 0xff) / 255.0
+                     green:((tagColor >> 8) & 0xff) / 255.0
+                      blue:(tagColor & 0xff) / 255.0
+                     alpha:((tagColor >> 24) & 0xff) / 255.0];
+        }
+      }
+    }
     NSDictionary<NSAttributedStringKey, id> *resolved = attributes;
     if (cachedCount < cachedAttributes.size()) {
       resolved = [attributes copy];
-      cachedAttributes[cachedCount++] = {run.styles, run.link, resolved};
+      cachedAttributes[cachedCount++] = {run.styles, run.link, run.tag, resolved};
     }
     [text addAttributes:resolved range:range];
   }
@@ -384,6 +419,29 @@ void applyTokens(NSMutableAttributedString *text, const Block &block, DSThemeCol
 @end
 
 @implementation DSContainerInfo
+@end
+
+@implementation DSTagStyles
+
+- (BOOL)isEmpty {
+  return self.names.count == 0;
+}
+
+- (NSDictionary *)styleForTag:(NSString *)name {
+  if (name.length == 0 || self.names.count == 0) {
+    return nil;
+  }
+  NSString *normalized = name.lowercaseString;
+  for (NSUInteger index = 0; index < self.names.count; index++) {
+    if ([self.names[index] isEqualToString:normalized]) {
+      const long long color = index < self.colors.count ? self.colors[index].longLongValue : -1;
+      const long long flags = index < self.flags.count ? self.flags[index].longLongValue : 0;
+      return @{@"color" : @(color), @"flags" : @(flags)};
+    }
+  }
+  return nil;
+}
+
 @end
 
 @implementation DSLinkVariants
@@ -617,6 +675,7 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
 #pragma mark - Text segments
 
 @interface DSTextSegment ()
+@property (nonatomic) uint32_t customContainer;
 @property (nonatomic) NSAttributedString *attributedString;
 @property (nonatomic) CGFloat topInset;
 @property (nonatomic) CGFloat bottomInset;
@@ -652,7 +711,8 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
                   syntaxHighlighting:(BOOL)syntaxHighlighting
                              inCard:(BOOL)inCard
                               caret:(const PlacedCaret &)caret
-                           variants:(DSLinkVariants *)variants {
+                           variants:(DSLinkVariants *)variants
+                          tagStyles:(DSTagStyles *)tagStyles {
   DSTextSegment *segment = [DSTextSegment new];
   segment->_measurementLock = [NSLock new];
   segment.theme = [DSThemeColors colorsFor:theme];
@@ -789,7 +849,7 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
                  range:NSIntersectionRange(firstParagraph, blockRange)];
 
     applyRuns(text, block, font, theme, colors, start, baseSize, monospaced, 0,
-              static_cast<uint32_t>(block.text.size()));
+              static_cast<uint32_t>(block.text.size()), document, variants, tagStyles);
     if (isCode && syntaxHighlighting) {
       applyTokens(text, block, colors, start, 0, static_cast<uint32_t>(block.text.size()));
     }
@@ -826,6 +886,18 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
   segment.attributedString = [text copy];
   segment.blocks = [blocks copy];
   segment.blockRanges = [blockRanges copy];
+  // The plan grouped this segment for one custom container, if it did: the
+  // first block's innermost Custom frame names it, and every block in the range
+  // shares it by construction of the grouping.
+  uint32_t custom = UINT32_MAX;
+  if (blocks.count > 0) {
+    for (DSContainerInfo *frame in ((DSBlockInfo *)blocks[0]).containers) {
+      if (frame.kind == DSContainerKindCustom) {
+        custom = frame.containerId;
+      }
+    }
+  }
+  segment.customContainer = custom;
   return segment;
 }
 
@@ -1259,7 +1331,7 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                  syntaxHighlighting:syntaxHighlighting
                                             inCard:YES
                                              caret:caret
-                                          variants:nil];
+                                          variants:nil tagStyles:nil];
   segment.language = [NSString stringWithUTF8String:block.language.c_str()];
   // The header row's own typography and its two remaining colors, all from the
   // theme rather than from literals in the card view.
@@ -1410,12 +1482,17 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
 
 @implementation DSTableSegment
 
+/// Table cells can hold styled tag runs, so the table builder takes the same
+/// styling inputs as the text builder: the document for names, and the two
+/// objects that say how links and tags draw.
 + (instancetype)segmentWithDocument:(const Document &)document
                                from:(size_t)from
                                  to:(size_t)to
                              theme:(const Theme &)theme
                               scale:(CGFloat)scale
-                         markerFont:(UIFont *)markerFont {
+                         markerFont:(UIFont *)markerFont
+                           variants:(DSLinkVariants *)variants
+                          tagStyles:(DSTagStyles *)tagStyles {
   DSTableSegment *segment = [DSTableSegment new];
   segment.theme = [DSThemeColors colorsFor:theme];
   segment.borderWidth = tableBorderWidth(theme) * scale;
@@ -1486,7 +1563,7 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                 NSParagraphStyleAttributeName : style,
               }];
       applyRuns(text, block, headerRow ? headerFont : font, theme, segment.theme, 0, size, false, cell.start,
-                cell.end);
+                cell.end, document, variants, tagStyles);
       DSTableCell *tableCell = [DSTableCell new];
       tableCell.text = text;
       [row addObject:tableCell];
@@ -1600,6 +1677,10 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   downstream::ReaderChoices _cachedChoices;
   /// Per-URL link styles, which the text builder reads when it colors a link run.
   DSLinkVariants *_variants;
+  /// Styles for app-allowed inline tags, read when a run names one. Beside
+  /// `_variants` because the two answer different questions about the same
+  /// runs.
+  DSTagStyles *_tagStyles;
   bool _hasCachedFrames;
   /// Cache native geometry. Measurement needs no NSValue boxing, and each
   /// caller copies only the frames it consumes while holding the cache lock.
@@ -1646,7 +1727,8 @@ static NSString *committedVariantsKey(DSLinkVariants *variants) {
                markerFont:(UIFont *)markerFont
         syntaxHighlighting:(BOOL)syntaxHighlighting
                   caretAfter:(const PlacedCaret &)caretAfter
-                  variants:(DSLinkVariants *)variants {
+                  variants:(DSLinkVariants *)variants
+                 tagStyles:(DSTagStyles *)tagStyles {
   // The theme is in the key because a segment holds resolved colors and
   // measured sizes, and a second theme must not read the first one's.
   // The plan's kind is in it for the same reason: a math block and an image-only
@@ -1654,9 +1736,10 @@ static NSString *committedVariantsKey(DSLinkVariants *variants) {
   // and a paragraph and the two are not interchangeable.
   // The caret is not in it because its placeholder is only ever in the last
   // segment's measured text, and a committed segment is never the last one.
-  NSString *key = [NSString stringWithFormat:@"%llu:%zu:%llu:%.4f:%d:%d:%@", (unsigned long long)document.blocks[from].identity,
-                                             to - from, (unsigned long long)theme.id(), scale, syntaxHighlighting,
-                                             static_cast<int>(kind), committedVariantsKey(variants)];
+  NSString *key =
+      [NSString stringWithFormat:@"%llu:%zu:%llu:%.4f:%d:%d:%@:%@", (unsigned long long)document.blocks[from].identity,
+                                 to - from, (unsigned long long)theme.id(), scale, syntaxHighlighting,
+                                 static_cast<int>(kind), committedVariantsKey(variants), tagStylesKey(tagStyles)];
   DSCommittedSegment *cached = [self.committedSegmentCache objectForKey:key];
   bool matches = cached != nil && cached->identities.size() == to - from;
   for (size_t index = from; matches && index < to; index++) {
@@ -1695,7 +1778,9 @@ static NSString *committedVariantsKey(DSLinkVariants *variants) {
                                                               to:to
                                                            theme:theme
                                                            scale:scale
-                                                      markerFont:markerFont];
+                                                      markerFont:markerFont
+                                                        variants:variants
+                                                       tagStyles:tagStyles];
       break;
     case SegmentKind::Code:
       cached->segment = (id)[DSCodeSegment segmentWithDocument:document
@@ -1706,6 +1791,11 @@ static NSString *committedVariantsKey(DSLinkVariants *variants) {
                                         syntaxHighlighting:syntaxHighlighting
                                                          caret:caretAfter];
       break;
+    case SegmentKind::Custom:
+      // A custom container draws as text until it is hosted: the blocks are
+      // ordinary paragraphs, and only a hosted tag replaces them. Falls through
+      // to the text builder, because there is nothing custom about unhosted
+      // text.
     case SegmentKind::Text:
       cached->segment = (id)[DSTextSegment segmentWithDocument:document
                                                            from:from
@@ -1716,7 +1806,7 @@ static NSString *committedVariantsKey(DSLinkVariants *variants) {
                                           syntaxHighlighting:syntaxHighlighting
                                                          inCard:NO
                                                           caret:caretAfter
-                                                       variants:variants];
+                                                       variants:variants tagStyles:tagStyles];
       break;
   }
   [self.committedSegmentCache setObject:cached forKey:key cost:cost];
@@ -1752,7 +1842,22 @@ static NSString *variantsKey(DSLinkVariants *variants) {
                 syntaxHighlighting:syntaxHighlighting
                              theme:themeHandle
                             caret:caret
-                          variants:nil];
+                          variants:nil tagStyles:nil];
+}
+
+/// A cache key for the tag styles, or empty when there are none to key on.
+static NSString *tagStylesKey(DSTagStyles *styles) {
+  if (styles == nil || styles.isEmpty) {
+    return @"";
+  }
+  NSUInteger hash = styles.names.count;
+  for (NSString *name in styles.names) {
+    hash = hash * 31 + name.hash;
+  }
+  for (NSNumber *color in styles.colors) {
+    hash = hash * 31 + color.unsignedIntegerValue;
+  }
+  return [NSString stringWithFormat:@"%lu", (unsigned long)hash];
 }
 
 + (instancetype)renderedDocumentFor:(const DocumentHandle &)document
@@ -1760,26 +1865,28 @@ static NSString *variantsKey(DSLinkVariants *variants) {
                  syntaxHighlighting:(BOOL)syntaxHighlighting
                               theme:(const Theme::Handle &)themeHandle
                              caret:(const PlacedCaret &)caret
-                          variants:(DSLinkVariants *)variants {
+                          variants:(DSLinkVariants *)variants
+                         tagStyles:(DSTagStyles *)tagStyles {
   if (!document) {
     return [[self alloc] initWithDocument:document
                                fontScale:fontScale
                       syntaxHighlighting:syntaxHighlighting
                                    theme:themeHandle ? themeHandle : Theme::defaultTheme()
                                   caret:caret
-                               variants:variants];
+                               variants:variants tagStyles:tagStyles];
   }
   // The theme id is in the key rather than the theme itself, because interned
   // themes are stable for the life of a process and their id is all a cache key
   // needs to tell two of them apart. The caret is in it for the same reason: its
   // placeholder is in the measured text, so two renderings that differ only in
   // whether a caret was reserved are two different heights.
-  NSString *key = [NSString stringWithFormat:@"%llu:%.4f:%d:%llu:%d:%d:%@", (unsigned long long)document->id,
-                                             fontScale, syntaxHighlighting,
-                                             (unsigned long long)(themeHandle ? themeHandle->id()
-                                                                          : Theme::defaultTheme()->id()),
-                                             static_cast<int>(caret.kind), static_cast<int>(caret.place),
-                                             variantsKey(variants)];
+  NSString *key =
+      [NSString stringWithFormat:@"%llu:%.4f:%d:%llu:%d:%d:%@:%@", (unsigned long long)document->id,
+                                 fontScale, syntaxHighlighting,
+                                 (unsigned long long)(themeHandle ? themeHandle->id()
+                                                                  : Theme::defaultTheme()->id()),
+                                 static_cast<int>(caret.kind), static_cast<int>(caret.place),
+                                 variantsKey(variants), tagStylesKey(tagStyles)];
   DSRenderedDocument *rendered = [self.cache objectForKey:key];
   if (rendered == nil) {
     rendered = [[self alloc] initWithDocument:document
@@ -1787,7 +1894,7 @@ static NSString *variantsKey(DSLinkVariants *variants) {
                           syntaxHighlighting:syntaxHighlighting
                                     theme:themeHandle ? themeHandle : Theme::defaultTheme()
                                    caret:caret
-                                variants:variants];
+                                variants:variants tagStyles:tagStyles];
     [self.cache setObject:rendered forKey:key];
   }
   return rendered;
@@ -1803,7 +1910,8 @@ static NSString *variantsKey(DSLinkVariants *variants) {
               syntaxHighlighting:(BOOL)syntaxHighlighting
                             theme:(const Theme::Handle &)themeHandle
                            caret:(const PlacedCaret &)caret
-                        variants:(DSLinkVariants *)variants {
+                        variants:(DSLinkVariants *)variants
+                       tagStyles:(DSTagStyles *)tagStyles {
   if (!(self = [super init])) {
     return nil;
   }
@@ -1829,6 +1937,7 @@ static NSString *variantsKey(DSLinkVariants *variants) {
   NSMutableArray<NSNumber *> *indexes = [NSMutableArray new];
   _settledBlocks = document.settledBlocks;
   _variants = variants;
+  _tagStyles = tagStyles;
 
   for (const SegmentPlan &segment : planSegments(document)) {
     // The caret belongs to the last segment, whichever kind it is, because that is
@@ -1846,7 +1955,7 @@ static NSString *variantsKey(DSLinkVariants *variants) {
                                            markerFont:markerFont
                                     syntaxHighlighting:syntaxHighlighting
                                            caretAfter:here
-                                             variants:_variants];
+                                             variants:_variants tagStyles:_tagStyles];
     } else if (segment.isCode()) {
       built = [DSCodeSegment segmentWithDocument:document
                                            index:segment.from
@@ -1873,7 +1982,9 @@ static NSString *variantsKey(DSLinkVariants *variants) {
                                                to:segment.to
                                             theme:theme
                                             scale:scale
-                                       markerFont:markerFont];
+                                       markerFont:markerFont
+                                         variants:_variants
+                                        tagStyles:_tagStyles];
     } else {
       built = [DSTextSegment segmentWithDocument:document
                                             from:segment.from
@@ -1884,7 +1995,7 @@ static NSString *variantsKey(DSLinkVariants *variants) {
                                 syntaxHighlighting:syntaxHighlighting
                                            inCard:NO
                                             caret:here
-                                         variants:_variants];
+                                         variants:_variants tagStyles:_tagStyles];
     }
     // The plan counted the code blocks, so the ordinal comes from there rather
     // than from a walk of the blocks. It is assigned here so a committed segment
@@ -1950,7 +2061,7 @@ static NSString *variantsKey(DSLinkVariants *variants) {
                            syntaxHighlighting:NO
                                       inCard:NO
                                        caret:caret
-                                    variants:nil];
+                                    variants:nil tagStyles:nil];
 }
 
 - (NSArray<NSNumber *> *)segmentBlockIndexes {
@@ -1981,7 +2092,16 @@ static NSString *variantsKey(DSLinkVariants *variants) {
                hosts:(const downstream::HostLayout &)hosts
              choices:(const downstream::ReaderChoices &)choices {
   if ([segment isKindOfClass:DSTextSegment.class]) {
-    return visibleHeight((DSTextSegment *)segment, width, choices);
+    DSTextSegment *text = (DSTextSegment *)segment;
+    // A hosted tag replaces its whole segment with the slot: the component
+    // owns its height, so the text underneath takes none. Only a segment the
+    // plan grouped for one container is ever hosted, which is what makes the
+    // container id on the plan the key rather than a block range.
+    const uint32_t custom = [text customContainer];
+    if (custom != UINT32_MAX && hosts.hostsTag(custom)) {
+      return hosts.tagHeightFor(custom);
+    }
+    return visibleHeight(text, width, choices);
   }
   if ([segment isKindOfClass:DSMathSegment.class]) {
     DSMathSegment *formula = segment;
@@ -2090,6 +2210,7 @@ static NSString *variantsKey(DSLinkVariants *variants) {
                                  includeFrames:NO includeHosts:YES];
   measurement.size = stacked.size;
   measurement.hosts = std::move(stacked.hosts);
+  measurement.tagHosts = std::move(stacked.tagHosts);
   return measurement;
 }
 
@@ -2131,6 +2252,7 @@ static NSString *variantsKey(DSLinkVariants *variants) {
   DSStackedLayout stacked;
   stacked.frames.reserve(_segments.count);
   stacked.hosts.reserve(hosts.entries.size());
+  stacked.tagHosts.reserve(hosts.tags.size());
   // Segment edges round up from their exact positions, so frames stay on
   // whole points without rounding error accumulating across segments.
   CGFloat y = 0;
@@ -2157,6 +2279,18 @@ static NSString *variantsKey(DSLinkVariants *variants) {
     // component measured. The column comes from the block's own container path
     // through the engine's `contentLeading`, the same number the shadow node
     // measured the child at, so the two cannot disagree about where it goes.
+    if ([segment isKindOfClass:DSTextSegment.class]) {
+      DSTextSegment *text = segment;
+      // A hosted tag's rectangle: its content column, at the full height the
+      // component measured. Same shape as a hosted fence's, keyed by container
+      // id rather than code ordinal.
+      const uint32_t custom = text.customContainer;
+      if (custom != UINT32_MAX && hosts.hostsTag(custom)) {
+        const CGFloat leading = text.contentLeading;
+        const CGFloat column = constrained ? std::max<CGFloat>(0, width - leading) : 0;
+        stacked.tagHosts.emplace_back(custom, CGRectMake(leading, top, column, bottom - top));
+      }
+    }
     if ([segment isKindOfClass:DSCodeSegment.class]) {
       DSCodeSegment *card = segment;
       if (hosts.hosts(card.codeOrdinal)) {

@@ -78,6 +78,7 @@ export const ENGINE = [
     'TableLayout.cpp',
     'Direction.cpp',
     'BidiTable.cpp',
+    'TagSlots.cpp',
     'TagPolicy.cpp',
   ].map((name) => join(CPP, 'downstream', name)),
   ...[

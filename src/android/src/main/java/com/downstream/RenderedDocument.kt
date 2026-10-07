@@ -73,10 +73,16 @@ internal class RenderedDocument(
     choices: ReaderChoices,
   ): Int =
     when (segment) {
-      // The reader's one set of choices reaches the measurement whole, because a
-      // collapsed body is a height like any other and the view below draws from
-      // the same set.
-      is TextSegment -> segment.height(width, paint, choices)
+      // A hosted tag replaces its whole segment with the slot: the component
+      // owns its height, so the text underneath takes none. Only a segment the
+      // plan grouped for one container is ever hosted, which is what makes the
+      // container id the key rather than a block range.
+      is TextSegment ->
+        if (segment.customContainer >= 0 && hosts.hostsTag(segment.customContainer)) {
+          hosts.tagHeightFor(segment.customContainer).toInt()
+        } else {
+          segment.height(width, paint, choices)
+        }
       // A picture's box is the state and the theme, and nothing else: there is no
       // text to lay out and the bytes are not here. The same `imageBox` the
       // shadow node measured with, or the two disagree by the height of a
@@ -214,6 +220,50 @@ internal class RenderedDocument(
    * come from the frames just stacked, so the shadow node places a child where
    * this rendering puts it.
    */
+  /**
+   * Content rectangles of hosted tags, as `[container, left, top, right,
+   * bottom]` groups, in the document's own coordinates.
+   *
+   * Beside `hostFrames` because the two count different things, and one array
+   * mixing them would let a fence claim a tag's rectangle. Read the same way,
+   * for the same reason: only `measureText` reports attachment positions, and
+   * a hosted child is not text.
+   */
+  @Synchronized
+  fun tagHostFrames(
+    width: Int,
+    chrome: Int = 0,
+    code: CodeLayout = CodeLayout(),
+    images: ImageLayout = ImageLayout(),
+    hosts: HostLayout = HostLayout(),
+    tables: TableLayout = TableLayout(),
+    choices: ReaderChoices = ReaderChoices(),
+  ): IntArray {
+    if (hosts.tags.isEmpty()) {
+      return IntArray(0)
+    }
+    val frames = frames(width, chrome, code, images, hosts, tables, choices)
+    val out = IntArray(hosts.tags.size * 5)
+    var count = 0
+    segments.forEachIndexed { index, segment ->
+      if (segment !is TextSegment || segment.customContainer < 0 ||
+        !hosts.hostsTag(segment.customContainer)
+      ) {
+        return@forEachIndexed
+      }
+      val top = frames[index * 2]
+      val height = frames[index * 2 + 1]
+      val leading = segment.contentLeading.toInt()
+      val column = max(0, width - leading)
+      out[count++] = segment.customContainer
+      out[count++] = leading
+      out[count++] = top
+      out[count++] = leading + column
+      out[count++] = top + height
+    }
+    return if (count == out.size) out else out.copyOf(count)
+  }
+
   @Synchronized
   fun hostFrames(
     width: Int,
@@ -850,6 +900,7 @@ internal class RenderedDocument(
       for (run in 0 until document.runCount) {
         val styles = document.runStyles(run)
         val link = document.runLink(run)
+        val tag = document.runTag(run)
         val start = document.runStart(run)
         val end = document.runEnd(run)
         val bold = styles and NativeDocument.STYLE_STRONG != 0
@@ -1069,6 +1120,11 @@ internal class RenderedDocument(
             flags,
           )
         }
+        if (tag >= 0) {
+          // A pressable tag names itself on the run, the way a link names its
+          // index: a press has to know which tag it landed on without asking.
+          text.setSpan(TagSpan(tag), start, end, flags)
+        }
         if (link >= 0) {
           // A per-URL variant wins over the theme: the first prefix the URL
           // starts with names the color, and anything it does not name stays the
@@ -1183,8 +1239,19 @@ internal class RenderedDocument(
           caret.kind,
         )
       }
+      // The plan grouped this segment for one custom container, if it did: the
+      // first block's innermost Custom frame names it, and every block in the
+      // range shares it by construction of the grouping.
+      var custom = -1
+      for (depth in 0 until document.containerCount(0)) {
+        if (document.containerKind(0, depth) == NativeDocument.CONTAINER_CUSTOM) {
+          custom = document.containerId(0, depth)
+        }
+      }
       return TextSegment(
-        displayText, accessibleBlocks, detailsBlocks, taskBlocks, gapBefore, caretOffset, caret.kind,
+        displayText, accessibleBlocks, detailsBlocks, taskBlocks, custom,
+        contentLeading = contentLeading(containersOf(0, -1).first).toInt(),
+        gapBefore = gapBefore, caretOffset = caretOffset, caretKind = caret.kind,
       )
     }
 

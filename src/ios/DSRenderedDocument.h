@@ -29,6 +29,10 @@
 struct DSMeasurement {
   CGSize size{0, 0};
   std::vector<std::pair<uint32_t, CGRect>> hosts;
+  /// Content rectangles of hosted tags, by container id. Beside `hosts`
+  /// because the two count different things, and one list mixing them would
+  /// let a fence claim a tag's rectangle.
+  std::vector<std::pair<uint32_t, CGRect>> tagHosts;
 };
 
 /// One stacking pass's answer: every segment frame, the document's size, and
@@ -37,6 +41,7 @@ struct DSMeasurement {
 struct DSStackedLayout {
   std::vector<CGRect> frames;
   std::vector<std::pair<uint32_t, CGRect>> hosts;
+  std::vector<std::pair<uint32_t, CGRect>> tagHosts;
   CGSize size{0, 0};
 };
 #endif
@@ -47,6 +52,10 @@ NS_ASSUME_NONNULL_BEGIN
 extern NSAttributedStringKey const DSBlockInfoAttributeName;
 /// Character attribute holding the NSNumber index into Document::links.
 extern NSAttributedStringKey const DSLinkIndexAttributeName;
+/// Character attribute holding the NSNumber index into Document::tags, for a
+/// run an app-allowed tag styled. Beside the link index because a press has to
+/// know which tag it landed on without asking.
+extern NSAttributedStringKey const DSTagIndexAttributeName;
 
 typedef NS_ENUM(NSInteger, DSContainerKind) {
   DSContainerKindQuote = 0,
@@ -72,6 +81,26 @@ extern NSString *const DSSpoilerAttributeName;
  * know how the question is stored. Empty when the app named no variants, which
  * is the common case and costs nothing to ask.
  */
+/**
+ * Styles for app-allowed inline tags, as the view resolved them from
+ * `markdownStyle.tags`.
+ *
+ * Beside `DSLinkVariants` because the two answer different questions: a link
+ * variant matches a URL by prefix, and a tag style matches a tag by name. An
+ * empty object costs nothing to ask, which is the common case.
+ */
+@interface DSTagStyles : NSObject
+/// Tag names lowercased, with a processed color per entry or -1, and
+/// bold/italic as bits.
+@property (nonatomic, copy) NSArray<NSString *> *names;
+@property (nonatomic, copy) NSArray<NSNumber *> *colors;
+@property (nonatomic, copy) NSArray<NSNumber *> *flags;
+/// The entry styling `name`, or nil. First entry wins on collision.
+- (NSDictionary *)styleForTag:(NSString *)name;
+/// True when there is nothing to match against.
+- (BOOL)isEmpty;
+@end
+
 @interface DSLinkVariants : NSObject
 /// Every prefix flat in one array, with the counts that say where one variant's
 /// prefixes end.
@@ -146,6 +175,11 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
 
 /// A run of non-code, non-table blocks laid out as one text layout.
 @interface DSTextSegment : NSObject
+/// The custom container's id when the plan grouped this segment for one, or
+/// UINT32_MAX. Set at build time from the first block's innermost Custom frame,
+/// so a hosted tag is one lookup rather than a walk of the segment's blocks on
+/// every measure.
+@property (nonatomic, readonly) uint32_t customContainer;
 @property (nonatomic, readonly) NSAttributedString *attributedString;
 @property (nonatomic, readonly) NSArray<DSBlockInfo *> *blocks;
 /// Each block's own range in `attributedString`, which is what a reveal unit's
@@ -401,7 +435,8 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
                  syntaxHighlighting:(BOOL)syntaxHighlighting
                               theme:(const downstream::Theme::Handle &)theme
                              caret:(const downstream::PlacedCaret &)caret
-                          variants:(DSLinkVariants *)variants;
+                          variants:(DSLinkVariants *)variants
+                         tagStyles:(DSTagStyles *)tagStyles;
 #endif
 
 /// Drops every cached rendering. For tests and for a caller that wants to force

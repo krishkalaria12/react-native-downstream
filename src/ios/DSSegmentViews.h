@@ -175,6 +175,12 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 /// opposite of the state it found, because a checkbox is a toggle rather than a
 /// report.
 - (void)didToggleTaskAtContainer:(uint32_t)containerId checked:(BOOL)checked;
+/// A press on an app-allowed tag's run.
+///
+/// Reported with the tag's name, its attributes, the pressed text, and the
+/// source range — everything `onTagPress` promises, read here rather than in
+/// JavaScript because the document is what knows them.
+- (void)didPressTagAtIndex:(NSInteger)tagIndex text:(NSString *)text;
 /// Blocks as the Markdown that produced them, for "Copy as Markdown".
 ///
 /// The exporter reads block indices, so the caller maps its selection onto the
@@ -204,6 +210,15 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 - (NSInteger)linkIndexAtPoint:(CGPoint)point;
 @end
 
+/// Tag index at a point, or -1. Beside the segment protocol because only text
+/// carries tag runs: tables and code never name a tag.
+@protocol DSTagPressable <NSObject>
+/// Tag index at a point in the view's coordinates, or -1.
+- (NSInteger)tagIndexAtPoint:(CGPoint)point;
+/// The pressed tag run's text, or empty.
+- (NSString *)tagTextAtPoint:(CGPoint)point;
+@end
+
 /// A segment view that can be told to redraw one block's characters.
 ///
 /// The range is in the *document block's* coordinates rather than the view's own,
@@ -231,6 +246,10 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 /// The document block this view's first character belongs to, which is what maps
 /// a reveal unit's block-and-offset pair into this view's own text.
 @property (nonatomic) NSInteger blockOffset;
+/// True when a hosted tag replaces this segment: the React child above draws,
+/// so this view draws nothing. Mirrors the code card's `hosted`, for the same
+/// reason — a hosted block shows none of its own drawing.
+@property (nonatomic) BOOL hosted;
 /// Whether a `<details>` summary draws its chevron, and the reader's choices,
 /// which say which way it points. Both reach the layout manager, which is what
 /// draws the decoration beside the text.
@@ -311,6 +330,9 @@ extern NSString *const DSControlIconDetailsChevron;
 @property (nonatomic, weak, nullable) id<DSRevealProvider> revealProvider;
 /// The document block this table's first row is.
 @property (nonatomic) NSInteger blockOffset;
+/// True when a hosted tag replaces this segment: the React child above draws,
+/// so this view draws nothing. Mirrors the code card's `hosted`, for the same
+/// reason — a hosted block shows none of its own drawing.
 @property (nonatomic, weak, nullable) id<DSControlDelegate> controlDelegate;
 @property (nonatomic) BOOL controlsEnabled;
 @property (nonatomic, readwrite) BOOL showsToolbar;
@@ -419,6 +441,12 @@ extern NSString *const DSControlIconDetailsChevron;
 /// Drops every reader scroll position, for a new generation.
 - (void)resetScrollPositions;
 - (NSInteger)linkIndexAtPoint:(CGPoint)point;
+/// Tag index at a point, or -1. Only text views answer; tables and code never
+/// name a tag.
+- (NSInteger)tagIndexAtPoint:(CGPoint)point;
+/// The pressed tag run's text, or empty. The run's own words, which is what an
+/// app shows alongside the tag it reports.
+- (NSString *)tagTextAtPoint:(CGPoint)point;
 /// The selection highlight, from the view's theme. Applied to every text view,
 /// so a themed `colors.selection` reaches the platform's own selection drawing
 /// rather than only the parts this library draws itself.

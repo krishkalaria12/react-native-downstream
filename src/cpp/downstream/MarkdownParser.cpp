@@ -907,11 +907,13 @@ private:
       if (allowed >= 0) {
         result.kind = ContainerTagLine::Kind::Allowed;
         result.allowedTag = allowed;
+        result.name = std::u16string(bare);
         return result;
       }
     }
     if (closing && (bare == u"details" || policyIndexOf(bare) >= 0)) {
       result.kind = ContainerTagLine::Kind::Close;
+      result.name = std::u16string(bare);
       return result;
     }
     if (bare == u"summary" && !closing && endsWithAscii(trimmed, u"</summary>")) {
@@ -1003,6 +1005,14 @@ private:
     if (!current_ || current_->kind != BlockKind::HtmlBlock) {
       return;
     }
+    // The one-block form first: `<details><summary>X</summary>body</details>`
+    // with no blank lines arrives as a single HTML block, so there are no
+    // separate opener and closer lines to pair. It is split here — summary from
+    // the tag, body parsed as Markdown — which goes past GitHub and Streamdown,
+    // where the body shows as raw text. Models write it this way.
+    if (consumeOneBlockDetails()) {
+      return;
+    }
     // Every line is classified before anything is emitted, because emitting a
     // summary finishes the leaf being built — and the leaf being built is this
     // HTML block, whose text has to be the leftovers by then. Classifying first
@@ -1020,6 +1030,12 @@ private:
       }
       at = newline + 1;
     }
+    // Byte offsets come from searching the source, not from mapping the leaf
+    // text: entities decode, so leaf units and source bytes only agree on line
+    // boundaries, and `leafStart_` itself can include a preceding newline. Each
+    // tag line is found by its own text starting at a line start, which a tag in
+    // the middle of a prose line can never match.
+    size_t searchFrom = lastLeafEnd_;
     const bool recognised =
         std::any_of(lines.begin(), lines.end(), [](const ContainerTagLine &line) {
           return line.kind != ContainerTagLine::Kind::Other;
@@ -1043,14 +1059,28 @@ private:
           pushContainer(ContainerKind::Details, u"", TaskState::None);
           containers_.back().container.open = line.open;
           break;
-        case ContainerTagLine::Kind::Allowed:
-          pushCustom(line.allowedTag);
+        case ContainerTagLine::Kind::Allowed: {
+          // The body's source starts after the opener line: found by the tag
+          // name at a line start, so a `<user>` inside prose can never match.
+          const size_t openerEnd = findTagLine(line.name, false, searchFrom);
+          const size_t bodyStart = openerEnd == std::string_view::npos ? source_.size()
+                                                                       : openerEnd + 1;
+          searchFrom = bodyStart;
+          pushCustom(line.allowedTag, bodyStart);
           break;
-        case ContainerTagLine::Kind::Close:
+        }
+        case ContainerTagLine::Kind::Close: {
           // A closer with nothing open is dropped, and so is the whole line: the
           // frame it belongs to is not here, and a reader cannot act on a tag.
+          // The body's source ends where the closer line begins.
+          const size_t closerStart = findTagLine(line.name, true, searchFrom);
+          if (closerStart != std::string_view::npos) {
+            closeCustom(closerStart);
+            searchFrom = closerStart;
+          }
           (void)popFrame();
           break;
+        }
         case ContainerTagLine::Kind::Summary:
         case ContainerTagLine::Kind::Other:
           break;
@@ -1076,6 +1106,321 @@ private:
     }
   }
 
+  /**
+   * Matches `<details…>` at `at`, returning the end of its `>` and whether it
+   * carries `open`. The name must be the whole first word, so `<details-panel>`
+   * is not this tag. Case-sensitive, like the line classifier: the two paths
+   * must agree about what opens a container.
+   */
+  static bool matchDetailsOpener(std::string_view text, size_t at, size_t &tagEnd, bool &open) {
+    if (text.compare(at, 8, "<details") != 0) {
+      return false;
+    }
+    size_t pos = at + 8;
+    if (pos < text.size() && text[pos] != ' ' && text[pos] != '\t' && text[pos] != '>' &&
+        text[pos] != '/') {
+      return false;
+    }
+    // Scan to the closing `>`, stepping over quoted attribute values so a `>`
+    // inside one does not end the tag.
+    bool selfClosing = false;
+    while (pos < text.size() && text[pos] != '>') {
+      if (text[pos] == '"' || text[pos] == '\'') {
+        const char quote = text[pos++];
+        while (pos < text.size() && text[pos] != quote) {
+          pos++;
+        }
+        if (pos < text.size()) {
+          pos++;
+        }
+        continue;
+      }
+      if (text[pos] == '/' && pos + 1 < text.size() && text[pos + 1] == '>') {
+        selfClosing = true;
+      }
+      pos++;
+    }
+    if (pos >= text.size() || selfClosing) {
+      return false;
+    }
+    tagEnd = pos + 1;
+    // `open` is presence, not value: a bare `open`, `open=""` and
+    // `open="open"` all mean open, which is what HTML says about booleans.
+    open = false;
+    size_t attr = at + 8;
+    while (attr < pos) {
+      while (attr < pos && (text[attr] == ' ' || text[attr] == '\t')) {
+        attr++;
+      }
+      size_t start = attr;
+      while (attr < pos && text[attr] != '=' && text[attr] != ' ' && text[attr] != '\t' &&
+             text[attr] != '/' && text[attr] != '>') {
+        attr++;
+      }
+      if (attr > start && text.compare(start, 4, "open") == 0 &&
+          (attr == start + 4 || text[attr] == '=' || text[attr] == ' ' || text[attr] == '\t')) {
+        // `opened` is a different attribute: the name must end here or at `=`.
+        size_t after = attr;
+        while (after < pos && (text[after] == ' ' || text[after] == '\t')) {
+          after++;
+        }
+        if (attr == start + 4 || after < pos) {
+          open = true;
+        }
+      }
+      while (attr < pos && text[attr] != ' ' && text[attr] != '\t') {
+        attr++;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Handles `<details><summary>X</summary>body</details>` arriving as one HTML
+   * block: no blank lines inside, so md4c never split it.
+   *
+   * The summary comes from the tag and the body is parsed as Markdown through a
+   * sub-parse, whose blocks are spliced in with their references rebased onto
+   * this document. A failing sub-parse leaves the block alone to be shown as
+   * source, because losing a reader's text is worse than showing a tag.
+   */
+  bool consumeOneBlockDetails() {
+    if (leafStart_ == kUnknownOffset || leafEnd_ <= leafStart_) {
+      return false;
+    }
+    const std::string_view slice = source_.substr(leafStart_, leafEnd_ - leafStart_);
+    size_t at = 0;
+    while (at < slice.size() && (slice[at] == ' ' || slice[at] == '\t' || slice[at] == '\n' ||
+                                 slice[at] == '\r')) {
+      at++;
+    }
+    size_t openerEnd = 0;
+    bool open = false;
+    if (!matchDetailsOpener(slice, at, openerEnd, open)) {
+      return false;
+    }
+    // The closer is the LAST `</details>` in the block: a nested one-block
+    // form inside the body brings its own closer, and the outer one ends the
+    // outer form. The sub-parse pairs the inner one by recursion.
+    size_t closer = slice.rfind("</details>");
+    if (closer == std::string_view::npos || closer < openerEnd) {
+      return false;
+    }
+    size_t after = closer + 10;
+    while (after < slice.size() &&
+           (slice[after] == ' ' || slice[after] == '\t' || slice[after] == '\n' || slice[after] == '\r')) {
+      after++;
+    }
+    if (after != slice.size()) {
+      return false;
+    }
+    // Between the opener and the closer: an optional `<summary>…</summary>`,
+    // then the body. Without a summary the disclosure reads "Details", which is
+    // what a browser shows for a summary-less `<details>`.
+    size_t pos = openerEnd;
+    while (pos < closer &&
+           (slice[pos] == ' ' || slice[pos] == '\t' || slice[pos] == '\n' || slice[pos] == '\r')) {
+      pos++;
+    }
+    std::string_view summaryBytes;
+    bool hasSummary = false;
+    if (slice.compare(pos, 8, "<summary") == 0) {
+      size_t nameEnd = pos + 8;
+      while (nameEnd < closer && slice[nameEnd] != '>') {
+        nameEnd++;
+      }
+      if (nameEnd >= closer) {
+        return false;
+      }
+      const size_t closeTag = slice.find("</summary>", nameEnd + 1);
+      if (closeTag == std::string_view::npos || closeTag + 10 > closer) {
+        return false;
+      }
+      summaryBytes = slice.substr(nameEnd + 1, closeTag - nameEnd - 1);
+      hasSummary = true;
+      pos = closeTag + 10;
+    }
+    const size_t bodyStart = leafStart_ + pos;
+    const size_t bodyEnd = leafStart_ + closer;
+    const ParseResult sub = parseBodyRegion(bodyStart, bodyEnd);
+    if (sub.status != ParseStatus::Ok) {
+      return false;
+    }
+    current_->text.clear();
+    pushContainer(ContainerKind::Details, u"", TaskState::None);
+    containers_.back().container.open = open;
+    emitSummary(hasSummary ? unwrapInlineTags(utf8ToUtf16(summaryBytes)) : u"Details");
+    spliceBody(sub, bodyStart);
+    (void)popFrame();
+    return true;
+  }
+
+  /**
+   * Parses a body region as its own document, guarded against pathological
+   * nesting: one-block forms nest through here by recursion, and each level
+   * consumes its own tags, so depth is bounded by input length — but a hostile
+   * input could still nest thousands deep.
+   */
+  ParseResult parseBodyRegion(size_t bodyStart, size_t bodyEnd) {
+    static thread_local int depth = 0;
+    if (depth >= 64) {
+      ParseResult refused;
+      refused.status = ParseStatus::ParseFailed;
+      refused.message = "Details nesting too deep.";
+      return refused;
+    }
+    depth++;
+    const ParseResult sub =
+        parseMarkdownAt(source_.substr(bodyStart, bodyEnd - bodyStart), bodyStart, options_);
+    depth--;
+    return sub;
+  }
+
+  /**
+   * Splices a body sub-parse's blocks into this document at the current point.
+   *
+   * Every reference the sub-parse numbered from zero is rebased: container ids
+   * onto this parse's count with the live stack prepended, table ids the same
+   * way, link and tag indices onto this document's lists, and image indices
+   * onto its pictures. Ranges move from body-relative to source-absolute. The
+   * sub-parse ran with the same options, so a nested form inside it already
+   * paired by recursion before these blocks arrive here.
+   */
+  void spliceBody(const ParseResult &sub, size_t bodyStart) {
+    const uint32_t containerBase = containerCount_;
+    const uint32_t tableBase = tableCount_;
+    const size_t linkBase = document_->links.size();
+    const size_t imageBase = document_->images.size();
+    const size_t tagBase = document_->tags.size();
+    // The live stack, Details frame included: the sub-parse numbered its own
+    // containers from zero, so these go in front and its ids shift past them.
+    std::vector<Container> prefix;
+    prefix.reserve(containers_.size());
+    for (const auto &frame : containers_) {
+      Container container = frame.container;
+      container.showsMarker = false;
+      prefix.push_back(std::move(container));
+    }
+    // UTF-16 base for range rebasing: ranges are in text units, not bytes.
+    const uint32_t utf16Base =
+        static_cast<uint32_t>(utf8ToUtf16(source_.substr(0, bodyStart)).size());
+    // Source ranges are body-relative in the sub-parse and source-absolute
+    // here, so each block's range moves by the body's own start. Blocks and
+    // ranges travel together by index, which is how the incremental parser
+    // reads them too.
+    for (size_t index = 0; index < sub.document->blocks.size(); index++) {
+      const Block &source = sub.document->blocks[index];
+      Block block = source;
+      // The live stack goes in front with the ids it already has — the Details
+      // frame just pushed among them — and only the sub-parse's own frames
+      // shift past them. Shifting the prepended frames too would move a frame
+      // the summary leaf already named.
+      for (auto frame = prefix.rbegin(); frame != prefix.rend(); ++frame) {
+        block.containers.insert(block.containers.begin(), *frame);
+      }
+      for (size_t depth = prefix.size(); depth < block.containers.size(); depth++) {
+        block.containers[depth].id += containerBase;
+      }
+      if (block.table != 0) {
+        block.table += tableBase;
+      }
+      for (InlineRun &run : block.runs) {
+        if (run.link >= 0) {
+          run.link += static_cast<int32_t>(linkBase);
+        }
+        if (run.tag >= 0) {
+          run.tag += static_cast<int32_t>(tagBase);
+        }
+      }
+      for (uint32_t &index : block.images) {
+        index += static_cast<uint32_t>(imageBase);
+      }
+      document_->blocks.push_back(std::move(block));
+      ByteRange range = {0, 0};
+      if (index < sub.blockSource.size()) {
+        range = sub.blockSource[index];
+        range.start += static_cast<uint32_t>(bodyStart);
+        range.end += static_cast<uint32_t>(bodyStart);
+      }
+      blockSource_.push_back(range);
+    }
+    for (const Link &source : sub.document->links) {
+      Link link = source;
+      link.range.start += utf16Base;
+      link.range.end += utf16Base;
+      if (link.tag >= 0) {
+        link.tag += static_cast<int32_t>(tagBase);
+      }
+      document_->links.push_back(std::move(link));
+    }
+    for (const Image &source : sub.document->images) {
+      Image image = source;
+      if (image.link >= 0) {
+        image.link += static_cast<int32_t>(linkBase);
+      }
+      document_->images.push_back(std::move(image));
+    }
+    for (const Tag &source : sub.document->tags) {
+      Tag tag = source;
+      tag.range.start += utf16Base;
+      tag.range.end += utf16Base;
+      document_->tags.push_back(std::move(tag));
+    }
+    containerCount_ += sub.containerCount;
+    tableCount_ += sub.tableCount;
+  }
+
+  /**
+   * Finds a tag line's end (opener) or start (closer) in the source.
+   *
+   * `name` is the lowercased tag name; the line must start with `<name` or
+   * `</name` after whitespace, so a tag inside prose can never match. Searches
+   * forward from `from`, which the caller advances past each found line so
+   * nested same-name tags resolve outside-in. Returns npos when missing, in
+   * which case the caller falls back to block bounds.
+   */
+  size_t findTagLine(const std::u16string &name, bool closing, size_t from) const {
+    const std::string ascii = utf16ToUtf8(name);
+    const std::string open = closing ? "</" + ascii : "<" + ascii;
+    size_t pos = from;
+    // The block may start mid-line (a preceding newline counted into the last
+    // block), so the first candidate is the line `from` is already on.
+    size_t lineStart = pos;
+    if (pos > 0 && source_[pos - 1] != '\n') {
+      const size_t prev = source_.rfind('\n', pos - 1);
+      lineStart = prev == std::string_view::npos ? 0 : prev + 1;
+    }
+    for (;;) {
+      size_t at = lineStart;
+      while (at < source_.size() && (source_[at] == ' ' || source_[at] == '\t')) {
+        at++;
+      }
+      if (source_.compare(at, open.size(), open) == 0) {
+        const size_t after = at + open.size();
+        if (after >= source_.size() || source_[after] == ' ' || source_[after] == '\t' ||
+            source_[after] == '>' || source_[after] == '/' || source_[after] == '\n' ||
+            source_[after] == '\r') {
+          if (!closing) {
+            const size_t end = source_.find('\n', at);
+            return end == std::string_view::npos ? source_.size() : end;
+          }
+          return at;
+        }
+      }
+      if (lineStart >= source_.size()) {
+        return std::string_view::npos;
+      }
+      const size_t next = source_.find('\n', lineStart);
+      if (next == std::string_view::npos) {
+        return std::string_view::npos;
+      }
+      lineStart = next + 1;
+      if (lineStart > leafEnd_) {
+        return std::string_view::npos;
+      }
+    }
+  }
+
   /// Opens the frame for a block tag the app allowed.
   ///
   /// The container names the tag by its index in the document's own tag list, so
@@ -1083,10 +1428,16 @@ private:
   /// the reader's press on the tag maps back to where it was written. The record
   /// is made here, at the opener, because that is the one point in the parse at
   /// which the whole tag is known.
-  void pushCustom(int32_t policyIndex) {
+  void pushCustom(int32_t policyIndex, size_t bodyStart) {
     const int32_t tag = recordAllowedTagAt(policyIndex, leafStart_ == kUnknownOffset ? source_.size() : leafStart_);
     pushContainer(ContainerKind::Custom, u"", TaskState::None);
     containers_.back().container.tag = tag;
+    // The body's source starts where the opener line ends: the renderer draws
+    // these bytes rather than the parsed blocks, so the range has to be exact
+    // here rather than derived later from blocks that may have moved.
+    if (tag >= 0 && static_cast<size_t>(tag) < document_->tags.tail().size()) {
+      document_->tags.tail()[static_cast<size_t>(tag)].bodyStart = static_cast<uint32_t>(bodyStart);
+    }
   }
 
   /// A document record for one of the app's own tags, by its policy index.
@@ -1101,6 +1452,26 @@ private:
     record.range.start = offsets_.toUtf16(at);
     document_->tags.push_back(std::move(record));
     return static_cast<int32_t>(document_->tags.size() - 1);
+  }
+
+  /// Completes a custom tag's body range when its closer arrives.
+  ///
+  /// Only when the innermost frame is that Custom frame: a closer pops
+  /// whatever is innermost, so a `</user>` inside a `<details>` ends the
+  /// details and leaves the tag open — and an open tag's body stays empty
+  /// until its own closer arrives, if it ever does.
+  void closeCustom(size_t closerStart) {
+    if (containers_.empty()) {
+      return;
+    }
+    Container &top = containers_.back().container;
+    if (top.kind != ContainerKind::Custom) {
+      return;
+    }
+    const int32_t tag = top.tag;
+    if (tag >= 0 && static_cast<size_t>(tag) < document_->tags.tail().size()) {
+      document_->tags.tail()[static_cast<size_t>(tag)].bodyEnd = static_cast<uint32_t>(closerStart);
+    }
   }
 
   /// Pops the nearest frame this parser opened, if there is one.
@@ -1405,14 +1776,21 @@ private:
     // on the way through `promoteLeaf`, and an empty paragraph is a line of space
     // a comment-only block has always taken. A `<details>` tag pair is not a line
     // of prose, so it gets no block at all.
-    if (current_->kind != BlockKind::HtmlBlock || !current_->text.empty()) {
+    // A consumed HTML block emits neither a block nor a source entry: the two
+    // lists stay parallel, which is what the incremental parser requires to
+    // prove a region closed. Its bytes still advance `lastLeafEnd_`, so the
+    // block after it starts where the tags ended rather than where they began.
+    const bool dropped = current_->kind == BlockKind::HtmlBlock && current_->text.empty();
+    if (!dropped) {
       document_->blocks.push_back(std::move(*current_));
     }
     current_.reset();
     if (leafStart_ == kUnknownOffset) {
       leafStart_ = leafEnd_ = lastLeafEnd_;
     }
-    blockSource_.push_back({static_cast<uint32_t>(leafStart_), static_cast<uint32_t>(leafEnd_)});
+    if (!dropped) {
+      blockSource_.push_back({static_cast<uint32_t>(leafStart_), static_cast<uint32_t>(leafEnd_)});
+    }
     lastLeafEnd_ = leafEnd_;
     leafStart_ = kUnknownOffset;
     fenceMarkerScratch_ = 0;

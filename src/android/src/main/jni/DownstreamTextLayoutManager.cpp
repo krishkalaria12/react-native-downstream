@@ -87,6 +87,17 @@ folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontSc
           "height", static_cast<double>(entry.height)));
     }
     data["hostEntries"] = std::move(hostEntries);
+    // One object per hosted tag, by container id rather than code ordinal.
+    // Beside the fence entries because the two count different things, and an
+    // absent key is the empty tag list on Kotlin's side.
+    if (!hosts.tags.empty()) {
+      auto tagEntries = folly::dynamic::array();
+      for (const auto &entry : hosts.tags) {
+        tagEntries.push_back(folly::dynamic::object("container", static_cast<double>(entry.container))(
+            "height", static_cast<double>(entry.height)));
+      }
+      data["tagHostEntries"] = std::move(tagEntries);
+    }
   }
   return data;
 }
@@ -99,6 +110,7 @@ JavaVM *javaVm = nullptr;
 jclass nativeClass = nullptr;
 jmethodID prepareMethod = nullptr;
 jmethodID hostFramesMethod = nullptr;
+jmethodID tagHostFramesMethod = nullptr;
 std::atomic<bool> javaReady{false};
 
 /// `DownstreamNative.writeClipboard`, resolved once on a Java thread.
@@ -218,6 +230,12 @@ Java_com_downstream_DownstreamNative_nativeInstallPreparer(JNIEnv *env, jclass c
   const jmethodID frames =
       env->GetStaticMethodID(clazz, "hostFrames", "(JLcom/facebook/react/bridge/ReadableMap;F)[F");
   env->ExceptionClear();
+  // Beside the fence frames, for the same reason: resolved once here rather
+  // than per measurement, and a null means tag children are not placed rather
+  // than crashing.
+  tagHostFramesMethod =
+      env->GetStaticMethodID(clazz, "tagHostFrames", "(JLcom/facebook/react/bridge/ReadableMap;F)[F");
+  env->ExceptionClear();
   if (env->GetJavaVM(&javaVm) != JNI_OK) {
     env->ExceptionClear();
     return;
@@ -262,6 +280,40 @@ bool writeClipboard(std::string_view text) {
   env->DeleteLocalRef(value);
   return written == JNI_TRUE;
 }
+
+namespace {
+// Forward-declared because the measurement below reads tag rectangles before
+// this file defines the call: one static reader beside `hostFrames`, for the
+// same document and the same reason.
+std::shared_ptr<std::vector<jfloat>> tagHostFrames(jlong documentId, jobject layoutMap, jfloat width);
+
+std::shared_ptr<std::vector<jfloat>> tagHostFrames(jlong documentId, jobject layoutMap, jfloat width) {
+  if (!javaReady.load(std::memory_order_acquire) || tagHostFramesMethod == nullptr) {
+    return nullptr;
+  }
+  JNIEnv *env = attachedEnv();
+  if (env == nullptr || layoutMap == nullptr) {
+    return nullptr;
+  }
+  auto array = static_cast<jfloatArray>(
+      env->CallStaticObjectMethod(nativeClass, tagHostFramesMethod, documentId, layoutMap, width));
+  if (env->ExceptionCheck()) {
+    env->ExceptionClear();
+    return nullptr;
+  }
+  if (array == nullptr) {
+    return nullptr;
+  }
+  const jsize length = env->GetArrayLength(array);
+  auto frames = std::make_shared<std::vector<jfloat>>(length);
+  if (length > 0) {
+    env->GetFloatArrayRegion(array, 0, length, frames->data());
+  }
+  env->DeleteLocalRef(array);
+  return frames;
+}
+
+} // namespace
 
 } // namespace
 
@@ -365,8 +417,26 @@ DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
                                    Rect{Point{left, top}, Size{std::max(0.0f, right - left), std::max(0.0f, bottom - top)}}});
     }
   }
+  // Tag slots beside fence slots: `[container, left, top, right, bottom]`
+  // groups, read the same way for the same reason. A hosted child is not text,
+  // so only this call reports where it goes.
+  const auto tagFrames = tagHostFrames(document->id, reinterpret_cast<ReadableMap::javaobject>(localDataMap.get()),
+                                       framesWidth);
+  if (tagFrames != nullptr) {
+    for (size_t index = 0; index + 4 < tagFrames->size(); index += 5) {
+      const float left = tagFrames->at(index + 1);
+      const float top = tagFrames->at(index + 2);
+      const float right = tagFrames->at(index + 3);
+      const float bottom = tagFrames->at(index + 4);
+      measurement.tagSlots.push_back(
+          {static_cast<uint32_t>(tagFrames->at(index)),
+           Rect{Point{left, top}, Size{std::max(0.0f, right - left), std::max(0.0f, bottom - top)}}});
+    }
+  }
   return measurement;
 }
+
+
 
 // Builds the spans and precomputed text on the worker through
 // DownstreamNative.prepare, which fills the same RenderedDocument cache that

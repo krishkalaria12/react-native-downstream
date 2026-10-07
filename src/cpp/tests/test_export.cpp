@@ -15,6 +15,7 @@
 #include "BidiTable.h"
 #include "DetailsLayout.h"
 #include "Direction.h"
+#include "TagSlots.h"
 #include "TableLayout.h"
 #include "Unicode.h"
 #include "tests/check.h"
@@ -72,7 +73,7 @@ void checkPlan(const char *label, std::string_view source, const char *expected)
       shape.push_back(' ');
     }
     // One letter per kind rather than a table flag and a code flag, because the
-    // plan has five kinds and the last two were added after the other three: a
+    // plan has six kinds and the last three were added after the other three: a
     // boolean per kind is how a new one gets drawn as prose and measured as text.
     switch (segment.kind) {
       case SegmentKind::Table: shape += 'T'; break;
@@ -80,6 +81,7 @@ void checkPlan(const char *label, std::string_view source, const char *expected)
       case SegmentKind::Math: shape += 'M'; break;
       case SegmentKind::Image: shape += 'I'; break;
       case SegmentKind::Text: shape += 't'; break;
+      case SegmentKind::Custom: shape += 'U'; break;
     }
     shape += std::to_string(segment.from);
     shape.push_back('-');
@@ -595,8 +597,87 @@ void testDirection() {
         "prose that opens with inline code still reads the way its words do");
 }
 
+/// A custom container's blocks group into their own segment, and the slot query
+/// names them for a renderer.
+///
+/// The plan groups only simple blocks: code, tables, formulas and pictures keep
+/// their own segments wherever they sit, so a container holding any of those is
+/// drawn natively rather than hosted.
+void checkPlanWith(const char *label, std::string_view source, const ParseOptions &options, const char *expected) {
+  const ParseResult result = parseMarkdown(source, options);
+  if (result.status != ParseStatus::Ok || !result.document) {
+    CHECK(false, label);
+    return;
+  }
+  std::string shape;
+  for (const SegmentPlan &segment : planSegments(*result.document)) {
+    if (!shape.empty()) {
+      shape.push_back(' ');
+    }
+    switch (segment.kind) {
+      case SegmentKind::Table: shape += 'T'; break;
+      case SegmentKind::Code: shape += 'C'; break;
+      case SegmentKind::Math: shape += 'M'; break;
+      case SegmentKind::Image: shape += 'I'; break;
+      case SegmentKind::Text: shape += 't'; break;
+      case SegmentKind::Custom: shape += 'U'; break;
+    }
+    shape += std::to_string(segment.from);
+    shape.push_back('-');
+    shape += std::to_string(segment.to);
+  }
+  expectEq(shape, expected, label);
+}
+
+void testCustomSegments() {
+  TagPolicy policy;
+  policy.tags = {AllowedTag{"user", {}}};
+  // Inline HTML on, as the view resolves it: container pairing is an HTML
+  // feature, and without the bit every tag stays source.
+  const ParseOptions options(ParseFlags::Default | ParseFlags::InlineHtml, policy);
+  // One paragraph in one container: one custom segment.
+  checkPlanWith("a custom container groups its blocks", "<user>\n\nHello.\n\n</user>\n", options, "U0-1");
+  // Without the policy the tag is not a container, so the opener, the body and
+  // the closer stay one text segment of ordinary blocks.
+  checkPlan("with no policy there is no custom segment", "<user>\n\nHello.\n\n</user>\n", "t0-3");
+  // A fence inside splits: the container spans three segments and is drawn
+  // natively rather than hosted, because one slot cannot replace two drawings.
+  checkPlanWith("a fence inside splits the container's segments", "<user>\n\nA.\n\n```\nx\n```\n\nB.\n\n</user>\n",
+                options, "U0-1 C1-2 U2-3");
+}
+
+/// The tag slots in a document: one per custom container whose tag the app
+/// named, with the source it holds and whether its closer arrived.
+void testTagSlots() {
+  TagPolicy policy;
+  policy.tags = {AllowedTag{"user", {}}};
+  const ParseOptions options(ParseFlags::Default | ParseFlags::InlineHtml, policy);
+  const std::string source = "<user>\n\nHello **there**.\n\n</user>\n";
+  const ParseResult result = parseMarkdown(source, options);
+  CHECK(result.status == ParseStatus::Ok, "the custom document parses");
+  // A controlled parse treats every block as settled, the way the fence query
+  // does: the source is complete, so nothing in it is still arriving.
+  const uint32_t settled = static_cast<uint32_t>(result.document->blocks.size());
+  const std::vector<TagSlot> slots = tagSlots(*result.document, source, {"user"}, false, settled);
+  CHECK(slots.size() == 1, "one container is one slot");
+  CHECK(slots[0].name == "user", "the slot names its tag");
+  CHECK(slots[0].markdown == "Hello **there**.", "the slot holds the body's source, not a re-serialization");
+  CHECK(!slots[0].incomplete, "a closed container is complete");
+  CHECK(slots[0].blockCount == 1, "and it spans its one block");
+  // A tag with no renderer draws natively, so there is nothing to mount for it.
+  CHECK(tagSlots(*result.document, source, {"team"}, false, settled).empty(), "an unnamed tag is no slot");
+  CHECK(tagSlots(*result.document, source, {}, false, settled).empty(), "no names is no slots");
+  // No closer yet: the body is still arriving, so the renderer shows a
+  // placeholder rather than half a card.
+  const ParseResult open = parseMarkdown("<user>\n\nHello.\n", options);
+  CHECK(open.status == ParseStatus::Ok, "the unclosed document parses");
+  const std::vector<TagSlot> pending = tagSlots(*open.document, "<user>\n\nHello.\n", {"user"}, true);
+  CHECK(pending.size() == 1, "an open container is still a slot");
+  CHECK(pending[0].incomplete, "but an incomplete one");
+}
+
 /// The gutter is as wide as the widest number it draws, and never narrower than
-/// two digits, which is what keeps Streamdown's "over 100" bug out.
+/// two digits, which is what keeps Streamdown\'s "over 100" bug out.
 void testGutterDigits() {
   CHECK(gutterDigits(1, 1) == 2, "one line is at least two digits");
   CHECK(gutterDigits(1, 9) == 2, "nine lines are two digits");
@@ -993,6 +1074,8 @@ int main() {
   testDetailsLayout();
   testVisibleTextHeight();
   testDirection();
+  testCustomSegments();
+  testTagSlots();
   testGutterDigits();
   testCodeCardHeight();
   testCodeLineStarts();

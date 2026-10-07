@@ -3,6 +3,7 @@
 #include "Clipboard.h"
 #include "ControlledSlots.h"
 #include "FenceSlots.h"
+#include "TagSlots.h"
 #include "MarkdownParser.h"
 #include "SessionRegistry.h"
 #include "SessionTrace.h"
@@ -299,6 +300,36 @@ jsi::Array toJs(jsi::Runtime &rt, const std::vector<Slot> &slots) {
   return array;
 }
 
+/// A tag slot as a plain JavaScript object, built by hand rather than through
+/// the generated struct bridging: the attributes are a nested array, which the
+/// generated bridging cannot express, so the shape is spelled out here where a
+/// reader can see exactly what crosses.
+jsi::Object tagSlotToJs(jsi::Runtime &rt, const downstream::TagSlot &slot) {
+  jsi::Object object(rt);
+  object.setProperty(rt, "container", static_cast<double>(slot.container));
+  object.setProperty(rt, "tag", static_cast<double>(slot.tag));
+  object.setProperty(rt, "name", jsi::String::createFromUtf8(rt, slot.name));
+  jsi::Array attributes(rt, slot.attributes.size());
+  for (size_t index = 0; index < slot.attributes.size(); index++) {
+    jsi::Array pair(rt, 2);
+    pair.setValueAtIndex(rt, 0, jsi::String::createFromUtf8(rt, slot.attributes[index].first));
+    pair.setValueAtIndex(rt, 1, jsi::String::createFromUtf8(rt, slot.attributes[index].second));
+    attributes.setValueAtIndex(rt, index, std::move(pair));
+  }
+  object.setProperty(rt, "attributes", std::move(attributes));
+  object.setProperty(rt, "markdown", jsi::String::createFromUtf8(rt, slot.markdown));
+  object.setProperty(rt, "incomplete", slot.incomplete);
+  return object;
+}
+
+jsi::Array toJs(jsi::Runtime &rt, const std::vector<downstream::TagSlot> &slots) {
+  jsi::Array array = jsi::Array(rt, slots.size());
+  for (size_t index = 0; index < slots.size(); index++) {
+    array.setValueAtIndex(rt, index, tagSlotToJs(rt, slots[index]));
+  }
+  return array;
+}
+
 } // namespace
 
 jsi::Object DownstreamSessionModule::fenceSlots(jsi::Runtime &rt, std::string source, double mathFlags,
@@ -377,5 +408,6 @@ jsi::Array DownstreamSessionModule::sessionFenceSlots(jsi::Runtime &rt, std::str
   }
   return toJs(rt, slots);
 }
+
 
 } // namespace facebook::react

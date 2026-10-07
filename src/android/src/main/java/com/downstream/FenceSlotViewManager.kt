@@ -37,6 +37,12 @@ class FenceSlotViewManager :
     // two slots cannot claim the same block.
   }
 
+  override fun setContainerId(view: ReactViewGroup, value: Int) {
+    // Like `ordinal`: the shadow node reads it, the view never does. A tag slot
+    // carries its container's id here and -1 in `ordinal`, so the two key
+    // spaces cannot claim each other's blocks.
+  }
+
   companion object {
     const val NAME = "DownstreamFenceSlot"
   }

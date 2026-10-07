@@ -27,6 +27,16 @@ struct HostRect {
   Rect rect;
 };
 
+/// Where one React child that replaced a custom tag goes.
+///
+/// A separate list from `slots` because the two count different things: a fence
+/// slot is keyed by code ordinal and a tag slot by container id, so one list
+/// mixing them would let a fence claim a tag's rectangle.
+struct TagHostRect {
+  uint32_t container{0};
+  Rect rect;
+};
+
 /// What one measurement produced: the document's size, and where each React
 /// child that replaced a fence goes.
 ///
@@ -38,6 +48,10 @@ struct DocumentMeasurement {
   Size size{0, 0};
   /// Both platforms emit rectangles in document order, hence code ordinal order.
   std::vector<HostRect> slots;
+  /// Tag slot rectangles, in container id order, for the same reason `slots`
+  /// exists: a frame that draws at a position has that position from the
+  /// measurement that gave the document its height.
+  std::vector<TagHostRect> tagSlots;
 
   /// The rectangle for `ordinal`, or nullptr when this document hosts no
   /// child there, which is what a stale slot from a lagging render gets.
@@ -45,6 +59,15 @@ struct DocumentMeasurement {
     const auto it = std::lower_bound(slots.begin(), slots.end(), ordinal,
                                     [](const HostRect &slot, uint32_t value) { return slot.ordinal < value; });
     return it != slots.end() && it->ordinal == ordinal ? &it->rect : nullptr;
+  }
+
+  /// The rectangle for a hosted tag's container, or nullptr when this document
+  /// hosts no child there.
+  const Rect *tagSlotFor(uint32_t container) const {
+    const auto it =
+        std::lower_bound(tagSlots.begin(), tagSlots.end(), container,
+                         [](const TagHostRect &slot, uint32_t value) { return slot.container < value; });
+    return it != tagSlots.end() && it->container == container ? &it->rect : nullptr;
   }
 };
 

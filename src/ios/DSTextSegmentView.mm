@@ -19,6 +19,7 @@ NSString *const kPlaceholder = @"\u200b";
   /// block and an offset within it, and this is what turns that into a range in
   /// this view's own text.
   NSInteger _blockOffset;
+  BOOL _hosted;
   /// Whether this view's spoilers are showing. One boolean for the whole view:
   /// a tap reveals the spoiler it lands on, and a second tap hides them again.
   BOOL _spoilersRevealed;
@@ -49,6 +50,16 @@ NSString *const kPlaceholder = @"\u200b";
     [self addGestureRecognizer:detailsTap];
   }
   return self;
+}
+
+- (void)setHosted:(BOOL)hosted {
+  if (hosted == _hosted) {
+    return;
+  }
+  _hosted = hosted;
+  // A hosted block shows none of its own drawing, because the React child
+  // above it is the block now: text, decorations and chevron alike.
+  self.hidden = hosted;
 }
 
 - (void)setSegment:(DSTextSegment *)segment {
@@ -409,6 +420,28 @@ NSString *const kPlaceholder = @"\u200b";
                                 [text appendString:literal ?: [self->_stack.textStorage.string substringWithRange:part]];
                               }];
   UIPasteboard.generalPasteboard.string = [text stringByReplacingOccurrencesOfString:kPlaceholder withString:@""];
+}
+
+- (NSString *)tagTextAtPoint:(CGPoint)point {
+  const UIEdgeInsets inset = self.textContainerInset;
+  const CGPoint adjusted = CGPointMake(point.x - inset.left, point.y - inset.top);
+  const NSUInteger at =
+      [self.layoutManager glyphIndexForPoint:adjusted inTextContainer:self.textContainer];
+  if (at >= self.textStorage.length) {
+    return @"";
+  }
+  NSRange effective;
+  [self.textStorage attribute:DSTagIndexAttributeName atIndex:at effectiveRange:&effective];
+  if (effective.location == NSNotFound || NSMaxRange(effective) > self.textStorage.length) {
+    return @"";
+  }
+  return [self.textStorage.string substringWithRange:effective];
+}
+
+- (NSInteger)tagIndexAtPoint:(CGPoint)point {
+  const UIEdgeInsets inset = self.textContainerInset;
+  return tagIndexInStack(self.layoutManager, self.textContainer,
+                         CGPointMake(point.x - inset.left, point.y - inset.top));
 }
 
 - (NSInteger)linkIndexAtPoint:(CGPoint)point {

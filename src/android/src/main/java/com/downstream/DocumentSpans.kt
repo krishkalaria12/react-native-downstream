@@ -34,6 +34,14 @@ internal class LinkSpan(val index: Int, val color: Int, val underlined: Boolean 
 }
 
 /**
+ * An app-allowed tag's run, pressable like a link.
+ *
+ * A marker span rather than a drawing span: the tag's style comes from the
+ * theme or the variant, and this only says *that* the run is a tag press.
+ */
+internal class TagSpan(val index: Int)
+
+/**
  * Raises text by [pixels], or lowers it for a negative value, for footnote
  * references and scripts. Pixels rather than a share of the paint's size,
  * because the size span applied before this one has already shrunk the paint

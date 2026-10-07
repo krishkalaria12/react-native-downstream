@@ -725,12 +725,18 @@ describe('inputs too large or too composed for a corpus file', () => {
  */
 describe('preview.tables', () => {
   const TABLES = 1 << 6;
-  const TABLE = ['| a | b |', '| --- | --- |', '| 1 | 2 |', '| 3 | 4 |', ''].join(
-    '\n'
-  );
+  const TABLE = [
+    '| a | b |',
+    '| --- | --- |',
+    '| 1 | 2 |',
+    '| 3 | 4 |',
+    '',
+  ].join('\n');
 
   const tableTexts = (model: { blocks: { kind: number; text: string }[] }) =>
-    model.blocks.filter((block) => block.kind === KIND.table).map((block) => block.text);
+    model.blocks
+      .filter((block) => block.kind === KIND.table)
+      .map((block) => block.text);
 
   it('shows a complete table', () => {
     // A table followed by prose is complete, so the mode changes nothing. Three
@@ -751,23 +757,17 @@ describe('preview.tables', () => {
   it('shows the rows together once the table completes', () => {
     // Streamed in two chunks: the rows alone are withheld, and the prose that
     // ends the table brings them all back at once.
-    const partial = replaySession(
-      'full',
-      [
-        { op: 'preview', features: TABLES },
-        { op: 'append', chunk: TABLE },
-        { op: 'parse', finished: false },
-      ]
-    );
+    const partial = replaySession('full', [
+      { op: 'preview', features: TABLES },
+      { op: 'append', chunk: TABLE },
+      { op: 'parse', finished: false },
+    ]);
     expect(tableTexts(partial)).toHaveLength(0);
-    const done = replaySession(
-      'full',
-      [
-        { op: 'preview', features: TABLES },
-        { op: 'append', chunk: `${TABLE}\nDone.\n` },
-        { op: 'parse', finished: false },
-      ]
-    );
+    const done = replaySession('full', [
+      { op: 'preview', features: TABLES },
+      { op: 'append', chunk: `${TABLE}\nDone.\n` },
+      { op: 'parse', finished: false },
+    ]);
     expect(tableTexts(done)).toHaveLength(3);
   });
 

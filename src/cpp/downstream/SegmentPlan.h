@@ -23,6 +23,12 @@ enum class SegmentKind : uint8_t {
   Code = 2,
   Math = 3,
   Image = 4,
+  /// A custom container's own blocks, grouped so a hosted tag replaces exactly
+  /// this range. Only simple blocks group here: code, tables, formulas and
+  /// pictures keep their own segments wherever they sit, so a container holding
+  /// any of those spans several segments and is drawn natively rather than
+  /// hosted.
+  Custom = 5,
 };
 
 /// One unit of platform layout.
@@ -48,12 +54,19 @@ struct SegmentPlan {
   /// reader's expand choice is keyed by it, so it has to survive the blocks
   /// before it being rewritten. -1 for every other segment.
   int32_t tableOrdinal{-1};
+  /// Custom segments only: the container's own id, which is also what a hosted
+  /// tag is keyed by. An id rather than a counted ordinal because it is already
+  /// unique, already stable across append-only snapshots, and already on every
+  /// frame the platforms draw from — a fifth counter would be a second way to
+  /// say the same thing. -1 for every other segment.
+  int32_t customContainer{-1};
   /// Every block is committed. Committed blocks never change under their
   /// identity, so a committed segment is keyed by its first block's identity
   /// and its block count, and can be reused by later snapshots.
   bool committed{false};
 
   bool isTable() const { return kind == SegmentKind::Table; }
+  bool isCustom() const { return kind == SegmentKind::Custom; }
   bool isCode() const { return kind == SegmentKind::Code; }
   bool isMath() const { return kind == SegmentKind::Math; }
   bool isImage() const { return kind == SegmentKind::Image; }

@@ -39,7 +39,9 @@ import {
 } from './parseFlags';
 import { openLinkSafely, resolveLinkUrl, resolvesLinks } from './linkSafety';
 import { resolveIcons } from './icons';
+import { TagSlots, resolveTagRenderers, useTagSlots } from './tagRenderers';
 import { resolveLinkVariants } from './linkVariants';
+import { resolveTagStyles } from './tagStyles';
 
 /**
  * The link variants as four flat arrays the native views read.
@@ -48,6 +50,31 @@ import { resolveLinkVariants } from './linkVariants';
  * arrays are new identities every time and a new identity is a props update the
  * shadow node would re-measure for.
  */
+/**
+ * The tag styles as three flat arrays the native views read.
+ *
+ * Memoized on the style object for the same reason the link variants are: the
+ * arrays are new identities every time, and a new identity is a props update
+ * the shadow node would re-measure for.
+ */
+function useTagStyleProps(markdownStyle: MarkdownViewProps['markdownStyle']) {
+  return useMemo(() => {
+    const style = Array.isArray(markdownStyle)
+      ? markdownStyle[markdownStyle.length - 1]
+      : markdownStyle;
+    const resolved = resolveTagStyles(
+      style === false || style === null || style === undefined
+        ? undefined
+        : style
+    );
+    return {
+      names: resolved.map((entry) => entry.name),
+      colors: resolved.map((entry) => entry.color ?? -1),
+      flags: resolved.map((entry) => entry.flags),
+    };
+  }, [markdownStyle]);
+}
+
 function useLinkVariantProps(
   markdownStyle: MarkdownViewProps['markdownStyle']
 ) {
@@ -101,6 +128,14 @@ import {
 export type DownstreamMarkdownProps = MarkdownViewProps;
 
 type NativeLinkPress = Readonly<{ url: string; start: number; end: number }>;
+type NativeTagPress = Readonly<{
+  tag: string;
+  attributes: string;
+  text: string;
+  start: number;
+  end: number;
+  generation: number;
+}>;
 type NativeImagePress = Readonly<{
   url: string;
   alt: string;
@@ -824,6 +859,27 @@ function useStableRenderers(resolved: ResolvedRenderers): ResolvedRenderers {
  * nothing and renders no children, so its behaviour and its cost are exactly
  * what they were before renderers existed.
  */
+function useTagRenderers(
+  plugins: MarkdownViewProps['plugins'],
+  allowedTags: ReadonlyArray<string>,
+  document: {
+    source?: string;
+    sessionId?: string;
+    generation: number;
+    sequence?: number;
+    revision?: number;
+    parseFlags: number;
+  }
+): ReactNode {
+  const resolved = useMemo(() => resolveTagRenderers(plugins), [plugins]);
+  const slots = useTagSlots({ ...document, allowedTags, resolved });
+  const scope = `${document.sessionId ?? ''}\u0000${document.generation}`;
+  if (slots.length === 0) {
+    return null;
+  }
+  return <TagSlots slots={slots} scope={scope} />;
+}
+
 function useFenceRenderers(
   plugins: MarkdownViewProps['plugins'],
   document: {
@@ -1045,6 +1101,7 @@ function ControlledMarkdown({
   icons,
   onTableFullscreen,
   onTaskPress,
+  onTagPress,
   onLinkLongPress,
   linkPreview = false,
   renderTableFullscreen,
@@ -1105,6 +1162,45 @@ function ControlledMarkdown({
 
   const taskPressLatest = useRef({ onTaskPress, generationRef });
   taskPressLatest.current = { onTaskPress, generationRef };
+  // A press on an app-allowed tag's run: the tag's name, its attributes, the
+  // pressed text, and the source range. A press on a document that has since
+  // been replaced is dropped, which is the same generation rule every other
+  // event follows.
+  const tagPressLatest = useRef({ onTagPress, generationRef });
+  tagPressLatest.current = { onTagPress, generationRef };
+  const handleTagPress = useCallback(
+    (native: NativeSyntheticEvent<NativeTagPress>) => {
+      const payload = native.nativeEvent;
+      const current = tagPressLatest.current;
+      if (payload.generation !== current.generationRef.current) return;
+      // Attributes cross as JSON `[[name, value], …]` because codegen events
+      // carry no arrays; an app that never reads them never pays to parse.
+      let attributes: Record<string, string> = {};
+      try {
+        const pairs = JSON.parse(payload.attributes) as unknown;
+        if (Array.isArray(pairs)) {
+          for (const pair of pairs) {
+            if (
+              Array.isArray(pair) &&
+              typeof pair[0] === 'string' &&
+              typeof pair[1] === 'string'
+            ) {
+              attributes[pair[0]] = pair[1];
+            }
+          }
+        }
+      } catch {
+        attributes = {};
+      }
+      current.onTagPress?.({
+        tag: payload.tag,
+        attributes,
+        text: payload.text,
+        range: { start: payload.start, end: payload.end },
+      });
+    },
+    []
+  );
   const handleTaskPress = useCallback(
     (native: NativeSyntheticEvent<MarkdownTaskPressEvent>) => {
       const payload = native.nativeEvent;
@@ -1135,6 +1231,7 @@ function ControlledMarkdown({
     useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
   );
   const linkVariantProps = useLinkVariantProps(markdownStyle);
+  const tagStyleProps = useTagStyleProps(markdownStyle);
   // A controlled view has to say whether text is arriving; the platform has
   // nothing else to go on.
   useAnimationCallbacks(isAnimating, onAnimationStart, onAnimationEnd);
@@ -1175,6 +1272,11 @@ function ControlledMarkdown({
     onError,
     currentGeneration
   );
+  const tags = useTagRenderers(plugins, images.allowedTags, {
+    source: current.source,
+    generation,
+    parseFlags: images.parseFlags,
+  });
 
   return (
     <NativeDownstreamMarkdownView
@@ -1199,7 +1301,11 @@ function ControlledMarkdown({
       linkVariantCounts={linkVariantProps.counts}
       linkVariantColors={linkVariantProps.colors}
       linkVariantUnderline={linkVariantProps.underlines}
+      tagStyleNames={tagStyleProps.names}
+      tagStyleColors={tagStyleProps.colors}
+      tagStyleFlags={tagStyleProps.flags}
       onTaskPress={handleTaskPress}
+      onTagPress={handleTagPress}
       onLinkLongPress={handleLinkLongPress}
       linkPreview={linkPreview}
       parseFlags={images.parseFlags}
@@ -1221,6 +1327,7 @@ function ControlledMarkdown({
       onControlAction={handleControlAction}
     >
       {fences}
+      {tags}
       {fullscreen.element}
     </NativeDownstreamMarkdownView>
   );
@@ -1251,6 +1358,7 @@ function StreamMarkdown({
   icons,
   onTableFullscreen,
   onTaskPress,
+  onTagPress,
   onLinkLongPress,
   linkPreview = false,
   renderTableFullscreen,
@@ -1308,6 +1416,45 @@ function StreamMarkdown({
 
   const taskPressLatest = useRef({ onTaskPress, generationRef });
   taskPressLatest.current = { onTaskPress, generationRef };
+  // A press on an app-allowed tag's run: the tag's name, its attributes, the
+  // pressed text, and the source range. A press on a document that has since
+  // been replaced is dropped, which is the same generation rule every other
+  // event follows.
+  const tagPressLatest = useRef({ onTagPress, generationRef });
+  tagPressLatest.current = { onTagPress, generationRef };
+  const handleTagPress = useCallback(
+    (native: NativeSyntheticEvent<NativeTagPress>) => {
+      const payload = native.nativeEvent;
+      const current = tagPressLatest.current;
+      if (payload.generation !== current.generationRef.current) return;
+      // Attributes cross as JSON `[[name, value], …]` because codegen events
+      // carry no arrays; an app that never reads them never pays to parse.
+      let attributes: Record<string, string> = {};
+      try {
+        const pairs = JSON.parse(payload.attributes) as unknown;
+        if (Array.isArray(pairs)) {
+          for (const pair of pairs) {
+            if (
+              Array.isArray(pair) &&
+              typeof pair[0] === 'string' &&
+              typeof pair[1] === 'string'
+            ) {
+              attributes[pair[0]] = pair[1];
+            }
+          }
+        }
+      } catch {
+        attributes = {};
+      }
+      current.onTagPress?.({
+        tag: payload.tag,
+        attributes,
+        text: payload.text,
+        range: { start: payload.start, end: payload.end },
+      });
+    },
+    []
+  );
   const handleTaskPress = useCallback(
     (native: NativeSyntheticEvent<MarkdownTaskPressEvent>) => {
       const payload = native.nativeEvent;
@@ -1340,6 +1487,7 @@ function StreamMarkdown({
     useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
   );
   const linkVariantProps = useLinkVariantProps(markdownStyle);
+  const tagStyleProps = useTagStyleProps(markdownStyle);
   // A stream view follows its controller's own transitions, so the callbacks fire
   // on the first append of a generation and on `finish()`, unless an explicit
   // `isAnimating` overrides the flag, which takes the callbacks with it.
@@ -1394,6 +1542,13 @@ function StreamMarkdown({
     onError,
     currentGeneration
   );
+  const tags = useTagRenderers(plugins, images.allowedTags, {
+    sessionId: binding.sessionId,
+    generation: binding.generation,
+    sequence: binding.readySequence,
+    revision: binding.revision,
+    parseFlags: images.parseFlags,
+  });
 
   return (
     <NativeDownstreamMarkdownView
@@ -1421,7 +1576,11 @@ function StreamMarkdown({
       linkVariantCounts={linkVariantProps.counts}
       linkVariantColors={linkVariantProps.colors}
       linkVariantUnderline={linkVariantProps.underlines}
+      tagStyleNames={tagStyleProps.names}
+      tagStyleColors={tagStyleProps.colors}
+      tagStyleFlags={tagStyleProps.flags}
       onTaskPress={handleTaskPress}
+      onTagPress={handleTagPress}
       onLinkLongPress={handleLinkLongPress}
       linkPreview={linkPreview}
       parseFlags={images.parseFlags}
@@ -1443,6 +1602,7 @@ function StreamMarkdown({
       onControlAction={handleControlAction}
     >
       {fences}
+      {tags}
       {fullscreen.element}
     </NativeDownstreamMarkdownView>
   );

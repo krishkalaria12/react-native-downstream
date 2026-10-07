@@ -113,6 +113,22 @@ internal class TextSegment(
    * know which box it landed on without asking.
    */
   val taskBlocks: List<TaskBlock> = emptyList(),
+  /**
+   * The custom container's id when the plan grouped this segment for one, or -1.
+   *
+   * Set at build time from the first block's innermost Custom frame, so a
+   * hosted tag is one lookup rather than a walk of the segment's blocks on
+   * every measure.
+   */
+  val customContainer: Int = -1,
+  /**
+   * The content indent in pixels, from the segment's own container path.
+   *
+   * Carried because a hosted tag's rectangle starts here: the slot is as wide
+   * as the column the text would have taken, which is what the shadow node
+   * measured the child at.
+   */
+  val contentLeading: Int = 0,
   gapBefore: Int,
   /**
    * Where the caret's placeholder sits in [text], or -1 when this segment has

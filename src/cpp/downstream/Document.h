@@ -343,6 +343,12 @@ struct Tag {
   SourceRange range;
   /// True for a tag that spans lines, which is a container rather than a run.
   bool block{false};
+  /// The source bytes between the opening and closing lines, for a block tag
+  /// whose closer arrived. A renderer draws this rather than the parsed
+  /// blocks, because the writer sent it as the tag's content rather than as
+  /// Markdown to parse again. Empty when the closer never arrived.
+  uint32_t bodyStart{0};
+  uint32_t bodyEnd{0};
 };
 
 /// An actionable link. Links that fail the URL policy are plain text and are

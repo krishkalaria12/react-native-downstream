@@ -472,6 +472,30 @@ void DownstreamMarkdownShadowNode::imagesChanged(const std::shared_ptr<const Sha
   concrete->relayoutWhenImagesChange(answers);
 }
 
+std::vector<DownstreamMarkdownShadowNode::TagSlotChild> DownstreamMarkdownShadowNode::tagSlotChildren() const {
+  std::vector<TagSlotChild> slots;
+  const auto &children = getChildren();
+  for (size_t index = 0; index < children.size(); index++) {
+    const auto &child = children[index];
+    // The same dedicated component fences use: a slot's whole job is to hold
+    // the app's component, and whether it replaces a fence or a tag changes
+    // which block range it stands in for, not how it is held.
+    const auto *slot = dynamic_cast<const DownstreamFenceSlotShadowNode *>(child.get());
+    if (slot == nullptr) {
+      continue;
+    }
+    const int32_t container = slot->getConcreteProps().containerId;
+    if (container < 0) {
+      continue;
+    }
+    if (slot->getConcreteProps().yogaStyle.display() == yoga::Display::None) {
+      continue;
+    }
+    slots.push_back({static_cast<uint32_t>(container), child, index});
+  }
+  return slots;
+}
+
 std::vector<DownstreamMarkdownShadowNode::SlotChild> DownstreamMarkdownShadowNode::slotChildren() const {
   std::vector<SlotChild> slots;
   const auto &children = getChildren();
@@ -551,6 +575,62 @@ downstream::HostLayout DownstreamMarkdownShadowNode::measureSlots(const LayoutCo
   }
   std::sort(hosts.entries.begin(), hosts.entries.end(),
             [](const downstream::HostEntry &a, const downstream::HostEntry &b) { return a.ordinal < b.ordinal; });
+  // Tag slots beside fence slots: a child that replaces a custom container is
+  // measured at the container's column, exactly as a fence child is measured
+  // at its block's. The entries land in the tag key space, so a fence can
+  // never claim a tag's height.
+  const std::vector<TagSlotChild> tagSlots = tagSlotChildren();
+  hosts.tags.reserve(tagSlots.size());
+  // Index custom containers once for every mounted child, the way fences index
+  // code blocks above: one walk, however many tags a message holds.
+  uint32_t lastContainer = 0;
+  for (const auto &slot : tagSlots) {
+    lastContainer = std::max(lastContainer, slot.container);
+  }
+  std::vector<const downstream::Block *> tagBlocks;
+  if (document) {
+    for (const auto &block : document->blocks) {
+      for (const auto &container : block.containers) {
+        if (container.kind == downstream::ContainerKind::Custom && container.id <= lastContainer) {
+          tagBlocks.push_back(&block);
+          break;
+        }
+      }
+      if (tagBlocks.size() > lastContainer) {
+        break;
+      }
+    }
+  }
+  for (const TagSlotChild &slot : tagSlots) {
+    const auto *layoutable = dynamic_cast<const LayoutableShadowNode *>(slot.node.get());
+    if (layoutable == nullptr) {
+      continue;
+    }
+    float column = static_cast<float>(maximumWidth);
+    for (const downstream::Block *block : tagBlocks) {
+      bool found = false;
+      for (const auto &container : block->containers) {
+        if (container.kind == downstream::ContainerKind::Custom && container.id == slot.container) {
+          found = true;
+          break;
+        }
+      }
+      if (found && theme && std::isfinite(maximumWidth)) {
+        const double leading =
+            downstream::theme_layout::contentLeading(*theme, block->containers, scale);
+        column = static_cast<float>(std::max(0.0, static_cast<double>(maximumWidth) - leading));
+        break;
+      }
+    }
+    LayoutConstraints constraints{Size{column, 0}, Size{column, std::numeric_limits<Float>::infinity()},
+                                 layoutConstraints.layoutDirection};
+    const Size size = layoutable->measure(layoutContext, constraints);
+    hosts.tags.push_back({slot.container, static_cast<float>(size.height)});
+  }
+  std::sort(hosts.tags.begin(), hosts.tags.end(),
+            [](const downstream::TagHostEntry &a, const downstream::TagHostEntry &b) {
+              return a.container < b.container;
+            });
   return hosts;
 }
 
@@ -611,6 +691,7 @@ void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
   // A copy of the child list, written back once every slot is placed: cloning a
   // child while walking the list would otherwise invalidate the walk.
   auto children = std::make_shared<std::vector<std::shared_ptr<const ShadowNode>>>(*children_);
+  layoutTagSlots(layoutContext, measurement, children);
   for (const SlotChild &slot : slots) {
     const size_t index = slot.childIndex;
     // A leaf Yoga node lays its own children out, exactly as the text shadow
@@ -645,6 +726,42 @@ void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
     (*children)[index] = std::move(cloned);
   }
   children_ = std::move(children);
+}
+
+void DownstreamMarkdownShadowNode::layoutTagSlots(
+    LayoutContext layoutContext, const DocumentMeasurement &measurement,
+    std::shared_ptr<std::vector<std::shared_ptr<const ShadowNode>>> &children) {
+  const std::vector<TagSlotChild> slots = tagSlotChildren();
+  for (const TagSlotChild &slot : slots) {
+    const size_t index = slot.childIndex;
+    std::shared_ptr<ShadowNode> cloned = (*children)[index]->clone({});
+    auto *layoutable = dynamic_cast<LayoutableShadowNode *>(cloned.get());
+    if (layoutable == nullptr) {
+      continue;
+    }
+    const Rect *rect = measurement.tagSlotFor(slot.container);
+    if (rect == nullptr) {
+      // A slot whose container has no hosted range in this document: a stale
+      // child from a lagging render, or one that arrived while the source was
+      // still being prepared. Nothing is drawn for it, the way a fence slot
+      // with no block is hidden.
+      layoutable->setLayoutMetrics(LayoutMetrics{.frame = {}, .displayType = DisplayType::None});
+      (*children)[index] = std::move(cloned);
+      continue;
+    }
+    const Size size{rect->size.width, rect->size.height};
+    LayoutConstraints constraints{size, size, getLayoutMetrics().layoutDirection};
+    layoutable->layoutTree(layoutContext, constraints);
+    LayoutMetrics metrics = layoutable->getLayoutMetrics();
+    metrics.frame.size = size;
+    metrics.frame.origin = rect->origin;
+    metrics.displayType = DisplayType::Flex;
+    layoutable->setLayoutMetrics(std::move(metrics));
+    (*children)[index] = std::move(cloned);
+  }
+  // No write-back here: the caller owns the list and writes it back once both
+  // passes are done, so a tag slot placed here is not overwritten by a fence
+  // slot placed after it.
 }
 
 void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {

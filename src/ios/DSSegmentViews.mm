@@ -26,6 +26,29 @@ BOOL hasLink(NSAttributedString *text, NSRange range) {
   return found;
 }
 
+/// Tag index under a point in a laid-out TextKit stack, or -1.
+///
+/// Beside the link lookup because a press has to know which tag it landed on:
+/// the whole run is the control, and the attribute names it.
+NSInteger tagIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *container, CGPoint location) {
+  if (layoutManager.numberOfGlyphs == 0) {
+    return -1;
+  }
+  const NSUInteger glyph = [layoutManager glyphIndexForPoint:location
+                                             inTextContainer:container
+                              fractionOfDistanceThroughGlyph:NULL];
+  if (glyph >= layoutManager.numberOfGlyphs) {
+    return -1;
+  }
+  const CGRect glyphRect = [layoutManager boundingRectForGlyphRange:NSMakeRange(glyph, 1) inTextContainer:container];
+  if (!CGRectContainsPoint(CGRectInset(glyphRect, -kLinkHitSlop, -kLinkHitSlop), location)) {
+    return -1;
+  }
+  const NSUInteger character = [layoutManager characterIndexForGlyphAtIndex:glyph];
+  NSNumber *tag = [layoutManager.textStorage attribute:DSTagIndexAttributeName atIndex:character effectiveRange:NULL];
+  return tag != nil ? tag.integerValue : -1;
+}
+
 /// Link index under a point in a laid-out TextKit stack, or -1.
 NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *container, CGPoint location) {
   if (layoutManager.numberOfGlyphs == 0) {
@@ -325,6 +348,23 @@ static Class segmentViewClassFor(id segment) {
 /// Asked through the segment's own ordinal rather than its index, because an
 /// ordinal names the block across every snapshot and an index moves as blocks
 /// stream in.
+/// True when the segment shows a hosted tag rather than its own text.
+///
+/// The segment's own container id, which the plan grouped it for: a hosted tag
+/// replaces exactly that range, so the key is the container rather than a block.
+- (BOOL)hostsCustomContainerAtIndex:(NSUInteger)index {
+  NSArray *segments = _rendered.segments;
+  if (segments == nil || index >= segments.count) {
+    return NO;
+  }
+  id segment = segments[index];
+  if (![segment isKindOfClass:DSTextSegment.class]) {
+    return NO;
+  }
+  const uint32_t container = ((DSTextSegment *)segment).customContainer;
+  return container != UINT32_MAX && _hostLayout.hostsTag(container);
+}
+
 - (BOOL)hostsCodeOrdinalAtIndex:(NSUInteger)index {
   if (index >= _codeOrdinals.count) {
     return NO;
@@ -340,6 +380,11 @@ static Class segmentViewClassFor(id segment) {
   if ([view isKindOfClass:DSTextSegmentView.class]) {
     DSTextSegmentView *text = (DSTextSegmentView *)view;
     text.selectable = _selectable && [self isSegmentSettledAtIndex:index];
+    // A hosted tag replaces its whole segment: the child owns the range now,
+    // so the text underneath draws nothing. Only a segment the plan grouped
+    // for one container is ever hosted, which is what makes the container id
+    // the key rather than a block range.
+    text.hosted = [self hostsCustomContainerAtIndex:index];
     // The chevron is the control's own glyph, so it appears with the control and
     // points the way the body will move.
     text.detailsToggle = (_controls & downstream::ControlBits::DetailsToggle) != 0;
@@ -798,6 +843,30 @@ static Class segmentViewClassFor(id segment) {
     }
   }
   return -1;
+}
+
+- (NSInteger)tagIndexAtPoint:(CGPoint)point {
+  for (UIView<DSSegmentView> *view in _segmentViews) {
+    if (!CGRectContainsPoint(view.frame, point)) {
+      continue;
+    }
+    if ([view conformsToProtocol:@protocol(DSTagPressable)]) {
+      return [(UIView<DSTagPressable> *)view tagIndexAtPoint:[self convertPoint:point toView:view]];
+    }
+  }
+  return -1;
+}
+
+- (NSString *)tagTextAtPoint:(CGPoint)point {
+  for (UIView<DSSegmentView> *view in _segmentViews) {
+    if (!CGRectContainsPoint(view.frame, point)) {
+      continue;
+    }
+    if ([view conformsToProtocol:@protocol(DSTagPressable)]) {
+      return [(UIView<DSTagPressable> *)view tagTextAtPoint:[self convertPoint:point toView:view]];
+    }
+  }
+  return @"";
 }
 
 @end

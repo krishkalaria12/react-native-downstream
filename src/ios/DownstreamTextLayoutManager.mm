@@ -131,6 +131,13 @@ DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
                                         Size{static_cast<Float>(host.second.size.width),
                                              static_cast<Float>(host.second.size.height)}}});
     }
+    for (const auto &host : measured.tagHosts) {
+      measurement.tagSlots.push_back({host.first,
+                                      Rect{Point{static_cast<Float>(host.second.origin.x),
+                                                 static_cast<Float>(host.second.origin.y)},
+                                           Size{static_cast<Float>(host.second.size.width),
+                                                static_cast<Float>(host.second.size.height)}}});
+    }
     return measurement;
   }
 }

@@ -78,6 +78,25 @@ private:
     size_t childIndex{0};
   };
 
+  /// A slot child that replaces a custom tag: its container's id rather than a
+  /// code ordinal, because the two count different things. Beside `SlotChild`
+  /// rather than inside it so a fence can never claim a tag's container.
+  struct TagSlotChild {
+    uint32_t container{0};
+    std::shared_ptr<const ShadowNode> node;
+    size_t childIndex{0};
+  };
+
+  /// The tag slot children, beside the fence ones: a child whose `containerId`
+  /// names a custom container. A child whose `display` is `none` is not in the
+  /// list, for the same reason a hidden fence slot hosts nothing.
+  std::vector<TagSlotChild> tagSlotChildren() const;
+  /// Places tag slot children at their measured rectangles, beside the fence
+  /// slots `layoutSlots` places. Takes the child list by reference because both
+  /// passes write it back once.
+  void layoutTagSlots(LayoutContext layoutContext, const DocumentMeasurement &measurement,
+                      std::shared_ptr<std::vector<std::shared_ptr<const ShadowNode>>> &children);
+
   /// The slot children a measurement or a layout has to consider, in child
   /// order. A child whose `display` is `none` — which is what React gives a
   /// suspended subtree — is not in the list, so it hosts nothing and its fence

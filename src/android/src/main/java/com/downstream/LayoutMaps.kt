@@ -86,7 +86,21 @@ internal fun ReadableMap.toImageLayout(): ImageLayout = ImageLayout(
  */
 internal fun ReadableMap.toHostLayout(): HostLayout = HostLayout(
   entries = hostEntriesAt("hostEntries"),
+  // The hosted tags, beside the hosted fences: a container id rather than a
+  // code ordinal, because the two count different things.
+  tags = tagHostEntriesAt("tagHostEntries"),
 )
+
+internal fun ReadableMap.tagHostEntriesAt(key: String): List<TagHostEntry> {
+  val array = (if (hasKey(key)) getArray(key) else null) ?: return emptyList()
+  return List(array.size()) { index ->
+    val entry = array.getMap(index) ?: Arguments.createMap()
+    TagHostEntry(
+      container = entry.numberAt("container", 0.0).toInt(),
+      height = PixelUtil.toPixelFromDIP(entry.numberAt("height", 0.0)).toFloat(),
+    )
+  }
+}
 
 internal fun ReadableMap.hostEntriesAt(key: String): List<HostEntry> {
   val array = (if (hasKey(key)) getArray(key) else null) ?: return emptyList()

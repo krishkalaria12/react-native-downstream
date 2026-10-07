@@ -37,6 +37,10 @@ public:
   /// further events.
   static void dispose(const std::string &id);
   static DocumentHandle snapshot(const std::string &id, uint64_t generation, uint64_t sequence);
+  /// The session's current source. Matches any snapshot `snapshot` returns,
+  /// because that only returns the current version: a tag slot's inner
+  /// Markdown is sliced from here rather than re-serialized from blocks.
+  static std::string source(const std::string &id);
   /// Whether the writer finished the stream. A finished stream settles every
   /// block, so a fence it never closed is final rather than still arriving.
   static bool isFinished(const std::string &id);

@@ -94,6 +94,30 @@ export type NativeTaskPress = Readonly<{
   generation: CodegenTypes.Int32;
 }>;
 
+/**
+ * A press on an app-allowed tag's run.
+ *
+ * The tag's name, its attributes flat, and the source range of the tag itself —
+ * everything `onTagPress` promises, read natively because the document is what
+ * knows them.
+ */
+export type NativeTagPress = Readonly<{
+  tag: string;
+  /**
+   * The attributes as JSON `[[name, value], …]`.
+   *
+   * A string because codegen events carry no arrays: the shape is fixed and
+   * documented here rather than in a second type, and an app that never reads
+   * attributes never pays to parse it.
+   */
+  attributes: string;
+  /** The pressed run's own words, which is what an app shows. */
+  text: string;
+  start: CodegenTypes.Int32;
+  end: CodegenTypes.Int32;
+  generation: CodegenTypes.Int32;
+}>;
+
 export interface NativeProps extends ViewProps {
   /** Complete canonical source, already validated by DownstreamMarkdown. */
   markdown: string;
@@ -226,6 +250,14 @@ export interface NativeProps extends ViewProps {
   linkVariantColors?: ReadonlyArray<CodegenTypes.Double>;
   linkVariantUnderline?: ReadonlyArray<boolean>;
   /**
+   * Styles for app-allowed inline tags, as `src/tagStyles.ts` resolves them:
+   * tag names lowercased, a processed color per entry or -1, and bold/italic
+   * as bits. The platforms match a run's tag name against these at draw time.
+   */
+  tagStyleNames?: ReadonlyArray<string>;
+  tagStyleColors?: ReadonlyArray<CodegenTypes.Double>;
+  tagStyleFlags?: ReadonlyArray<CodegenTypes.Double>;
+  /**
    * Slot ids from src/themeSlots.ts, sorted ascending, one entry per override.
    *
    * Three arrays rather than a codegen object prop: a struct of every field
@@ -276,6 +308,7 @@ export interface NativeProps extends ViewProps {
   onMarkdownError?: CodegenTypes.DirectEventHandler<NativeMarkdownErrorEvent>;
   onControlAction?: CodegenTypes.DirectEventHandler<NativeControlActionEvent>;
   onTaskPress?: CodegenTypes.DirectEventHandler<NativeTaskPress>;
+  onTagPress?: CodegenTypes.DirectEventHandler<NativeTagPress>;
 }
 
 // The shadow node is hand-written C++ (src/cpp/fabric), so Codegen emits only the

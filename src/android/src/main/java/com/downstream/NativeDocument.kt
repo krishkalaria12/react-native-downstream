@@ -281,6 +281,9 @@ internal class NativeDocument(
   fun runStyles(run: Int) = runs[run * RUN_STRIDE + 2]
   fun runLink(run: Int) = runs[run * RUN_STRIDE + 3]
 
+  /** The app-allowed tag that styled this run, or -1. */
+  fun runTag(run: Int) = runs[run * RUN_STRIDE + 4]
+
   fun tokenStart(token: Int) = tokens[token * TOKEN_STRIDE]
   fun tokenEnd(token: Int) = tokens[token * TOKEN_STRIDE + 1]
   fun tokenClass(token: Int) = tokens[token * TOKEN_STRIDE + 2]
@@ -289,7 +292,7 @@ internal class NativeDocument(
     private const val BLOCK_STRIDE = 18
     private const val CELL_STRIDE = 3
     private const val CONTAINER_STRIDE = 6
-    private const val RUN_STRIDE = 4
+    private const val RUN_STRIDE = 5
     private const val TOKEN_STRIDE = 3
     /**
      * One block's resolved layout, in the order `writeBlockLayout` writes it.
@@ -409,8 +412,10 @@ internal const val SEGMENT_TABLE = 1
 internal const val SEGMENT_CODE = 2
 internal const val SEGMENT_MATH = 3
 internal const val SEGMENT_IMAGE = 4
+internal const val SEGMENT_CUSTOM = 5
 
-private val SEGMENT_KINDS = intArrayOf(SEGMENT_TEXT, SEGMENT_TABLE, SEGMENT_CODE, SEGMENT_MATH, SEGMENT_IMAGE)
+private val SEGMENT_KINDS =
+  intArrayOf(SEGMENT_TEXT, SEGMENT_TABLE, SEGMENT_CODE, SEGMENT_MATH, SEGMENT_IMAGE, SEGMENT_CUSTOM)
 
 /** A formula block's own metrics, as the theme resolves them. */
 internal data class MathMetrics(
@@ -437,7 +442,7 @@ internal class PlannedSegment(
    * as it is built, so a wrap choice resolves without walking the document.
    */
   val codeOrdinal: Int,
-  /** One of `SEGMENT_TEXT`, `SEGMENT_TABLE`, `SEGMENT_CODE`, `SEGMENT_MATH`, `SEGMENT_IMAGE`. */
+  /** One of `SEGMENT_TEXT` through `SEGMENT_CUSTOM`. */
   val kind: Int,
   /**
    * This segment's first picture's index in `Document::images`, or -1.
@@ -622,8 +627,43 @@ internal object DownstreamNative {
    * before `measure`, so this reads the rendering that measurement filled rather
    * than laying the document out again at a width the view never draws.
    */
+  /**
+   * Content rectangles of hosted tags, as `[container, left, top, right,
+   * bottom]` groups. Beside `hostFrames` because the two count different
+   * things, and read the same way for the same reason.
+   */
   @JvmStatic
   @DoNotStrip
+  fun tagHostFrames(documentId: Long, layout: ReadableMap, width: Float): FloatArray {
+    val context = preparationContext?.get() ?: return FloatArray(0)
+    return try {
+      val rendered = RenderedDocument.obtain(
+        context,
+        documentId,
+        layout.numberAt("fontScale", 1.0).toFloat(),
+        themeId = layout.numberAt("themeId", 0.0).toLong(),
+      ) ?: return FloatArray(0)
+      val hosts = layout.toHostLayout()
+      if (hosts.tags.isEmpty()) {
+        return FloatArray(0)
+      }
+      val frames = rendered.tagHostFrames(
+        PixelUtil.toPixelFromDIP(width).toInt(),
+        layout.numberAt("chrome", 0.0).toInt(),
+        layout.toCodeLayout(),
+        layout.toImageLayout(),
+        hosts,
+      )
+      // Every fifth value is a container id, not a length: converting it with
+      // the edges would hand a tag another container's rectangle.
+      FloatArray(frames.size) { index ->
+        if (index % 5 == 0) frames[index].toFloat() else PixelUtil.toDIPFromPixel(frames[index].toFloat())
+      }
+    } catch (error: RuntimeException) {
+      FloatArray(0)
+    }
+  }
+
   fun hostFrames(documentId: Long, layout: ReadableMap, width: Float): FloatArray {
     val context = preparationContext?.get() ?: return FloatArray(0)
     return try {
@@ -755,6 +795,17 @@ internal object DownstreamNative {
       index++
     }
     return urls
+  }
+
+  /** One app-allowed tag: its name, its attributes flat, and its source range. */
+  internal class NativeTag(val name: String, val attributes: List<String>, val range: IntRange)
+
+  /** Returns null when the document or tag is gone. */
+  fun readTag(id: Long, index: Int): NativeTag? {
+    val parts = nativeReadTag(id, index) ?: return null
+    val flat = parts[1] as? Array<String> ?: emptyArray()
+    val range = parts[2] as IntArray
+    return NativeTag(parts[0] as String, flat.toList(), range[0]..range[1])
   }
 
   /** Returns null when the document or link is gone. */
@@ -997,6 +1048,7 @@ internal object DownstreamNative {
 
   @JvmStatic
   private external fun nativeReadLink(id: Long, index: Int): Array<Any>?
+  private external fun nativeReadTag(id: Long, index: Int): Array<Any>?
 
   @JvmStatic
   private external fun nativeTraceDocument(id: Long, event: String)

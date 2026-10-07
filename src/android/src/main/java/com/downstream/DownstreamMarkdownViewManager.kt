@@ -103,6 +103,9 @@ class DownstreamMarkdownViewManager :
     view.onTaskToggle = { target, containerId, checked ->
       dispatchTaskToggle(target, containerId, checked)
     }
+    view.onTagPress = { target, name, attributes, text, range ->
+      dispatchTagPress(target, name, attributes, text, range)
+    }
     view.onLinkLongPress = linkLongPress@{ target, url, start, end ->
       val context = target.context as? ReactContext ?: return@linkLongPress
       dispatch(
@@ -665,6 +668,36 @@ class DownstreamMarkdownViewManager :
     ))
   }
 
+  /**
+   * A press on an app-allowed tag's run.
+   *
+   * The tag's name, its attributes flat, the pressed text's source range, and
+   * nothing else: JavaScript already has the text from the document, and the
+   * range is what maps the press back to where it was written.
+   */
+  private fun dispatchTagPress(
+    view: DownstreamMarkdownView,
+    name: String,
+    attributes: List<String>,
+    text: String,
+    range: IntRange,
+  ) {
+    val context = view.context as? ReactContext ?: return
+    dispatch(
+      view,
+      TagPressEvent(
+        UIManagerHelper.getSurfaceId(context),
+        view.id,
+        name,
+        attributes,
+        text,
+        range.first,
+        range.last + 1,
+        view.currentGeneration(),
+      ),
+    )
+  }
+
   private fun dispatchControlAction(
     view: DownstreamMarkdownView,
     action: String,
@@ -823,6 +856,65 @@ private class LinkLongPressEvent(
 
   companion object {
     const val NAME = "topLinkLongPress"
+  }
+}
+
+private class TagPressEvent(
+  surfaceId: Int,
+  viewTag: Int,
+  private val name: String,
+  private val attributes: List<String>,
+  private val text: String,
+  private val start: Int,
+  private val end: Int,
+  private val generation: Int,
+) : Event<TagPressEvent>(surfaceId, viewTag) {
+  override fun getEventName() = NAME
+
+  override fun getEventData(): WritableMap = Arguments.createMap().apply {
+    putString("tag", name)
+    putString("text", text)
+    // JSON `[[name, value], …]`, because the bridge carries no nested arrays
+    // here: the shape is fixed in the spec rather than in a second type.
+    putString("attributes", attributesJson(attributes))
+    putInt("start", start)
+    putInt("end", end)
+    putInt("generation", generation)
+  }
+
+  companion object {
+    const val NAME = "topTagPress"
+
+    /** Attributes flat `[name, value, …]` as JSON `[[name, value], …]`. */
+    fun attributesJson(attributes: List<String>): String {
+      val out = StringBuilder("[")
+      var index = 0
+      while (index + 1 < attributes.size) {
+        if (index > 0) out.append(",")
+        out.append("[")
+        out.append(quoteJson(attributes[index]))
+        out.append(",")
+        out.append(quoteJson(attributes[index + 1]))
+        out.append("]")
+        index += 2
+      }
+      out.append("]")
+      return out.toString()
+    }
+
+    /** One JSON string with its two escapes, which is all JSON needs here. */
+    fun quoteJson(value: String): String {
+      val out = StringBuilder("\"")
+      for (unit in value) {
+        when (unit) {
+          '\\' -> out.append("\\\\")
+          '"' -> out.append("\\\"")
+          else -> out.append(unit)
+        }
+      }
+      out.append("\"")
+      return out.toString()
+    }
   }
 }
 

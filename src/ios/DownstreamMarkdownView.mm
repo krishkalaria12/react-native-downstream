@@ -180,6 +180,13 @@ NSString *nameForFormat(NSString *format) {
   NSArray<NSNumber *> *_linkVariantCounts;
   NSArray<NSNumber *> *_linkVariantColors;
   NSArray<NSNumber *> *_linkVariantUnderlines;
+  /// Styles for app-allowed inline tags: names lowercased, a processed color
+  /// per entry or -1, and bold/italic as bits. Matched at draw time against a
+  /// run's tag name.
+  DSTagStyles *_tagStyles;
+  NSArray<NSString *> *_tagStyleNames;
+  NSArray<NSNumber *> *_tagStyleColors;
+  NSArray<NSNumber *> *_tagStyleFlags;
   CADisplayLink *_traceDisplayLink;
   uint64_t _traceDocumentId;
   uint64_t _controlEpoch;
@@ -512,6 +519,17 @@ NSString *nameForFormat(NSString *format) {
     _linkVariants = variants;
     [self applyRendering];
   }
+  // Styles for app-allowed inline tags, resolved in JavaScript from
+  // `markdownStyle.tags`. Colors but no heights, so like the variants they
+  // travel as view state rather than through the shadow node.
+  {
+    DSTagStyles *styles = [DSTagStyles new];
+    styles.names = [self stringsOf:newProps.tagStyleNames];
+    styles.colors = [self numbersOf:newProps.tagStyleColors];
+    styles.flags = [self numbersOf:newProps.tagStyleFlags];
+    _tagStyles = styles;
+    [self applyRendering];
+  }
   // The props that decide code layout, gathered into one value. The height and
   // the gutter are heights, so the shadow node measures with them and the view
   // draws with them; a change lands in props a revision before the state that
@@ -741,7 +759,8 @@ NSString *nameForFormat(NSString *format) {
                                                          syntaxHighlighting:_syntaxHighlighting
                                                                       theme:_theme
                                                                      caret:caret
-                                                                  variants:_linkVariants]
+                                                                  variants:_linkVariants
+                                                                 tagStyles:_tagStyles]
                                      : nil;
   // The fade is decided after the rendering exists, because the tracker aligns the
   // document it was given against the one this view last showed, and the ticker
@@ -902,9 +921,17 @@ NSString *nameForFormat(NSString *format) {
   if (recognizer.state != UIGestureRecognizerStateEnded) {
     return;
   }
-  const NSInteger linkIndex = [_documentView linkIndexAtPoint:[recognizer locationInView:_documentView]];
+  const CGPoint at = [recognizer locationInView:_documentView];
+  const NSInteger linkIndex = [_documentView linkIndexAtPoint:at];
   if (linkIndex >= 0) {
     [self didPressLinkAtIndex:linkIndex];
+    return;
+  }
+  // A link inside a tag is still the link a reader meant; anything else on a
+  // tag run is the tag.
+  const NSInteger tagIndex = [_documentView tagIndexAtPoint:at];
+  if (tagIndex >= 0) {
+    [self didPressTagAtIndex:tagIndex text:[_documentView tagTextAtPoint:at]];
   }
 }
 
@@ -945,6 +972,37 @@ NSString *nameForFormat(NSString *format) {
 /// A tap opens (or asks, through link safety); a hold is the app's: copy the URL,
 /// show a preview, open a sheet. The library does nothing with it, because doing
 /// anything would be a second behavior for one gesture.
+- (void)didPressTagAtIndex:(NSInteger)tagIndex text:(NSString *)text {
+  const auto *emitter = [self emitter];
+  const auto &document = _state ? _state->getData().document : nullptr;
+  if (emitter == nullptr || !document || tagIndex < 0 ||
+      static_cast<size_t>(tagIndex) >= document->tags.size()) {
+    return;
+  }
+  const Tag &tag = document->tags[static_cast<size_t>(tagIndex)];
+  // JSON `[[name, value], …]`, because codegen events carry no arrays: the
+  // shape is fixed in the spec rather than in a second type.
+  NSMutableArray<NSString *> *pairs = [NSMutableArray arrayWithCapacity:tag.attributes.size()];
+  for (const auto &pair : tag.attributes) {
+    [pairs addObject:@[
+      @(pair.first.c_str()),
+      @(pair.second.c_str()),
+    ]];
+  }
+  NSData *json = [NSJSONSerialization dataWithJSONObject:pairs options:0 error:nil];
+  emitter->onTagPress({
+      .tag = toNSString(tag.name),
+      .text = std::string(text.UTF8String ?: ""),
+      .text = std::string(text.UTF8String ?: ""),
+      .attributes = json != nil ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : @"[]",
+      .start = static_cast<int>(tag.range.start),
+      .end = static_cast<int>(tag.range.end),
+      .generation = _state
+          ? static_cast<int>(std::static_pointer_cast<const DownstreamMarkdownViewProps>(_props)->generation)
+          : 0,
+  });
+}
+
 - (void)didLongPressLinkAtIndex:(NSInteger)linkIndex {
   if (!_state || !_eventEmitter) {
     return;

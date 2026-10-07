@@ -56,6 +56,7 @@ internal class TextSegmentView(context: Context) : TextView(context) {
    */
   private var blockOffset = 0
   private var pressedLink = -1
+  private var pressedTag = -1
 
   /**
    * The `<details>` summary this view draws, if it draws one.
@@ -293,6 +294,18 @@ private class TaskPress(val id: Int, val checked: Boolean)
    * sentence, not by addressing its words.
    */
   private var spoilersRevealed = false
+
+  /**
+   * True when a hosted tag replaces this segment: the React child above draws,
+   * so this view draws nothing. Mirrors the code card's hosted flag, for the
+   * same reason — a hosted block shows none of its own drawing.
+   */
+  var hosted: Boolean = false
+    set(value) {
+      if (field == value) return
+      field = value
+      visibility = if (value) View.GONE else View.VISIBLE
+    }
 
   fun setContent(text: Spanned, accessibleBlocks: List<AccessibleBlock>, rendered: RenderedDocument) {
     bandFrame = null
@@ -828,6 +841,13 @@ private class TaskPress(val id: Int, val checked: Boolean)
         longPress = LongPress(context, held) { findHost()?.longPressLink(it) }
         longPress?.schedule(event.x, event.y)
       }
+      // A tag press is hit-tested beside the link: the whole run is the
+      // control, and a link inside a tag is still the tag a reader meant.
+      val tag = tagAt(layout, x, y)
+      if (tag >= 0) {
+        pressedTag = tag
+        return true
+      }
       // The summary is hit-tested before the links under it: the whole line is the
       // control, and a link inside a summary is still a summary a reader meant to
       // open. Everything else falls through to the link, then to selection.
@@ -902,6 +922,22 @@ private class TaskPress(val id: Int, val checked: Boolean)
       longPress?.cancel()
       longPress = null
     }
+    if (pressedTag >= 0) {
+      when (event.actionMasked) {
+        MotionEvent.ACTION_UP -> {
+          val tag = pressedTag
+          pressedTag = -1
+          if (tagAt(layout, x, y) == tag) {
+            // The run's own words, which is what an app shows alongside the
+            // tag it reports.
+            findHost()?.pressTag(tag, tagTextAt(layout, x, y))
+          }
+          return true
+        }
+        MotionEvent.ACTION_CANCEL -> pressedTag = -1
+        else -> return true
+      }
+    }
     if (pressedLink < 0) {
       return super.onTouchEvent(event)
     }
@@ -948,6 +984,27 @@ private class TaskPress(val id: Int, val checked: Boolean)
     // line's end is a press on words however far into the item it still is.
     val block = blocks.firstOrNull { offset in it.start until it.end } ?: return null
     return TaskPress(block.containerId, !block.checked)
+  }
+
+  /** A tag run under the point, or -1. The whole run is the control. */
+  private fun tagAt(layout: Layout, x: Float, y: Float): Int {
+    val content = text as? Spanned ?: return -1
+    if (y < 0 || y > layout.height) return -1
+    val line = layout.getLineForVertical(y.toInt())
+    val offset = layout.getOffsetForHorizontal(line, x)
+    val spans = content.getSpans(offset, offset + 1, TagSpan::class.java)
+    return spans.firstOrNull()?.index ?: -1
+  }
+
+  /** The tag run's own words under the point, or empty. */
+  private fun tagTextAt(layout: Layout, x: Float, y: Float): String {
+    val content = text as? Spanned ?: return ""
+    if (y < 0 || y > layout.height) return ""
+    val line = layout.getLineForVertical(y.toInt())
+    val offset = layout.getOffsetForHorizontal(line, x)
+    val span = content.getSpans(offset, offset + 1, TagSpan::class.java).firstOrNull()
+      ?: return ""
+    return content.subSequence(content.getSpanStart(span), content.getSpanEnd(span)).toString()
   }
 
   /** A spoiler run under the point, or null. Hidden text has no ink, so the range is the target. */

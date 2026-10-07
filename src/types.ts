@@ -917,6 +917,16 @@ export type MarkdownStyle = Readonly<{
    * This pairs with app-defined link schemes: an app that registers `app:` links
    * styles them here rather than teaching the theme about every host it links to.
    */
+  /**
+   * Styles for an app-allowed inline tag, by name, as enriched-markdown's
+   * `linkVariants` styles a link.
+   *
+   * A tag run draws with its entry's color and traits; anything it does not
+   * name stays the surrounding text's. Matched lowercased, as tag names
+   * compare, with the first entry winning when two names collide after
+   * lowercasing.
+   */
+  tags?: Readonly<Record<string, MarkdownTextStyle>>;
   linkVariants?: ReadonlyArray<
     Readonly<{
       /** URL prefixes this variant styles, matched with `startsWith`. */
