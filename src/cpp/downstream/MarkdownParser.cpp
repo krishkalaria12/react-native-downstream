@@ -106,6 +106,11 @@ public:
       : source_(source), parse_(source), brackets_(), options_(options), offsets_(source),
         document_(std::make_shared<Document>()) {
     document_->id = allocateDocumentId();
+    // The flag is the transport and the policy field is the read site, so one
+    // assignment here is the whole mapping: the builder owns its options, and
+    // a later `setParseTags` replaces the policy whole rather than merging
+    // into it.
+    options_.tags.literalTagContent = options_.literalTagContent();
     if (options_.enabled()) {
       // The rewrite is the same length as the source, so every offset md4c
       // reports is also an offset into `source_`. That is the whole reason
@@ -120,6 +125,10 @@ public:
   }
 
   int enterBlock(MD_BLOCKTYPE type, void *detail) {
+    // A literal tag's scope is its own block: an unclosed `<user>` does not
+    // reach into the next paragraph, because the policy promises the raw
+    // source between an open and a close in one block.
+    literalDepth_ = 0;
     switch (type) {
       case MD_BLOCK_THEAD:
       case MD_BLOCK_TBODY:
@@ -343,6 +352,12 @@ public:
     // newlines in callback order and the inner span's text offsets from
     // absorbing the breaks between spans.
     flushStretch(false);
+    // Inside a literal tag no span opens: no emphasis, no link records, no
+    // images. The text still arrives through the text callback, unstyled but
+    // present.
+    if (inLiteralTag()) {
+      return 0;
+    }
     switch (type) {
       case MD_SPAN_EM:
         emphasisDepth_++;
@@ -439,6 +454,11 @@ public:
   }
 
   int leaveSpan(MD_SPANTYPE type, void * /*detail*/) {
+    // Mirrors the enter gate: a span that never opened has no depth to give
+    // back and no frame to close.
+    if (inLiteralTag()) {
+      return 0;
+    }
     switch (type) {
       case MD_SPAN_EM:
         emphasisDepth_--;
@@ -550,6 +570,24 @@ public:
             // sanitizer does for every element it has no style for.
             return done();
           }
+          if (options_.tags.literalTagContent && literalDepth_ > 0) {
+            // Inside a literal tag every piece is raw source: consumed, never
+            // applied — no style, no link, no script. An allowed tag is the
+            // exception, handled exactly as outside: recorded and pushed on
+            // open, popped on close, so its record, its runs and the depth
+            // balance the same way in both modes.
+            if (piece.tag >= 0 && !piece.selfClosing) {
+              scan::TagPiece opened = piece;
+              if (!piece.closing) {
+                opened.tag = recordAllowedTag(piece, htmlOffset(text));
+                literalDepth_++;
+              } else {
+                literalDepth_--;
+              }
+              styleTagPush(opened);
+            }
+            return done();
+          }
           switch (piece.action) {
             case TagAction::Style:
               switch (piece.style) {
@@ -589,6 +627,12 @@ public:
                   scan::TagPiece opened = piece;
                   if (piece.tag >= 0 && !piece.closing && !piece.selfClosing) {
                     opened.tag = recordAllowedTag(piece, htmlOffset(text));
+                    // From here to its close the content is raw source, when
+                    // the app asked for it: the depth is what the span gates
+                    // read, and the close brings it back down.
+                    if (options_.tags.literalTagContent) {
+                      literalDepth_++;
+                    }
                   }
                   if (styleTagPush(opened)) {
                     return done();
@@ -2433,6 +2477,15 @@ private:
   unsigned dropDepth_{0};
   /// The dropped element's name, so a nested `</div>` cannot end it.
   std::string_view dropName_;
+  /// How deep inside an app-allowed tag the block is: 0 outside one.
+  ///
+  /// Only counts while `literalTagContent` is on, and only within its block,
+  /// because the policy promises the raw source between an open and a close in
+  /// one block. The span gates read it rather than the flag alone, so an
+  /// allowed tag nests and unclosed ones end with their paragraph.
+  unsigned literalDepth_{0};
+  /// True while inside an app-allowed tag whose content is raw source.
+  bool inLiteralTag() const { return options_.tags.literalTagContent && literalDepth_ > 0; }
   /// Open script tags, innermost last: 0 is a subscript, 1 a superscript.
   /// A small stack, not two depths, because the innermost-opened one wins and
   /// nesting the same tag twice does not shift further.

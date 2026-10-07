@@ -107,12 +107,13 @@ struct TagPolicy {
    */
   bool unwrapUnknownElements{true};
   /**
-   * A tag's content is the raw source between its open and close tags, rather
-   * than Markdown parsed from it.
+   * A tag's content is unstyled text rather than parsed Markdown.
    *
    * For every allowed tag, not per tag: an app asking for `<user>Bob</user>` to
    * be a name is asking for it not to be a paragraph, and having to say so per
-   * tag would mean a policy object per tag for one boolean.
+   * tag would mean a policy object per tag for one boolean. Delimiters md4c
+   * owns stay delimiters — `**x**` reads unstyled, not with asterisks — because
+   * the content is not interpreted rather than re-tokenized.
    */
   bool literalTagContent{false};
 

@@ -6,6 +6,7 @@ import {
   PARSE_FLAG_ENABLED,
   PARSE_FLAG_INLINE_HTML,
   PARSE_FLAG_LINK_RELATIVE,
+  PARSE_FLAG_LITERAL_TAG_CONTENT,
   PARSE_FLAG_NO_AUTOLINK_HTTP,
   PARSE_FLAG_NO_AUTOLINK_HTTPS,
   PARSE_FLAG_NO_AUTOLINK_MAILTO,
@@ -59,6 +60,7 @@ describe('resolveParseFlags', () => {
     cjk: undefined,
     links: undefined,
     autolinkProtocols: undefined,
+    literalTagContent: undefined,
   };
 
   it('renders the inline tags unless inlineHtml is false', () => {
@@ -320,6 +322,7 @@ describe('the extra syntaxes', () => {
       cjk: undefined,
       links: undefined,
       autolinkProtocols: undefined,
+      literalTagContent: undefined,
     };
     expect(
       resolveParseFlags({ ...base, syntax: { highlight: true } }, false).flags &
@@ -336,5 +339,38 @@ describe('the extra syntaxes', () => {
     expect(
       resolveParseFlags(base, false).flags & (HIGHLIGHT | UNDERLINE | SPOILER)
     ).toBe(0);
+  });
+});
+
+/**
+ * `literalTagContent`: an allowed tag's content is unstyled text, not Markdown.
+ *
+ * Off by default, like the syntax bits above, so a document that never asks
+ * parses exactly as before. The behavior itself is the engine's
+ * `literalTagContentRun` in `test_tags.cpp`; here only the bit is asserted,
+ * because this file is about resolution rather than rendering.
+ */
+describe('literalTagContent', () => {
+  const LITERAL = 1 << 14;
+  const base = {
+    math: false as const,
+    inlineHtml: undefined,
+    syntax: undefined,
+    cjk: undefined,
+    links: undefined,
+    autolinkProtocols: undefined,
+    literalTagContent: undefined,
+  };
+
+  it('sets the bit only when asked for', () => {
+    expect(
+      resolveParseFlags({ ...base, literalTagContent: true }, false).flags &
+        LITERAL
+    ).toBe(LITERAL);
+    expect(resolveParseFlags(base, false).flags & LITERAL).toBe(0);
+  });
+
+  it('exports the bit it resolves', () => {
+    expect(PARSE_FLAG_LITERAL_TAG_CONTENT).toBe(LITERAL);
   });
 });

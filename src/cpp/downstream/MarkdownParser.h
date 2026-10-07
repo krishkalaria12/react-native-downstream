@@ -69,6 +69,10 @@ constexpr uint32_t UnderlineSyntax = 1u << 12;
 /// `||spoiler||`, md4c's own spoiler syntax. Off by default: it hides text
 /// behind a tap, which is an app's decision about its own messages.
 constexpr uint32_t SpoilerSyntax = 1u << 13;
+/// An allowed tag's content is unstyled text rather than parsed Markdown. Off
+/// by default: `<user>**Bob**</user>` styles Bob unless the app says its
+/// custom tags are not Markdown.
+constexpr uint32_t LiteralTagContent = 1u << 14;
 
 /// What `undefined` resolves to, and therefore what the codegen default is.
 ///
@@ -80,7 +84,7 @@ constexpr uint32_t Default = Enabled | Brackets | Cjk;
 
 constexpr uint32_t All = Enabled | SingleDollar | Brackets | InlineHtml | SuperscriptSyntax |
     SubscriptSyntax | LinkRelative | NoAutolinkMailto | NoAutolinkHttp | NoAutolinkHttps | Cjk |
-    HighlightSyntax | UnderlineSyntax | SpoilerSyntax;
+    HighlightSyntax | UnderlineSyntax | SpoilerSyntax | LiteralTagContent;
 
 } // namespace ParseFlags
 
@@ -112,6 +116,7 @@ struct ParseOptions {
   bool highlightSyntax() const { return (flags & ParseFlags::HighlightSyntax) != 0; }
   bool underlineSyntax() const { return (flags & ParseFlags::UnderlineSyntax) != 0; }
   bool spoilerSyntax() const { return (flags & ParseFlags::SpoilerSyntax) != 0; }
+  bool literalTagContent() const { return (flags & ParseFlags::LiteralTagContent) != 0; }
 
   /**
    * Whether a bare address of this protocol may become a link.

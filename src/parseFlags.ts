@@ -46,6 +46,11 @@ export const PARSE_FLAG_HIGHLIGHT_SYNTAX = 1 << 11;
 export const PARSE_FLAG_UNDERLINE_SYNTAX = 1 << 12;
 /** `||spoiler||`, md4c's own spoiler syntax. Off by default. */
 export const PARSE_FLAG_SPOILER_SYNTAX = 1 << 13;
+/**
+ * An allowed tag's content is unstyled text, not parsed Markdown. Off by
+ * default; see `literalTagContent`.
+ */
+export const PARSE_FLAG_LITERAL_TAG_CONTENT = 1 << 14;
 
 /** Every flag the engine understands. */
 export const PARSE_FLAGS_ALL =
@@ -62,7 +67,8 @@ export const PARSE_FLAGS_ALL =
   PARSE_FLAG_CJK |
   PARSE_FLAG_HIGHLIGHT_SYNTAX |
   PARSE_FLAG_UNDERLINE_SYNTAX |
-  PARSE_FLAG_SPOILER_SYNTAX;
+  PARSE_FLAG_SPOILER_SYNTAX |
+  PARSE_FLAG_LITERAL_TAG_CONTENT;
 
 export type ResolvedMath = Readonly<{
   /** Bitmask for the native `parseFlags` prop. */
@@ -180,6 +186,7 @@ export type MarkdownParseInput = Readonly<{
   cjk: boolean | undefined;
   links: MarkdownLinksOptions | undefined;
   autolinkProtocols: MarkdownAutolinkProtocols | undefined;
+  literalTagContent: boolean | undefined;
 }>;
 
 /**
@@ -191,8 +198,8 @@ export type MarkdownParseInput = Readonly<{
  * a protocol is named. `resolveMath`'s answer is the base, so a document with no
  * math parses identically under any combination of the others.
  *
- * An options object rather than six positional arguments, because the last
- * three read identically to `undefined` at every call site and a caller would
+ * An options object rather than positional arguments, because the later ones
+ * read identically to `undefined` at every call site and a caller would
  * have to count them.
  */
 export function resolveParseFlags(
@@ -221,6 +228,9 @@ export function resolveParseFlags(
   }
   if (input.syntax?.spoiler === true) {
     flags |= PARSE_FLAG_SPOILER_SYNTAX;
+  }
+  if (input.literalTagContent === true) {
+    flags |= PARSE_FLAG_LITERAL_TAG_CONTENT;
   }
   if (
     input.links?.relative === true ||

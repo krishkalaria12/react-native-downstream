@@ -238,6 +238,8 @@ export const PARSE_NO_AUTOLINK_HTTP = 1 << 8;
 export const PARSE_NO_AUTOLINK_HTTPS = 1 << 9;
 /** The markdown-cjk-friendly amendment. On unless `cjk` is false. */
 export const PARSE_CJK = 1 << 10;
+/** An allowed tag's content is unstyled text. Off unless asked for. */
+export const PARSE_LITERAL_TAG_CONTENT = 1 << 14;
 export const PARSE_FLAGS_DEFAULT = PARSE_ENABLED | PARSE_BRACKETS | PARSE_CJK;
 
 function sessionBinary(): string {

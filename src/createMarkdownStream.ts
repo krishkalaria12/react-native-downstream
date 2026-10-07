@@ -141,6 +141,7 @@ class StreamState implements MarkdownStreamController {
         cjk: options.cjk,
         links: options.links,
         autolinkProtocols: options.disableAutolinkProtocols,
+        literalTagContent: options.literalTagContent,
       },
       mathAvailable()
     ).flags;

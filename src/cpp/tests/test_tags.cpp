@@ -181,6 +181,65 @@ bool allowedTagsRun() {
   return true;
 }
 
+/// `literalTagContent`: an allowed tag's content is raw source, not Markdown.
+bool literalTagContentRun() {
+  TagPolicy policy;
+  policy.tags = {AllowedTag{"user", {}}};
+  const ParseOptions plain{ParseFlags::InlineHtml, policy};
+  const ParseOptions literal{ParseFlags::InlineHtml | ParseFlags::LiteralTagContent, policy};
+
+  // Off by default: the emphasis inside is emphasis.
+  CHECK(stylesOver(parse("a <user>**bob**</user>", plain), u"bob") == InlineStyle::Strong,
+        "without the flag the content is parsed");
+
+  // On: the content is not interpreted — no style, though md4c still owns
+  // the markers themselves, so they read as syntax rather than text.
+  const ParseResult flat = parse("a <user>**bob**</user> c", literal);
+  CHECK(flat.document->blocks[0].text == u"a bob c", "the text is kept");
+  CHECK(stylesOver(flat, u"bob") == 0, "but unstyled");
+
+  // The tag itself is still real: recorded, and its runs name it.
+  CHECK(flat.document->tags.size() == 1, "the tag is still recorded");
+  bool named = false;
+  for (const InlineRun &run : flat.document->blocks[0].runs) {
+    named = named || run.tag >= 0;
+  }
+  CHECK(named, "and its runs name the record");
+
+  // Links do not form inside either: no record, no style.
+  const ParseResult linked = parse("<user>[x](https://e.com)</user>", literal);
+  CHECK(linked.document->links.empty(), "no link is recorded");
+  CHECK(stylesOver(linked, u"x") == 0, "and none is styled");
+
+  // Builtin tags inside are raw source too, consumed rather than applied.
+  const ParseResult builtin = parse("<user><b>x</b></user>", literal);
+  CHECK(builtin.document->blocks[0].text == u"x", "the text is kept");
+  CHECK(stylesOver(builtin, u"x") == 0, "but the bold is not applied");
+
+  // A nested allowed tag is a second record, and its content is literal too.
+  const ParseResult nested = parse("<user>a<user>b</user>c</user>", literal);
+  CHECK(nested.document->tags.size() == 2, "both tags are recorded");
+  CHECK(nested.document->blocks[0].text == u"abc", "with literal text throughout");
+  CHECK(stylesOver(nested, u"abc") == 0, "and no style anywhere");
+
+  // An unclosed tag ends with its block: the next paragraph parses normally.
+  const ParseResult open = parse("<user>**bob**\n\n**hi**", literal);
+  CHECK(open.document->blocks.size() == 2, "two paragraphs");
+  if (open.document->blocks.size() == 2) {
+    CHECK(stylesOver(open, u"bob") == 0, "the open tag's content is literal");
+    const std::u16string &second = open.document->blocks[1].text;
+    const size_t at = second.find(u"hi");
+    uint32_t bits = 0;
+    for (const InlineRun &run : open.document->blocks[1].runs) {
+      if (run.start < at + 2 && run.end > at) {
+        bits |= run.styles;
+      }
+    }
+    CHECK(bits == InlineStyle::Strong, "but the next block parses");
+  }
+  return true;
+}
+
 } // namespace
 
 int main() {
@@ -189,5 +248,6 @@ int main() {
   CHECK(elementsResolve(), "unwrap, hide, drop and literal");
   CHECK(anchorsLink(), "anchors");
   CHECK(allowedTagsRun(), "allowedTags");
+  CHECK(literalTagContentRun(), "literalTagContent");
   return ds_check_result();
 }

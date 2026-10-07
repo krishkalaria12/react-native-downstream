@@ -407,6 +407,12 @@ export type MarkdownStreamOptions = Readonly<{
    * `MarkdownAllowedTags`.
    */
   allowedTags?: MarkdownAllowedTags;
+  /**
+   * Leave a tag's content unstyled instead of parsing Markdown inside it. Off
+   * by default, and what an app whose custom tags are not Markdown wants:
+   * `<user>Bob</user>` is a name, not a paragraph.
+   */
+  literalTagContent?: boolean;
 }>;
 
 /** Created by createMarkdownStream(options), planned for the native session phase. */
@@ -1217,9 +1223,9 @@ type MarkdownViewBaseProps = Readonly<{
    */
   allowedTags?: MarkdownAllowedTags;
   /**
-   * Show a tag's source between its open and close instead of parsing what is
-   * inside it. Off by default, and what an app whose custom tags are not
-   * Markdown wants: `<user>Bob</user>` is a name, not a paragraph.
+   * Leave a tag's content unstyled instead of parsing Markdown inside it. Off
+   * by default, and what an app whose custom tags are not Markdown wants:
+   * `<user>Bob</user>` is a name, not a paragraph.
    */
   literalTagContent?: boolean;
   /**

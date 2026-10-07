@@ -647,6 +647,7 @@ function useMathAndImages(
     links?: MarkdownViewProps['links'];
     disableAutolinkProtocols?: MarkdownViewProps['disableAutolinkProtocols'];
     allowedTags?: MarkdownViewProps['allowedTags'];
+    literalTagContent?: MarkdownViewProps['literalTagContent'];
   },
   currentGeneration: () => number
 ) {
@@ -662,6 +663,7 @@ function useMathAndImages(
     links,
     disableAutolinkProtocols,
     allowedTags,
+    literalTagContent,
   } = props;
 
   // One read of the platform's answer for the lifetime of the process. A test
@@ -679,10 +681,19 @@ function useMathAndImages(
           cjk,
           links,
           autolinkProtocols: disableAutolinkProtocols,
+          literalTagContent,
         },
         engine.current
       ),
-    [math, inlineHtml, syntax, cjk, links, disableAutolinkProtocols]
+    [
+      math,
+      inlineHtml,
+      syntax,
+      cjk,
+      links,
+      disableAutolinkProtocols,
+      literalTagContent,
+    ]
   );
   const resolvedStable = useRef(resolved);
   if (resolvedStable.current.flags !== resolved.flags) {
