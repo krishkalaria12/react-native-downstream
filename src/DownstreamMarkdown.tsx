@@ -1074,29 +1074,38 @@ function ControlledMarkdown({
   // A hold on a link is the app's, full stop: the library neither opens nor
   // asks, so there is no safety flow — only the URL as written, the URL resolved,
   // and where the link was.
+  // Reads the handler and the generation late, through refs, so the callback
+  // keeps its identity across snapshots: re-registering the native event on
+  // every generation would drop a press that landed between renders. The same
+  // shape `useControls` uses for its own routing, for the same reason.
+  const linkLongPressLatest = useRef({ onLinkLongPress, generationRef });
+  linkLongPressLatest.current = { onLinkLongPress, generationRef };
   const handleLinkLongPress = useCallback(
     (native: NativeSyntheticEvent<NativeLinkPress>) => {
       const { url: href, start, end } = native.nativeEvent;
-      onLinkLongPress?.({
+      linkLongPressLatest.current.onLinkLongPress?.({
         url: resolveLinkUrl(href, ''),
         href,
         range: { start, end },
       });
     },
-    [onLinkLongPress]
+    []
   );
 
+  const taskPressLatest = useRef({ onTaskPress, generationRef });
+  taskPressLatest.current = { onTaskPress, generationRef };
   const handleTaskPress = useCallback(
     (native: NativeSyntheticEvent<MarkdownTaskPressEvent>) => {
       const payload = native.nativeEvent;
-      if (payload.generation !== generationRef.current) return;
-      onTaskPress?.({
+      const latest = taskPressLatest.current;
+      if (payload.generation !== latest.generationRef.current) return;
+      latest.onTaskPress?.({
         containerId: payload.containerId,
         checked: payload.checked,
         generation: payload.generation,
       } satisfies MarkdownTaskPressEvent);
     },
-    [generationRef, onTaskPress]
+    []
   );
 
   const { resolved, controlError, handleControlAction } = useControls(
@@ -1268,29 +1277,38 @@ function StreamMarkdown({
   // A hold on a link is the app's, full stop: the library neither opens nor
   // asks, so there is no safety flow — only the URL as written, the URL resolved,
   // and where the link was.
+  // Reads the handler and the generation late, through refs, so the callback
+  // keeps its identity across snapshots: re-registering the native event on
+  // every generation would drop a press that landed between renders. The same
+  // shape `useControls` uses for its own routing, for the same reason.
+  const linkLongPressLatest = useRef({ onLinkLongPress, generationRef });
+  linkLongPressLatest.current = { onLinkLongPress, generationRef };
   const handleLinkLongPress = useCallback(
     (native: NativeSyntheticEvent<NativeLinkPress>) => {
       const { url: href, start, end } = native.nativeEvent;
-      onLinkLongPress?.({
+      linkLongPressLatest.current.onLinkLongPress?.({
         url: resolveLinkUrl(href, ''),
         href,
         range: { start, end },
       });
     },
-    [onLinkLongPress]
+    []
   );
 
+  const taskPressLatest = useRef({ onTaskPress, generationRef });
+  taskPressLatest.current = { onTaskPress, generationRef };
   const handleTaskPress = useCallback(
     (native: NativeSyntheticEvent<MarkdownTaskPressEvent>) => {
       const payload = native.nativeEvent;
-      if (payload.generation !== generationRef.current) return;
-      onTaskPress?.({
+      const latest = taskPressLatest.current;
+      if (payload.generation !== latest.generationRef.current) return;
+      latest.onTaskPress?.({
         containerId: payload.containerId,
         checked: payload.checked,
         generation: payload.generation,
       } satisfies MarkdownTaskPressEvent);
     },
-    [generationRef, onTaskPress]
+    []
   );
 
   const { resolved, controlError, handleControlAction } = useControls(

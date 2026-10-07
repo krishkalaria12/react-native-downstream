@@ -148,7 +148,9 @@ function useDiagram(code: string, isIncomplete: boolean): Diagram {
           setDiagram({
             state: 'invalid',
             reason:
-              error instanceof Error ? error.message : 'This diagram does not parse.',
+              error instanceof Error
+                ? error.message
+                : 'This diagram does not parse.',
           });
         }
       });
@@ -168,7 +170,13 @@ function hash(text: string): number {
   return Math.abs(value);
 }
 
-function DiagramView({ svg, height }: { svg: string; height: number }): React.JSX.Element {
+function DiagramView({
+  svg,
+  height,
+}: {
+  svg: string;
+  height: number;
+}): React.JSX.Element {
   const html = useMemo(() => pageHtml(svg, '#ffffff'), [svg]);
   return (
     <WebView
