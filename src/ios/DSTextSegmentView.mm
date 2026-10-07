@@ -45,7 +45,7 @@ NSString *const kPlaceholder = @"\u200b";
   }
   _segment = segment;
   ((DSLayoutManager *)self.layoutManager).blockRanges = segment.blockRanges;
-  [_stack.textStorage setAttributedString:segment.attributedString];
+  DSUpdateTextStorage(_stack.textStorage, segment.attributedString);
   self.selectedRange = NSMakeRange(0, 0);
   invalidateAccessibleLinks(_cachedAccessibilityElements);
   _cachedAccessibilityElements = nil;

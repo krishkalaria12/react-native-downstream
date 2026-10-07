@@ -1,5 +1,6 @@
 #include "CodeBlocks.h"
 #include "CodeHighlighter.h"
+#include "Compare.h"
 #include "IncrementalParser.h"
 #include "SegmentPlan.h"
 #include "check.h"
@@ -311,9 +312,64 @@ bool md4cOffsetQuirk() {
   return true;
 }
 
+// Highlighting appended fence text must leave every retained snapshot intact,
+// including a token completed on the current line and a pending final newline.
+bool fenceAppendTokensAndSnapshots() {
+  const std::string code = "const value = compute(user.id, 42); // wide \xF0\x9F\x91\x8D\n"
+                           "const next = \"\xC3\xA9\xE6\xBC\xA2\";\n\nreturn value;\n";
+  for (const char *language : {"ts", "py", "rs", "json", "html", "unknown"}) {
+    for (size_t chunk : {size_t(1), size_t(7), size_t(16)}) {
+      IncrementalParser parser(ParseMode::IncrementalTail);
+      std::string source = std::string("```") + language + " title=sample\n";
+      CHECK(feed(parser, source, false).status == ParseStatus::Ok, "the test fence opens");
+      std::vector<DocumentHandle> retained;
+      std::vector<Block> copies;
+      for (size_t at = 0; at < code.size();) {
+        size_t take = std::min(chunk, code.size() - at);
+        // Session chunks are valid UTF-8 strings; keep whole scalars even for
+        // the one-byte workload. The standalone highlighter tests separately
+        // cover UTF-16 surrogate pairs arriving in two calls.
+        while (at + take < code.size() && (static_cast<unsigned char>(code[at + take]) & 0xc0) == 0x80) take++;
+        source.append(code, at, take);
+        at += take;
+        const auto result = feed(parser, source, false);
+        CHECK(result.status == ParseStatus::Ok, "the streaming fence parses");
+        const auto parsedFull = parseMarkdown(source);
+        const auto full = highlightSettledCodeBlocks(lexillaHighlighter(), parsedFull.document, 1e9, nullptr);
+        CHECK(full != nullptr, "the full-parse oracle accepts the UTF-8 fence");
+        if (!full || !result.document) return false;
+        CHECK(equal(*result.document, *full), "every growing fence matches fresh text and tokens");
+        retained.push_back(result.document);
+        copies.push_back(result.document->blocks.back());
+      }
+      CHECK(parser.counters().openFenceFastUpdates > 1, "the exact-lineage path receives multiple append updates");
+      source += "```\n\n```py\nreturn 1";
+      CHECK(feed(parser, source, false).status == ParseStatus::Ok, "closing and changing language reparses");
+      source += "2\nreturn 3";
+      const auto after = feed(parser, source, false);
+      const auto full = highlightSettledCodeBlocks(lexillaHighlighter(), parseMarkdown(source).document, 1e9, nullptr);
+      CHECK(equal(*after.document, *full), "a different fence cannot inherit an earlier fence's lineage");
+      for (size_t i = 0; i < retained.size(); i++) {
+        CHECK(equalBlock(retained[i]->blocks.back(), copies[i]), "later appends cannot mutate retained text or tokens");
+        CHECK(retained[i]->blocks.back().info == copies[i].info, "retained fence metadata is unchanged");
+      }
+      parser.replace("```ts\nconst changed = 'reset';");
+      CHECK(parser.parse(false).status == ParseStatus::Ok, "reset invalidates the old fence");
+      parser.append("\nconst more = 1");
+      CHECK(parser.parse(false).status == ParseStatus::Ok, "a reset fence resumes safely");
+      parser.append("2;");
+      const auto reset = parser.parse(false);
+      const auto resetFull = highlightSettledCodeBlocks(lexillaHighlighter(), parseMarkdown(parser.source()).document, 1e9, nullptr);
+      CHECK(equal(*reset.document, *resetFull), "reset append tokens match a fresh pass");
+    }
+  }
+  return true;
+}
+
 // The open-fence fast path copies bytes verbatim, so it must refuse bytes
 // md4c rewrites and must not mistake a closing fence for a new opener.
 bool fenceEdgeCases() {
+  CHECK(fenceAppendTokensAndSnapshots(), "fence append tokens and retained snapshots");
   const std::vector<std::vector<std::string>> cases = {
       {"```\n", "a\n", "\tb\n", "c"},
       {"```py\n", "x = 1\r\n", "y"},
@@ -601,6 +657,131 @@ static int batchedCorpus(ParseOptions parse) {
   return ds_check_result();
 }
 
+// A definition-free reference-bearing prefix is reusable, but stays mutable:
+// no provisional block gets an identity or becomes available as settled text.
+bool referenceSafeReuse() {
+  const std::string padding = "\n\n" + std::string(160, 'p') + "\n\n";
+  const std::vector<std::string> cases = {
+      "[ref]" + padding + "[ref]: https://example.com\n",
+      "[label][ref] [ref][] ![alt][ref] ![ref]" + padding + "[ref]: /image.png \"title\"\n",
+      "[Ref] [REF][] [label][rEf]" + padding + "[ref]: /first\n[REF]: /second\n",
+      "[two words]" + padding + "[two\n words]:\n /target\n \"multiline title\"\n",
+      "[ref]: /before\n\n[ref]" + padding + "[ref]: /duplicate\n",
+      "\\[ref] [missing] `[:code]` [inline](/target)" + padding + "[ref]: /escaped\n[missing]: /resolved\n",
+      "[^note]" + padding + "[^note]: footnote **content**\n    next line\n",
+      "> [ref]\n> quoted\n\n- [ref]\n- ![ref]" + padding + "> [ref]: /inside\n",
+      "| [ref] | b |\n| --- | --- |\n| ![ref] | c |" + padding + "[ref]: /table\n",
+      "[ref]" + padding + "```\n[ref]: /code\n```\n\n[ref]: /outside\n",
+      "[ref]" + padding + "\\[\n" + std::string(160, 'm') + "\n\n\\]\n",
+      "[ref]" + padding + "\\(" + std::string(160, 'm') + "\\)\n",
+      "[ref]" + padding + "<div>\n[ref]: /html\n</div>\n\n[ref]: /outside\n",
+      "![ref]" + padding + "[ref]: <https://example.com/image.png> 'title'\n",
+      "&#91;ref&#93; [ref]" + padding + "[ref]: /entity\n",
+      "[ref]" + padding + "\\[ref]: /escaped-marker\n",
+  };
+  for (const auto &text : cases) {
+    IncrementalParser parser(ParseMode::IncrementalTail);
+    std::map<uint64_t, std::pair<size_t, Block>> identities;
+    std::vector<std::pair<DocumentHandle, Document>> snapshots;
+    std::string source;
+    // Every byte exercises split brackets, colons, titles, and definitions.
+    for (const char byte : text) {
+      source.push_back(byte);
+      const auto result = feed(parser, source, false);
+      const auto expected = colored(parseMarkdown(source));
+      if (result.status != ParseStatus::Ok || !scan::sameDocument(*result.document, *expected) ||
+          !stableIdentities(*result.document, identities)) {
+        std::cerr << "Reference prefix mismatch at " << source.size() << " bytes in " << text << "\n";
+        return false;
+      }
+      if (source.size() % 79 == 0) {
+        Document copy = *result.document;
+        copy.blocks = SharedList<Block>(nullptr, std::vector<Block>(copy.blocks.begin(), copy.blocks.end()));
+        copy.links = SharedList<Link>(nullptr, std::vector<Link>(copy.links.begin(), copy.links.end()));
+        copy.images = SharedList<Image>(nullptr, std::vector<Image>(copy.images.begin(), copy.images.end()));
+        snapshots.emplace_back(result.document, std::move(copy));
+      }
+    }
+    for (const auto &[handle, copy] : snapshots) {
+      if (!scan::sameDocument(*handle, copy) || handle->settledBlocks != copy.settledBlocks) return false;
+    }
+    const auto finished = parser.parse(true);
+    if (!scan::sameDocument(*finished.document, *colored(parseMarkdown(source))) ||
+        finished.document->settledBlocks != finished.document->blocks.size()) return false;
+  }
+
+  IncrementalParser parser(ParseMode::IncrementalTail);
+  std::string source = std::string(160, 's') + "\n\n";
+  const auto strict = feed(parser, source, false);
+  const auto strictIdentity = strict.document->blocks.front().identity;
+  const size_t strictBytes = parser.committedBytes();
+  source += "[ref]\n\n";
+  while (source.size() < 96 * 1024) {
+    source += "Normal paragraph text with **strong** wording.\n\n";
+    const auto next = feed(parser, source, false);
+    if (!scan::sameDocument(*next.document, *parseMarkdown(source).document) ||
+        next.document->settledBlocks != 1 || next.document->blocks.front().identity != strictIdentity) return false;
+    for (size_t i = 1; i < next.document->blocks.size(); i++) {
+      if (next.document->blocks[i].identity != 0) return false;
+    }
+  }
+  const auto counts = parser.counters();
+  if (strictIdentity == 0 || parser.committedBytes() != strictBytes || parser.reusedBytes() < 90 * 1024 ||
+      counts.fullParses != 0 || counts.fallbackCount(ParseFallback::TailLimit) != 0 ||
+      counts.bytesParsed > source.size() * 5) return false;
+  const auto held = parser.document();
+  const auto heldSize = held->blocks.size();
+  source += "[ref]";
+  feed(parser, source, false);
+  source += ": /late\n";
+  const auto resolved = feed(parser, source, false);
+  if (!scan::sameDocument(*resolved.document, *parseMarkdown(source).document) ||
+      resolved.document->blocks.front().identity != strictIdentity || parser.reusedBytes() != strictBytes ||
+      held->blocks.size() != heldSize || held->blocks[1].text != u"[ref]") return false;
+
+  // Replacement/reset must release dependencies and old provisional storage.
+  parser.replace("[new]" + padding + "tail");
+  auto replacement = parser.parse(false);
+  if (!scan::sameDocument(*replacement.document, *parseMarkdown(parser.source()).document)) return false;
+  parser.append(" more\n\n");
+  parser.parse(false);
+  if (parser.reusedBytes() == 0 || parser.committedBytes() != 0) return false;
+  parser.reset();
+  const auto reset = feed(parser, "[new]" + padding + "tail", false);
+  if (!scan::sameDocument(*reset.document, *parseMarkdown(parser.source()).document) ||
+      parser.reusedBytes() == 0 || parser.committedBytes() != 0) return false;
+
+  // Changing parse flags must rescan old bytes, including markers that were
+  // harmless before bracket math was enabled, and reparse even without input.
+  IncrementalParser changed(ParseMode::IncrementalTail, ParseOptions{0});
+  const std::string mathSource = "[ref]" + padding + "\\[\n" + std::string(160, 'm') + "\n\n";
+  feed(changed, mathSource, false);
+  if (changed.reusedBytes() == 0) return false;
+  changed.setParse(ParseOptions{});
+  auto changedResult = changed.parse(false);
+  if (changed.reusedBytes() != 0 ||
+      !scan::sameDocument(*changedResult.document, *colored(parseMarkdown(mathSource)))) return false;
+  changed.append("\\]\n");
+  changedResult = changed.parse(false);
+  if (!scan::sameDocument(*changedResult.document, *colored(parseMarkdown(changed.source())))) return false;
+  changed.setParse(ParseOptions{0});
+  changedResult = changed.parse(false);
+  if (!scan::sameDocument(*changedResult.document, *parseMarkdown(changed.source(), ParseOptions{0}).document)) return false;
+  changed.setParse(ParseOptions{});
+  changedResult = changed.parse(false);
+  if (changed.reusedBytes() != 0 ||
+      !scan::sameDocument(*changedResult.document, *colored(parseMarkdown(changed.source())))) return false;
+
+  // Opting into preview revokes provisional storage before any repair runs.
+  parser.setPreview(remend::PreviewOptions::all());
+  const auto previewed = parser.parse(false);
+  IncrementalParser full(ParseMode::FullParse);
+  full.setPreview(remend::PreviewOptions::all());
+  full.append(parser.source());
+  const auto fullPreview = full.parse(false);
+  return scan::sameDocument(*previewed.document, *fullPreview.document) && parser.reusedBytes() == 0;
+}
+
 // What a pass returns is what a session hands every view, so it has to be the
 // snapshot the parser recorded, carrying both of its flags: a stream still
 // arriving, and how many leading blocks have settled. Each path is fed in turn:
@@ -634,6 +815,10 @@ bool snapshotsCarryTheirFlags(ParseMode mode) {
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc > 1 && std::string(argv[1]) == "--references") {
+    CHECK(referenceSafeReuse(), "reference-aware provisional reuse stays equivalent and bounded");
+    return ds_check_result();
+  }
   if (argc > 1 && std::string(argv[1]) == "--batch") {
     // `--batch <parseFlags>` sweeps the corpus under named parse options, which
     // is how a document with the opt-in tags on is held to the same
@@ -667,6 +852,7 @@ int main(int argc, char **argv) {
   CHECK(fullModeKeepsIdentities(), "full mode keeps identities");
   CHECK(snapshotsCarryTheirFlags(ParseMode::IncrementalTail), "a pass returns the snapshot it flagged (incremental)");
   CHECK(snapshotsCarryTheirFlags(ParseMode::FullParse), "a pass returns the snapshot it flagged (full)");
+  CHECK(referenceSafeReuse(), "reference-aware provisional reuse stays equivalent and bounded");
   CHECK(fullParseOracleSettles(), "the full-parse oracle settles code with a zero highlight budget");
   return ds_check_result();
 }

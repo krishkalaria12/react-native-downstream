@@ -1,0 +1,5 @@
+nowMs=0.0 frameUnits=64 activeRoots=64 invalidatedRoots=64
+nowMs=500.0 frameUnits=42 activeRoots=42 invalidatedRoots=64
+nowMs=1000.0 frameUnits=10 activeRoots=10 invalidatedRoots=64
+nowMs=1100.0 frameUnits=4 activeRoots=4 invalidatedRoots=64
+nowMs=1158.0 frameUnits=0 activeRoots=0 invalidatedRoots=64

@@ -53,9 +53,9 @@ struct HighlightState {
   HighlightState &operator=(HighlightState &&other) noexcept;
   ~HighlightState();
 
-  /// The block's text as UTF-16, exactly as the parser produced it. Compared
-  /// against the new text on every pass, so a resume can only happen when the
-  /// block really did grow at its end.
+  /// The block's text as UTF-16, exactly as the parser produced it. General
+  /// callers compare it against the new text; the parser's verified append
+  /// path may instead establish the same relationship by snapshot lineage.
   bool applies(std::string_view alias, std::u16string_view text) const;
   void clear();
 
@@ -83,6 +83,12 @@ struct HighlightState {
   /// rather than starting the block over.
   HighlightStop lastStop{HighlightStop::Skipped};
   bool resumed{false};
+
+private:
+  friend class CodeHighlighter;
+  // Only the parser's verified open-fence path establishes this association.
+  // A general tokenize call invalidates it before inspecting arbitrary text.
+  uint64_t sourceDocumentId_{0};
 };
 
 /// Tokenizes fenced code blocks.
@@ -109,6 +115,22 @@ public:
   /// Lexers created since the process started. A document with no code block
   /// never creates one, which the isolation test checks.
   virtual uint64_t lexersCreated() const = 0;
+
+private:
+  friend class IncrementalParser;
+  /// The parser copied the previous snapshot's tokens and appended its text.
+  /// Exact snapshot lineage permits skipping the whole-prefix comparison.
+  /// Other callers use tokenize.
+  void tokenizeAppend(std::string_view info, std::u16string_view text, HighlightState *state,
+                      std::vector<TokenRun> *runs, double budgetMs, uint64_t previousDocumentId,
+                      size_t previousLength, uint64_t nextDocumentId);
+  virtual void tokenizeTrustedAppend(std::string_view info, std::u16string_view text, HighlightState *state,
+                                     std::vector<TokenRun> *runs, double budgetMs) {
+    tokenize(info, text, state, runs, budgetMs);
+  }
+
+protected:
+  static void invalidateLineage(HighlightState *state) { state->sourceDocumentId_ = 0; }
 };
 
 /// The process-wide Lexilla highlighter. One per process is enough: a lexer

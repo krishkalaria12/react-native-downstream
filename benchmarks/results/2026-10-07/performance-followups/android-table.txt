@@ -1,0 +1,2 @@
+android_table streaming_100_rows cell_copies=10300->202 desired_widths=10300->202 layouts=10300->202
+android_table width_growth_shrink=pass appearance_header_alignment=pass inline_span_isolation=pass immutable_text=pass

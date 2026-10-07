@@ -104,6 +104,7 @@ function nativeEvents(events, names) {
     selected.push({
       sessionId: event.sessionId,
       generation: event.generation,
+      sequence: event.sequence,
       event: event.event,
       timeNs: BigInt(event.timeNs),
     });

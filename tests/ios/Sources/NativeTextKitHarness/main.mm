@@ -163,6 +163,53 @@ static void checkGutterOwnerLifetime() {
 }
 #endif
 
+static void checkRenderingCacheBudget() {
+  [DSRenderedDocument invalidateCaches];
+  const auto obtain = [](const downstream::DocumentHandle &document) {
+    return [DSRenderedDocument renderedDocumentFor:document fontScale:1 syntaxHighlighting:NO
+                                             theme:downstream::Theme::defaultTheme()
+                                             caret:downstream::PlacedCaret{}];
+  };
+  const auto smallDocument = makeDocument(@"short message");
+  DSRenderedDocument *small = obtain(smallDocument);
+  require(obtain(smallDocument) == small, @"small rendering did not hit the document cache");
+
+  // Uncommitted text is independently owned by each growing snapshot. This
+  // tail alone costs more than the ordinary budget, but its latest preparation
+  // must still survive until measure/mount.
+  const auto largeDocument = makeDocument([@"x" stringByPaddingToLength:600 * 1024 withString:@"x" startingAtIndex:0]);
+  DSRenderedDocument *held = obtain(largeDocument);
+  require(obtain(largeDocument) == held, @"latest oversized preparation was discarded before mount");
+  const auto nextLargeDocument = makeDocument([@"y" stringByPaddingToLength:600 * 1024 withString:@"y" startingAtIndex:0]);
+  DSRenderedDocument *next = obtain(nextLargeDocument);
+  require(obtain(nextLargeDocument) == next, @"latest oversized preparation did not hit");
+  DSRenderedDocument *rebuilt = obtain(largeDocument);
+#ifdef BASELINE
+  require(held == rebuilt, @"baseline did not retain the oversized historical tail");
+#else
+  require(held != rebuilt, @"historical oversized uncommitted tails accumulated");
+#endif
+  DSCodeSegment *segment = held.segments.firstObject;
+  require(segment.text.attributedString.length == 600 * 1024, @"cache eviction invalidated a held rendering");
+  require(obtain(smallDocument) == small, @"oversized tail displaced a small rendering");
+
+  // A shared committed prefix is omitted from the snapshot's tail estimate.
+  // It must not make a small changing tail use the oversized slot.
+  auto sharedDocument = std::make_shared<downstream::Document>(*largeDocument);
+  sharedDocument->id += 100000;
+  sharedDocument->blocks.tail()[0].identity = 777777;
+  downstream::Block tail;
+  tail.kind = downstream::BlockKind::Paragraph;
+  tail.text = u"streaming tail";
+  sharedDocument->blocks.push_back(std::move(tail));
+  DSRenderedDocument *shared = obtain(sharedDocument);
+  (void)obtain(makeDocument(@"another short message"));
+  require(obtain(sharedDocument) == shared, @"shared committed payload was charged to the snapshot");
+  printf("rendering_cache historical_oversized_tail_cached=%d held_tail_characters=%lu small_hit=1 shared_prefix_hit=1\n",
+         held == rebuilt, (unsigned long)segment.text.attributedString.length);
+  [DSRenderedDocument invalidateCaches];
+}
+
 /**
  * A hosted fence: a React child replaced the block, and the document is as tall
  * as the child measured with the child's rectangle at the block's own column.
@@ -511,8 +558,14 @@ static void checkCellBreakHeight() {
   printf("ios_table_cell_break row_broken=%.1f row_plain=%.1f\n", brokenHeight, plainHeight);
 }
 
+#include "HighlightVariants.mm"
+
+#include "TextTailChecks.mm"
+
 int main() {
   @autoreleasepool {
+    checkRenderingCacheBudget();
+    checkHighlightVariants();
     if (getenv("DOWNSTREAM_IOS_HOST_BENCH_ONLY") != nullptr) {
       benchmarkHostedMeasurements();
       printf("native TextKit checks passed\n");
@@ -539,6 +592,7 @@ int main() {
 #ifndef BASELINE
     require([segment baselineCharacterOffsetAtOrAfter:3] == 4, @"blank-line baseline lookup skipped value line");
 #endif
+    checkGrowingTextTail();
     checkEmojiGlyphMapping();
     checkBlankSuffixDraw();
     checkScriptLineHeight();

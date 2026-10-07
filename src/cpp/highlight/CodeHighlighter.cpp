@@ -241,6 +241,20 @@ class LexillaHighlighter final : public CodeHighlighter {
 public:
   void tokenize(std::string_view info, std::u16string_view text, HighlightState *state, std::vector<TokenRun> *runs,
                 double budgetMs) override {
+    invalidateLineage(state);
+    tokenizeImpl(info, text, state, runs, budgetMs, false);
+  }
+
+  uint64_t lexersCreated() const override { return gLexersCreated.load(std::memory_order_relaxed); }
+
+private:
+  void tokenizeTrustedAppend(std::string_view info, std::u16string_view text, HighlightState *state,
+                             std::vector<TokenRun> *runs, double budgetMs) override {
+    tokenizeImpl(info, text, state, runs, budgetMs, true);
+  }
+
+  void tokenizeImpl(std::string_view info, std::u16string_view text, HighlightState *state,
+                    std::vector<TokenRun> *runs, double budgetMs, bool trustedAppend) {
     state->resumed = false;
     const LanguageTable *language = LanguageRegistry::find(info);
     // UTF-8 is never shorter than UTF-16, so an over-long text is over the
@@ -256,7 +270,12 @@ public:
     // last line and nothing else.
     size_t from = 0;
     uint32_t baseUtf16 = 0;
-    if (state->applies(language->alias, text)) {
+    const bool joinsSurrogate = !state->text.empty() && state->text.size() < text.size() &&
+        state->text.back() >= 0xd800 && state->text.back() <= 0xdbff &&
+        text[state->text.size()] >= 0xdc00 && text[state->text.size()] <= 0xdfff;
+    const bool appendApplies = trustedAppend && state->engine != nullptr &&
+        state->language == language->alias && state->text.size() <= text.size() && !joinsSurrogate;
+    if (appendApplies || state->applies(language->alias, text)) {
       state->resumed = true;
       from = state->finalEnd;
       baseUtf16 = state->finalUtf16;
@@ -303,10 +322,6 @@ public:
     state->lastStop = styledEnd < end ? HighlightStop::Budget : HighlightStop::Complete;
     *runs = state->runs;
   }
-
-  uint64_t lexersCreated() const override { return gLexersCreated.load(std::memory_order_relaxed); }
-
-private:
   /// Per thread, because one highlighter serves the whole worker pool and a
   /// pass builds its runs into this rather than allocating for a few entries.
   static std::vector<TokenRun> &scratch() {
@@ -364,7 +379,8 @@ HighlightState::~HighlightState() = default;
 /// is what makes the check sound: a same-length rewrite and a shorter text have
 /// to be told apart from a genuine append, and only reading every unit can do
 /// that. Streaming n units in small chunks is therefore O(n^2) in comparison
-/// alone, which is part of why the highlight limit is 64 KiB.
+/// alone for general callers. The parser's verified open-fence path avoids the
+/// comparison using exact snapshot lineage; arbitrary text still comes here.
 bool HighlightState::applies(std::string_view alias, std::u16string_view next) const {
   // A previously unmatched high surrogate was encoded as U+FFFD. When the
   // append supplies its low surrogate, that byte prefix must be rebuilt.
@@ -377,6 +393,7 @@ bool HighlightState::applies(std::string_view alias, std::u16string_view next) c
 }
 
 void HighlightState::clear() {
+  sourceDocumentId_ = 0;
   resumed = false;
   lastStop = HighlightStop::Skipped;
   language.clear();
@@ -386,6 +403,20 @@ void HighlightState::clear() {
   runs.clear();
   engine.reset();
   document.reset({});
+}
+
+void CodeHighlighter::tokenizeAppend(std::string_view info, std::u16string_view text, HighlightState *state,
+                                    std::vector<TokenRun> *runs, double budgetMs, uint64_t previousDocumentId,
+                                    size_t previousLength, uint64_t nextDocumentId) {
+  const bool lineage = previousDocumentId != 0 && state->sourceDocumentId_ == previousDocumentId &&
+      state->text.size() == previousLength && previousLength <= text.size();
+  invalidateLineage(state);
+  if (lineage) {
+    tokenizeTrustedAppend(info, text, state, runs, budgetMs);
+  } else {
+    tokenize(info, text, state, runs, budgetMs);
+  }
+  state->sourceDocumentId_ = nextDocumentId;
 }
 
 CodeHighlighter &lexillaHighlighter() {

@@ -1,0 +1,215 @@
+round=1 variant=control
+fence colored=0 bytes=8192 chunk=16 median_ms=0.534875 parsed_bytes=9 fast_updates=512
+fence colored=0 bytes=16384 chunk=16 median_ms=1.377291 parsed_bytes=9 fast_updates=1024
+fence colored=0 bytes=32768 chunk=16 median_ms=3.643084 parsed_bytes=9 fast_updates=2048
+fence colored=0 bytes=61440 chunk=16 median_ms=10.424417 parsed_bytes=9 fast_updates=3840
+fence colored=1 bytes=8192 chunk=16 median_ms=0.848042 parsed_bytes=13 fast_updates=512
+fence colored=1 bytes=16384 chunk=16 median_ms=2.468875 parsed_bytes=13 fast_updates=1024
+fence colored=1 bytes=32768 chunk=16 median_ms=7.505208 parsed_bytes=13 fast_updates=2048
+fence colored=1 bytes=61440 chunk=16 median_ms=23.035709 parsed_bytes=13 fast_updates=3840
+prose reference=0 bytes=16384 chunk=128 median_ms=0.759291 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=16375 tail_limit=0
+prose reference=0 bytes=32768 chunk=128 median_ms=1.563666 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=32743 tail_limit=0
+prose reference=0 bytes=65536 chunk=128 median_ms=3.178458 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=65527 tail_limit=0
+prose reference=0 bytes=98304 chunk=128 median_ms=4.858084 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=98167 tail_limit=0
+prose reference=1 bytes=16384 chunk=128 median_ms=0.761167 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=0 tail_limit=0
+prose reference=1 bytes=32768 chunk=128 median_ms=1.541834 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=0 tail_limit=0
+prose reference=1 bytes=65536 chunk=128 median_ms=3.146083 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=0 tail_limit=0
+prose reference=1 bytes=98304 chunk=128 median_ms=4.878750 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=0 tail_limit=0
+
+round=1 variant=candidate
+fence colored=0 bytes=8192 chunk=16 median_ms=0.314917 parsed_bytes=9 fast_updates=512
+fence colored=0 bytes=16384 chunk=16 median_ms=0.873750 parsed_bytes=9 fast_updates=1024
+fence colored=0 bytes=32768 chunk=16 median_ms=2.820542 parsed_bytes=9 fast_updates=2048
+fence colored=0 bytes=61440 chunk=16 median_ms=10.098125 parsed_bytes=9 fast_updates=3840
+fence colored=1 bytes=8192 chunk=16 median_ms=0.711791 parsed_bytes=13 fast_updates=512
+fence colored=1 bytes=16384 chunk=16 median_ms=2.088583 parsed_bytes=13 fast_updates=1024
+fence colored=1 bytes=32768 chunk=16 median_ms=6.521833 parsed_bytes=13 fast_updates=2048
+fence colored=1 bytes=61440 chunk=16 median_ms=21.638125 parsed_bytes=13 fast_updates=3840
+prose reference=0 bytes=16384 chunk=128 median_ms=0.764625 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=16375 tail_limit=0
+prose reference=0 bytes=32768 chunk=128 median_ms=1.505500 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=32743 tail_limit=0
+prose reference=0 bytes=65536 chunk=128 median_ms=3.031625 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=65527 tail_limit=0
+prose reference=0 bytes=98304 chunk=128 median_ms=4.762583 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=98167 tail_limit=0
+prose reference=1 bytes=16384 chunk=128 median_ms=0.743458 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=0 tail_limit=0
+prose reference=1 bytes=32768 chunk=128 median_ms=1.505625 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=0 tail_limit=0
+prose reference=1 bytes=65536 chunk=128 median_ms=3.037375 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=0 tail_limit=0
+prose reference=1 bytes=98304 chunk=128 median_ms=4.718208 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=0 tail_limit=0
+
+round=1 variant=candidate
+fence colored=0 bytes=8192 chunk=16 median_ms=0.163125 parsed_bytes=9 fast_updates=512
+fence colored=0 bytes=16384 chunk=16 median_ms=0.504375 parsed_bytes=9 fast_updates=1024
+fence colored=0 bytes=32768 chunk=16 median_ms=2.105959 parsed_bytes=9 fast_updates=2048
+fence colored=0 bytes=61440 chunk=16 median_ms=9.829458 parsed_bytes=9 fast_updates=3840
+fence colored=1 bytes=8192 chunk=16 median_ms=0.748625 parsed_bytes=13 fast_updates=512
+fence colored=1 bytes=16384 chunk=16 median_ms=2.117083 parsed_bytes=13 fast_updates=1024
+fence colored=1 bytes=32768 chunk=16 median_ms=6.723583 parsed_bytes=13 fast_updates=2048
+fence colored=1 bytes=61440 chunk=16 median_ms=21.678500 parsed_bytes=13 fast_updates=3840
+prose reference=0 bytes=16384 chunk=128 median_ms=0.753500 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=16375 tail_limit=0
+prose reference=0 bytes=32768 chunk=128 median_ms=1.537500 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=32743 tail_limit=0
+prose reference=0 bytes=65536 chunk=128 median_ms=3.158375 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=65527 tail_limit=0
+prose reference=0 bytes=98304 chunk=128 median_ms=4.769667 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=98167 tail_limit=0
+prose reference=1 bytes=16384 chunk=128 median_ms=0.750208 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=0 tail_limit=0
+prose reference=1 bytes=32768 chunk=128 median_ms=1.559334 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=0 tail_limit=0
+prose reference=1 bytes=65536 chunk=128 median_ms=3.067875 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=0 tail_limit=0
+prose reference=1 bytes=98304 chunk=128 median_ms=4.734959 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=0 tail_limit=0
+
+round=1 variant=control
+fence colored=0 bytes=8192 chunk=16 median_ms=0.153083 parsed_bytes=9 fast_updates=512
+fence colored=0 bytes=16384 chunk=16 median_ms=0.487625 parsed_bytes=9 fast_updates=1024
+fence colored=0 bytes=32768 chunk=16 median_ms=2.058667 parsed_bytes=9 fast_updates=2048
+fence colored=0 bytes=61440 chunk=16 median_ms=9.778750 parsed_bytes=9 fast_updates=3840
+fence colored=1 bytes=8192 chunk=16 median_ms=0.829292 parsed_bytes=13 fast_updates=512
+fence colored=1 bytes=16384 chunk=16 median_ms=2.492333 parsed_bytes=13 fast_updates=1024
+fence colored=1 bytes=32768 chunk=16 median_ms=7.563750 parsed_bytes=13 fast_updates=2048
+fence colored=1 bytes=61440 chunk=16 median_ms=23.012958 parsed_bytes=13 fast_updates=3840
+prose reference=0 bytes=16384 chunk=128 median_ms=0.779625 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=16375 tail_limit=0
+prose reference=0 bytes=32768 chunk=128 median_ms=1.508250 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=32743 tail_limit=0
+prose reference=0 bytes=65536 chunk=128 median_ms=3.143333 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=65527 tail_limit=0
+prose reference=0 bytes=98304 chunk=128 median_ms=4.900958 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=98167 tail_limit=0
+prose reference=1 bytes=16384 chunk=128 median_ms=0.733459 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=0 tail_limit=0
+prose reference=1 bytes=32768 chunk=128 median_ms=1.487042 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=0 tail_limit=0
+prose reference=1 bytes=65536 chunk=128 median_ms=3.102458 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=0 tail_limit=0
+prose reference=1 bytes=98304 chunk=128 median_ms=4.815250 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=0 tail_limit=0
+
+round=2 variant=control
+fence colored=0 bytes=8192 chunk=16 median_ms=0.155292 parsed_bytes=9 fast_updates=512
+fence colored=0 bytes=16384 chunk=16 median_ms=0.492333 parsed_bytes=9 fast_updates=1024
+fence colored=0 bytes=32768 chunk=16 median_ms=2.127583 parsed_bytes=9 fast_updates=2048
+fence colored=0 bytes=61440 chunk=16 median_ms=9.873292 parsed_bytes=9 fast_updates=3840
+fence colored=1 bytes=8192 chunk=16 median_ms=0.850792 parsed_bytes=13 fast_updates=512
+fence colored=1 bytes=16384 chunk=16 median_ms=2.535542 parsed_bytes=13 fast_updates=1024
+fence colored=1 bytes=32768 chunk=16 median_ms=7.494625 parsed_bytes=13 fast_updates=2048
+fence colored=1 bytes=61440 chunk=16 median_ms=23.225000 parsed_bytes=13 fast_updates=3840
+prose reference=0 bytes=16384 chunk=128 median_ms=0.759292 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=16375 tail_limit=0
+prose reference=0 bytes=32768 chunk=128 median_ms=1.529958 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=32743 tail_limit=0
+prose reference=0 bytes=65536 chunk=128 median_ms=3.134583 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=65527 tail_limit=0
+prose reference=0 bytes=98304 chunk=128 median_ms=4.829834 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=98167 tail_limit=0
+prose reference=1 bytes=16384 chunk=128 median_ms=0.730167 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=0 tail_limit=0
+prose reference=1 bytes=32768 chunk=128 median_ms=1.505125 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=0 tail_limit=0
+prose reference=1 bytes=65536 chunk=128 median_ms=3.110791 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=0 tail_limit=0
+prose reference=1 bytes=98304 chunk=128 median_ms=4.815292 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=0 tail_limit=0
+
+round=2 variant=candidate
+fence colored=0 bytes=8192 chunk=16 median_ms=0.157959 parsed_bytes=9 fast_updates=512
+fence colored=0 bytes=16384 chunk=16 median_ms=0.504667 parsed_bytes=9 fast_updates=1024
+fence colored=0 bytes=32768 chunk=16 median_ms=2.152292 parsed_bytes=9 fast_updates=2048
+fence colored=0 bytes=61440 chunk=16 median_ms=10.070416 parsed_bytes=9 fast_updates=3840
+fence colored=1 bytes=8192 chunk=16 median_ms=0.748625 parsed_bytes=13 fast_updates=512
+fence colored=1 bytes=16384 chunk=16 median_ms=2.169542 parsed_bytes=13 fast_updates=1024
+fence colored=1 bytes=32768 chunk=16 median_ms=6.645916 parsed_bytes=13 fast_updates=2048
+fence colored=1 bytes=61440 chunk=16 median_ms=22.284542 parsed_bytes=13 fast_updates=3840
+prose reference=0 bytes=16384 chunk=128 median_ms=0.760000 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=16375 tail_limit=0
+prose reference=0 bytes=32768 chunk=128 median_ms=1.530375 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=32743 tail_limit=0
+prose reference=0 bytes=65536 chunk=128 median_ms=3.164833 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=65527 tail_limit=0
+prose reference=0 bytes=98304 chunk=128 median_ms=4.894916 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=98167 tail_limit=0
+prose reference=1 bytes=16384 chunk=128 median_ms=0.753875 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=0 tail_limit=0
+prose reference=1 bytes=32768 chunk=128 median_ms=1.490416 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=0 tail_limit=0
+prose reference=1 bytes=65536 chunk=128 median_ms=3.092792 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=0 tail_limit=0
+prose reference=1 bytes=98304 chunk=128 median_ms=4.769167 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=0 tail_limit=0
+
+round=2 variant=candidate
+fence colored=0 bytes=8192 chunk=16 median_ms=0.157125 parsed_bytes=9 fast_updates=512
+fence colored=0 bytes=16384 chunk=16 median_ms=0.508500 parsed_bytes=9 fast_updates=1024
+fence colored=0 bytes=32768 chunk=16 median_ms=2.132459 parsed_bytes=9 fast_updates=2048
+fence colored=0 bytes=61440 chunk=16 median_ms=10.012042 parsed_bytes=9 fast_updates=3840
+fence colored=1 bytes=8192 chunk=16 median_ms=0.804334 parsed_bytes=13 fast_updates=512
+fence colored=1 bytes=16384 chunk=16 median_ms=2.224208 parsed_bytes=13 fast_updates=1024
+fence colored=1 bytes=32768 chunk=16 median_ms=6.723250 parsed_bytes=13 fast_updates=2048
+fence colored=1 bytes=61440 chunk=16 median_ms=21.172416 parsed_bytes=13 fast_updates=3840
+prose reference=0 bytes=16384 chunk=128 median_ms=0.776292 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=16375 tail_limit=0
+prose reference=0 bytes=32768 chunk=128 median_ms=1.562292 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=32743 tail_limit=0
+prose reference=0 bytes=65536 chunk=128 median_ms=3.081875 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=65527 tail_limit=0
+prose reference=0 bytes=98304 chunk=128 median_ms=4.908000 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=98167 tail_limit=0
+prose reference=1 bytes=16384 chunk=128 median_ms=0.776208 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=0 tail_limit=0
+prose reference=1 bytes=32768 chunk=128 median_ms=1.517917 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=0 tail_limit=0
+prose reference=1 bytes=65536 chunk=128 median_ms=3.104541 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=0 tail_limit=0
+prose reference=1 bytes=98304 chunk=128 median_ms=4.886500 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=0 tail_limit=0
+
+round=2 variant=control
+fence colored=0 bytes=8192 chunk=16 median_ms=0.155958 parsed_bytes=9 fast_updates=512
+fence colored=0 bytes=16384 chunk=16 median_ms=0.490583 parsed_bytes=9 fast_updates=1024
+fence colored=0 bytes=32768 chunk=16 median_ms=2.115708 parsed_bytes=9 fast_updates=2048
+fence colored=0 bytes=61440 chunk=16 median_ms=10.079958 parsed_bytes=9 fast_updates=3840
+fence colored=1 bytes=8192 chunk=16 median_ms=0.839750 parsed_bytes=13 fast_updates=512
+fence colored=1 bytes=16384 chunk=16 median_ms=2.470750 parsed_bytes=13 fast_updates=1024
+fence colored=1 bytes=32768 chunk=16 median_ms=7.495625 parsed_bytes=13 fast_updates=2048
+fence colored=1 bytes=61440 chunk=16 median_ms=22.901709 parsed_bytes=13 fast_updates=3840
+prose reference=0 bytes=16384 chunk=128 median_ms=0.800500 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=16375 tail_limit=0
+prose reference=0 bytes=32768 chunk=128 median_ms=1.602084 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=32743 tail_limit=0
+prose reference=0 bytes=65536 chunk=128 median_ms=3.315375 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=65527 tail_limit=0
+prose reference=0 bytes=98304 chunk=128 median_ms=4.985500 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=98167 tail_limit=0
+prose reference=1 bytes=16384 chunk=128 median_ms=0.779042 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=0 tail_limit=0
+prose reference=1 bytes=32768 chunk=128 median_ms=1.556750 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=0 tail_limit=0
+prose reference=1 bytes=65536 chunk=128 median_ms=3.245209 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=0 tail_limit=0
+prose reference=1 bytes=98304 chunk=128 median_ms=4.920000 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=0 tail_limit=0
+
+round=3 variant=control
+fence colored=0 bytes=8192 chunk=16 median_ms=0.156625 parsed_bytes=9 fast_updates=512
+fence colored=0 bytes=16384 chunk=16 median_ms=0.498542 parsed_bytes=9 fast_updates=1024
+fence colored=0 bytes=32768 chunk=16 median_ms=2.133250 parsed_bytes=9 fast_updates=2048
+fence colored=0 bytes=61440 chunk=16 median_ms=10.186833 parsed_bytes=9 fast_updates=3840
+fence colored=1 bytes=8192 chunk=16 median_ms=0.862542 parsed_bytes=13 fast_updates=512
+fence colored=1 bytes=16384 chunk=16 median_ms=2.479125 parsed_bytes=13 fast_updates=1024
+fence colored=1 bytes=32768 chunk=16 median_ms=7.614459 parsed_bytes=13 fast_updates=2048
+fence colored=1 bytes=61440 chunk=16 median_ms=23.205250 parsed_bytes=13 fast_updates=3840
+prose reference=0 bytes=16384 chunk=128 median_ms=0.772417 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=16375 tail_limit=0
+prose reference=0 bytes=32768 chunk=128 median_ms=1.550042 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=32743 tail_limit=0
+prose reference=0 bytes=65536 chunk=128 median_ms=3.094167 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=65527 tail_limit=0
+prose reference=0 bytes=98304 chunk=128 median_ms=4.818375 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=98167 tail_limit=0
+prose reference=1 bytes=16384 chunk=128 median_ms=0.761916 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=0 tail_limit=0
+prose reference=1 bytes=32768 chunk=128 median_ms=1.536875 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=0 tail_limit=0
+prose reference=1 bytes=65536 chunk=128 median_ms=3.131542 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=0 tail_limit=0
+prose reference=1 bytes=98304 chunk=128 median_ms=4.765084 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=0 tail_limit=0
+
+round=3 variant=candidate
+fence colored=0 bytes=8192 chunk=16 median_ms=0.159583 parsed_bytes=9 fast_updates=512
+fence colored=0 bytes=16384 chunk=16 median_ms=0.507167 parsed_bytes=9 fast_updates=1024
+fence colored=0 bytes=32768 chunk=16 median_ms=2.186834 parsed_bytes=9 fast_updates=2048
+fence colored=0 bytes=61440 chunk=16 median_ms=9.748792 parsed_bytes=9 fast_updates=3840
+fence colored=1 bytes=8192 chunk=16 median_ms=0.765750 parsed_bytes=13 fast_updates=512
+fence colored=1 bytes=16384 chunk=16 median_ms=2.179375 parsed_bytes=13 fast_updates=1024
+fence colored=1 bytes=32768 chunk=16 median_ms=6.812708 parsed_bytes=13 fast_updates=2048
+fence colored=1 bytes=61440 chunk=16 median_ms=21.302167 parsed_bytes=13 fast_updates=3840
+prose reference=0 bytes=16384 chunk=128 median_ms=0.774334 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=16375 tail_limit=0
+prose reference=0 bytes=32768 chunk=128 median_ms=1.550958 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=32743 tail_limit=0
+prose reference=0 bytes=65536 chunk=128 median_ms=3.220167 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=65527 tail_limit=0
+prose reference=0 bytes=98304 chunk=128 median_ms=5.004750 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=98167 tail_limit=0
+prose reference=1 bytes=16384 chunk=128 median_ms=0.734125 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=0 tail_limit=0
+prose reference=1 bytes=32768 chunk=128 median_ms=1.526917 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=0 tail_limit=0
+prose reference=1 bytes=65536 chunk=128 median_ms=3.187833 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=0 tail_limit=0
+prose reference=1 bytes=98304 chunk=128 median_ms=4.890250 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=0 tail_limit=0
+
+round=3 variant=candidate
+fence colored=0 bytes=8192 chunk=16 median_ms=0.157458 parsed_bytes=9 fast_updates=512
+fence colored=0 bytes=16384 chunk=16 median_ms=0.503875 parsed_bytes=9 fast_updates=1024
+fence colored=0 bytes=32768 chunk=16 median_ms=2.140916 parsed_bytes=9 fast_updates=2048
+fence colored=0 bytes=61440 chunk=16 median_ms=9.712041 parsed_bytes=9 fast_updates=3840
+fence colored=1 bytes=8192 chunk=16 median_ms=0.760334 parsed_bytes=13 fast_updates=512
+fence colored=1 bytes=16384 chunk=16 median_ms=2.149583 parsed_bytes=13 fast_updates=1024
+fence colored=1 bytes=32768 chunk=16 median_ms=6.710625 parsed_bytes=13 fast_updates=2048
+fence colored=1 bytes=61440 chunk=16 median_ms=22.070250 parsed_bytes=13 fast_updates=3840
+prose reference=0 bytes=16384 chunk=128 median_ms=0.788542 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=16375 tail_limit=0
+prose reference=0 bytes=32768 chunk=128 median_ms=1.533083 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=32743 tail_limit=0
+prose reference=0 bytes=65536 chunk=128 median_ms=3.148542 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=65527 tail_limit=0
+prose reference=0 bytes=98304 chunk=128 median_ms=4.884333 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=98167 tail_limit=0
+prose reference=1 bytes=16384 chunk=128 median_ms=0.777167 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=0 tail_limit=0
+prose reference=1 bytes=32768 chunk=128 median_ms=1.554375 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=0 tail_limit=0
+prose reference=1 bytes=65536 chunk=128 median_ms=3.090250 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=0 tail_limit=0
+prose reference=1 bytes=98304 chunk=128 median_ms=4.819792 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=0 tail_limit=0
+
+round=3 variant=control
+fence colored=0 bytes=8192 chunk=16 median_ms=0.158167 parsed_bytes=9 fast_updates=512
+fence colored=0 bytes=16384 chunk=16 median_ms=0.501625 parsed_bytes=9 fast_updates=1024
+fence colored=0 bytes=32768 chunk=16 median_ms=2.146208 parsed_bytes=9 fast_updates=2048
+fence colored=0 bytes=61440 chunk=16 median_ms=9.994291 parsed_bytes=9 fast_updates=3840
+fence colored=1 bytes=8192 chunk=16 median_ms=0.845583 parsed_bytes=13 fast_updates=512
+fence colored=1 bytes=16384 chunk=16 median_ms=2.499250 parsed_bytes=13 fast_updates=1024
+fence colored=1 bytes=32768 chunk=16 median_ms=7.580083 parsed_bytes=13 fast_updates=2048
+fence colored=1 bytes=61440 chunk=16 median_ms=23.541167 parsed_bytes=13 fast_updates=3840
+prose reference=0 bytes=16384 chunk=128 median_ms=0.774000 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=16375 tail_limit=0
+prose reference=0 bytes=32768 chunk=128 median_ms=1.569542 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=32743 tail_limit=0
+prose reference=0 bytes=65536 chunk=128 median_ms=3.158125 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=65527 tail_limit=0
+prose reference=0 bytes=98304 chunk=128 median_ms=4.919583 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=98167 tail_limit=0
+prose reference=1 bytes=16384 chunk=128 median_ms=0.756000 parsed_bytes=23694 full_parses=1 tail_parses=127 committed=0 tail_limit=0
+prose reference=1 bytes=32768 chunk=128 median_ms=1.511375 parsed_bytes=47406 full_parses=1 tail_parses=255 committed=0 tail_limit=0
+prose reference=1 bytes=65536 chunk=128 median_ms=3.147500 parsed_bytes=94734 full_parses=1 tail_parses=511 committed=0 tail_limit=0
+prose reference=1 bytes=98304 chunk=128 median_ms=4.831500 parsed_bytes=142046 full_parses=1 tail_parses=767 committed=0 tail_limit=0

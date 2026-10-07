@@ -236,44 +236,21 @@ class DownstreamMarkdownViewManager :
     stateWrapper: StateWrapper,
   ): Any? {
     val state = stateWrapper.stateData ?: return null
-    view.setStateWrapper(stateWrapper)
-    // The whole code layout arrives in one map: the props and the reader's own
-    // per-block choices together, because between them they decide each card's
-    // height and neither half can be inferred from `chrome`.
-    view.setCodeProps(
-      state.numberAt("codeBlockWrap", 0.0) != 0.0,
-      state.numberAt("lineNumbers", 1.0) != 0.0,
-      state.numberAt("codeBlockMaxHeight", 400.0),
-    )
-    view.setCodeChoices(
-      state.ordinalsAt("wrapToggles"),
-      state.ordinalsAt("expanded"),
-    )
-    // Images resolve the same way code does: the state carries each picture's
-    // answer and the prefix list that produced it, so a reload draws the box the
-    // measurement reserved for it rather than a placeholder under a loaded image.
-    view.setImageLayout(state.toImageLayout())
-    // The hosted React children, in the same state: a fence with a child is drawn
-    // as a host segment at that child's height, and one without keeps its card.
-    view.setHostLayout(state.toHostLayout())
-    view.setChrome(state.numberAt("chrome", 0.0).toInt())
-    // The caret is resolved in the node, against the document and its streaming
-    // flag, so the view never decides where a caret goes. It is a state field
-    // rather than a prop for the same reason `chrome` is: its placeholder is
-    // measured with the text, so a change reaches the view through a state update
-    // on the next layout.
-    view.setCaret(
+    // The document and all layout options describe one measured state. Applying
+    // them together avoids rendering the old document under the incoming options.
+    view.applyState(
+      stateWrapper,
+      state.numberAt("documentId", 0.0).toLong(),
+      state.numberAt("fontScale", 1.0).toFloat(),
+      state.numberAt("themeId", 0.0).toLong(),
+      state.toCodeLayout(),
+      state.toImageLayout(),
+      state.toHostLayout(),
+      state.numberAt("chrome", 0.0).toInt(),
       PlacedCaret(
         state.numberAt("caretKind", 0.0).toInt(),
         state.numberAt("caretPlace", 0.0).toInt(),
       ),
-    )
-    // The theme travels as its id, the way the document does, so a state update
-    // carries one number rather than every slot the theme sets.
-    view.setDocument(
-      state.numberAt("documentId", 0.0).toLong(),
-      state.numberAt("fontScale", 1.0).toFloat(),
-      state.numberAt("themeId", 0.0).toLong(),
     )
     return null
   }

@@ -303,25 +303,71 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     ) {
       return
     }
+    this.documentId = documentId
+    this.fontScale = fontScale
+    this.themeId = resolved
+    applyDocumentState(refreshRendering = true, updateReveal = true)
+  }
+
+  /**
+   * Applies one Fabric state before rendering or reconciling any segment.
+   * Separate setters would rebuild the previous document with the new caret
+   * and restack it with intermediate image and host layouts.
+   */
+  internal fun applyState(
+    wrapper: StateWrapper,
+    documentId: Long,
+    fontScale: Float,
+    stateThemeId: Long,
+    code: CodeLayout,
+    images: ImageLayout,
+    hosts: HostLayout,
+    chrome: Int,
+    caret: PlacedCaret,
+  ) {
+    stateWrapper = wrapper
+    val resolved = if (stateThemeId != 0L) stateThemeId else internProps()
+    val documentChanged = documentId != this.documentId || fontScale != this.fontScale ||
+      resolved != themeId || (documentId != 0L && rendered == null)
+    val refreshRendering = documentChanged || caret != this.caret
+    val codeChanged = code != codeLayout
+    val hostsChanged = hosts != hostLayout
+    val layoutChanged = codeChanged || hostsChanged || images != imageLayout || chrome != this.chrome
+    if (!refreshRendering && !layoutChanged) return
+
+    this.documentId = documentId
+    this.fontScale = fontScale
+    themeId = resolved
+    codeLayout = code
+    imageLayout = images
+    hostLayout = hosts
+    this.chrome = chrome
+    this.caret = caret
+    applyDocumentState(refreshRendering, updateReveal = documentChanged)
+    if (codeChanged) requestLayout()
+    if (hostsChanged) layoutHostChildren()
+  }
+
+  /** Reconciles only after every field belongs to the incoming state. */
+  private fun applyDocumentState(refreshRendering: Boolean, updateReveal: Boolean) {
     if (pendingTraceDocumentId != 0L && pendingTraceDocumentId != documentId) {
       DownstreamNative.traceDocument(pendingTraceDocumentId, "frame_unavailable")
       pendingTraceDocumentId = 0L
     }
-    this.documentId = documentId
-    this.fontScale = fontScale
-    this.themeId = resolved
-    val tracing = documentId != 0L && DownstreamNative.isTracingDocument(documentId)
+    val tracing = updateReveal && documentId != 0L && DownstreamNative.isTracingDocument(documentId)
     if (tracing) DownstreamNative.traceDocument(documentId, "apply_start")
-    rendered = if (documentId != 0L) {
-      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, resolved, caret)
-    } else {
-      null
+    if (refreshRendering) {
+      rendered = if (documentId != 0L) {
+        RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, caret)
+      } else {
+        null
+      }
     }
     syncSegmentViews()
     // The fade is decided after the rendering exists, because the tracker aligns
     // the document it was given against the one this view last showed, and the
     // segment views have to be there for the tick to invalidate.
-    applyReveal()
+    if (updateReveal) applyReveal()
     if (tracing) {
       DownstreamNative.traceDocument(documentId, "apply_end")
       pendingTraceDocumentId = documentId

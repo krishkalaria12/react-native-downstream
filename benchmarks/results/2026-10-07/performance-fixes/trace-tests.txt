@@ -1,0 +1,18 @@
+✔ superseded batches are counted outside latency samples (0.912959ms)
+✔ group excludes cancelled runs and compares trace toggles (0.225ms)
+✔ overlapping exports count each run once (0.785667ms)
+✔ candidate, build, device and cold state have separate groups (0.132916ms)
+✔ native intervals use only native timestamps from the same snapshot (0.141708ms)
+✔ native intervals do not pair starts and ends from different sequences (0.050958ms)
+✔ interleaved measurements retain their own snapshot durations (0.103042ms)
+✔ coalesced appends each wait for the parse that consumed them (0.071417ms)
+✔ queue delay never pairs an append across a session generation (0.072833ms)
+✔ appends still queued when the run ends are reported as unmatched (0.086458ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 39.495167

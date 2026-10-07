@@ -200,6 +200,23 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 @interface DSCodeSegmentView : UIView <DSSegmentView, DSRevealInvalidatable>
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
 @property (nonatomic, weak, nullable) id<DSControlDelegate> controlDelegate;
+/// The block this card draws, so the document view resolves its layout against
+/// the same meta the measurement used.
+@property (nonatomic, readonly, nullable) DSCodeSegment *segment;
+/// False once the block's fence has closed, which stops a capped card following
+/// its newest line.
+@property (nonatomic) BOOL streaming;
+/// True while a React child draws this block instead of the card.
+///
+/// The card's background, header, gutter and body all belong to a fallback that
+/// is not being shown, and a hosted block draws only what the child cannot: the
+/// quote and admonition bars beside it and the list marker on its first line,
+/// over the full height the child measured.
+@property (nonatomic) BOOL hosted;
+/// Where the code body's fading alphas come from.
+@property (nonatomic, weak, nullable) id<DSRevealProvider> revealProvider;
+/// The document block this code card draws.
+@property (nonatomic) NSInteger blockOffset;
 @property (nonatomic) BOOL controlsEnabled;
 @property (nonatomic, readwrite) BOOL showsHeader;
 /// Buttons to build, as bits of `downstream::ControlBits`.
@@ -212,6 +229,8 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 @property (nonatomic) UIColor *selectionColor;
 - (void)setSegment:(DSCodeSegment *)segment;
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
+/// Drops the reader's scroll position when the document generation changes.
+- (void)resetScrollPosition;
 @end
 
 /// The vertical viewport around a code card's gutter and body.
@@ -245,6 +264,8 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 @property (nonatomic) uint32_t controls;
 - (void)setSegment:(DSTableSegment *)segment;
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
+/// Drops the reader's scroll position when the document generation changes.
+- (void)resetScrollPosition;
 @end
 
 /**

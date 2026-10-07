@@ -1,0 +1,8 @@
+prose_highlight_false duplicate_document=1 duplicate_segment=1 duplicate_measure_layouts=1
+stream_tail chars=2048 updates=20 build_ms=0.030 measure_ms=1.249 explicit_layout_calls=20
+stream_tail chars=8192 updates=20 build_ms=0.077 measure_ms=5.521 explicit_layout_calls=20
+stream_tail chars=32768 updates=20 build_ms=0.236 measure_ms=21.376 explicit_layout_calls=20
+rounded_mount_width old=320.2 new=320 full_layouts=1 frames_ms=20.582
+snapshot_render_cache live=128 retained_utf16_chars=4243072 utf16_content_bytes=8486144
+native TextKit checks passed
+com.downstream.NativeTextKitHarness: 38194
