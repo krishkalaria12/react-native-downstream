@@ -21,7 +21,7 @@ private fun check(condition: Boolean, label: String) {
 
 /** A frame of the kind a block carries, for the container-path cases. */
 private fun details(id: Int, open: Boolean, summary: Boolean = false) =
-  ContainerDecoration(0f, 10f, null, false, null, 0f, 0f, kind = CONTAINER_DETAILS, id = id, open = open,
+  ContainerDecoration(0f, 10f, null, false, null, 0f, 0f, kind = NativeDocument.CONTAINER_DETAILS, id = id, open = open,
     summary = summary)
 
 private fun quote() = ContainerDecoration(0f, 10f, null, false, null, 0f, 0f, kind = 0)

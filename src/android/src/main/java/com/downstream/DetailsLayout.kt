@@ -32,9 +32,6 @@ internal fun resolveDetails(choices: ReaderChoices, containerId: Int, writtenOpe
     open = hasChoice(choices.set(ChoiceKind.DetailsOpen), containerId) != writtenOpen,
   )
 
-/** `ContainerKind::Details`. */
-internal const val CONTAINER_DETAILS = 4
-
 /**
  * True when this block sits inside a `<details>` whose body is not shown.
  *
@@ -44,7 +41,7 @@ internal const val CONTAINER_DETAILS = 4
  */
 internal fun insideHiddenDetails(containers: List<ContainerDecoration>, choices: ReaderChoices): Boolean =
   containers.any { decoration ->
-    decoration.kind == CONTAINER_DETAILS &&
+    decoration.kind == NativeDocument.CONTAINER_DETAILS &&
       !resolveDetails(choices, decoration.id, decoration.open).open
   }
 
@@ -58,7 +55,7 @@ internal fun insideHiddenDetails(containers: List<ContainerDecoration>, choices:
  */
 internal fun isDetailsSummary(containers: List<ContainerDecoration>): Boolean {
   for (container in containers) {
-    if (container.kind != CONTAINER_DETAILS) continue
+    if (container.kind != NativeDocument.CONTAINER_DETAILS) continue
     if (container.summary) return true
   }
   return false

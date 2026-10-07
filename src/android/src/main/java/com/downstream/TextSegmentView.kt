@@ -382,7 +382,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
       val start = block.start.coerceIn(0, content.length)
       val end = block.end.coerceIn(start, content.length)
       val frame = details.firstOrNull { it.start == block.start && it.end == block.end }
-      val container = frame?.containers?.lastOrNull { it.kind == CONTAINER_DETAILS }?.id
+      val container = frame?.containers?.lastOrNull { it.kind == NativeDocument.CONTAINER_DETAILS }?.id
       linkPieces(content, start, end).forEachIndexed { index, piece ->
         add(TextReadingPart(piece, index == 0 && block.heading,
           if (index == 0) block.taskState else 0, container, frame?.summary == true))
@@ -884,7 +884,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
             // The innermost frame is the block's own container, which is the one
             // whose body the press opens. A summary inside another summary opens
             // the inner one, the same way pressing it reads.
-            val container = pressed.containers.last { it.kind == CONTAINER_DETAILS }
+            val container = pressed.containers.last { it.kind == NativeDocument.CONTAINER_DETAILS }
             findHost()?.toggleDetails(container.id)
           }
           return true
@@ -982,7 +982,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
   /** Whether this view's summary has its body showing under [choices]. */
   fun isSummaryOpen(choices: ReaderChoices): Boolean {
     val summary = summary ?: return true
-    val frame = summary.containers.last { it.kind == CONTAINER_DETAILS }
+    val frame = summary.containers.last { it.kind == NativeDocument.CONTAINER_DETAILS }
     return resolveDetails(choices, frame.id, frame.open).open
   }
 

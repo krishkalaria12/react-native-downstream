@@ -346,6 +346,8 @@ internal class NativeDocument(
     const val CONTAINER_LIST_ITEM = 1
     const val CONTAINER_ADMONITION = 2
     const val CONTAINER_FOOTNOTE = 3
+    const val CONTAINER_DETAILS = 4
+    const val CONTAINER_CUSTOM = 5
 
     const val ALIGN_CENTER = 2
     const val ALIGN_RIGHT = 3
