@@ -41,7 +41,7 @@ internal fun resolveDetails(choices: ReaderChoices, containerId: Int, writtenOpe
  */
 internal fun insideHiddenDetails(containers: List<ContainerDecoration>, choices: ReaderChoices): Boolean =
   containers.any { decoration ->
-    decoration.kind == NativeDocument.CONTAINER_DETAILS &&
+    decoration.kind == CONTAINER_DETAILS &&
       !resolveDetails(choices, decoration.id, decoration.open).open
   }
 
@@ -55,7 +55,7 @@ internal fun insideHiddenDetails(containers: List<ContainerDecoration>, choices:
  */
 internal fun isDetailsSummary(containers: List<ContainerDecoration>): Boolean {
   for (container in containers) {
-    if (container.kind != NativeDocument.CONTAINER_DETAILS) continue
+    if (container.kind != CONTAINER_DETAILS) continue
     if (container.summary) return true
   }
   return false

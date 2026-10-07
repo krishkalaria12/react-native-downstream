@@ -744,7 +744,7 @@ internal class RenderedDocument(
         val spanEnd = if (block + 1 < document.blockCount) end + 1 else end
         val previous = block - 1
         val (containers, leading, inQuote) = containersOf(block, previous)
-        if (containers.any { it.kind == NativeDocument.CONTAINER_DETAILS }) {
+        if (containers.any { it.kind == CONTAINER_DETAILS }) {
           detailsBlocks.add(
             DetailsBlock(
               start, end,

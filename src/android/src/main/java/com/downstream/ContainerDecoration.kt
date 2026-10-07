@@ -1,6 +1,15 @@
 package com.downstream
 
 /**
+ * `ContainerKind::Details`, as the engine numbers it.
+ *
+ * Here rather than in `NativeDocument` because the layout rules that read it
+ * run without a device: `tests/android` compiles this file and
+ * `DetailsLayout.kt` together, and neither may import the JNI reader.
+ */
+internal const val CONTAINER_DETAILS = 4
+
+/**
  * One level of block nesting around a block, as the engine reported it.
  *
  * Its own file, with no Android imports, because this is data rather than
