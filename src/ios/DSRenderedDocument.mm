@@ -269,14 +269,37 @@ void applyRuns(NSMutableAttributedString *text, const Block &block, const BlockF
       attributes[NSBaselineOffsetAttributeName] = @(-size * subscriptBaselineOffset(theme));
     }
     if (run.link >= 0) {
-      attributes[NSForegroundColorAttributeName] =
-          [colors colorForSlot:kSlotLinkColor fallback:UIColor.linkColor];
+      // A per-URL variant wins over the theme: the first prefix the URL starts
+      // with names the color, and anything it does not name stays the theme's.
+      // The URL comes from the document's own link table, which is the same
+      // string a press reports — so the style an app sees and the link an app
+      // handles cannot disagree about which URL they mean.
+      UIColor *linkColor = [colors colorForSlot:kSlotLinkColor fallback:UIColor.linkColor];
+      BOOL linkUnderline = linkUnderlined(theme);
+      if (variants != nil && !variants.isEmpty && run.link >= 0 &&
+          static_cast<size_t>(run.link) < document.links.size()) {
+        // The run's own link index is into `Document::links`, which is the same
+        // string a press reports — so the style an app sees and the link an app
+        // handles cannot disagree about which URL they mean.
+        const std::string &url = document.links[static_cast<size_t>(run.link)].url;
+        NSDictionary *variant = [variants variantForURL:@(url.c_str())];
+        const long long variantColor = [variant[@"color"] longLongValue];
+        if (variant != nil && variantColor >= 0) {
+          linkColor = [UIColor colorWithRed:((variantColor >> 16) & 0xff) / 255.0
+                                      green:((variantColor >> 8) & 0xff) / 255.0
+                                       blue:(variantColor & 0xff) / 255.0
+                                      alpha:((variantColor >> 24) & 0xff) / 255.0];
+        }
+        if (variant != nil && variant[@"underline"] != nil) {
+          linkUnderline = [variant[@"underline"] boolValue];
+        }
+      }
+      attributes[NSForegroundColorAttributeName] = linkColor;
       // A theme can turn the underline off, which is what a link that reads as a
       // link by color alone wants.
-      if (linkUnderlined(theme)) {
+      if (linkUnderline) {
         attributes[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
-        attributes[NSUnderlineColorAttributeName] =
-            [colors colorForSlot:kSlotLinkColor fallback:UIColor.linkColor];
+        attributes[NSUnderlineColorAttributeName] = linkColor;
       }
       attributes[DSLinkIndexAttributeName] = @(run.link);
     }
@@ -361,6 +384,35 @@ void applyTokens(NSMutableAttributedString *text, const Block &block, DSThemeCol
 @end
 
 @implementation DSContainerInfo
+@end
+
+@implementation DSLinkVariants
+
+- (BOOL)isEmpty {
+  return self.prefixes.count == 0;
+}
+
+- (NSDictionary *)variantForURL:(NSString *)url {
+  if (url.length == 0 || self.prefixes.count == 0) {
+    return nil;
+  }
+  NSUInteger at = 0;
+  for (NSUInteger variant = 0; variant < self.counts.count; variant++) {
+    const NSUInteger count = self.counts[variant].unsignedIntegerValue;
+    for (NSUInteger index = 0; index < count && at + index < self.prefixes.count; index++) {
+      if ([url hasPrefix:self.prefixes[at + index]]) {
+        const long long color =
+            variant < self.colors.count ? self.colors[variant].longLongValue : -1;
+        const BOOL underline =
+            variant < self.underlines.count ? self.underlines[variant].boolValue : NO;
+        return @{@"color" : @(color), @"underline" : @(underline)};
+      }
+    }
+    at += count;
+  }
+  return nil;
+}
+
 @end
 
 @interface DSBlockInfo ()
@@ -589,6 +641,8 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
 /// `inCard` is true for the one-block body of a code card: the card draws the
 /// background and the padding, and code is laid out left to right however the
 /// block's own characters read.
+/// The per-URL link styles, or nil. Links are the only runs that read it, so
+/// the code card's body and the table's cells do not take one.
 + (instancetype)segmentWithDocument:(const Document &)document
                                from:(size_t)from
                                  to:(size_t)to
@@ -597,7 +651,8 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
                          markerFont:(UIFont *)markerFont
                   syntaxHighlighting:(BOOL)syntaxHighlighting
                              inCard:(BOOL)inCard
-                              caret:(const PlacedCaret &)caret {
+                              caret:(const PlacedCaret &)caret
+                           variants:(DSLinkVariants *)variants {
   DSTextSegment *segment = [DSTextSegment new];
   segment->_measurementLock = [NSLock new];
   segment.theme = [DSThemeColors colorsFor:theme];
@@ -1203,7 +1258,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                         markerFont:markerFont
                                  syntaxHighlighting:syntaxHighlighting
                                             inCard:YES
-                                             caret:caret];
+                                             caret:caret
+                                          variants:nil];
   segment.language = [NSString stringWithUTF8String:block.language.c_str()];
   // The header row's own typography and its two remaining colors, all from the
   // theme rather than from literals in the card view.
@@ -1542,6 +1598,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   /// the code layout is: a closed and an open body are different heights, so they
   /// are different measurements.
   downstream::ReaderChoices _cachedChoices;
+  /// Per-URL link styles, which the text builder reads when it colors a link run.
+  DSLinkVariants *_variants;
   bool _hasCachedFrames;
   /// Cache native geometry. Measurement needs no NSValue boxing, and each
   /// caller copies only the frames it consumes while holding the cache lock.
@@ -1571,6 +1629,14 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   return cache;
 }
 
+/// The variants folded into a committed segment's cache key.
+///
+/// Link colors are baked into a segment's text, so two variant sets are two
+/// different segments even when everything else is the same.
+static NSString *committedVariantsKey(DSLinkVariants *variants) {
+  return variantsKey(variants);
+}
+
 + (id)committedSegmentFor:(const Document &)document
                      kind:(SegmentKind)kind
                      from:(size_t)from
@@ -1579,7 +1645,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                     scale:(CGFloat)scale
                markerFont:(UIFont *)markerFont
         syntaxHighlighting:(BOOL)syntaxHighlighting
-                  caretAfter:(const PlacedCaret &)caretAfter {
+                  caretAfter:(const PlacedCaret &)caretAfter
+                  variants:(DSLinkVariants *)variants {
   // The theme is in the key because a segment holds resolved colors and
   // measured sizes, and a second theme must not read the first one's.
   // The plan's kind is in it for the same reason: a math block and an image-only
@@ -1587,9 +1654,9 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   // and a paragraph and the two are not interchangeable.
   // The caret is not in it because its placeholder is only ever in the last
   // segment's measured text, and a committed segment is never the last one.
-  NSString *key = [NSString stringWithFormat:@"%llu:%zu:%llu:%.4f:%d:%d", (unsigned long long)document.blocks[from].identity,
+  NSString *key = [NSString stringWithFormat:@"%llu:%zu:%llu:%.4f:%d:%d:%@", (unsigned long long)document.blocks[from].identity,
                                              to - from, (unsigned long long)theme.id(), scale, syntaxHighlighting,
-                                             static_cast<int>(kind)];
+                                             static_cast<int>(kind), committedVariantsKey(variants)];
   DSCommittedSegment *cached = [self.committedSegmentCache objectForKey:key];
   bool matches = cached != nil && cached->identities.size() == to - from;
   for (size_t index = from; matches && index < to; index++) {
@@ -1648,11 +1715,31 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                                      markerFont:markerFont
                                           syntaxHighlighting:syntaxHighlighting
                                                          inCard:NO
-                                                          caret:caretAfter];
+                                                          caret:caretAfter
+                                                       variants:variants];
       break;
   }
   [self.committedSegmentCache setObject:cached forKey:key cost:cost];
   return cached->segment;
+}
+
+/// A cache key for the variants, or empty when there are none to key on.
+///
+/// The variants change link colors but no heights, so the key only has to tell
+/// two variant sets apart — not to be readable. A hash of the arrays is what
+/// does that without putting every prefix in the key.
+static NSString *variantsKey(DSLinkVariants *variants) {
+  if (variants == nil || variants.isEmpty) {
+    return @"";
+  }
+  NSUInteger hash = variants.prefixes.count;
+  for (NSString *prefix in variants.prefixes) {
+    hash = hash * 31 + prefix.hash;
+  }
+  for (NSNumber *color in variants.colors) {
+    hash = hash * 31 + color.unsignedIntegerValue;
+  }
+  return [NSString stringWithFormat:@"%lu", (unsigned long)hash];
 }
 
 + (instancetype)renderedDocumentFor:(const DocumentHandle &)document
@@ -1660,30 +1747,47 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                  syntaxHighlighting:(BOOL)syntaxHighlighting
                               theme:(const Theme::Handle &)themeHandle
                              caret:(const PlacedCaret &)caret {
+  return [self renderedDocumentFor:document
+                         fontScale:fontScale
+                syntaxHighlighting:syntaxHighlighting
+                             theme:themeHandle
+                            caret:caret
+                          variants:nil];
+}
+
++ (instancetype)renderedDocumentFor:(const DocumentHandle &)document
+                          fontScale:(CGFloat)fontScale
+                 syntaxHighlighting:(BOOL)syntaxHighlighting
+                              theme:(const Theme::Handle &)themeHandle
+                             caret:(const PlacedCaret &)caret
+                          variants:(DSLinkVariants *)variants {
   if (!document) {
     return [[self alloc] initWithDocument:document
                                fontScale:fontScale
                       syntaxHighlighting:syntaxHighlighting
                                    theme:themeHandle ? themeHandle : Theme::defaultTheme()
-                                  caret:caret];
+                                  caret:caret
+                               variants:variants];
   }
   // The theme id is in the key rather than the theme itself, because interned
   // themes are stable for the life of a process and their id is all a cache key
   // needs to tell two of them apart. The caret is in it for the same reason: its
   // placeholder is in the measured text, so two renderings that differ only in
   // whether a caret was reserved are two different heights.
-  NSString *key = [NSString stringWithFormat:@"%llu:%.4f:%d:%llu:%d:%d", (unsigned long long)document->id,
+  NSString *key = [NSString stringWithFormat:@"%llu:%.4f:%d:%llu:%d:%d:%@", (unsigned long long)document->id,
                                              fontScale, syntaxHighlighting,
                                              (unsigned long long)(themeHandle ? themeHandle->id()
                                                                           : Theme::defaultTheme()->id()),
-                                             static_cast<int>(caret.kind), static_cast<int>(caret.place)];
+                                             static_cast<int>(caret.kind), static_cast<int>(caret.place),
+                                             variantsKey(variants)];
   DSRenderedDocument *rendered = [self.cache objectForKey:key];
   if (rendered == nil) {
     rendered = [[self alloc] initWithDocument:document
                                    fontScale:fontScale
                           syntaxHighlighting:syntaxHighlighting
                                     theme:themeHandle ? themeHandle : Theme::defaultTheme()
-                                   caret:caret];
+                                   caret:caret
+                                variants:variants];
     [self.cache setObject:rendered forKey:key];
   }
   return rendered;
@@ -1698,7 +1802,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                        fontScale:(CGFloat)rawScale
               syntaxHighlighting:(BOOL)syntaxHighlighting
                             theme:(const Theme::Handle &)themeHandle
-                           caret:(const PlacedCaret &)caret {
+                           caret:(const PlacedCaret &)caret
+                        variants:(DSLinkVariants *)variants {
   if (!(self = [super init])) {
     return nil;
   }
@@ -1723,6 +1828,7 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   NSMutableArray *segments = [NSMutableArray new];
   NSMutableArray<NSNumber *> *indexes = [NSMutableArray new];
   _settledBlocks = document.settledBlocks;
+  _variants = variants;
 
   for (const SegmentPlan &segment : planSegments(document)) {
     // The caret belongs to the last segment, whichever kind it is, because that is
@@ -1739,7 +1845,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                                 scale:scale
                                            markerFont:markerFont
                                     syntaxHighlighting:syntaxHighlighting
-                                           caretAfter:here];
+                                           caretAfter:here
+                                             variants:_variants];
     } else if (segment.isCode()) {
       built = [DSCodeSegment segmentWithDocument:document
                                            index:segment.from
@@ -1776,7 +1883,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                        markerFont:markerFont
                                 syntaxHighlighting:syntaxHighlighting
                                            inCard:NO
-                                            caret:here];
+                                            caret:here
+                                         variants:_variants];
     }
     // The plan counted the code blocks, so the ordinal comes from there rather
     // than from a walk of the blocks. It is assigned here so a committed segment
@@ -1841,7 +1949,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
                                   markerFont:markerFont
                            syntaxHighlighting:NO
                                       inCard:NO
-                                       caret:caret];
+                                       caret:caret
+                                    variants:nil];
 }
 
 - (NSArray<NSNumber *> *)segmentBlockIndexes {

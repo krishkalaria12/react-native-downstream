@@ -173,6 +173,13 @@ NSString *nameForFormat(NSString *format) {
   /// icon" — a text-only button is how a quiet header is built.
   NSArray<NSString *> *_controlIcons;
   BOOL _linkPreview;
+  /// Per-URL link styles, as four flat arrays: every prefix, the counts that say
+  /// where one variant's prefixes end, a processed color per variant or -1, and
+  /// whether it underlines.
+  NSArray<NSString *> *_linkVariantPrefixes;
+  NSArray<NSNumber *> *_linkVariantCounts;
+  NSArray<NSNumber *> *_linkVariantColors;
+  NSArray<NSNumber *> *_linkVariantUnderlines;
   CADisplayLink *_traceDisplayLink;
   uint64_t _traceDocumentId;
   uint64_t _controlEpoch;
@@ -448,6 +455,24 @@ NSString *nameForFormat(NSString *format) {
   return YES;
 }
 
+/// The strings of a codegen string array, as the view holds them.
+- (NSArray<NSString *> *)stringsOf:(const std::vector<std::string> &)values {
+  NSMutableArray<NSString *> *out = [NSMutableArray arrayWithCapacity:values.size()];
+  for (const std::string &value : values) {
+    [out addObject:@(value.c_str())];
+  }
+  return out;
+}
+
+/// The numbers of a codegen number array.
+- (NSArray<NSNumber *> *)numbersOf:(const std::vector<double> &)values {
+  NSMutableArray<NSNumber *> *out = [NSMutableArray arrayWithCapacity:values.size()];
+  for (double value : values) {
+    [out addObject:@(value)];
+  }
+  return out;
+}
+
 /// Interns the theme the props carry, or falls back to the default one.
 - (void)updateProps:(const Props::Shared &)props oldProps:(const Props::Shared &)oldProps {
   const auto &newProps = *std::static_pointer_cast<const DownstreamMarkdownViewProps>(props);
@@ -473,6 +498,19 @@ NSString *nameForFormat(NSString *format) {
   if (newProps.linkPreview != _linkPreview) {
     _linkPreview = newProps.linkPreview;
     _documentView.linkPreview = _linkPreview;
+  }
+  // Per-URL link styles, resolved in JavaScript from `markdownStyle.linkVariants`.
+  // They change colors but no heights, so they travel as view state rather than
+  // through the shadow node: the measurement this view draws from was made
+  // without them, and the heights agree either way.
+  {
+    DSLinkVariants *variants = [DSLinkVariants new];
+    variants.prefixes = [self stringsOf:newProps.linkVariantPrefixes];
+    variants.counts = [self numbersOf:newProps.linkVariantCounts];
+    variants.colors = [self numbersOf:newProps.linkVariantColors];
+    variants.underlines = [self numbersOf:newProps.linkVariantUnderline];
+    _linkVariants = variants;
+    [self applyRendering];
   }
   // The props that decide code layout, gathered into one value. The height and
   // the gutter are heights, so the shadow node measures with them and the view
@@ -702,7 +740,8 @@ NSString *nameForFormat(NSString *format) {
                                                                   fontScale:_fontScale
                                                          syntaxHighlighting:_syntaxHighlighting
                                                                       theme:_theme
-                                                                     caret:caret]
+                                                                     caret:caret
+                                                                  variants:_linkVariants]
                                      : nil;
   // The fade is decided after the rendering exists, because the tracker aligns the
   // document it was given against the one this view last showed, and the ticker

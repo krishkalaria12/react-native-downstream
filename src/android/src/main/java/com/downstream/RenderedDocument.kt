@@ -369,10 +369,14 @@ internal class RenderedDocument(
       syntaxHighlighting: Boolean = true,
       themeId: Long = 0L,
       caret: PlacedCaret = PlacedCaret.NONE,
+      linkVariants: LinkVariants = LinkVariants(),
     ): RenderedDocument? {
       val night = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
         Configuration.UI_MODE_NIGHT_YES
-      val key = "$documentId:$fontScale:$night:$syntaxHighlighting:$themeId:${caret.kind}:${caret.place}"
+      // Link colors are baked into a segment's text, so two variant sets are two
+      // different renderings even when everything else is the same.
+      val key =
+        "$documentId:$fontScale:$night:$syntaxHighlighting:$themeId:${caret.kind}:${caret.place}:${linkVariants.hashCode()}"
       cache.get(key)?.let { return it }
       // Inline formulas draw from text spans, which have no context of their own.
       MathFonts.attach(context)
@@ -382,6 +386,14 @@ internal class RenderedDocument(
       // would be one crossing per field per picture; this is one for the document.
       // A document with no pictures is ordinary, so an empty list is an answer.
       val images = DownstreamNative.readImages(documentId) ?: NativeImages.EMPTY
+      // The document's link URLs, read once when variants could style them. An
+      // empty list when there is nothing to match against, so a document with no
+      // variants pays for no JNI round trip at all.
+      val linkUrls = if (linkVariants.isEmpty()) {
+        emptyList()
+      } else {
+        DownstreamNative.readLinkUrls(documentId)
+      }
       // A theme can cap the platform's font scale but cannot raise it, and the
       // cap is applied once here so every measurement below works with the
       // result. Resolved in C++ so both platforms read one rule.
@@ -409,7 +421,7 @@ internal class RenderedDocument(
         val caretKey = if (isLast) "${caret.kind}:${caret.place}" else "0:0"
         val segmentKey =
           "${planned.identity}:${planned.to - planned.from}:$ordinal:$scaled:$night:" +
-            "$syntaxHighlighting:$themeId:$caretKey"
+            "$syntaxHighlighting:$themeId:$caretKey:${linkVariants.hashCode()}"
         val segment = (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
           // The theme id goes with the read, because each block's typography is
           // resolved against it in C++; without it every block reads the default.
@@ -419,6 +431,7 @@ internal class RenderedDocument(
                 it, images, style, planned, ordinal, planned.tableOrdinal, syntaxHighlighting,
                 style.px(it.previousBottomMargin),
                 if (isLast) caret else PlacedCaret.NONE,
+                linkVariants, linkUrls,
               )
             }
             ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
@@ -615,6 +628,8 @@ internal class RenderedDocument(
       syntaxHighlighting: Boolean,
       previousBottom: Float,
       caret: PlacedCaret = PlacedCaret.NONE,
+      linkVariants: LinkVariants = LinkVariants(),
+      linkUrls: List<String> = emptyList(),
     ): Segment {
       val from = planned.from
       val isCode = planned.kind == SEGMENT_CODE
@@ -1055,11 +1070,19 @@ internal class RenderedDocument(
           )
         }
         if (link >= 0) {
-          // A theme can turn the underline off, which is what a link that reads
-          // as a link by color alone wants.
-          val linkColor = theme.color(ThemeSlots.SLOT_LINK_COLOR, colors.night) ?: colors.link
+          // A per-URL variant wins over the theme: the first prefix the URL
+          // starts with names the color, and anything it does not name stays the
+          // theme's. The URL is the document's own link string, which is the
+          // same string a press reports.
+          var linkColor = theme.color(ThemeSlots.SLOT_LINK_COLOR, colors.night) ?: colors.link
+          var linkUnderline = theme.flag(ThemeSlots.SLOT_LINK_UNDERLINE)
+          if (!linkVariants.isEmpty()) {
+            val variant = linkUrls.getOrNull(link)?.let { linkVariants.variantFor(it) }
+            if (variant?.color != null) linkColor = variant.color
+            if (variant?.underline != null) linkUnderline = variant.underline
+          }
           text.setSpan(
-            LinkSpan(link, linkColor, theme.flag(ThemeSlots.SLOT_LINK_UNDERLINE)),
+            LinkSpan(link, linkColor, linkUnderline),
             start,
             end,
             flags,

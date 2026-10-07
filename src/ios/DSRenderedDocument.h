@@ -64,6 +64,28 @@ typedef NS_ENUM(NSInteger, DSContainerKind) {
 /// Marks a spoiler run, so a press can find it by range rather than by color.
 extern NSString *const DSSpoilerAttributeName;
 
+/**
+ * Per-URL link styles, as the view resolved them from `markdownStyle.linkVariants`.
+ *
+ * One object rather than four arrays because the segment builder asks one
+ * question — "what styles this URL?" — and the answer should not require it to
+ * know how the question is stored. Empty when the app named no variants, which
+ * is the common case and costs nothing to ask.
+ */
+@interface DSLinkVariants : NSObject
+/// Every prefix flat in one array, with the counts that say where one variant's
+/// prefixes end.
+@property (nonatomic, copy) NSArray<NSString *> *prefixes;
+@property (nonatomic, copy) NSArray<NSNumber *> *counts;
+/// A processed color per variant, or -1, and whether it underlines.
+@property (nonatomic, copy) NSArray<NSNumber *> *colors;
+@property (nonatomic, copy) NSArray<NSNumber *> *underlines;
+/// The variant styling `url`, or nil. First prefix wins across the whole list.
+- (NSDictionary *)variantForURL:(NSString *)url;
+/// True when there is nothing to match against.
+- (BOOL)isEmpty;
+@end
+
 @interface DSContainerInfo : NSObject
 @property (nonatomic, readonly) DSContainerKind kind;
 @property (nonatomic, readonly) CGFloat leading;
@@ -372,6 +394,14 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
                  syntaxHighlighting:(BOOL)syntaxHighlighting
                               theme:(const downstream::Theme::Handle &)theme
                              caret:(const downstream::PlacedCaret &)caret;
+/// The same, with per-URL link styles. The variants change colors but no
+/// heights, so they join the cache key rather than the measurement.
++ (instancetype)renderedDocumentFor:(const downstream::DocumentHandle &)document
+                          fontScale:(CGFloat)fontScale
+                 syntaxHighlighting:(BOOL)syntaxHighlighting
+                              theme:(const downstream::Theme::Handle &)theme
+                             caret:(const downstream::PlacedCaret &)caret
+                          variants:(DSLinkVariants *)variants;
 #endif
 
 /// Drops every cached rendering. For tests and for a caller that wants to force

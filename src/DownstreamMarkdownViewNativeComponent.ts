@@ -212,6 +212,20 @@ export interface NativeProps extends ViewProps {
   // icon". `src/icons.ts` is where that mapping happens.
   controlIcons?: ReadonlyArray<string>;
   /**
+   * Per-URL link styles, as `src/linkVariants.ts` resolves them: every prefix
+   * flat in one array, with the counts that say where one variant's prefixes
+   * end and the next begins. A processed color per variant, or -1, and whether
+   * it underlines, in the same order.
+   *
+   * Flat arrays rather than objects because codegen's structs cannot hold the
+   * shape, and the platforms match by prefix at draw time rather than resolving
+   * a style per link up front.
+   */
+  linkVariantPrefixes?: ReadonlyArray<string>;
+  linkVariantCounts?: ReadonlyArray<CodegenTypes.Double>;
+  linkVariantColors?: ReadonlyArray<CodegenTypes.Double>;
+  linkVariantUnderline?: ReadonlyArray<boolean>;
+  /**
    * Slot ids from src/themeSlots.ts, sorted ascending, one entry per override.
    *
    * Three arrays rather than a codegen object prop: a struct of every field

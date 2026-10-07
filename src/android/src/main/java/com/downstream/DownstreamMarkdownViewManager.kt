@@ -302,6 +302,43 @@ class DownstreamMarkdownViewManager :
    * back to the platform's own, so a name an app invented cannot leave a button
    * with no icon at all.
    */
+  override fun setLinkPreview(view: DownstreamMarkdownView, value: Boolean) {
+    // Android has no system link preview to gate: a hold is the app's
+    // `onLinkLongPress` and nothing else, whatever this prop says. Recorded
+    // and ignored, so a prop written for iOS does not warn here.
+  }
+
+  /**
+   * Per-URL link styles, as four flat arrays.
+   *
+   * Read once per props update rather than per segment because the view builds
+   * every segment from one object: a message with twenty links matches each URL
+   * once, not once per segment that draws it.
+   */
+  override fun setLinkVariantPrefixes(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.setLinkVariantPrefixes(value?.let { array ->
+      List(array.size()) { index -> array.getString(index).orEmpty() }
+    } ?: emptyList())
+  }
+
+  override fun setLinkVariantCounts(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.setLinkVariantCounts(value?.let { array ->
+      List(array.size()) { index -> array.getDouble(index).toInt() }
+    } ?: emptyList())
+  }
+
+  override fun setLinkVariantColors(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.setLinkVariantColors(value?.let { array ->
+      List(array.size()) { index -> array.getDouble(index).toInt() }
+    } ?: emptyList())
+  }
+
+  override fun setLinkVariantUnderline(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.setLinkVariantUnderline(value?.let { array ->
+      List(array.size()) { index -> array.getBoolean(index) }
+    } ?: emptyList())
+  }
+
   override fun setControlIcons(view: DownstreamMarkdownView, value: ReadableArray?) {
     setControlIcons(value?.let { array ->
       List(array.size()) { index -> array.getString(index).orEmpty() }

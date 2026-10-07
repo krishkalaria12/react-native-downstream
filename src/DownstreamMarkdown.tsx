@@ -39,6 +39,42 @@ import {
 } from './parseFlags';
 import { openLinkSafely, resolveLinkUrl, resolvesLinks } from './linkSafety';
 import { resolveIcons } from './icons';
+import { resolveLinkVariants } from './linkVariants';
+
+/**
+ * The link variants as four flat arrays the native views read.
+ *
+ * Memoized on the style object rather than rebuilt per render, because the
+ * arrays are new identities every time and a new identity is a props update the
+ * shadow node would re-measure for.
+ */
+function useLinkVariantProps(
+  markdownStyle: MarkdownViewProps['markdownStyle']
+) {
+  return useMemo(() => {
+    // A composable style is an array; the resolver takes one style, so the last
+    // entry wins the way it does in the theme resolver.
+    const style = Array.isArray(markdownStyle)
+      ? markdownStyle[markdownStyle.length - 1]
+      : markdownStyle;
+    const variants = resolveLinkVariants(
+      style === false || style === null || style === undefined
+        ? undefined
+        : style
+    );
+    const prefixes: string[] = [];
+    const counts: number[] = [];
+    const colors: number[] = [];
+    const underlines: boolean[] = [];
+    for (const variant of variants) {
+      counts.push(variant.match.length);
+      prefixes.push(...variant.match);
+      colors.push(variant.color ?? -1);
+      underlines.push(variant.underline ?? false);
+    }
+    return { prefixes, counts, colors, underlines };
+  }, [markdownStyle]);
+}
 import { TableFullscreen, type InheritedTableProps } from './TableFullscreen';
 import { resolveTheme, type ResolvedTheme } from './theme';
 import type {
@@ -1078,6 +1114,7 @@ function ControlledMarkdown({
   const resolvedTheme = useStableTheme(
     useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
   );
+  const linkVariantProps = useLinkVariantProps(markdownStyle);
   // A controlled view has to say whether text is arriving; the platform has
   // nothing else to go on.
   useAnimationCallbacks(isAnimating, onAnimationStart, onAnimationEnd);
@@ -1138,6 +1175,10 @@ function ControlledMarkdown({
       csvSeparator={resolved.csvSeparator}
       controlLabels={resolved.labels}
       controlIcons={resolveIcons(icons)}
+      linkVariantPrefixes={linkVariantProps.prefixes}
+      linkVariantCounts={linkVariantProps.counts}
+      linkVariantColors={linkVariantProps.colors}
+      linkVariantUnderline={linkVariantProps.underlines}
       onTaskPress={handleTaskPress}
       onLinkLongPress={handleLinkLongPress}
       linkPreview={linkPreview}
@@ -1269,6 +1310,7 @@ function StreamMarkdown({
   const resolvedTheme = useStableTheme(
     useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
   );
+  const linkVariantProps = useLinkVariantProps(markdownStyle);
   // A stream view follows its controller's own transitions, so the callbacks fire
   // on the first append of a generation and on `finish()`, unless an explicit
   // `isAnimating` overrides the flag, which takes the callbacks with it.
@@ -1346,6 +1388,10 @@ function StreamMarkdown({
       csvSeparator={resolved.csvSeparator}
       controlLabels={resolved.labels}
       controlIcons={resolveIcons(icons)}
+      linkVariantPrefixes={linkVariantProps.prefixes}
+      linkVariantCounts={linkVariantProps.counts}
+      linkVariantColors={linkVariantProps.colors}
+      linkVariantUnderline={linkVariantProps.underlines}
       onTaskPress={handleTaskPress}
       onLinkLongPress={handleLinkLongPress}
       linkPreview={linkPreview}

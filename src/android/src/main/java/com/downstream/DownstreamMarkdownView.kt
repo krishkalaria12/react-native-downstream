@@ -111,6 +111,39 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    * per-block decision rather than one the view makes.
    */
   private var direction = View.TEXT_DIRECTION_FIRST_STRONG_LTR
+
+  /**
+   * Per-URL link styles, in four flat arrays as the bridge carries them.
+   *
+   * Held as parts rather than as one object because the four props arrive as
+   * four updates: the object is built where it is read, from whatever parts
+   * have arrived, so an update that changes one array does not drop the other
+   * three.
+   */
+  private var variantPrefixes: List<String> = emptyList()
+  private var variantCounts: List<Int> = emptyList()
+  private var variantColors: List<Int> = emptyList()
+  private var variantUnderlines: List<Boolean> = emptyList()
+
+  fun setLinkVariantPrefixes(value: List<String>) {
+    variantPrefixes = value
+  }
+
+  fun setLinkVariantCounts(value: List<Int>) {
+    variantCounts = value
+  }
+
+  fun setLinkVariantColors(value: List<Int>) {
+    variantColors = value
+  }
+
+  fun setLinkVariantUnderline(value: List<Boolean>) {
+    variantUnderlines = value
+  }
+
+  /** The four parts as one object, built where it is read. */
+  internal fun linkVariants(): LinkVariants =
+    LinkVariants(variantPrefixes, variantCounts, variantColors, variantUnderlines)
   private var syntaxHighlighting = true
   // Every control on, which is the default and matches the codegen default.
   private var controls = CONTROL_CODE_COPY or CONTROL_CODE_DOWNLOAD or CONTROL_TABLE_COPY or
@@ -346,7 +379,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     val tracing = documentId != 0L && DownstreamNative.isTracingDocument(documentId)
     if (tracing) DownstreamNative.traceDocument(documentId, "apply_start")
     rendered = if (documentId != 0L) {
-      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, resolved, caret)
+      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, resolved, caret, linkVariants())
     } else {
       null
     }
@@ -646,7 +679,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     val id = documentId
     val scale = fontScale
     rendered = if (id != 0L) {
-      RenderedDocument.obtain(context, id, scale, syntaxHighlighting, themeId, value)
+      RenderedDocument.obtain(context, id, scale, syntaxHighlighting, themeId, value, linkVariants = linkVariants())
     } else {
       null
     }
@@ -1020,7 +1053,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     if (enabled != syntaxHighlighting) {
       syntaxHighlighting = enabled
       if (documentId != 0L) {
-        rendered = RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId)
+        rendered = RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, linkVariants = linkVariants())
         syncSegmentViews()
       }
     }
@@ -1288,7 +1321,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
     if (documentId != 0L) {
-      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId)?.let {
+      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, linkVariants = linkVariants())?.let {
         rendered = it
         syncSegmentViews()
       }

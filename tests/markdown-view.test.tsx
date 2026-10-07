@@ -1059,6 +1059,35 @@ describe('DownstreamMarkdown controls', () => {
   });
 });
 
+describe('DownstreamMarkdown link variants', () => {
+  const LINKED = 'See [the docs](https://example.com/a) today.\n';
+
+  it('sends the resolved variants as four flat arrays', () => {
+    mount(
+      <DownstreamMarkdown
+        markdown={LINKED}
+        markdownStyle={{
+          linkVariants: [{ match: 'https://example.com', color: '#ff0000' }],
+        }}
+      />
+    );
+    const props = nativeView.last();
+    // Flat arrays rather than objects, because that is what the bridge carries;
+    // the platforms match by prefix at draw time.
+    expect(props?.linkVariantPrefixes).toEqual(['https://example.com']);
+    expect(props?.linkVariantCounts).toEqual([1]);
+    expect(props?.linkVariantColors).toEqual([expect.any(Number)]);
+    expect(props?.linkVariantUnderline).toEqual([false]);
+  });
+
+  it('sends nothing when no variants are named', () => {
+    mount(<DownstreamMarkdown markdown={LINKED} />);
+    const props = nativeView.last();
+    expect(props?.linkVariantPrefixes).toEqual([]);
+    expect(props?.linkVariantCounts).toEqual([]);
+  });
+});
+
 describe('DownstreamMarkdown math and image callbacks', () => {
   for (const mode of ['controlled', 'stream'] as const) {
     it(`keeps ${mode} native callbacks stable and calls the newest handlers`, () => {

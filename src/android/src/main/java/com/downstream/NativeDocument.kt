@@ -736,6 +736,25 @@ internal object DownstreamNative {
     )
   }
 
+  /**
+   * Every link's URL, in index order.
+   *
+   * Read once per rendering rather than once per link because a segment build
+   * asks for every link it draws. The table ends at the first index the
+   * registry has nothing for, which is the document's own link count by
+   * construction.
+   */
+  fun readLinkUrls(id: Long): List<String> {
+    val urls = ArrayList<String>()
+    var index = 0
+    while (true) {
+      val url = readLink(id, index)?.url ?: break
+      urls.add(url)
+      index++
+    }
+    return urls
+  }
+
   /** Returns null when the document or link is gone. */
   fun readLink(id: Long, index: Int): NativeLink? {
     val parts = nativeReadLink(id, index) ?: return null

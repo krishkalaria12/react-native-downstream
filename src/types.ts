@@ -893,6 +893,26 @@ export type MarkdownStyle = Readonly<{
     fontFamily?: string;
     fontWeight?: TextStyle['fontWeight'];
   };
+  /**
+   * Per-URL link styles, by prefix, as enriched-markdown's `linkVariants`.
+   *
+   * The first prefix a link's URL starts with wins, so an app lists specific
+   * hosts before the scheme they share. A variant styles the link's text the
+   * way `link` does; anything it does not name stays the `link` style.
+   *
+   * This pairs with app-defined link schemes: an app that registers `app:` links
+   * styles them here rather than teaching the theme about every host it links to.
+   */
+  linkVariants?: ReadonlyArray<
+    Readonly<{
+      /** URL prefixes this variant styles, matched with `startsWith`. */
+      match: string | ReadonlyArray<string>;
+      color?: MarkdownColor;
+      underline?: boolean;
+      fontFamily?: string;
+      fontWeight?: TextStyle['fontWeight'];
+    }>
+  >;
   strong?: {
     color?: MarkdownColor;
     fontFamily?: string;
