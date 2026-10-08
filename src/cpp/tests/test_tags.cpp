@@ -12,6 +12,7 @@
 #include "check.h"
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace downstream;
@@ -279,7 +280,7 @@ void blockTagAttributes() {
                              static_cast<uint32_t>(result.document->blocks.size()));
   CHECK(slots.size() == 1 && slots[0].attributes == expected,
         "the hosted block slot receives the permitted attribute and excludes onclick");
-  for (const std::string &opener : {
+  for (const std::string_view opener : {
            "<card data_id=\"x\" id=\"safe\">",
            "<card $id=\"bad\" id=\"safe\">",
            "<card _id=\"bad id=evil\" id=\"safe\">",
