@@ -21,11 +21,13 @@ DocumentMeasurement DownstreamTextLayoutManager::measure(const downstream::Docum
                                                          Float fontSizeMultiplier,
                                                          const LayoutConstraints &layoutConstraints,
                                                          SurfaceId surfaceId, uint32_t chrome,
-                                                         const downstream::CodeLayout &code,
+                                                         const downstream::CodeLayoutProps &code,
                                                          const downstream::PlacedCaret &caret,
                                                          const downstream::ImageLayout &images,
                                                          const downstream::HostLayout &hosts,
-                                                         const downstream::Theme::Handle &theme) const {
+                                                         const downstream::Theme::Handle &theme,
+                                                         const downstream::TableLayoutProps &tables,
+                                                         const downstream::ReaderChoices &choices) const {
   const Float maximumWidth = layoutConstraints.maximumSize.width;
   // The theme can cap the platform's font scale, and the cap is applied before
   // the scale reaches either the cache key or the platform, so a measurement and
@@ -45,7 +47,7 @@ DocumentMeasurement DownstreamTextLayoutManager::measure(const downstream::Docum
         if (entry.documentId == document->id && entry.fontSizeMultiplier == scale &&
             entry.maximumWidth == maximumWidth && entry.chrome == chrome && entry.code == code &&
             entry.caret == caret && entry.images == images && entry.hosts == hosts &&
-            entry.themeLayoutKey == themeLayoutKey) {
+            entry.tables == tables && entry.choices == choices && entry.themeLayoutKey == themeLayoutKey) {
           measurement = entry.measurement;
           cached = true;
           break;
@@ -54,14 +56,14 @@ DocumentMeasurement DownstreamTextLayoutManager::measure(const downstream::Docum
     }
 
     if (!cached) {
-      measurement =
-          measurePlatform(document, scale, maximumWidth, surfaceId, chrome, code, caret, images, hosts, theme);
+      measurement = measurePlatform(document, scale, maximumWidth, surfaceId, chrome, code, choices, caret, images,
+                                    hosts, theme, tables);
       std::lock_guard<std::mutex> lock(cacheMutex_);
       if (cache_.size() >= kMeasurementCacheCapacity) {
         cache_.erase(cache_.begin());
       }
-      cache_.push_back(
-          {document->id, scale, maximumWidth, chrome, code, caret, images, hosts, themeLayoutKey, measurement});
+      cache_.push_back({document->id, scale, maximumWidth, chrome, code, caret, images, hosts, tables, choices,
+                        themeLayoutKey, measurement});
     } else {
       downstream::SessionTrace::recordDocument(document->id, "measure_cache_hit");
     }

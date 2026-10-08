@@ -79,11 +79,55 @@ internal class CodeGutterView(context: Context) : View(context) {
     invalidate()
   }
 
+  private val markPaint = Paint()
+
+  /**
+   * The line bands a fence asked for with `{1,3-5}` in its info string.
+   *
+   * Drawn behind the code rather than beside it, and behind *every* visual line a
+   * logical line wraps onto, because a mark is about a line of the file rather
+   * than about a line of the screen: marking only the first visual row would leave
+   * the rest of a wrapped marked line looking unmarked.
+   *
+   * No height of its own, so it is not a layout input and does not join
+   * `LayoutHint` — the bands are drawn into the card's existing rows.
+   */
+  private fun drawLineMarks(canvas: Canvas, textLayout: Layout) {
+    val segment = segment ?: return
+    val marks = segment.fenceMeta.marks
+    if (marks.isEmpty()) return
+    val color = segment.colors.slotOrNull(ThemeSlots.SLOT_CODE_BLOCK_LINE_MARK_COLOR) ?: return
+    val first = segment.fenceMeta.startLine
+    val starts = segment.lineStarts
+    val dirty = canvas.clipBounds
+    markPaint.color = color
+    for (mark in marks) {
+      // Marked lines are the fence's own numbering, so a fence that started at
+      // line 10 marks line 10 first — which is what makes `{1,3-5}` on a diff mean
+      // the same thing as it does in every other diff viewer.
+      val from = (mark[0] - first).toInt()
+      val to = (mark[1] - first).toInt()
+      for (index in from..to) {
+        if (index < 0 || index >= starts.size) continue
+        val offset = starts[index].coerceAtMost(textLayout.text.length)
+        val lastOffset = (offset + 1).coerceAtMost(textLayout.text.length)
+        for (line in textLayout.getLineForOffset(offset)..
+          textLayout.getLineForOffset(lastOffset)) {
+          val top = textLayout.getLineTop(line)
+          if (top > dirty.bottom) break
+          if (textLayout.getLineBottom(line) < dirty.top) continue
+          canvas.drawRect(0f, top.toFloat(), width.toFloat(), textLayout.getLineBottom(line).toFloat(), markPaint)
+        }
+      }
+    }
+  }
+
   override fun onDraw(canvas: Canvas) {
     val segment = this.segment ?: return
     val layout = this.layout ?: return
     val body = this.body ?: return
     val textLayout = body.layout ?: return
+    drawLineMarks(canvas, textLayout)
     val color = this.color
     if (segment.lineStarts.isEmpty() || color == 0) return
     // The gutter is as tall as the code and sits beside it, so a line's y here is
@@ -337,10 +381,10 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   /** The fence's parsed meta, so the host resolves the layout the same way. */
   val fenceMeta: FenceMeta get() = segment?.fenceMeta ?: FenceMeta()
 
-  private val copyButton = controlButton(R.drawable.ds_ic_copy, LABEL_COPY_CODE)
-  private val downloadButton = controlButton(R.drawable.ds_ic_download, LABEL_DOWNLOAD_FILE)
-  private val wrapButton = controlButton(R.drawable.ds_ic_wrap, LABEL_WRAP_CODE)
-  private val expandButton = controlButton(R.drawable.ds_ic_expand, LABEL_EXPAND_CODE)
+  private val copyButton = controlButton(controlDrawable("copy", R.drawable.ds_ic_copy), LABEL_COPY_CODE)
+  private val downloadButton = controlButton(controlDrawable("download", R.drawable.ds_ic_download), LABEL_DOWNLOAD_FILE)
+  private val wrapButton = controlButton(controlDrawable("wrap", R.drawable.ds_ic_wrap), LABEL_WRAP_CODE)
+  private val expandButton = controlButton(controlDrawable("expand", R.drawable.ds_ic_expand), LABEL_EXPAND_CODE)
 
   private val allButtons: List<ImageButton>
     get() = listOf(expandButton, wrapButton, downloadButton, copyButton)
@@ -571,14 +615,20 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
       button.isEnabled = controlsEnabled && button.visibility == View.VISIBLE
       button.alpha = if (button.isEnabled) 1f else 0.4f
     }
-    copyButton.setImageResource(if (copied) R.drawable.ds_ic_check else R.drawable.ds_ic_copy)
+    copyButton.setImageResource(
+      if (copied) controlDrawable("check", R.drawable.ds_ic_check)
+      else controlDrawable("copy", R.drawable.ds_ic_copy),
+    )
     copyButton.contentDescription = controlLabels[if (copied) LABEL_COPIED else LABEL_COPY_CODE]
     val wraps = layout?.wraps ?: false
     wrapButton.isSelected = wraps
     wrapButton.contentDescription = controlLabels[if (wraps) LABEL_UNWRAP_CODE else LABEL_WRAP_CODE]
     wrapButton.stateDescription = wrapButton.contentDescription
     expandButton.isSelected = expanded
-    expandButton.setImageResource(if (expanded) R.drawable.ds_ic_collapse else R.drawable.ds_ic_expand)
+    expandButton.setImageResource(
+      if (expanded) controlDrawable("collapse", R.drawable.ds_ic_collapse)
+      else controlDrawable("expand", R.drawable.ds_ic_expand),
+    )
     expandButton.contentDescription =
       controlLabels[if (expanded) LABEL_COLLAPSE_CODE else LABEL_EXPAND_CODE]
     expandButton.stateDescription = expandButton.contentDescription

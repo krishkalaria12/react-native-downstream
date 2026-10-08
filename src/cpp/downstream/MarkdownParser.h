@@ -1,10 +1,12 @@
 #pragma once
 
 #include "Document.h"
+#include "TagPolicy.h"
 
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace downstream {
@@ -38,17 +40,71 @@ constexpr uint32_t InlineHtml = 1u << 3;
 constexpr uint32_t SuperscriptSyntax = 1u << 4;
 /// md4c's `~x~` subscripts. Off by default.
 constexpr uint32_t SubscriptSyntax = 1u << 5;
+/// `/…`, `./…`, `../…` and `#…` are links rather than plain text. Off by
+/// default, because a relative reference names no target until the app has
+/// resolved it against an origin it was given, and Streamdown shows it as text
+/// until it has one too.
+constexpr uint32_t LinkRelative = 1u << 6;
+/// A bare address is not a `mailto:` link. Off by default: a reader who wrote
+/// one meant to write it, and Streamdown has no way to turn it off either.
+constexpr uint32_t NoAutolinkMailto = 1u << 7;
+/// A bare `http://` address, and the `http://` a `www.` autolink is rewritten
+/// to, is not a link.
+constexpr uint32_t NoAutolinkHttp = 1u << 8;
+/// A bare `https://` address is not a link.
+constexpr uint32_t NoAutolinkHttps = 1u << 9;
+/// CJK-friendly emphasis and autolink boundaries, as the
+/// [markdown-cjk-friendly](https://github.com/tats-u/markdown-cjk-friendly)
+/// amendment defines them. On by default: a document without CJK in it parses
+/// identically either way, which is what the differential test proves.
+constexpr uint32_t Cjk = 1u << 10;
+/// `==highlight==`, md4c's own mark syntax. Off by default: it is not GitHub
+/// dialect, and a chat model that writes `==` around a version number does not
+/// mean a highlighter.
+constexpr uint32_t HighlightSyntax = 1u << 11;
+/// `__underline__`, md4c's own underline syntax. Off by default, for the same
+/// reason — and because it takes `_` away from emphasis, so turning it on
+/// changes what `_x_` means everywhere.
+constexpr uint32_t UnderlineSyntax = 1u << 12;
+/// `||spoiler||`, md4c's own spoiler syntax. Off by default: it hides text
+/// behind a tap, which is an app's decision about its own messages.
+constexpr uint32_t SpoilerSyntax = 1u << 13;
+/// An allowed tag's content is unstyled text rather than parsed Markdown. Off
+/// by default: `<user>**Bob**</user>` styles Bob unless the app says its
+/// custom tags are not Markdown.
+constexpr uint32_t LiteralTagContent = 1u << 14;
 
 /// What `undefined` resolves to, and therefore what the codegen default is.
-constexpr uint32_t Default = Enabled | Brackets;
+///
+/// `Cjk` is in the default because it costs nothing for the text it does not
+/// change, and the differential test is what keeps that promise checkable. The
+/// link bits are not: they change what a reader can tap, which is an app's
+/// decision.
+constexpr uint32_t Default = Enabled | Brackets | Cjk;
 
-constexpr uint32_t All = Enabled | SingleDollar | Brackets | InlineHtml | SuperscriptSyntax | SubscriptSyntax;
+constexpr uint32_t All = Enabled | SingleDollar | Brackets | InlineHtml | SuperscriptSyntax |
+    SubscriptSyntax | LinkRelative | NoAutolinkMailto | NoAutolinkHttp | NoAutolinkHttps | Cjk |
+    HighlightSyntax | UnderlineSyntax | SpoilerSyntax | LiteralTagContent;
 
 } // namespace ParseFlags
 
 /// A parse's options, as the props and a stream's options resolve to.
 struct ParseOptions {
   uint32_t flags{ParseFlags::Default};
+  /// Which HTML tags the source may use, and what happens to one with no row of
+  /// its own. Compared by value, so it is part of a source's identity in the
+  /// same way the flags are.
+  TagPolicy tags;
+
+  // Constructors rather than aggregate initialisation, because a caller that
+  // names only a bitmask says so rather than leaving the tag policy to default,
+  // and a caller that sets both cannot leave one out by accident.
+  ParseOptions() = default;
+  explicit ParseOptions(uint32_t flagsIn) : flags(flagsIn) {}
+  ParseOptions(uint32_t flagsIn, TagPolicy tagsIn) : flags(flagsIn), tags(std::move(tagsIn)) {}
+
+  /// Relative references are links rather than plain text.
+  bool relativeLinks() const { return (flags & ParseFlags::LinkRelative) != 0; }
 
   bool enabled() const { return (flags & ParseFlags::Enabled) != 0; }
   bool singleDollar() const { return (flags & ParseFlags::SingleDollar) != 0; }
@@ -56,6 +112,24 @@ struct ParseOptions {
   bool inlineHtml() const { return (flags & ParseFlags::InlineHtml) != 0; }
   bool superscriptSyntax() const { return (flags & ParseFlags::SuperscriptSyntax) != 0; }
   bool subscriptSyntax() const { return (flags & ParseFlags::SubscriptSyntax) != 0; }
+  bool cjk() const { return (flags & ParseFlags::Cjk) != 0; }
+  bool highlightSyntax() const { return (flags & ParseFlags::HighlightSyntax) != 0; }
+  bool underlineSyntax() const { return (flags & ParseFlags::UnderlineSyntax) != 0; }
+  bool spoilerSyntax() const { return (flags & ParseFlags::SpoilerSyntax) != 0; }
+  bool literalTagContent() const { return (flags & ParseFlags::LiteralTagContent) != 0; }
+
+  /**
+   * Whether a bare address of this protocol may become a link.
+   *
+   * The one place the three autolink bits are read, so the builder, a link's
+   * own record and a test cannot disagree about which protocol is allowed. An
+   * explicit `[text](mailto:…)` never comes through here: it is not an autolink,
+   * and a writer who typed the brackets meant the link.
+   */
+  bool autolinksMailto() const { return (flags & ParseFlags::NoAutolinkMailto) == 0; }
+  bool autolinksHttp() const { return (flags & ParseFlags::NoAutolinkHttp) == 0; }
+  bool autolinksHttps() const { return (flags & ParseFlags::NoAutolinkHttps) == 0; }
+
   /// True when a document under these options parses exactly as it did before
   /// math existed. The flag is the only thing that has to be off, because every
   /// other bit is read through it.

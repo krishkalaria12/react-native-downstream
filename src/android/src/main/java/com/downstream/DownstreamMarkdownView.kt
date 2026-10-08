@@ -78,6 +78,25 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   internal var onWrapToggle: ((view: DownstreamMarkdownView, ordinal: Int, wrapped: Boolean) -> Unit)? = null
   internal var onExpandToggle: ((view: DownstreamMarkdownView, ordinal: Int, expanded: Boolean) -> Unit)? = null
 
+  /**
+   * Phase 2. Both fire before the view applies its own choice, so the manager
+   * reads `nextToggledOrdinal` while it is still the press's ordinal.
+   */
+  internal var onTableExpandToggle: ((view: DownstreamMarkdownView, ordinal: Int, expanded: Boolean) -> Unit)? =
+    null
+
+  internal var onTableFullscreen: ((view: DownstreamMarkdownView, ordinal: Int) -> Unit)? = null
+  internal var onDetailsToggle: ((view: DownstreamMarkdownView, containerId: Int, open: Boolean) -> Unit)? = null
+  internal var onTaskToggle: ((view: DownstreamMarkdownView, containerId: Int, checked: Boolean) -> Unit)? = null
+  internal var onLinkLongPress: ((view: DownstreamMarkdownView, url: String, start: Int, end: Int) -> Unit)? = null
+  internal var onTagPress: ((
+    view: DownstreamMarkdownView,
+    name: String,
+    attributes: List<String>,
+    text: String,
+    range: IntRange,
+  ) -> Unit)? = null
+
   private var documentId = 0L
   private var fontScale = 1f
   /** The interned theme the state carried, which the rendering was built with. */
@@ -94,6 +113,60 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   internal var themeFonts: Array<String>? = null
   private var rendered: RenderedDocument? = null
   private var selectable = true
+  /**
+   * The `dir` prop, as a text direction. Null means `auto`, which is the engine's
+   * per-block decision rather than one the view makes.
+   */
+  private var direction = View.TEXT_DIRECTION_FIRST_STRONG_LTR
+
+  /**
+   * Per-URL link styles, in four flat arrays as the bridge carries them.
+   *
+   * Held as parts rather than as one object because the four props arrive as
+   * four updates: the object is built where it is read, from whatever parts
+   * have arrived, so an update that changes one array does not drop the other
+   * three.
+   */
+  private var variantPrefixes: List<String> = emptyList()
+  private var variantCounts: List<Int> = emptyList()
+  private var variantColors: List<Int> = emptyList()
+  private var variantUnderlines: List<Boolean> = emptyList()
+
+  fun setLinkVariantPrefixes(value: List<String>) {
+    variantPrefixes = value
+  }
+
+  fun setLinkVariantCounts(value: List<Int>) {
+    variantCounts = value
+  }
+
+  fun setLinkVariantColors(value: List<Int>) {
+    variantColors = value
+  }
+
+  fun setLinkVariantUnderline(value: List<Boolean>) {
+    variantUnderlines = value
+  }
+
+  private var tagStyleNames: List<String> = emptyList()
+  private var tagStyleColors: List<Int> = emptyList()
+  private var tagStyleFlags: List<Int> = emptyList()
+
+  fun setTagStyleNames(value: List<String>) {
+    tagStyleNames = value
+  }
+
+  fun setTagStyleColors(value: List<Int>) {
+    tagStyleColors = value
+  }
+
+  fun setTagStyleFlags(value: List<Int>) {
+    tagStyleFlags = value
+  }
+
+  /** The four parts as one object, built where it is read. */
+  internal fun linkVariants(): LinkVariants =
+    LinkVariants(variantPrefixes, variantCounts, variantColors, variantUnderlines)
   private var syntaxHighlighting = true
   // Every control on, which is the default and matches the codegen default.
   private var controls = CONTROL_CODE_COPY or CONTROL_CODE_DOWNLOAD or CONTROL_TABLE_COPY or
@@ -106,6 +179,22 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    * decision, and so a measurement and a mount cannot disagree about a height.
    */
   private var codeLayout = CodeLayout()
+
+  /**
+   * The table layout, beside [codeLayout] and for the same reason: the shadow
+   * node measures with it and the view draws with it, so a measured table and a
+   * drawn one cannot disagree about a cap.
+   */
+  private var tableLayout = TableLayout()
+
+  /**
+   * The reader's one set of choices, beside the two layouts that carry it.
+   *
+   * A collapsible block's toggle reads from here rather than from either layout,
+   * because it is neither a code block's nor a table's decision, and putting it
+   * in one of them would make that kind's state a place the other two are read.
+   */
+  private var readerChoices = ReaderChoices()
   private var csvSeparator = ","
   private var codeFilename = "file"
   private var tableFilename = "table"
@@ -324,6 +413,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     hosts: HostLayout,
     chrome: Int,
     caret: PlacedCaret,
+    tables: TableLayoutProps,
   ) {
     stateWrapper = wrapper
     val resolved = if (stateThemeId != 0L) stateThemeId else internProps()
@@ -332,7 +422,10 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     val refreshRendering = documentChanged || caret != this.caret
     val codeChanged = code != codeLayout
     val hostsChanged = hosts != hostLayout
-    val layoutChanged = codeChanged || hostsChanged || images != imageLayout || chrome != this.chrome
+    val tablesChanged = tables != tableLayout.props
+    val choicesChanged = code.choices != readerChoices
+    val layoutChanged = codeChanged || hostsChanged || images != imageLayout || chrome != this.chrome ||
+      tablesChanged || choicesChanged
     if (!refreshRendering && !layoutChanged) return
 
     this.documentId = documentId
@@ -343,8 +436,13 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     hostLayout = hosts
     this.chrome = chrome
     this.caret = caret
+    // One set of reader choices and one table layout, derived from the same
+    // state the shadow node measured with: a code toggle, a table toggle, and
+    // a details toggle all live in it.
+    readerChoices = code.choices
+    tableLayout = TableLayout(tables, code.choices)
     applyDocumentState(refreshRendering, updateReveal = documentChanged)
-    if (codeChanged) requestLayout()
+    if (codeChanged || tablesChanged || choicesChanged) requestLayout()
     if (hostsChanged) layoutHostChildren()
   }
 
@@ -358,7 +456,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     if (tracing) DownstreamNative.traceDocument(documentId, "apply_start")
     if (refreshRendering) {
       rendered = if (documentId != 0L) {
-        RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, caret)
+        RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, caret, linkVariants())
       } else {
         null
       }
@@ -404,6 +502,24 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   override fun onDetachedFromWindow() {
     stopRevealTick()
     super.onDetachedFromWindow()
+  }
+
+  /**
+   * The `dir` prop, as a text direction the view draws with.
+   *
+   * `auto` leaves each text view on the engine's per-block answer, which is what
+   * the measurement already used; the two other values pin every block the same
+   * way. Null is `auto`, which is the prop's own default.
+   */
+  fun setDirection(value: String?) {
+    val next = when (value) {
+      "ltr" -> View.TEXT_DIRECTION_LTR
+      "rtl" -> View.TEXT_DIRECTION_RTL
+      else -> View.TEXT_DIRECTION_FIRST_STRONG_LTR
+    }
+    if (next == direction) return
+    direction = next
+    applySettledState()
   }
 
   fun setSelectable(selectable: Boolean) {
@@ -504,11 +620,50 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     requestLayout()
   }
 
-  /** The reader's own per-block choices, as the state carries them. */
+  /**
+   * The reader's own per-block choices, as the state carries them.
+   *
+   * Only the two code sets are replaced. A state update carries all four, so the
+   * other two arrive again on the next one, and reading them from the current
+   * value rather than from `{}` is what keeps a table toggle from being undone by
+   * a code state update that happened to land later.
+   */
   fun setCodeChoices(wrapToggles: IntArray, expanded: IntArray) {
-    val choices = CodeChoices(wrapToggles, expanded)
+    val choices = codeLayout.choices.replace(ChoiceKind.Wrap, wrapToggles)
+      .replace(ChoiceKind.CodeExpand, expanded)
     if (choices == codeLayout.choices) return
     codeLayout = CodeLayout(codeLayout.props, choices)
+    applySettledState()
+    requestLayout()
+  }
+
+  /**
+   * The table cap, from `tableMaxHeight`. Separate from [setCodeProps] because the
+   * two caps are separate numbers with separate defaults, and one method taking
+   * both would have to be told which a caller meant.
+   */
+  fun setTableProps(maxHeightDp: Double) {
+    val props = TableLayoutProps(PixelUtil.toPixelFromDIP(maxHeightDp).toFloat())
+    if (props == tableLayout.props) return
+    tableLayout = TableLayout(props, tableLayout.choices)
+    applySettledState()
+    requestLayout()
+  }
+
+  /** The reader's own per-table choices, as the state carries them. */
+  fun setTableChoices(expanded: IntArray) {
+    val choices = tableLayout.choices.replace(ChoiceKind.TableExpand, expanded)
+    if (choices == tableLayout.choices) return
+    tableLayout = tableLayout.withChoices(choices)
+    applySettledState()
+    requestLayout()
+  }
+
+  /** The collapsible blocks the reader opened, as the state carries them. */
+  fun setDetailsChoices(open: IntArray) {
+    val choices = readerChoices.replace(ChoiceKind.DetailsOpen, open)
+    if (choices == readerChoices) return
+    readerChoices = choices
     applySettledState()
     requestLayout()
   }
@@ -602,7 +757,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     val id = documentId
     val scale = fontScale
     rendered = if (id != 0L) {
-      RenderedDocument.obtain(context, id, scale, syntaxHighlighting, themeId, value)
+      RenderedDocument.obtain(context, id, scale, syntaxHighlighting, themeId, value, linkVariants = linkVariants())
     } else {
       null
     }
@@ -621,7 +776,23 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       val planned = plan[index]
       val settled = planned.from + 1 <= planned.settledBlocks
       when (val child = segmentViews[index]) {
-        is TextSegmentView -> child.setSelectable(selectable && settled)
+        is TextSegmentView -> {
+          // A hosted tag replaces its whole segment: the child owns the range
+          // now, so the text underneath draws nothing. Only a segment the plan
+          // grouped for one container is ever hosted, which is what makes the
+          // container id the key rather than a block range.
+          val custom = (rendered?.segments?.getOrNull(index) as? TextSegment)?.customContainer ?: -1
+          child.hosted = custom >= 0 && hostLayout.hostsTag(custom)
+          child.setSelectable(selectable && settled)
+          child.textDirection = direction
+          // The chevron is the control's own glyph, so it appears with the control
+          // and points the way the body will move.
+          child.readerChoices = readerChoices
+          child.setDetailsState(
+            controls and CONTROL_DETAILS_TOGGLE != 0,
+            child.isSummaryOpen(readerChoices),
+          )
+        }
         is CodeSegmentView -> {
           // The same two calls the measurement used, so the frame this card is
           // given and the layout it draws inside it are one decision.
@@ -638,9 +809,16 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
           child.setHeaderVisible(chrome and RenderedDocument.CHROME_CODE_HEADER != 0)
         }
         is TableSegmentView -> {
+          // The same two calls the measurement used, so the box this table is
+          // given and the cap it draws inside it are one decision.
           child.setControls(controls)
           child.setControlsEnabled(settled)
           child.setToolbarVisible(chrome and RenderedDocument.CHROME_TABLE_TOOLBAR != 0)
+          child.tableLayout = resolveTable(tableLayout, child.ordinal)
+          // Settled on the same rule a code card uses: the plan carries the
+          // parser's own settled count, so the card and the parser cannot
+          // disagree about whether the table closed.
+          child.isStreaming = !settled
         }
         is ImageSegmentView -> child.setDownloadControl(controls, settled, controlLabels[LABEL_IMAGE_DOWNLOAD])
       }
@@ -959,7 +1137,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     if (enabled != syntaxHighlighting) {
       syntaxHighlighting = enabled
       if (documentId != 0L) {
-        rendered = RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId)
+        rendered = RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, linkVariants = linkVariants())
         syncSegmentViews()
       }
     }
@@ -993,10 +1171,15 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     sessionId = null
     sourceEpoch++
     codeLayout = CodeLayout()
+    tableLayout = TableLayout()
     onControl = null
     onControlFailure = null
     onWrapToggle = null
     onExpandToggle = null
+    onTableExpandToggle = null
+    onTableFullscreen = null
+    onDetailsToggle = null
+    onTaskToggle = null
     // A recycled view has no emitter any more. Already opened saves finish,
     // while their callbacks drop events belonging to the previous source.
     exporter.release()
@@ -1064,6 +1247,48 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     onExpandToggle?.invoke(this, ordinal, expanded)
   }
 
+  override fun onToggleTableExpand(ordinal: Int, expanded: Boolean) {
+    nextOrdinal = ordinal
+    onTableExpandToggle?.invoke(this, ordinal, expanded)
+  }
+
+  fun tableMarkdown(ordinal: Int): String? {
+    val planned = rendered?.plan?.firstOrNull { it.isTable && it.tableOrdinal == ordinal } ?: return null
+    return DownstreamNative.export(documentId, planned.from, planned.to, EXPORT_MARKDOWN, ',')
+  }
+
+  override fun onTableFullscreen(ordinal: Int) {
+    nextOrdinal = ordinal
+    onTableFullscreen?.invoke(this, ordinal)
+  }
+
+  override fun onToggleDetails(containerId: Int, open: Boolean) {
+    nextOrdinal = containerId
+    onDetailsToggle?.invoke(this, containerId, open)
+  }
+
+  override fun onToggleTask(containerId: Int, checked: Boolean) {
+    nextOrdinal = containerId
+    onTaskToggle?.invoke(this, containerId, checked)
+  }
+
+  /**
+   * The reader's own answer for one collapsible block, through the same Fabric
+   * state path a code block's wrap takes.
+   *
+   * Only Yoga and the chat list around the message can know the message's new
+   * height, and nothing else has to be involved: the choice is state, so the node
+   * is cloned, measured again and remounted with no React render and no re-parse.
+   */
+  fun toggleDetails(containerId: Int) {
+    if (stateWrapper == null) return
+    val choices = readerChoices.copyWith(ChoiceKind.DetailsOpen, containerId)
+    readerChoices = choices
+    applySettledState()
+    requestLayout()
+    pushTableState(tableLayout.withChoices(choices))
+  }
+
   /**
    * Hands a new state back with [ordinal]'s wrap choice toggled, through the same
    * Fabric state path the wrap button uses.
@@ -1073,12 +1298,32 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    * render. The whole code layout travels with it, because together the props and
    * the sets decide each block's height.
    */
-  fun toggleWrap(ordinal: Int) = updateChoice { it.copyWith(ordinal) }
+  fun toggleWrap(ordinal: Int) = updateChoice { it.copyWith(ChoiceKind.Wrap, ordinal) }
 
   /** The same, for the cap the expand button lifts. */
-  fun toggleExpand(ordinal: Int) = updateChoice { it.copyWithExpand(ordinal) }
+  fun toggleExpand(ordinal: Int) = updateChoice { it.copyWith(ChoiceKind.CodeExpand, ordinal) }
 
-  private fun updateChoice(toggle: (CodeChoices) -> CodeChoices) {
+  /**
+   * The same, for the cap a table's expand button lifts. Separate from
+   * [toggleExpand] because the two are keyed by different ordinals: a code
+   * ordinal counts code blocks and a table ordinal counts tables, so one set of
+   * choices cannot hold both without a caller being told which a press meant.
+   */
+  fun toggleTableExpand(ordinal: Int) {
+    if (stateWrapper == null) return
+    val layout = tableLayout.withChoices(
+      tableLayout.choices.copyWith(ChoiceKind.TableExpand, ordinal),
+    )
+    // The chrome is recomputed from the code layout, which did not change: a
+    // table's cap and a code card's wrap are separate bits and this press moved
+    // neither, so there is nothing to recompute here.
+    tableLayout = layout
+    applySettledState()
+    requestLayout()
+    pushTableState(layout)
+  }
+
+  private fun updateChoice(toggle: (ReaderChoices) -> ReaderChoices) {
     if (stateWrapper == null) return
     val choices = toggle(codeLayout.choices)
     val layout = CodeLayout(codeLayout.props, choices)
@@ -1107,7 +1352,30 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     // shadow node use; this side converts to pixels when it lays out.
     map.putDouble("codeBlockMaxHeight", PixelUtil.toDIPFromPixel(layout.props.maxHeight).toDouble())
     map.putArray("wrapToggles", intArrayOf(choices.wrapToggles))
-    map.putArray("expanded", intArrayOf(choices.expanded))
+    map.putArray("expanded", intArrayOf(choices.codeExpanded))
+    wrapper.updateState(map)
+  }
+
+  /**
+   * The same, for the table layout. Only the table keys change, so the code keys
+   * are sent unchanged rather than dropped: the shadow node keeps one code
+   * layout, and a push that omitted them would reset the reader's code choices.
+   */
+  private fun pushTableState(layout: TableLayout) {
+    val wrapper = stateWrapper ?: return
+    val map = Arguments.createMap()
+    map.putDouble("documentId", documentId.toDouble())
+    map.putDouble("fontScale", fontScale.toDouble())
+    map.putDouble("chrome", chrome.toDouble())
+    map.putDouble("codeBlockWrap", if (codeLayout.props.wrap) 1.0 else 0.0)
+    map.putDouble("lineNumbers", if (codeLayout.props.lineNumbers) 1.0 else 0.0)
+    map.putDouble("codeBlockMaxHeight", PixelUtil.toDIPFromPixel(codeLayout.props.maxHeight).toDouble())
+    map.putArray("wrapToggles", intArrayOf(codeLayout.choices.wrapToggles))
+    map.putArray("expanded", intArrayOf(codeLayout.choices.codeExpanded))
+    // The cap crosses as points, for the same reason the code cap does.
+    map.putDouble("tableMaxHeight", PixelUtil.toDIPFromPixel(layout.props.maxHeight).toDouble())
+    map.putArray("tableExpanded", intArrayOf(layout.choices.tableExpanded))
+    map.putArray("detailsOpen", intArrayOf(layout.choices.detailsOpen))
     wrapper.updateState(map)
   }
 
@@ -1125,7 +1393,9 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     ) {
       chrome = chrome or RenderedDocument.CHROME_CODE_HEADER
     }
-    if (controls and (CONTROL_TABLE_COPY or CONTROL_TABLE_DOWNLOAD) != 0) {
+    if (controls and (CONTROL_TABLE_COPY or CONTROL_TABLE_DOWNLOAD or CONTROL_TABLE_EXPAND or
+      CONTROL_TABLE_FULLSCREEN) != 0
+    ) {
       chrome = chrome or RenderedDocument.CHROME_TABLE_TOOLBAR
     }
     if (controls and CONTROL_CODE_WRAP != 0 && layout.props.wrap && layout.choices.wrapToggles.isEmpty()) {
@@ -1140,7 +1410,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
     if (documentId != 0L) {
-      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId)?.let {
+      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, linkVariants = linkVariants())?.let {
         rendered = it
         syncSegmentViews()
       }
@@ -1150,6 +1420,42 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   internal fun pressLink(index: Int) {
     val link = DownstreamNative.readLink(documentId, index) ?: return
     onLinkPress?.invoke(this, link.url, link.start, link.end)
+  }
+
+  /**
+   * Blocks as the Markdown that produced them, for "Copy as Markdown".
+   *
+   * The exporter reads block indices, so the caller maps its selection onto
+   * the document first: this only exports, because exporting is the one thing
+   * the engine does identically on both platforms.
+   */
+  internal fun exportMarkdown(from: Int, to: Int): String? {
+    if (documentId == 0L || from < 0 || to <= from) return null
+    return DownstreamNative.export(documentId, from, to, EXPORT_MARKDOWN, ',')
+  }
+
+  /**
+   * A hold on a link, reported rather than acted on.
+   *
+   * A tap opens (or asks, through link safety); a hold is the app's: copy the
+   * URL, show a sheet. The library does nothing with it, because doing anything
+   * would be a second behavior for one gesture.
+   */
+  internal fun longPressLink(index: Int) {
+    val link = DownstreamNative.readLink(documentId, index) ?: return
+    onLinkLongPress?.invoke(this, link.url, link.start, link.end)
+  }
+
+  /**
+   * A press on an app-allowed tag's run.
+   *
+   * Reported with the tag's name, its attributes, the pressed text, and the
+   * source range — everything `onTagPress` promises, read here rather than in
+   * JavaScript because the document is what knows them.
+   */
+  internal fun pressTag(index: Int, text: String) {
+    val tag = DownstreamNative.readTag(documentId, index) ?: return
+    onTagPress?.invoke(this, tag.name, tag.attributes, text, tag.range)
   }
 
   // The segment views this view is currently holding, in document order. Every
@@ -1359,11 +1665,18 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     if (width <= 0) {
       return
     }
-    val frames = document.frames(width, chrome, codeLayout, imageLayout, hostLayout)
+    val frames = document.frames(
+      width, chrome, codeLayout, imageLayout, hostLayout, tableLayout, readerChoices,
+    )
     for (index in 0 until minOf(segmentViews.size, frames.size / 2)) {
       val child = segmentViews[index]
       val top = paddingTop + frames[index * 2]
       val height = frames[index * 2 + 1]
+      // A closed details body has a zero frame. Hide its native child as well,
+      // so it cannot draw or expose accessibility content outside that frame.
+      // Hosted children remain GONE because their React slot owns the drawing.
+      if (height <= 0 && child.visibility != View.GONE) child.visibility = View.INVISIBLE
+      else if (height > 0 && child.visibility == View.INVISIBLE) child.visibility = View.VISIBLE
       child.measure(
         MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
         MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY),
@@ -1398,6 +1711,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     segmentLayer.layout(paddingLeft, paddingTop, right - paddingRight, bottom - paddingBottom)
     hostLayer.layout(0, 0, right - left, bottom - top)
     layoutSegments()
+
   }
 
   private var layoutPosted = false

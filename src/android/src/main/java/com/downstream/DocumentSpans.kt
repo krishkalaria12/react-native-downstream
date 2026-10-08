@@ -34,6 +34,14 @@ internal class LinkSpan(val index: Int, val color: Int, val underlined: Boolean 
 }
 
 /**
+ * An app-allowed tag's run, pressable like a link.
+ *
+ * A marker span rather than a drawing span: the tag's style comes from the
+ * theme or the variant, and this only says *that* the run is a tag press.
+ */
+internal class TagSpan(val index: Int)
+
+/**
  * Raises text by [pixels], or lowers it for a negative value, for footnote
  * references and scripts. Pixels rather than a share of the paint's size,
  * because the size span applied before this one has already shrunk the paint
@@ -117,28 +125,30 @@ internal class ThemedStrikeSpan(val color: Int) : UnderlineSpan() {
   }
 }
 
+
 /**
- * One nesting level's decoration: its indent, the bar or marker it draws in that
- * indent, and the two metrics the drawing reads off it.
+ * An underline in a color the theme chose, beside the strike span above.
  *
- * The bar's width and the marker gap are here rather than in the view because
- * they are the theme's, and a view that read its own would be a second place
- * the values could differ from the measurement's.
+ * The same reason for existing: Android's own `UnderlineSpan` draws the current
+ * text color, and a theme that wants its links — or its `<u>` — underlined in
+ * another color needs a span of its own.
  */
-internal class ContainerDecoration(
-  val leading: Float,
-  val width: Float,
-  val barColor: Int?,
-  val continuesPrevious: Boolean,
-  val marker: String?,
-  val barWidth: Float = 0f,
-  val markerGap: Float = 0f,
-  /**
-   * The marker's own color, which a theme can set apart from the list's: a
-   * bullet from a number, or a finished task from an unfinished one.
-   */
-  val markerColor: Int? = null,
-)
+internal class ThemedUnderlineSpan(val color: Int) : UnderlineSpan() {
+  override fun updateDrawState(ds: TextPaint) {
+    super.updateDrawState(ds)
+    ds.underlineColor = color
+  }
+}
+
+/**
+ * A spoiler run, hidden until tapped.
+ *
+ * A marker span rather than a drawing span, because the hiding is done by the
+ * background and foreground colors the builder already set: this only says *that*
+ * the run is a spoiler, so a press on it can reveal it and a screen reader can
+ * announce it as hidden.
+ */
+internal class SpoilerSpan(val color: Int)
 
 /** One native block's reading order and role inside a shared text layout. */
 internal class AccessibleBlock(val start: Int, val end: Int, val heading: Boolean, val taskState: Int)

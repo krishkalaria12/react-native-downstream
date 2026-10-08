@@ -68,6 +68,12 @@ enum class PreviewFeature : uint32_t {
   /// so a comparison such as `a<b` is hidden for at most one chunk and comes
   /// back when the next character proves it is not a tag.
   HtmlTags = 1u << 5,
+  /// An incomplete trailing table, hidden until it is complete.
+  ///
+  /// A table whose rows are still arriving is not shown at all — not even the
+  /// rows that have settled — because a half-drawn grid is what this mode
+  /// exists to prevent. When the table completes, its rows arrive together.
+  Tables = 1u << 6,
 };
 
 struct PreviewOptions {
@@ -90,7 +96,8 @@ struct PreviewOptions {
   static constexpr features_t allFeatures() {
     return static_cast<features_t>(PreviewFeature::Emphasis) | static_cast<features_t>(PreviewFeature::InlineCode) |
         static_cast<features_t>(PreviewFeature::Links) | static_cast<features_t>(PreviewFeature::Images) |
-        static_cast<features_t>(PreviewFeature::Math) | static_cast<features_t>(PreviewFeature::HtmlTags);
+        static_cast<features_t>(PreviewFeature::Math) | static_cast<features_t>(PreviewFeature::HtmlTags) |
+        static_cast<features_t>(PreviewFeature::Tables);
   }
 };
 

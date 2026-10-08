@@ -17,7 +17,11 @@ bool sameBlock(const Block &a, const Block &b) {
       a.table != b.table || a.spacingBefore != b.spacingBefore || a.text != b.text || a.language != b.language ||
       a.info != b.info || !(a.meta == b.meta) || a.runs.size() != b.runs.size() || a.cells.size() != b.cells.size() ||
       a.tokens.size() != b.tokens.size() || a.containers.size() != b.containers.size() ||
-a.math.size() != b.math.size() || a.images.size() != b.images.size() ||
+      a.math.size() != b.math.size() || a.images.size() != b.images.size() ||
+      // The direction counts because it is part of what is drawn: a block whose
+      // text is the same but whose lines break the other way is a different
+      // block to a cached rendering, and the same reason `spacingBefore` does.
+      a.direction != b.direction ||
       // A fence that has just been closed draws the same code, but it is no
       // longer the block a writer is typing into, so the caret moves and a
       // cached rendering with the caret inside the fence must not be reused.

@@ -2,6 +2,8 @@
 
 #import "DSRenderedDocument.h"
 
+#include "DetailsLayout.h"
+
 #include <algorithm>
 
 using namespace downstream;
@@ -19,7 +21,10 @@ using namespace downstream;
 
 @end
 
-@implementation DSLayoutManager
+@implementation DSLayoutManager {
+  BOOL _detailsToggle;
+  downstream::ReaderChoices _detailsChoices;
+}
 
 - (BOOL)textBoundsForCharacterRange:(NSRange)range bounds:(DSBlockTextBounds *)bounds {
   const NSRange glyphs = [self glyphRangeForCharacterRange:range actualCharacterRange:NULL];
@@ -187,6 +192,75 @@ using namespace downstream;
 /// first fading word rather than fading on its own, which is what makes a bullet
 /// appear with the text it belongs to; a rule takes its block's single unit. A
 /// quote bar draws at full alpha, as Streamdown draws a border.
+  - (void)setDetailsToggle:(BOOL)toggle {
+    _detailsToggle = toggle;
+  }
+
+  - (void)setDetailsChoices:(const downstream::ReaderChoices &)choices {
+    _detailsChoices = choices;
+  }
+
+  /// Whether this block's `<details>` body is showing, which every one of its
+  /// frames agrees on: the choice is the container's, not the block's.
+  ///
+  /// Any closed frame is enough. A block inside two collapsible blocks, the outer
+  /// of which is closed, is not visible however open the inner one is.
+  - (BOOL)blockIsHidden:(DSBlockInfo *)info {
+    for (DSContainerInfo *frame in info.containers) {
+      if (frame.kind == DSContainerKindDetails && !frame.summary && ![self isOpen:frame]) {
+        return YES;
+      }
+    }
+    return NO;
+  }
+
+  /// The reader's answer for one container, or the writer's when the reader said
+  /// nothing. `downstream::resolveDetails` is the one rule, so a summary reads as
+  /// expanded on both platforms or on neither.
+  - (BOOL)isOpen:(DSContainerInfo *)frame {
+    return downstream::resolveDetails(_detailsChoices, frame.containerId, frame.writtenOpen).open;
+  }
+
+  /**
+   * The disclosure chevron on a summary's line.
+   *
+   * Drawn as a path rather than taken from a font so it is the same shape at
+   * every size and needs no asset: two strokes that meet, turned a quarter either
+   * way, with round caps so it does not look sharp next to rounded text.
+   */
+  - (void)drawChevronForContainer:(DSContainerInfo *)container
+                            block:(DSBlockInfo *)info
+                           bounds:(DSBlockTextBounds)bounds
+                           origin:(CGPoint)origin
+                            width:(CGFloat)width
+                             open:(BOOL)open
+                            alpha:(CGFloat)alpha {
+    const CGFloat size = bounds.bottom - bounds.top;
+    const CGFloat half = size * 0.22;
+    const CGFloat centerY = origin.y + (bounds.top + bounds.bottom) / 2;
+    // Leading edge of the text, in the direction the text itself runs, so a
+    // right-to-left document's chevron is on the right where a reader of that
+    // script expects the disclosure to be.
+    const CGFloat x = info.rightToLeft
+        ? origin.x + width - container.leading - container.width + container.markerGap
+        : origin.x + container.leading + container.width - container.markerGap - size * 0.5;
+    const CGFloat tip = open ? centerY + half : centerY - half;
+    UIBezierPath *path = [UIBezierPath bezierPath];
+    [path moveToPoint:CGPointMake(x - half, tip - (open ? half : -half))];
+    [path addLineToPoint:CGPointMake(x, tip)];
+    [path addLineToPoint:CGPointMake(x + half, tip - (open ? half : -half))];
+    path.lineWidth = MAX(1, size * 0.06);
+    path.lineCapStyle = kCGLineCapRound;
+    path.lineJoinStyle = kCGLineJoinRound;
+    CGContextRef context = UIGraphicsGetCurrentContext();
+    CGContextSaveGState(context);
+    CGContextSetAlpha(context, alpha);
+    UIColor *color = info.rule != nil ? info.rule.color : [UIColor secondaryLabelColor];
+    [color setStroke];
+    [path stroke];
+    CGContextRestoreGState(context);
+  }
+
 - (void)drawDecorationsForGlyphs:(NSRange)glyphsToShow atPoint:(CGPoint)origin {
   NSTextStorage *storage = self.textStorage;
   NSTextContainer *container = self.textContainers.firstObject;
@@ -197,6 +271,7 @@ using namespace downstream;
   const NSRange visible = [self characterRangeForGlyphRange:glyphsToShow actualGlyphRange:NULL];
 
   NSUInteger index = visible.location;
+
   while (index < NSMaxRange(visible)) {
     NSRange blockRange;
     DSBlockInfo *info = [storage attribute:DSBlockInfoAttributeName
@@ -207,6 +282,9 @@ using namespace downstream;
     if (info == nil || (info.containers.count == 0 && info.rule == nil)) {
       continue;
     }
+    // Whether this block's own body is showing, which every one of its frames
+    // agrees on: the reader's choice is the container's, not the block's.
+    const BOOL hidden_ = [self blockIsHidden:info];
     DSBlockTextBounds bounds;
     if (![self textBoundsForCharacterRange:blockRange bounds:&bounds]) {
       continue;
@@ -234,7 +312,25 @@ using namespace downstream;
         UIRectFill(CGRectMake(origin.x + x, barTop, containerInfo.barWidth, bottom - barTop));
         CGContextRestoreGState(context);
       }
-      if (containerInfo.marker != nil) {
+      if (containerInfo.kind == DSContainerKindDetails) {
+        // A `<details>`'s chevron, drawn in the leading margin of the summary's
+        // line, and only on the summary: the marker is consumed by the container's
+        // own first leaf, which is the line a reader taps to open the body.
+        //
+        // In the margin rather than in the line because the line is the text: a
+        // reader who selected the summary and copied it should get the words they
+        // wrote, not a glyph.
+        if (containerInfo.summary && _detailsToggle && !hidden_) {
+          [self drawChevronForContainer:containerInfo
+                                   block:info
+                                  bounds:bounds
+                                  origin:origin
+                                  width:width
+                                  open:[self isOpen:containerInfo]
+                                alpha:blockAlpha];
+        }
+      }
+      if (containerInfo.marker.length > 0) {
         UIFont *markerFont = [containerInfo.marker attribute:NSFontAttributeName atIndex:0 effectiveRange:NULL];
         const CGSize markerSize = containerInfo.marker.size;
         const CGFloat x = info.rightToLeft

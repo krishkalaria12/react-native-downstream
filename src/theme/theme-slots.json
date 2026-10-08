@@ -1361,6 +1361,41 @@
       "kind": "metric",
       "layout": true,
       "default": 0.2
+    },
+    {
+      "id": 256,
+      "name": "codeBlock.lineMarkColor",
+      "kind": "color",
+      "layout": false,
+      "default": "selection"
+    },
+    {
+      "id": 258,
+      "name": "mark.color",
+      "kind": "color",
+      "layout": false,
+      "default": "label"
+    },
+    {
+      "id": 260,
+      "name": "mark.backgroundColor",
+      "kind": "color",
+      "layout": false,
+      "default": "tertiaryFill"
+    },
+    {
+      "id": 262,
+      "name": "underline.color",
+      "kind": "color",
+      "layout": false,
+      "default": "label"
+    },
+    {
+      "id": 264,
+      "name": "spoiler.color",
+      "kind": "color",
+      "layout": false,
+      "default": "label"
     }
   ]
 }

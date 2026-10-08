@@ -28,6 +28,11 @@ internal class NativeDocument(
    */
   private val layouts: DoubleArray,
   /**
+   * The `{1,3-5}` line marks across every block in the range: a count per block
+   * and then that many inclusive `first,last` pairs, in block order.
+   */
+  private val markValues: IntArray,
+  /**
    * Each block's formula, one entry per block per [MATH_STRIDE] fields.
    *
    * A separate table from [layouts] because these are the document's own ems
@@ -77,6 +82,18 @@ internal class NativeDocument(
   fun containerCount(block: Int) = blocks[block * BLOCK_STRIDE + 7]
   fun cellCount(block: Int) = blocks[block * BLOCK_STRIDE + 9]
   fun tableId(block: Int) = blocks[block * BLOCK_STRIDE + 10]
+
+  /**
+   * The block's layout direction, as `BlockDirection` in the engine numbers it.
+   *
+   * Read from the block rather than derived from its text: the engine already
+   * decided, and `Character.getDirectionality` reaching its own answer here is
+   * the second rule this replaced.
+   */
+  fun blockDirection(block: Int) = blocks[block * BLOCK_STRIDE + 17]
+
+  /** True when the engine laid this block out right to left. */
+  fun blockIsRtl(block: Int) = blockDirection(block) == DIRECTION_RTL
 
   /** The synthetic title paragraph of an admonition, decided document-wide. */
   fun isAdmonitionTitle(block: Int) = blocks[block * BLOCK_STRIDE + 11] != 0
@@ -215,7 +232,32 @@ internal class NativeDocument(
     title = blocks[block * BLOCK_STRIDE + 13].let { if (it >= 0) strings[it] else "" },
     startLine = blocks[block * BLOCK_STRIDE + 14],
     noLineNumbers = blocks[block * BLOCK_STRIDE + 15] != 0,
+    marks = marksOf(block),
   )
+
+  /**
+   * The fence's line marks, read out of the flat mark list.
+   *
+   * A count per block and then that many inclusive `first,last` pairs, walked
+   * from the front on each read: the list is built once per document read and a
+   * document with no marks is empty, which is the whole of what this costs in
+   * every case but one.
+   */
+  private fun marksOf(block: Int): List<IntArray> {
+    val found = ArrayList<IntArray>()
+    var at = 0
+    for (index in 0..block) {
+      val count = blocks[index * BLOCK_STRIDE + 16]
+      if (index == block) {
+        for (pair in 0 until count) {
+          found.add(intArrayOf(markValues[at + pair * 2], markValues[at + pair * 2 + 1]))
+        }
+        return found
+      }
+      at += count * 2
+    }
+    return found
+  }
 
   private fun cell(block: Int, column: Int) = (blocks[block * BLOCK_STRIDE + 8] + column) * CELL_STRIDE
 
@@ -231,20 +273,26 @@ internal class NativeDocument(
   fun taskState(block: Int, depth: Int) = containers[container(block, depth) + 3]
   fun marker(block: Int, depth: Int): String? = containers[container(block, depth) + 4].let { if (it >= 0) strings[it] else null }
 
+  /** `<details open>`: the writer's starting state. False for every other kind. */
+  fun containerOpen(block: Int, depth: Int) = containers[container(block, depth) + 5] != 0
+
   fun runStart(run: Int) = runs[run * RUN_STRIDE]
   fun runEnd(run: Int) = runs[run * RUN_STRIDE + 1]
   fun runStyles(run: Int) = runs[run * RUN_STRIDE + 2]
   fun runLink(run: Int) = runs[run * RUN_STRIDE + 3]
+
+  /** The app-allowed tag that styled this run, or -1. */
+  fun runTag(run: Int) = runs[run * RUN_STRIDE + 4]
 
   fun tokenStart(token: Int) = tokens[token * TOKEN_STRIDE]
   fun tokenEnd(token: Int) = tokens[token * TOKEN_STRIDE + 1]
   fun tokenClass(token: Int) = tokens[token * TOKEN_STRIDE + 2]
 
   companion object {
-    private const val BLOCK_STRIDE = 16
+    private const val BLOCK_STRIDE = 18
     private const val CELL_STRIDE = 3
-    private const val CONTAINER_STRIDE = 5
-    private const val RUN_STRIDE = 4
+    private const val CONTAINER_STRIDE = 6
+    private const val RUN_STRIDE = 5
     private const val TOKEN_STRIDE = 3
     /**
      * One block's resolved layout, in the order `writeBlockLayout` writes it.
@@ -294,10 +342,15 @@ internal class NativeDocument(
     /** A paragraph holding nothing but pictures, promoted to a block of its own. */
     const val KIND_IMAGE = 7
 
+    /** `BlockDirection::RightToLeft`. */
+    const val DIRECTION_RTL = 2
+
     const val CONTAINER_QUOTE = 0
     const val CONTAINER_LIST_ITEM = 1
     const val CONTAINER_ADMONITION = 2
     const val CONTAINER_FOOTNOTE = 3
+    const val CONTAINER_DETAILS = 4
+    const val CONTAINER_CUSTOM = 5
 
     const val ALIGN_CENTER = 2
     const val ALIGN_RIGHT = 3
@@ -316,6 +369,14 @@ internal class NativeDocument(
     const val STYLE_FOOTNOTE = 1 shl 6
     const val STYLE_SUPERSCRIPT = 1 shl 8
     const val STYLE_SUBSCRIPT = 1 shl 9
+    /** `<kbd>`: a key cap, drawn as inline code with a border. */
+    const val STYLE_KEYBOARD = 1 shl 10
+    /** `<mark>`: highlighted text. */
+    const val STYLE_HIGHLIGHT = 1 shl 11
+    /** `<u>` and `<ins>`: underlined text. */
+    const val STYLE_UNDERLINE = 1 shl 12
+    /** `||spoiler||`: hidden until tapped. */
+    const val STYLE_SPOILER = 1 shl 13
 
     // Token classes, in the order src/cpp/downstream/Document.h declares them.
     const val TOKEN_PLAIN = 0
@@ -351,8 +412,10 @@ internal const val SEGMENT_TABLE = 1
 internal const val SEGMENT_CODE = 2
 internal const val SEGMENT_MATH = 3
 internal const val SEGMENT_IMAGE = 4
+internal const val SEGMENT_CUSTOM = 5
 
-private val SEGMENT_KINDS = intArrayOf(SEGMENT_TEXT, SEGMENT_TABLE, SEGMENT_CODE, SEGMENT_MATH, SEGMENT_IMAGE)
+private val SEGMENT_KINDS =
+  intArrayOf(SEGMENT_TEXT, SEGMENT_TABLE, SEGMENT_CODE, SEGMENT_MATH, SEGMENT_IMAGE, SEGMENT_CUSTOM)
 
 /** A formula block's own metrics, as the theme resolves them. */
 internal data class MathMetrics(
@@ -379,7 +442,7 @@ internal class PlannedSegment(
    * as it is built, so a wrap choice resolves without walking the document.
    */
   val codeOrdinal: Int,
-  /** One of `SEGMENT_TEXT`, `SEGMENT_TABLE`, `SEGMENT_CODE`, `SEGMENT_MATH`, `SEGMENT_IMAGE`. */
+  /** One of `SEGMENT_TEXT` through `SEGMENT_CUSTOM`. */
   val kind: Int,
   /**
    * This segment's first picture's index in `Document::images`, or -1.
@@ -389,6 +452,13 @@ internal class PlannedSegment(
    * holds exactly one block, so one ordinal is the whole of it.
    */
   val imageOrdinal: Int,
+  /**
+   * This table's ordinal among the document's tables, which a reader's expand
+   * choice is keyed by, or -1 for any other segment. Counted by the plan for the
+   * same reason [codeOrdinal] is: a measurement needs it, and a measurement runs
+   * before any view has walked the segments.
+   */
+  val tableOrdinal: Int,
 )
 
 /**
@@ -463,6 +533,7 @@ internal fun interface NativeControlExportCallback {
 internal object DownstreamNative {
   init {
     nativeInstallPreparer()
+    nativeInstallClipboard()
   }
 
   /**
@@ -471,6 +542,30 @@ internal object DownstreamNative {
    */
   @Volatile
   var preparationContext: WeakReference<Context>? = null
+
+  /**
+   * Puts [text] on the system clipboard, for the link-safety confirmation's
+   * "Copy link".
+   *
+   * Called from C++ (`Clipboard.h`'s writer) on whatever thread JavaScript asked
+   * from, so it attaches rather than assuming it is on a Java thread. The
+   * clipboard manager is process-wide and holds no reference to the context it
+   * was given, so the context here is the preparation one and a reader who has
+   * never rendered a Markdown view copies nothing rather than crashing.
+   */
+  @JvmStatic
+  @DoNotStrip
+  fun writeClipboard(text: String): Boolean {
+    val context = preparationContext?.get() ?: return false
+    return try {
+      val manager =
+        context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager ?: return false
+      manager.setPrimaryClip(android.content.ClipData.newPlainText(null, text))
+      true
+    } catch (error: RuntimeException) {
+      false
+    }
+  }
 
   /**
    * Builds and measures a document's rendering on a worker thread after it is
@@ -509,6 +604,9 @@ internal object DownstreamNative {
           layout.numberAt("chrome", 0.0).toInt(),
           layout.toCodeLayout(),
           layout.toImageLayout(),
+          layout.toHostLayout(),
+          layout.toTableLayout(),
+          layout.toReaderChoices(),
         )
       }
     } catch (error: RuntimeException) {
@@ -532,8 +630,46 @@ internal object DownstreamNative {
    * before `measure`, so this reads the rendering that measurement filled rather
    * than laying the document out again at a width the view never draws.
    */
+  /**
+   * Content rectangles of hosted tags, as `[container, left, top, right,
+   * bottom]` groups. Beside `hostFrames` because the two count different
+   * things, and read the same way for the same reason.
+   */
   @JvmStatic
   @DoNotStrip
+  fun tagHostFrames(documentId: Long, layout: ReadableMap, width: Float): FloatArray {
+    val context = preparationContext?.get() ?: return FloatArray(0)
+    return try {
+      val rendered = RenderedDocument.obtain(
+        context,
+        documentId,
+        layout.numberAt("fontScale", 1.0).toFloat(),
+        themeId = layout.numberAt("themeId", 0.0).toLong(),
+      ) ?: return FloatArray(0)
+      val hosts = layout.toHostLayout()
+      if (hosts.tags.isEmpty()) {
+        return FloatArray(0)
+      }
+      val code = layout.toCodeLayout()
+      val frames = rendered.tagHostFrames(
+        PixelUtil.toPixelFromDIP(width).toInt(),
+        layout.numberAt("chrome", 0.0).toInt(),
+        code,
+        layout.toImageLayout(),
+        hosts,
+        layout.toTableLayout(),
+        code.choices,
+      )
+      // Every fifth value is a container id, not a length: converting it with
+      // the edges would hand a tag another container's rectangle.
+      FloatArray(frames.size) { index ->
+        if (index % 5 == 0) frames[index].toFloat() else PixelUtil.toDIPFromPixel(frames[index].toFloat())
+      }
+    } catch (error: RuntimeException) {
+      FloatArray(0)
+    }
+  }
+
   fun hostFrames(documentId: Long, layout: ReadableMap, width: Float): FloatArray {
     val context = preparationContext?.get() ?: return FloatArray(0)
     return try {
@@ -547,12 +683,15 @@ internal object DownstreamNative {
       if (hosts.isEmpty()) {
         return FloatArray(0)
       }
+      val code = layout.toCodeLayout()
       val frames = rendered.hostFrames(
         PixelUtil.toPixelFromDIP(width).toInt(),
         layout.numberAt("chrome", 0.0).toInt(),
-        layout.toCodeLayout(),
+        code,
         layout.toImageLayout(),
         hosts,
+        layout.toTableLayout(),
+        code.choices,
       )
       // Every fifth value is an ordinal, not a length: converting it with the
       // edges would hand a chart another fence's rectangle.
@@ -579,6 +718,7 @@ internal object DownstreamNative {
       layouts = parts[7] as DoubleArray,
       maths = parts[8] as DoubleArray,
       formulaTable = parts.getOrNull(9) as? DoubleArray ?: DoubleArray(0),
+      markValues = parts.getOrNull(10) as? IntArray ?: IntArray(0),
     )
   }
 
@@ -598,6 +738,7 @@ internal object DownstreamNative {
         values[it + 5].toInt(),
         SEGMENT_KINDS.getOrElse(values[it + 6].toInt()) { SEGMENT_TEXT },
         values[it + 7].toInt(),
+        values[it + 8].toInt(),
       )
     }
   }
@@ -644,6 +785,36 @@ internal object DownstreamNative {
       titles = parts[2] as Array<String>,
       records = parts[3] as IntArray,
     )
+  }
+
+  /**
+   * Every link's URL, in index order.
+   *
+   * Read once per rendering rather than once per link because a segment build
+   * asks for every link it draws. The table ends at the first index the
+   * registry has nothing for, which is the document's own link count by
+   * construction.
+   */
+  fun readLinkUrls(id: Long): List<String> {
+    val urls = ArrayList<String>()
+    var index = 0
+    while (true) {
+      val url = readLink(id, index)?.url ?: break
+      urls.add(url)
+      index++
+    }
+    return urls
+  }
+
+  /** One app-allowed tag: its name, its attributes flat, and its source range. */
+  internal class NativeTag(val name: String, val attributes: List<String>, val range: IntRange)
+
+  /** Returns null when the document or tag is gone. */
+  fun readTag(id: Long, index: Int): NativeTag? {
+    val parts = nativeReadTag(id, index) ?: return null
+    val flat = parts[1] as? Array<String> ?: emptyArray()
+    val range = parts[2] as IntArray
+    return NativeTag(parts[0] as String, flat.toList(), range[0]..range[1])
   }
 
   /** Returns null when the document or link is gone. */
@@ -770,7 +941,7 @@ internal object DownstreamNative {
     }
   }
 
-  private const val PLAN_STRIDE = 8
+  private const val PLAN_STRIDE = 9
 
   // Implemented in DownstreamJni.cpp, which links into libappmodules.so.
   @JvmStatic
@@ -886,6 +1057,7 @@ internal object DownstreamNative {
 
   @JvmStatic
   private external fun nativeReadLink(id: Long, index: Int): Array<Any>?
+  private external fun nativeReadTag(id: Long, index: Int): Array<Any>?
 
   @JvmStatic
   private external fun nativeTraceDocument(id: Long, event: String)
@@ -928,4 +1100,7 @@ internal object DownstreamNative {
 
   @JvmStatic
   private external fun nativeInstallPreparer()
+
+  @JvmStatic
+  private external fun nativeInstallClipboard()
 }

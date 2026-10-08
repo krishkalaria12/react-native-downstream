@@ -309,7 +309,7 @@ export const cases = [
   {
     id: 'inline-html-subset',
     description:
-      'br, sub and sup recognized while every other tag stays escaped text; a half-arrived tag is text until its > arrives',
+      'br, sub and sup recognized, b strong; a half-arrived tag is text until its > arrives',
     parseFlags: 8,
     chunks: [
       'E=mc<sup',
@@ -334,7 +334,7 @@ export const cases = [
         afterChunk: 5,
         prefix:
           'E=mc<sup>2</sup> and H<sub>2</sub>O\n\nMix<br>Then bake, see <b>bold</b>\n',
-        visibleText: 'E=mc2 and H2O\nMix\nThen bake, see <b>bold</b>',
+        visibleText: 'E=mc2 and H2O\nMix\nThen bake, see bold',
       },
     ],
   },
@@ -1242,6 +1242,9 @@ export const adversarialCases = [
   {
     id: 'html-comment-open',
     description: 'An HTML comment stays open across blank lines',
+    // Inline HTML is on, because this case is about what the HTML subset does
+    // with a comment: an unclosed `<!--` is text, and a closed one is nothing.
+    parseFlags: 1 << 3,
     chunks: [
       'Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n',
       '<!--\n',
@@ -1287,8 +1290,11 @@ export const adversarialCases = [
         afterChunk: 5,
         prefix:
           'Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n<!--\n\ncomment\n-->\n',
+        // The `<!--` closes, so the whole block is hidden: a reader is not shown
+        // a note to the renderer. One empty block is left where it was, which
+        // draws nothing.
         visibleText:
-          'Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n<!--\n\ncomment\n-->',
+          'Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n',
         enabledLinks: [],
       },
       {
@@ -1296,7 +1302,7 @@ export const adversarialCases = [
         prefix:
           'Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n<!--\n\ncomment\n-->\ntext\n',
         visibleText:
-          'Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n<!--\n\ncomment\n-->\ntext',
+          'Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\ntext',
         enabledLinks: [],
       },
     ],

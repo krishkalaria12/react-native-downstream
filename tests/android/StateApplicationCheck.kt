@@ -11,10 +11,12 @@ internal object DownstreamNative {
   fun isTracingDocument(id: Long): Boolean = true
   fun traceDocument(id: Long, name: String) { traces.add(id to name) }
 }
+internal class LinkVariants
 internal class RenderedDocument(val id: Long, val scale: Float, val theme: Long, val caret: PlacedCaret) {
   companion object {
     val obtains = mutableListOf<RenderedDocument>()
-    fun obtain(context: Any, id: Long, scale: Float, syntax: Boolean, theme: Long, caret: PlacedCaret): RenderedDocument =
+    fun obtain(context: Any, id: Long, scale: Float, syntax: Boolean, theme: Long, caret: PlacedCaret,
+               linkVariants: LinkVariants? = null): RenderedDocument =
       RenderedDocument(id, scale, theme, caret).also { obtains.add(it) }
   }
 }
@@ -33,6 +35,8 @@ internal class StateHost {
   private var imageLayout = ImageLayout()
   private var hostLayout = HostLayout()
   private var chrome = 0
+  private var readerChoices = ReaderChoices()
+  private var tableLayout = TableLayout()
   private var caret = PlacedCaret.NONE
   private var pendingTraceDocumentId = 0L
   var stateWrapper: StateWrapper? = null
@@ -43,6 +47,7 @@ internal class StateHost {
   var hostLayoutRequests = 0
   var frameRequests = 0
   private fun internProps(): Long = propTheme
+  internal fun linkVariants(): LinkVariants = LinkVariants()
   private fun syncSegmentViews() {
     val document = rendered
     check(document == null || document.id == documentId && document.caret == caret)
@@ -53,6 +58,8 @@ internal class StateHost {
   private fun applySettledState() {}
   private fun requestLayout() { layoutRequests++ }
   private fun layoutHostChildren() { hostLayoutRequests++ }
+  fun currentTables() = tableLayout
+  fun currentChoices() = readerChoices
   fun clearCounts() {
     mounted.clear()
     revealed.clear()
@@ -76,7 +83,7 @@ internal class StateHost {
 }
 
 fun main() {
-  val code = CodeLayout(CodeLayoutProps(true, false, 500f), CodeChoices(intArrayOf(0), intArrayOf(1)))
+  val code = CodeLayout(CodeLayoutProps(true, false, 500f), ReaderChoices(codeExpanded = intArrayOf(1), wrapToggles = intArrayOf(0)))
   val images = ImageLayout(ImageStateLayout(entries = listOf(ImageEntry(0, ImageState.LOADED, 120f, 80f))))
   val hosts = HostLayout(listOf(HostEntry(0, 180f)))
   val caret = PlacedCaret(1, 1)
@@ -101,7 +108,7 @@ fun main() {
   atomic.setDocument(1, 1f, 5)
   atomic.clearCounts()
   val wrapper = StateWrapper()
-  atomic.applyState(wrapper, 2, 1.5f, 6, code, images, hosts, 3, caret)
+  atomic.applyState(wrapper, 2, 1.5f, 6, code, images, hosts, 3, caret, TableLayoutProps())
   val expected = MountedState(2, code, images, hosts, 3, caret)
   check(atomic.mounted == listOf(expected))
   check(RenderedDocument.obtains.size == 1)
@@ -115,7 +122,7 @@ fun main() {
   // A repeated snapshot must still replace its wrapper for future interactions.
   atomic.clearCounts()
   val rebound = StateWrapper()
-  atomic.applyState(rebound, 2, 1.5f, 6, code, images, hosts, 3, caret)
+  atomic.applyState(rebound, 2, 1.5f, 6, code, images, hosts, 3, caret, TableLayoutProps())
   check(atomic.stateWrapper === rebound)
   check(atomic.mounted.isEmpty() && RenderedDocument.obtains.isEmpty() && atomic.revealed.isEmpty())
 
@@ -131,35 +138,52 @@ fun main() {
     changing.setDocument(2, 1.5f, 6)
     changing.clearCounts()
     changing.applyState(wrapper, 2, 1.5f, 6, expectedOption.code, expectedOption.images,
-      expectedOption.hosts, expectedOption.chrome, expectedOption.caret)
+      expectedOption.hosts, expectedOption.chrome, expectedOption.caret, TableLayoutProps())
     check(changing.mounted == listOf(expectedOption))
     check(RenderedDocument.obtains.isEmpty() && changing.revealed.isEmpty())
   }
 
   // Same document, changed geometry: reuse text, sync once under final options.
   atomic.clearCounts()
-  atomic.applyState(wrapper, 2, 1.5f, 6, CodeLayout(), ImageLayout(), HostLayout(), 0, caret)
+  atomic.applyState(wrapper, 2, 1.5f, 6, CodeLayout(), ImageLayout(), HostLayout(), 0, caret, TableLayoutProps())
   check(atomic.mounted.single() == MountedState(2, CodeLayout(), ImageLayout(), HostLayout(), 0, caret))
   check(RenderedDocument.obtains.isEmpty() && atomic.revealed.isEmpty())
   check(atomic.layoutRequests == 1 && atomic.hostLayoutRequests == 1)
 
+  // Tables and details share the choices measured by the incoming Fabric state.
+  atomic.clearCounts()
+  val choices = ReaderChoices(tableExpanded = intArrayOf(1), detailsOpen = intArrayOf(2))
+  val chosenCode = CodeLayout(choices = choices)
+  val tables = TableLayoutProps(480f)
+  atomic.applyState(wrapper, 2, 1.5f, 6, chosenCode, ImageLayout(), HostLayout(), 0, caret, tables)
+  check(atomic.currentChoices() == choices && atomic.currentTables() == TableLayout(tables, choices))
+  check(resolveTable(atomic.currentTables(), 1).expanded)
+  check(atomic.mounted.size == 1 && atomic.layoutRequests == 1)
+  check(RenderedDocument.obtains.isEmpty() && atomic.revealed.isEmpty())
+  atomic.clearCounts()
+  val tallerTables = TableLayoutProps(600f)
+  atomic.applyState(wrapper, 2, 1.5f, 6, chosenCode, ImageLayout(), HostLayout(), 0, caret, tallerTables)
+  check(atomic.currentTables() == TableLayout(tallerTables, choices))
+  check(atomic.mounted.size == 1 && atomic.layoutRequests == 1)
+  check(RenderedDocument.obtains.isEmpty() && atomic.revealed.isEmpty())
+
   // A caret-only change rebuilds this document without reapplying its reveal.
   atomic.clearCounts()
-  atomic.applyState(wrapper, 2, 1.5f, 6, CodeLayout(), ImageLayout(), HostLayout(), 0, PlacedCaret.NONE)
+  atomic.applyState(wrapper, 2, 1.5f, 6, CodeLayout(), ImageLayout(), HostLayout(), 0, PlacedCaret.NONE, TableLayoutProps())
   check(RenderedDocument.obtains.single().let { it.id == 2L && it.caret == PlacedCaret.NONE })
   check(atomic.mounted.size == 1 && atomic.revealed.isEmpty())
 
   // Theme fallback and empty/recycled mounts still take the document path.
   atomic.clearCounts()
   atomic.propTheme = 9
-  atomic.applyState(wrapper, 2, 1.5f, 0, CodeLayout(), ImageLayout(), HostLayout(), 0, PlacedCaret.NONE)
+  atomic.applyState(wrapper, 2, 1.5f, 0, CodeLayout(), ImageLayout(), HostLayout(), 0, PlacedCaret.NONE, TableLayoutProps())
   check(RenderedDocument.obtains.single().theme == 9L && atomic.revealed == listOf(2L))
   atomic.clearCounts()
-  atomic.applyState(wrapper, 0, 1f, 0, CodeLayout(), ImageLayout(), HostLayout(), 0, PlacedCaret.NONE)
+  atomic.applyState(wrapper, 0, 1f, 0, CodeLayout(), ImageLayout(), HostLayout(), 0, PlacedCaret.NONE, TableLayoutProps())
   check(RenderedDocument.obtains.isEmpty() && atomic.mounted.single().id == 0L)
   atomic.recycle()
   atomic.clearCounts()
-  atomic.applyState(wrapper, 2, 1.5f, 6, code, images, hosts, 3, caret)
+  atomic.applyState(wrapper, 2, 1.5f, 6, code, images, hosts, 3, caret, TableLayoutProps())
   check(atomic.mounted == listOf(expected) && RenderedDocument.obtains.single().id == 2L)
   println("ok Fabric state same-document changes, no-op, tracing, theme fallback and remount")
 }

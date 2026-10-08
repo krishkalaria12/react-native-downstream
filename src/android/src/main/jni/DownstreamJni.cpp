@@ -578,6 +578,9 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
 
   std::u16string text;
   std::vector<jint> blocks;
+  /// The `{1,3-5}` marks, flattened across every block: a count per block and
+  /// then that many inclusive `first,last` pairs, in block order.
+  std::vector<jint> marks;
   std::vector<jint> containers;
   std::vector<jint> runs;
   std::vector<jint> cells;
@@ -635,7 +638,7 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
                                     static_cast<jint>(block.spacingBefore),
                                     start,
                                     static_cast<jint>(text.size()),
-                                    static_cast<jint>(containers.size() / 5),
+                                    static_cast<jint>(containers.size() / 6),
                                     static_cast<jint>(block.containers.size()),
                                     static_cast<jint>(cells.size() / 3),
                                     static_cast<jint>(block.cells.size()),
@@ -645,7 +648,20 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
                                     intern(block.meta.title),
                                     static_cast<jint>(block.meta.startLine),
                                     block.meta.noLineNumbers ? 1 : 0,
+                                    // How many `{first,last}` pairs follow for
+                                    // this block; the pairs themselves are in the
+                                    // flat mark list.
+                                    static_cast<jint>(block.meta.marks.size()),
+                                    // The layout direction the engine decided, so
+                                    // this side draws the line the way the
+                                    // measurement was made rather than asking
+                                    // `Character.getDirectionality` again.
+                                    static_cast<jint>(block.direction),
                                 });
+    for (const LineMark &mark : block.meta.marks) {
+      marks.push_back(static_cast<jint>(mark.first));
+      marks.push_back(static_cast<jint>(mark.last));
+    }
     for (const MathSpan &span : block.math) {
       formulas.insert(formulas.end(), {static_cast<double>(index - static_cast<size_t>(from)),
                                        static_cast<double>(span.start), static_cast<double>(span.end), 0.0});
@@ -700,6 +716,13 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
                                               container.showsMarker ? 1 : 0,
                                               static_cast<jint>(container.task),
                                               marker,
+                                              // The `<details open>` attribute, and only a
+                                              // `<details>` carries it. It crosses with the
+                                              // rest of the frame rather than as its own read,
+                                              // because a view that has to decide whether a
+                                              // body is showing is asking about the frame it is
+                                              // already drawing.
+                                              container.open ? 1 : 0,
                                           });
     }
     for (const InlineRun &run : block.runs) {
@@ -708,6 +731,11 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
                                   start + static_cast<jint>(run.end),
                                   static_cast<jint>(run.styles),
                                   run.link,
+                                  // The app-allowed tag that styled this run,
+                                  // or -1. Crosses with the run rather than as
+                                  // its own read, because a press has to know
+                                  // which tag it landed on without asking.
+                                  run.tag,
                               });
     }
     for (const TokenRun &run : block.tokens) {
@@ -728,7 +756,7 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
     env->DeleteLocalRef(value);
   }
 
-  jobjectArray result = env->NewObjectArray(10, objectClass, nullptr);
+  jobjectArray result = env->NewObjectArray(11, objectClass, nullptr);
   env->SetObjectArrayElement(result, 0, toJavaString(env, text));
   env->SetObjectArrayElement(result, 1, toJavaArray(env, blocks));
   env->SetObjectArrayElement(result, 2, toJavaArray(env, containers));
@@ -751,6 +779,7 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
     env->SetDoubleArrayRegion(formulaArray, 0, static_cast<jsize>(formulas.size()), formulas.data());
   }
   env->SetObjectArrayElement(result, 9, formulaArray);
+  env->SetObjectArrayElement(result, 10, toJavaArray(env, marks));
   return result;
 }
 
@@ -840,6 +869,10 @@ Java_com_downstream_DownstreamNative_nativeSegmentPlan(JNIEnv *env, jclass /*cla
                                     // matches a picture to its state without walking the
                                     // document. -1 for every other segment.
                                     static_cast<jlong>(segment.imageOrdinal),
+                                    // The table ordinal, for the same reason and because a
+                                    // reader's expand choice is keyed by it: a block index
+                                    // counts rows and moves as a table streams.
+                                    static_cast<jlong>(segment.tableOrdinal),
                                 });
   }
   jlongArray array = env->NewLongArray(static_cast<jsize>(values.size()));
@@ -959,6 +992,43 @@ Java_com_downstream_DownstreamNative_nativeReadLink(JNIEnv *env, jclass /*clazz*
 /// Serializes blocks [from, to) of a document, as a String, or null when the
 /// document is gone. The same call serves a clipboard write and a saved file,
 /// so both platforms can only ever produce identical bytes.
+/**
+ * One app-allowed tag as `[name, attributes, range]`, where attributes is a
+ * flat `[name, value, …]` list and range is `[start, end]` in UTF-16 source
+ * offsets. Null when the document is gone or the index is not a tag.
+ *
+ * Read one tag at a time because a press names one tag: a bulk table would
+ * cross every tag of every document for a press that reads one.
+ */
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_downstream_DownstreamNative_nativeReadTag(
+    JNIEnv *env, jclass /*clazz*/, jlong id, jint index) {
+  const DocumentHandle document = DocumentRegistry::find(static_cast<uint64_t>(id));
+  if (!document || index < 0 || static_cast<size_t>(index) >= document->tags.size()) {
+    return nullptr;
+  }
+  const Tag &tag = document->tags[static_cast<size_t>(index)];
+  jclass objectClass = env->FindClass("java/lang/Object");
+  jobjectArray result = env->NewObjectArray(3, objectClass, nullptr);
+  jstring name = toJavaString(env, utf8ToUtf16(tag.name));
+  env->SetObjectArrayElement(result, 0, name);
+  env->DeleteLocalRef(name);
+  jobjectArray attributes = env->NewObjectArray(static_cast<jsize>(tag.attributes.size() * 2), objectClass, nullptr);
+  jsize attr = 0;
+  for (const auto &pair : tag.attributes) {
+    jstring key = toJavaString(env, utf8ToUtf16(pair.first));
+    env->SetObjectArrayElement(attributes, attr++, key);
+    env->DeleteLocalRef(key);
+    jstring value = toJavaString(env, utf8ToUtf16(pair.second));
+    env->SetObjectArrayElement(attributes, attr++, value);
+    env->DeleteLocalRef(value);
+  }
+  env->SetObjectArrayElement(result, 1, attributes);
+  env->DeleteLocalRef(attributes);
+  env->SetObjectArrayElement(result, 2, toJavaArray(env, {static_cast<jint>(tag.range.start),
+                                                          static_cast<jint>(tag.range.end)}));
+  return result;
+}
+
 extern "C" JNIEXPORT jstring JNICALL Java_com_downstream_DownstreamNative_nativeExport(
     JNIEnv *env, jclass /*clazz*/, jlong id, jint from, jint to, jint format, jint separator) {
   const DocumentHandle document = DocumentRegistry::find(static_cast<uint64_t>(id));

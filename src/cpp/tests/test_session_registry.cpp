@@ -60,6 +60,10 @@ int main() {
     std::cerr << "Snapshot version mismatch\n";
     return 1;
   }
+  const auto firstPublished = SessionRegistry::publishedSnapshot(id, 0, 2);
+  CHECK(firstPublished.document == first && !firstPublished.source && firstPublished.live,
+        "ordinary Markdown publishes state without copying a source for tag queries");
+  CHECK(!SessionRegistry::publishedSnapshot(id, 0, 1).document, "published data requires an exact version");
   SessionTrace::recordDocument(first->id, "measure_start");
   {
     std::lock_guard<std::mutex> lock(traceMutex);
@@ -110,6 +114,7 @@ int main() {
     std::cerr << "Reset did not invalidate old work\n";
     return 1;
   }
+  CHECK(!SessionRegistry::publishedSnapshot(id, 0, 4).document, "reset invalidates the old published tuple");
   auto replacement = SessionRegistry::snapshot(id, 1, 0);
   if (!replacement || replacement->blocks.size() != 1 || replacement->blocks[0].text != u"new" ||
       SessionRegistry::reset(id, std::string(1, static_cast<char>(0xff)), 2) ||
@@ -149,6 +154,47 @@ int main() {
   };
   const auto ignore = [](const SessionEvent &) {};
 
+  // Wait for the worker to consume the original options before changing only
+  // tags. A consumed pending update must not erase the configured flags.
+  for (const ParseMode mode : {ParseMode::FullParse, ParseMode::IncrementalTail}) {
+    const std::string policyId = mode == ParseMode::FullParse ? "policy-full" : "policy-incremental";
+    CHECK(SessionRegistry::create(policyId, mode, ignore), "create a session for independent tag updates");
+    CHECK(SessionRegistry::setParse(policyId, ParseOptions((ParseFlags::Default | ParseFlags::InlineHtml) &
+                                                         ~ParseFlags::Cjk)),
+          "configure HTML and disable CJK before the worker runs");
+    CHECK(SessionRegistry::append(policyId, "test <mark>ready</mark> これは~~削除~~です\n", 0, 1),
+          "append source that distinguishes configured flags from defaults");
+    CHECK(shows(policyId, 0, 1, u"test ready これは~~削除~~です"), "wait until the worker has consumed the flags");
+    CHECK(SessionRegistry::setParseTags(policyId, tagPolicyFromStrings({"-1", "user", "id"})),
+          "change only the tags after the flags have been consumed");
+    CHECK(SessionRegistry::append(policyId, "\n<user id=\"7\">\n\nhello\n\n</user>\n", 0, 2),
+          "append an allowed custom tag after changing its policy");
+    const auto policyDocument = shows(policyId, 0, 2, u"hello");
+    CHECK(policyDocument && policyDocument->blocks.front().text == u"test ready これは~~削除~~です",
+          "tag-only updates preserve HTML support and the disabled CJK flag");
+    CHECK(policyDocument && !policyDocument->tags.empty(), "tag-only updates apply the new tag policy");
+    SessionRegistry::dispose(policyId);
+  }
+
+  const std::string tagsId = "tag-source-session";
+  CHECK(SessionRegistry::create(tagsId, ParseMode::FullParse, ignore), "create a custom-tag session");
+  CHECK(SessionRegistry::setParse(tagsId, ParseOptions(ParseFlags::Default | ParseFlags::InlineHtml,
+                                                      tagPolicyFromStrings({"-1", "user", "id"}))),
+        "allow custom containers with their attribute policy");
+  CHECK(SessionRegistry::append(tagsId, "<user id=\"7\">\n\nhello\n", 0, 1), "append an open custom container");
+  CHECK(shows(tagsId, 0, 1, u"hello"), "publish the open custom container");
+  const auto tagPrefix = SessionRegistry::publishedSnapshot(tagsId, 0, 1);
+  CHECK(tagPrefix.document && tagPrefix.source && *tagPrefix.source == "<user id=\"7\">\n\nhello\n" && tagPrefix.live,
+        "custom tag publication keeps canonical source and live state together");
+  CHECK(SessionRegistry::append(tagsId, "\n</user>\n\nworld\n", 0, 2), "close the container and append a paragraph");
+  CHECK(shows(tagsId, 0, 2, u"world"), "publish the extended custom source");
+  const auto tagExtended = SessionRegistry::publishedSnapshot(tagsId, 0, 2);
+  CHECK(tagExtended.source && *tagExtended.source == "<user id=\"7\">\n\nhello\n\n</user>\n\nworld\n",
+        "the new document has the new canonical source");
+  CHECK(tagPrefix.source && *tagPrefix.source == "<user id=\"7\">\n\nhello\n",
+        "retained published custom source is immutable");
+  SessionRegistry::dispose(tagsId);
+
   const std::string previewId = "preview-session";
   CHECK(SessionRegistry::create(previewId, ParseMode::IncrementalTail, ignore), "create a session to preview on");
   CHECK(SessionRegistry::append(previewId, "hello **bold wor", 0, 1), "append to the preview session");
@@ -185,6 +231,9 @@ int main() {
     const auto settled = shows(settledId, 0, 1, u"hello **bold wor");
     CHECK(settled, "a finished stream is never repaired");
     CHECK(settled && settled->blocks.back().runs.empty(), "a finished stream leaves the open span unstyled");
+    const auto finishedPublished = SessionRegistry::publishedSnapshot(settledId, 0, 1);
+    CHECK(finishedPublished.document == settled && !finishedPublished.live,
+          "finished state is published with its settled document");
 
     // Asking again after the stream settled changes nothing a reader can see.
     CHECK(SessionRegistry::setPreview(settledId, remend::PreviewOptions::all()),

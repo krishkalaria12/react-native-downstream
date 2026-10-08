@@ -30,6 +30,20 @@ import com.facebook.react.uimanager.PixelUtil
 internal fun ReadableMap.numberAt(key: String, fallback: Double): Double =
   if (hasKey(key) && !isNull(key)) getDouble(key) else fallback
 
+/**
+ * The reader's one set of choices in the map.
+ *
+ * Read once and shared: the two layouts below and a collapsible block's toggle
+ * all draw from it, and reading it three times would let a map that carried one
+ * set produce three different ones.
+ */
+internal fun ReadableMap.toReaderChoices(): ReaderChoices = ReaderChoices(
+  wrapToggles = ordinalsAt("wrapToggles"),
+  codeExpanded = ordinalsAt("expanded"),
+  tableExpanded = ordinalsAt("tableExpanded"),
+  detailsOpen = ordinalsAt("detailsOpen"),
+)
+
 /** The code layout in the map, as the shadow node resolved it. */
 internal fun ReadableMap.toCodeLayout(): CodeLayout = CodeLayout(
   CodeLayoutProps(
@@ -37,7 +51,13 @@ internal fun ReadableMap.toCodeLayout(): CodeLayout = CodeLayout(
     numberAt("lineNumbers", 1.0) != 0.0,
     PixelUtil.toPixelFromDIP(numberAt("codeBlockMaxHeight", 400.0)).toFloat(),
   ),
-  CodeChoices(ordinalsAt("wrapToggles"), ordinalsAt("expanded")),
+  toReaderChoices(),
+)
+
+/** The table layout in the map, as the shadow node resolved it. */
+internal fun ReadableMap.toTableLayout(): TableLayout = TableLayout(
+  TableLayoutProps(PixelUtil.toPixelFromDIP(numberAt("tableMaxHeight", 300.0)).toFloat()),
+  toReaderChoices(),
 )
 
 /**
@@ -66,7 +86,21 @@ internal fun ReadableMap.toImageLayout(): ImageLayout = ImageLayout(
  */
 internal fun ReadableMap.toHostLayout(): HostLayout = HostLayout(
   entries = hostEntriesAt("hostEntries"),
+  // The hosted tags, beside the hosted fences: a container id rather than a
+  // code ordinal, because the two count different things.
+  tags = tagHostEntriesAt("tagHostEntries"),
 )
+
+internal fun ReadableMap.tagHostEntriesAt(key: String): List<TagHostEntry> {
+  val array = (if (hasKey(key)) getArray(key) else null) ?: return emptyList()
+  return List(array.size()) { index ->
+    val entry = array.getMap(index) ?: Arguments.createMap()
+    TagHostEntry(
+      container = entry.numberAt("container", 0.0).toInt(),
+      height = PixelUtil.toPixelFromDIP(entry.numberAt("height", 0.0)).toFloat(),
+    )
+  }
+}
 
 internal fun ReadableMap.hostEntriesAt(key: String): List<HostEntry> {
   val array = (if (hasKey(key)) getArray(key) else null) ?: return emptyList()

@@ -26,6 +26,29 @@ BOOL hasLink(NSAttributedString *text, NSRange range) {
   return found;
 }
 
+/// Tag index under a point in a laid-out TextKit stack, or -1.
+///
+/// Beside the link lookup because a press has to know which tag it landed on:
+/// the whole run is the control, and the attribute names it.
+NSInteger tagIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *container, CGPoint location) {
+  if (layoutManager.numberOfGlyphs == 0) {
+    return -1;
+  }
+  const NSUInteger glyph = [layoutManager glyphIndexForPoint:location
+                                             inTextContainer:container
+                              fractionOfDistanceThroughGlyph:NULL];
+  if (glyph >= layoutManager.numberOfGlyphs) {
+    return -1;
+  }
+  const CGRect glyphRect = [layoutManager boundingRectForGlyphRange:NSMakeRange(glyph, 1) inTextContainer:container];
+  if (!CGRectContainsPoint(CGRectInset(glyphRect, -kLinkHitSlop, -kLinkHitSlop), location)) {
+    return -1;
+  }
+  const NSUInteger character = [layoutManager characterIndexForGlyphAtIndex:glyph];
+  NSNumber *tag = [layoutManager.textStorage attribute:DSTagIndexAttributeName atIndex:character effectiveRange:NULL];
+  return tag != nil ? tag.integerValue : -1;
+}
+
 /// Link index under a point in a laid-out TextKit stack, or -1.
 NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *container, CGPoint location) {
   if (layoutManager.numberOfGlyphs == 0) {
@@ -143,6 +166,15 @@ NSString *const kSymbolUnwrap = @"text.alignleft";
 NSString *const kSymbolExpand = @"arrow.up.left.and.arrow.down.right";
 NSString *const kSymbolCollapse = @"arrow.down.left.and.arrow.up.right";
 
+/// Phase 2: a table's full-screen button, and the chevron a `<details>` summary
+/// opens and closes with. Both are Downstream's own names, because Streamdown's
+/// full-screen table is a browser viewport and its chevron belongs to the
+/// browser's own widget rather than to this library.
+NSString *const kSymbolMaximize = @"arrow.up.left.and.arrow.down.right";
+NSString *const kSymbolClose = @"xmark";
+NSString *const kSymbolChevronDown = @"chevron.down";
+NSString *const kSymbolChevronRight = @"chevron.right";
+
 @implementation DSControlButton
 @end
 
@@ -170,6 +202,46 @@ UIButton *makeControlButton(NSString *symbol, NSString *label, NSString *action,
   return button;
 }
 
+NSString *const DSControlIconCopy = @"copy";
+NSString *const DSControlIconCheck = @"check";
+NSString *const DSControlIconDownload = @"download";
+NSString *const DSControlIconMaximize = @"maximize";
+NSString *const DSControlIconClose = @"close";
+NSString *const DSControlIconWrap = @"wrap";
+NSString *const DSControlIconExpand = @"expand";
+NSString *const DSControlIconCollapse = @"collapse";
+NSString *const DSControlIconTableFullscreen = @"tableFullscreen";
+NSString *const DSControlIconDetailsChevron = @"detailsChevron";
+
+/// The SF Symbol each default name stands for.
+///
+/// A table rather than a switch in the drawing code, because a symbol name is the
+/// one thing about a button that is neither a colour nor a size, and it is read
+/// once per button rather than once per frame.
+NSString *defaultSymbolForIconName(NSString *name) {
+  static NSDictionary<NSString *, NSString *> *symbols;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    symbols = @{
+      DSControlIconCopy : kSymbolCopy,
+      DSControlIconCheck : kSymbolCheck,
+      DSControlIconDownload : kSymbolDownload,
+      DSControlIconMaximize : kSymbolMaximize,
+      DSControlIconClose : kSymbolClose,
+      DSControlIconWrap : kSymbolWrap,
+      DSControlIconExpand : kSymbolExpand,
+      DSControlIconCollapse : kSymbolCollapse,
+      DSControlIconTableFullscreen : kSymbolMaximize,
+      // Both chevrons are the same glyph here: the drawing rotates it a quarter
+      // turn when the body is open, which is the same glyph the code card's
+      // expand arrow is built from.
+      DSControlIconDetailsChevron : kSymbolChevronDown,
+    };
+  });
+  NSString *const symbol = symbols[name];
+  return symbol != nil ? symbol : name;
+}
+
 NSString *symbolForCopy(BOOL copied) {
   return copied ? kSymbolCheck : kSymbolCopy;
 }
@@ -188,6 +260,10 @@ NSString *symbolForExpand(BOOL expanded) {
   DSRenderedDocument *_rendered;
   NSMutableArray<UIView<DSSegmentView> *> *_segmentViews;
   NSArray<NSString *> *_labels;
+  /// The `icons` prop's resolved names, handed to every segment view on the way.
+  NSArray<NSString *> *_icons;
+  /// Whether a hold on a link may show the system's preview.
+  BOOL _linkPreview;
   uint32_t _chrome;
   /// A code block's ordinals, so a wrap or expand choice can be applied by
   /// ordinal rather than by segment index, which moves as blocks stream in.
@@ -195,6 +271,13 @@ NSString *symbolForExpand(BOOL expanded) {
   /// The whole code layout, which both the card views and the frame stack read,
   /// so a block's drawn layout and its measured height are the same decision.
   downstream::CodeLayout _codeLayout;
+  /// The whole table layout, which the table segments draw from and the frame
+  /// stack is keyed by, for the same reason `codeLayout` is.
+  downstream::TableLayout _tableLayout;
+  /// The reader's one set of choices. A text segment's chevron reads it directly
+  /// rather than through either layout, because a collapsible block is neither a
+  /// code block's nor a table's decision.
+  downstream::ReaderChoices _detailsChoices;
   /// What each image is, which the image views draw from and the frame stack is
   /// keyed by. A load changes an entry, which re-stacks the frames.
   downstream::ImageStateLayout _imageState;
@@ -266,6 +349,23 @@ static Class segmentViewClassFor(id segment) {
 /// Asked through the segment's own ordinal rather than its index, because an
 /// ordinal names the block across every snapshot and an index moves as blocks
 /// stream in.
+/// True when the segment shows a hosted tag rather than its own text.
+///
+/// The segment's own container id, which the plan grouped it for: a hosted tag
+/// replaces exactly that range, so the key is the container rather than a block.
+- (BOOL)hostsCustomContainerAtIndex:(NSUInteger)index {
+  NSArray *segments = _rendered.segments;
+  if (segments == nil || index >= segments.count) {
+    return NO;
+  }
+  id segment = segments[index];
+  if (![segment isKindOfClass:DSTextSegment.class]) {
+    return NO;
+  }
+  const uint32_t container = ((DSTextSegment *)segment).customContainer;
+  return container != UINT32_MAX && _hostLayout.hostsTag(container);
+}
+
 - (BOOL)hostsCodeOrdinalAtIndex:(NSUInteger)index {
   if (index >= _codeOrdinals.count) {
     return NO;
@@ -279,7 +379,19 @@ static Class segmentViewClassFor(id segment) {
 
 - (void)applyStateToSegmentView:(UIView<DSSegmentView> *)view atIndex:(NSUInteger)index {
   if ([view isKindOfClass:DSTextSegmentView.class]) {
-    ((DSTextSegmentView *)view).selectable = _selectable && [self isSegmentSettledAtIndex:index];
+    DSTextSegmentView *text = (DSTextSegmentView *)view;
+    text.selectable = _selectable && [self isSegmentSettledAtIndex:index];
+    // A hosted tag replaces its whole segment: the child owns the range now,
+    // so the text underneath draws nothing. Only a segment the plan grouped
+    // for one container is ever hosted, which is what makes the container id
+    // the key rather than a block range.
+    text.hosted = [self hostsCustomContainerAtIndex:index];
+    // The chevron is the control's own glyph, so it appears with the control and
+    // points the way the body will move.
+    text.detailsToggle = (_controls & downstream::ControlBits::DetailsToggle) != 0;
+    text.detailsChoices = _detailsChoices;
+    text.controlDelegate = _controlDelegate;
+    text.linkPreview = _linkPreview;
     return;
   }
   if ([view isKindOfClass:DSCodeSegmentView.class]) {
@@ -326,6 +438,11 @@ static Class segmentViewClassFor(id segment) {
   table.showsToolbar = (_chrome & downstream::kChromeTableToolbar) != 0;
   table.controls = _controls;
   table.controlsEnabled = [self isSegmentSettledAtIndex:index];
+  // The same settled rule a code card follows, for the same reason: a table whose
+  // rows are still arriving follows its newest row, and one that has closed keeps
+  // the position the reader left it at.
+  table.streaming = ![self isSegmentSettledAtIndex:index];
+  table.tableLayout = _tableLayout;
 }
 
 /// Where the document's fading characters are. Set on every render because the
@@ -376,6 +493,7 @@ static Class segmentViewClassFor(id segment) {
         codeView.linkDelegate = _linkDelegate;
         codeView.controlDelegate = self.controlDelegate;
         [codeView setControlLabels:_labels];
+        [codeView setControlIcons:_icons];
         view = codeView;
       } else if ([segment isKindOfClass:DSMathSegment.class]) {
         // A formula has no controls and no links, so it is given neither
@@ -393,6 +511,7 @@ static Class segmentViewClassFor(id segment) {
         tableView.linkDelegate = _linkDelegate;
         tableView.controlDelegate = self.controlDelegate;
         [tableView setControlLabels:_labels];
+        [tableView setControlIcons:_icons];
         view = tableView;
       }
       if (index < _segmentViews.count) {
@@ -585,6 +704,24 @@ static Class segmentViewClassFor(id segment) {
   [self reapplyState];
 }
 
+- (void)setTableLayout:(downstream::TableLayout)tableLayout {
+  if (tableLayout == _tableLayout) {
+    return;
+  }
+  _tableLayout = tableLayout;
+  // The one set of choices rides along with the props it belongs to, so a table
+  // prop that did not change still carries a collapsed body to the chevrons.
+  _detailsChoices = tableLayout.choices;
+  for (UIView<DSSegmentView> *view in _segmentViews) {
+    if ([view isKindOfClass:DSTableSegmentView.class]) {
+      ((DSTableSegmentView *)view).tableLayout = tableLayout;
+    } else if ([view isKindOfClass:DSTextSegmentView.class]) {
+      ((DSTextSegmentView *)view).detailsChoices = _detailsChoices;
+    }
+  }
+  [self setNeedsLayout];
+}
+
 - (void)setImageState:(downstream::ImageStateLayout)imageState {
   if (imageState == _imageState) {
     return;
@@ -644,6 +781,29 @@ static Class segmentViewClassFor(id segment) {
   }
 }
 
+/// The `icons` prop's resolved names, forwarded like the labels: only code and
+/// table views answer, and a view created later reads the current value.
+- (void)setControlIcons:(NSArray<NSString *> *)icons {
+  _icons = [icons copy];
+  for (UIView *view in _segmentViews) {
+    if ([view respondsToSelector:@selector(setControlIcons:)]) {
+      [(id)view setControlIcons:_icons];
+    }
+  }
+}
+
+/// Whether a long press shows the platform's link preview, forwarded like the
+/// labels: only text views answer, and a view created later reads the current
+/// value.
+- (void)setLinkPreview:(BOOL)linkPreview {
+  _linkPreview = linkPreview;
+  for (UIView *view in _segmentViews) {
+    if ([view respondsToSelector:@selector(setLinkPreview:)]) {
+      [(id)view setLinkPreview:linkPreview];
+    }
+  }
+}
+
 - (void)setControlDelegate:(id<DSControlDelegate>)controlDelegate {
   _controlDelegate = controlDelegate;
   for (UIView *view in _segmentViews) {
@@ -695,9 +855,16 @@ static Class segmentViewClassFor(id segment) {
                                                           chrome:_chrome
                                                              code:_codeLayout
                                                            images:_imageState
-                                                              hosts:_hostLayout];
+                                                              hosts:_hostLayout
+                                                             tables:_tableLayout];
   for (NSUInteger index = 0; index < _segmentViews.count && index < frames.count; index++) {
-    _segmentViews[index].frame = frames[index].CGRectValue;
+    UIView *view = _segmentViews[index];
+    const CGRect frame = frames[index].CGRectValue;
+    id segment = _rendered.segments[index];
+    const BOOL hostedTag = [segment isKindOfClass:DSTextSegment.class] &&
+        _hostLayout.hostsTag(((DSTextSegment *)segment).customContainer);
+    view.hidden = frame.size.height == 0 || hostedTag;
+    view.frame = frame;
   }
 }
 
@@ -708,6 +875,30 @@ static Class segmentViewClassFor(id segment) {
     }
   }
   return -1;
+}
+
+- (NSInteger)tagIndexAtPoint:(CGPoint)point {
+  for (UIView<DSSegmentView> *view in _segmentViews) {
+    if (!CGRectContainsPoint(view.frame, point)) {
+      continue;
+    }
+    if ([view conformsToProtocol:@protocol(DSTagPressable)]) {
+      return [(UIView<DSTagPressable> *)view tagIndexAtPoint:[self convertPoint:point toView:view]];
+    }
+  }
+  return -1;
+}
+
+- (NSString *)tagTextAtPoint:(CGPoint)point {
+  for (UIView<DSSegmentView> *view in _segmentViews) {
+    if (!CGRectContainsPoint(view.frame, point)) {
+      continue;
+    }
+    if ([view conformsToProtocol:@protocol(DSTagPressable)]) {
+      return [(UIView<DSTagPressable> *)view tagTextAtPoint:[self convertPoint:point toView:view]];
+    }
+  }
+  return @"";
 }
 
 @end

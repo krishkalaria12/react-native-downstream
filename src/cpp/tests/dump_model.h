@@ -127,16 +127,25 @@ inline bool write(const ParseResult &result) {
       std::printf("%s[%u,%u]", m ? "," : "", block.meta.marks[m].first, block.meta.marks[m].last);
     }
     std::printf("]}");
+    // The layout direction, so a test can read the rule's answer rather than
+    // inferring it from the text. 0 is `Inherit`, which the engine resolves to a
+    // resolved direction before the block reaches here, so a block that prints 0
+    // is a block the rule left alone.
+    std::printf(",\"direction\":%d", static_cast<int>(block.direction));
     std::printf(",\"text\":");
     writeString(block.text);
     std::printf(",\"containers\":[");
     for (size_t c = 0; c < block.containers.size(); c++) {
       const Container &container = block.containers[c];
+      // `open` and `tag` are the two fields only a `<details>` and an app's own
+      // block tag carry, and they are what a reader's own choice is resolved
+      // against, so the model says which of them are present rather than leaving
+      // a test to infer it from the kind.
       std::printf("%s{\"kind\":%d,\"id\":%u,\"showsMarker\":%s,\"task\":%d,\"marker\":", c ? "," : "",
                   static_cast<int>(container.kind), container.id, container.showsMarker ? "true" : "false",
                   static_cast<int>(container.task));
       writeString(container.marker);
-      std::printf("}");
+      std::printf(",\"open\":%s,\"tag\":%d}", container.open ? "true" : "false", container.tag);
     }
     std::printf("],\"runs\":[");
     for (size_t r = 0; r < block.runs.size(); r++) {
@@ -227,6 +236,31 @@ inline ParseOptions parseFlagsFromArg(int argc, char **argv, int at) {
   }
   options.flags = static_cast<uint32_t>(std::strtoul(argv[at], nullptr, 10));
   return options;
+}
+
+/// The tag policy from argv[at], as `src/allowedTags.ts` writes it, so a driver
+/// exercises the engine's own reader rather than hand-building a policy. Absent
+/// is the empty policy, which is what the built-in table on its own means.
+inline ParseOptions parseOptionsFromArgs(int argc, char **argv) {
+  ParseOptions options = parseFlagsFromArg(argc, argv, 1);
+  if (argc <= 2) {
+    return options;
+  }
+  const std::string joined(argv[2] == nullptr ? "" : argv[2]);
+  if (joined.empty()) {
+    return options;
+  }
+  std::vector<std::string> flat;
+  size_t start = 0;
+  while (start <= joined.size()) {
+    const size_t comma = joined.find(',', start);
+    flat.push_back(joined.substr(start, comma == std::string::npos ? std::string::npos : comma - start));
+    if (comma == std::string::npos) {
+      break;
+    }
+    start = comma + 1;
+  }
+  return ParseOptions(options.flags, tagPolicyFromStrings(flat));
 }
 
 /// The registered languages from argv[at], comma separated and unnormalized,

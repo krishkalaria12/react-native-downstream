@@ -90,6 +90,35 @@ class DownstreamMarkdownViewManager :
     }
     view.onWrapToggle = { target, ordinal, wrapped -> dispatchWrapToggle(target, ordinal, wrapped) }
     view.onExpandToggle = { target, ordinal, expanded -> dispatchExpandToggle(target, ordinal, expanded) }
+    // Phase 2. A table's two buttons report as `table`, and the full-screen one
+    // carries no ordinal: JavaScript already holds the table's Markdown, and an
+    // event that repeated it would put a whole table into an event payload.
+    view.onTableExpandToggle = { target, ordinal, expanded ->
+      dispatchTableExpandToggle(target, ordinal, expanded)
+    }
+    view.onTableFullscreen = { target, ordinal -> dispatchTableFullscreen(target, ordinal) }
+    view.onDetailsToggle = { target, containerId, open ->
+      dispatchDetailsToggle(target, containerId, open)
+    }
+    view.onTaskToggle = { target, containerId, checked ->
+      dispatchTaskToggle(target, containerId, checked)
+    }
+    view.onTagPress = { target, name, attributes, text, range ->
+      dispatchTagPress(target, name, attributes, text, range)
+    }
+    view.onLinkLongPress = linkLongPress@{ target, url, start, end ->
+      val context = target.context as? ReactContext ?: return@linkLongPress
+      dispatch(
+        target,
+        LinkLongPressEvent(
+          UIManagerHelper.getSurfaceId(context),
+          target.id,
+          url,
+          start,
+          end,
+        ),
+      )
+    }
     return view
   }
 
@@ -133,6 +162,18 @@ class DownstreamMarkdownViewManager :
 
   override fun setSelectable(view: DownstreamMarkdownView, value: Boolean) {
     view.setSelectable(value)
+  }
+
+  /**
+   * The `dir` prop, which overrides the engine's per-block decision.
+   *
+   * Read on the view rather than passed down: the shadow node folds it into the
+   * layout hint, so a measurement already carries it, and what the view needs is
+   * only the direction to draw text in. `auto` is the engine's own answer, which
+   * is what a document with no `dir` prop gets.
+   */
+  override fun setDir(view: DownstreamMarkdownView, value: String?) {
+    view.setDirection(value)
   }
 
   override fun setSyntaxHighlighting(view: DownstreamMarkdownView, value: Boolean) {
@@ -199,6 +240,42 @@ class DownstreamMarkdownViewManager :
     view.setParseFlags(value)
   }
 
+  /**
+   * The HTML tags the source may use, in the engine's wire form.
+   *
+   * Only the shadow node reads them, and it reads them from the props itself: it is
+   * the only thing that parses, so there is nothing for the view to keep. The
+   * override exists because codegen declares the prop and a manager that did not
+   * implement it would fail to compile.
+   */
+  override fun setAllowedTags(view: DownstreamMarkdownView, value: ReadableArray?) {
+    // Intentionally empty. See above.
+  }
+
+  /**
+   * The tallest a table grows before it scrolls, in points; 0 is no cap.
+   *
+   * A height, so it reaches the view the way `codeBlockMaxHeight` does: through
+   * the shadow node's state, which is the one path a native view has for changing
+   * its own layout without a React render. The override is here so the manager
+   * implements every prop codegen declared.
+   */
+  override fun setTableMaxHeight(view: DownstreamMarkdownView, value: Double) {
+    // Intentionally empty. See above.
+  }
+
+  /**
+   * The origin a relative link resolves against.
+   *
+   * The engine keeps the source's own `href` on a press and JavaScript resolves
+   * it, so nothing here reads the value: it is a parse bit that arrives in the
+   * same `parseFlags` prop. The override exists so the manager implements every
+   * prop codegen declared.
+   */
+  override fun setLinkOrigin(view: DownstreamMarkdownView, value: String?) {
+    // Intentionally empty. See above.
+  }
+
   override fun setImages(view: DownstreamMarkdownView, value: Boolean) {
     view.setImages(value)
   }
@@ -217,6 +294,76 @@ class DownstreamMarkdownViewManager :
 
   override fun setCsvSeparator(view: DownstreamMarkdownView, value: String?) {
     view.setCsvSeparator(value ?: ",")
+  }
+
+  /**
+   * The `icons` prop's resolved names, which the button builders read for their
+   * glyph.
+   *
+   * A name the app set to an empty string is a removed glyph, and a text-only
+   * button is what that is for. Anything this library does not recognise falls
+   * back to the platform's own, so a name an app invented cannot leave a button
+   * with no icon at all.
+   */
+  override fun setLinkPreview(view: DownstreamMarkdownView, value: Boolean) {
+    // Android has no system link preview to gate: a hold is the app's
+    // `onLinkLongPress` and nothing else, whatever this prop says. Recorded
+    // and ignored, so a prop written for iOS does not warn here.
+  }
+
+  /**
+   * Per-URL link styles, as four flat arrays.
+   *
+   * Read once per props update rather than per segment because the view builds
+   * every segment from one object: a message with twenty links matches each URL
+   * once, not once per segment that draws it.
+   */
+  override fun setLinkVariantPrefixes(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.setLinkVariantPrefixes(value?.let { array ->
+      List(array.size()) { index -> array.getString(index).orEmpty() }
+    } ?: emptyList())
+  }
+
+  override fun setLinkVariantCounts(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.setLinkVariantCounts(value?.let { array ->
+      List(array.size()) { index -> array.getDouble(index).toInt() }
+    } ?: emptyList())
+  }
+
+  override fun setLinkVariantColors(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.setLinkVariantColors(value?.let { array ->
+      List(array.size()) { index -> array.getDouble(index).toInt() }
+    } ?: emptyList())
+  }
+
+  override fun setLinkVariantUnderline(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.setLinkVariantUnderline(value?.let { array ->
+      List(array.size()) { index -> array.getBoolean(index) }
+    } ?: emptyList())
+  }
+
+  override fun setTagStyleNames(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.setTagStyleNames(value?.let { array ->
+      List(array.size()) { index -> array.getString(index).orEmpty() }
+    } ?: emptyList())
+  }
+
+  override fun setTagStyleColors(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.setTagStyleColors(value?.let { array ->
+      List(array.size()) { index -> array.getDouble(index).toInt() }
+    } ?: emptyList())
+  }
+
+  override fun setTagStyleFlags(view: DownstreamMarkdownView, value: ReadableArray?) {
+    view.setTagStyleFlags(value?.let { array ->
+      List(array.size()) { index -> array.getDouble(index).toInt() }
+    } ?: emptyList())
+  }
+
+  override fun setControlIcons(view: DownstreamMarkdownView, value: ReadableArray?) {
+    setControlIcons(value?.let { array ->
+      List(array.size()) { index -> array.getString(index).orEmpty() }
+    } ?: emptyList())
   }
 
   override fun setControlLabels(view: DownstreamMarkdownView, value: ReadableArray?) {
@@ -251,6 +398,7 @@ class DownstreamMarkdownViewManager :
         state.numberAt("caretKind", 0.0).toInt(),
         state.numberAt("caretPlace", 0.0).toInt(),
       ),
+      TableLayoutProps(PixelUtil.toPixelFromDIP(state.numberAt("tableMaxHeight", 300.0)).toFloat()),
     )
     return null
   }
@@ -292,6 +440,7 @@ class DownstreamMarkdownViewManager :
     // a fence drawn by a React component is as tall as that component, and
     // measuring without it would measure the card the child replaces.
     val hosts = localData?.toHostLayout() ?: HostLayout()
+    val tables = localData?.toTableLayout() ?: TableLayout()
     if (DownstreamNative.preparationContext?.get() !== context) {
       DownstreamNative.preparationContext = WeakReference(context)
     }
@@ -311,7 +460,7 @@ class DownstreamMarkdownViewManager :
     }
     return YogaMeasureOutput.make(
       PixelUtil.toDIPFromPixel(layoutWidth.toFloat()),
-      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth, chrome, code, images, hosts).toFloat()),
+      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth, chrome, code, images, hosts, tables, code.choices).toFloat()),
     )
   }
 
@@ -402,21 +551,156 @@ class DownstreamMarkdownViewManager :
     val toggled = view.nextToggledOrdinal()
     if (toggled < 0) return
     view.toggleWrap(ordinal)
-    dispatchControlAction(view, "wrap", wrapped = wrapped)
+    dispatchControlAction(view, "wrap", wrapped = wrapped, ordinal = ordinal.toDouble())
   }
 
   private fun dispatchExpandToggle(view: DownstreamMarkdownView, ordinal: Int, expanded: Boolean) {
     val toggled = view.nextToggledOrdinal()
     if (toggled < 0) return
     view.toggleExpand(ordinal)
-    dispatchControlAction(view, "expand", expanded = expanded)
+    dispatchControlAction(
+      view,
+      "expand",
+      expanded = expanded,
+      ordinal = ordinal.toDouble(),
+    )
+  }
+
+  /**
+   * A table's expand press. The same state round trip as a code card's, for the
+   * same reason: only Yoga and the chat list know the table's new height.
+   */
+  private fun dispatchTableExpandToggle(
+    view: DownstreamMarkdownView,
+    ordinal: Int,
+    expanded: Boolean,
+  ) {
+    val toggled = view.nextToggledOrdinal()
+    if (toggled < 0) return
+    view.toggleTableExpand(ordinal)
+    dispatchControlAction(
+      view,
+      "expand",
+      block = "table",
+      expanded = expanded,
+      ordinal = ordinal.toDouble(),
+    )
+  }
+
+  /**
+   * A table's full-screen press. No state update, because nothing about the
+   * message changes: a modal holding a second view is the whole of the effect,
+   * and the height that view needs is the width of the screen rather than the
+   * width of this column.
+   */
+  private fun dispatchTableFullscreen(view: DownstreamMarkdownView, ordinal: Int) {
+    val toggled = view.nextToggledOrdinal()
+    if (toggled < 0) return
+    val context = view.context as? ReactContext ?: return
+    dispatch(
+      view,
+      ControlActionEvent(
+        UIManagerHelper.getSurfaceId(context),
+        view.id,
+        "table",
+        "fullscreen",
+        "",
+        "",
+        "",
+        false,
+        false,
+        view.currentGeneration(),
+        ordinal = ordinal.toDouble(),
+        markdown = view.tableMarkdown(ordinal),
+      ),
+    )
+  }
+
+  /**
+   * A `<details>` summary press.
+   *
+   * The same shape as a wrap or an expand press: the view has already applied its
+   * own answer, the state update is the thing that makes the chat list re-measure,
+   * and the event reports which way it went. `block` is `details` because the
+   * three kinds of collapsible choice are three different blocks.
+   */
+  private fun dispatchDetailsToggle(
+    view: DownstreamMarkdownView,
+    containerId: Int,
+    open: Boolean,
+  ) {
+    val toggled = view.nextToggledOrdinal()
+    if (toggled < 0) return
+    view.toggleDetails(containerId)
+    dispatchControlAction(
+      view,
+      "expand",
+      block = "details",
+      expanded = open,
+      ordinal = containerId.toDouble(),
+    )
+  }
+
+  /**
+   * A task checkbox press.
+   *
+   * No state update, because nothing about the message changes: the checkbox is
+   * drawn, not stored, and the app owns the source that flips it. The event is
+   * the whole of the effect.
+   */
+  private fun dispatchTaskToggle(view: DownstreamMarkdownView, containerId: Int, checked: Boolean) {
+    val toggled = view.nextToggledOrdinal()
+    if (toggled < 0) return
+    val context = view.context as? ReactContext ?: return
+    dispatch(view, TaskPressEvent(
+      UIManagerHelper.getSurfaceId(context),
+      view.id,
+      containerId,
+      checked,
+      view.currentGeneration(),
+    ))
+  }
+
+  /**
+   * A press on an app-allowed tag's run.
+   *
+   * The tag's name, its attributes flat, the pressed text's source range, and
+   * nothing else: JavaScript already has the text from the document, and the
+   * range is what maps the press back to where it was written.
+   */
+  private fun dispatchTagPress(
+    view: DownstreamMarkdownView,
+    name: String,
+    attributes: List<String>,
+    text: String,
+    range: IntRange,
+  ) {
+    val context = view.context as? ReactContext ?: return
+    dispatch(
+      view,
+      TagPressEvent(
+        UIManagerHelper.getSurfaceId(context),
+        view.id,
+        name,
+        attributes,
+        text,
+        range.first,
+        range.last + 1,
+        view.currentGeneration(),
+      ),
+    )
   }
 
   private fun dispatchControlAction(
     view: DownstreamMarkdownView,
     action: String,
+    block: String = "code",
     wrapped: Boolean = false,
     expanded: Boolean = false,
+    // The block's ordinal among its own kind, because an app that keys a press
+    // needs to know which block was pressed and the three kinds count separately.
+    // -1 where a press has no ordinal to report.
+    ordinal: Double = -1.0,
   ) {
     val context = view.context as? ReactContext ?: return
     dispatch(
@@ -424,7 +708,7 @@ class DownstreamMarkdownViewManager :
       ControlActionEvent(
         UIManagerHelper.getSurfaceId(context),
         view.id,
-        "code",
+        block,
         action,
         "",
         "",
@@ -432,6 +716,7 @@ class DownstreamMarkdownViewManager :
         wrapped,
         expanded,
         view.currentGeneration(),
+        ordinal = ordinal,
       ),
     )
   }
@@ -498,6 +783,16 @@ private class ControlActionEvent(
   private val expanded: Boolean = false,
   private val generation: Int,
   private val url: String = "",
+  /**
+   * The table this press belongs to, as its ordinal among the document's tables.
+   *
+   * A number rather than the Markdown, because JavaScript can identify the table
+   * and a whole table in an event payload is a whole table through the bridge for
+   * nothing: the modal is rendered from the `markdown` field of this same event,
+   * which the native side already had to build.
+   */
+  private val ordinal: Double = -1.0,
+  private val markdown: String? = null,
 ) : Event<ControlActionEvent>(surfaceId, viewTag) {
   override fun getEventName() = NAME
 
@@ -511,10 +806,111 @@ private class ControlActionEvent(
     putBoolean("wrapped", wrapped)
     putBoolean("expanded", expanded)
     putInt("generation", generation)
+    putDouble("ordinal", ordinal)
+    markdown?.let { putString("markdown", it) }
   }
 
   companion object {
     const val NAME = "topControlAction"
+  }
+}
+
+private class TaskPressEvent(
+  surfaceId: Int,
+  viewTag: Int,
+  private val containerId: Int,
+  private val checked: Boolean,
+  private val generation: Int,
+) : Event<TaskPressEvent>(surfaceId, viewTag) {
+  override fun getEventName() = NAME
+
+  override fun getEventData(): WritableMap = Arguments.createMap().apply {
+    putInt("containerId", containerId)
+    putBoolean("checked", checked)
+    putInt("generation", generation)
+  }
+
+  companion object {
+    const val NAME = "topTaskPress"
+  }
+}
+
+private class LinkLongPressEvent(
+  surfaceId: Int,
+  viewTag: Int,
+  private val url: String,
+  private val start: Int,
+  private val end: Int,
+) : Event<LinkLongPressEvent>(surfaceId, viewTag) {
+  override fun getEventName() = NAME
+
+  override fun getEventData(): WritableMap = Arguments.createMap().apply {
+    putString("url", url)
+    putInt("start", start)
+    putInt("end", end)
+  }
+
+  companion object {
+    const val NAME = "topLinkLongPress"
+  }
+}
+
+private class TagPressEvent(
+  surfaceId: Int,
+  viewTag: Int,
+  private val name: String,
+  private val attributes: List<String>,
+  private val text: String,
+  private val start: Int,
+  private val end: Int,
+  private val generation: Int,
+) : Event<TagPressEvent>(surfaceId, viewTag) {
+  override fun getEventName() = NAME
+
+  override fun getEventData(): WritableMap = Arguments.createMap().apply {
+    putString("tag", name)
+    putString("text", text)
+    // JSON `[[name, value], …]`, because the bridge carries no nested arrays
+    // here: the shape is fixed in the spec rather than in a second type.
+    putString("attributes", attributesJson(attributes))
+    putInt("start", start)
+    putInt("end", end)
+    putInt("generation", generation)
+  }
+
+  companion object {
+    const val NAME = "topTagPress"
+
+    /** Attributes flat `[name, value, …]` as JSON `[[name, value], …]`. */
+    fun attributesJson(attributes: List<String>): String {
+      val out = StringBuilder("[")
+      var index = 0
+      while (index + 1 < attributes.size) {
+        if (index > 0) out.append(",")
+        out.append("[")
+        out.append(quoteJson(attributes[index]))
+        out.append(",")
+        out.append(quoteJson(attributes[index + 1]))
+        out.append("]")
+        index += 2
+      }
+      out.append("]")
+      return out.toString()
+    }
+
+    /** One JSON string with its two escapes, which is all JSON needs here. */
+    fun quoteJson(value: String): String {
+      val out = StringBuilder("\"")
+      for (unit in value) {
+        when (unit) {
+          '\\' -> out.append("\\\\")
+          '"' -> out.append("\\\"")
+          else -> out.append(unit)
+        }
+      }
+      out.append("\"")
+      return out.toString()
+    }
   }
 }
 

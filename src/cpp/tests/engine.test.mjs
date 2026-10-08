@@ -39,10 +39,20 @@ const TASK = { 0: null, 1: 'unchecked', 2: 'checked' };
 const [STRONG, EMPHASIS, STRIKE, CODE, LINK, IMAGE_ALT, FOOTNOTE] = [
   0, 1, 2, 3, 4, 5, 6,
 ].map((bit) => 1 << bit);
+/** The phase 4 tag styles, mirroring `InlineStyle` in `src/cpp/downstream`. */
+const HIGHLIGHT = 1 << 11;
+const UNDERLINE = 1 << 12;
 /** Bits of the provisional pass, mirroring `src/cpp/remend/Preview.h`. */
 const PREVIEW_HTML_TAGS = 1 << 5;
 const PREVIEW_ALL =
   (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | PREVIEW_HTML_TAGS;
+const LINK_RELATIVE = 1 << 6;
+const NO_AUTOLINK_MAILTO = 1 << 7;
+const NO_AUTOLINK_HTTP = 1 << 8;
+const NO_AUTOLINK_HTTPS = 1 << 9;
+const CJK = 1 << 10;
+/** The bits `resolveParseFlags` sends for a view that passes nothing. */
+const DEFAULT_VIEW = (1 << 3) | CJK;
 
 /**
  * RaTeX's macOS slice, which `node math/scripts/vendor-ratex.mjs` writes. The
@@ -76,14 +86,11 @@ before(async () => {
   );
   const executables = [
     ['dump_document', engine],
-    [
-      'test_incremental',
-      [incremental, downstream('SegmentPlan.cpp'), ...engine],
-    ],
+    ['test_incremental', [incremental, ...engine]],
     ['dump_session', [incremental, ...engine]],
-    ['dump_export', [downstream('SegmentPlan.cpp'), ...engine]],
-    ['test_export', [downstream('SegmentPlan.cpp'), ...engine]],
-    ['test_fence_meta', [downstream('SegmentPlan.cpp'), ...engine]],
+    ['dump_export', engine],
+    ['test_export', engine],
+    ['test_fence_meta', engine],
     ['test_reveal', [incremental, ...engine]],
     ['test_preview', [incremental, ...engine]],
     ['test_session_registry', [registry, incremental, ...pool, ...engine]],
@@ -112,6 +119,7 @@ before(async () => {
     ['dump_tokens', [downstream('Unicode.cpp')]],
     ['test_theme', theme],
     ['test_images', [downstream('ImageLayout.cpp')]],
+    ['test_tags', []],
     ['test_math', []],
     [
       'test_math_scan',
@@ -135,7 +143,9 @@ before(async () => {
   for (const [name, dependencies] of executables) {
     targets[name] = [
       testSource(`${name}.cpp`),
-      ...dependencies,
+      // The HTML subset is decided by the builder and read by `Scan.cpp`, so the
+      // test needs the engine rather than just the scanner.
+      ...(name === 'test_tags' ? engine : dependencies),
       ...MD4C_SOURCES,
     ];
   }
@@ -218,14 +228,15 @@ describe('vendored md4c', () => {
   // security or bugfix patch, which must be recorded here on purpose, or an
   // accident. The revision and version live in src/cpp/md4c/README.md.
   const PINS = {
-    // md4c.c and md4c.h carry two local patches, both recorded in
-    // src/cpp/md4c/README.md and both behind a flag that is off by default:
-    // MD_FLAG_LATEXMATHBLOCKS makes a `$$` line a fence, and
-    // MD_FLAG_LATEXMATHNOSINGLE makes a single `$` never math.
+    // md4c.c and md4c.h carry three local patches, all recorded in
+    // src/cpp/md4c/README.md and all behind a flag that is off by default:
+    // MD_FLAG_LATEXMATHBLOCKS makes a `$$` line a fence,
+    // MD_FLAG_LATEXMATHNOSINGLE makes a single `$` never math, and
+    // MD_FLAG_CJKFRIENDLY implements the markdown-cjk-friendly amendment.
     'md4c.c':
-      '20ae89c5abf48e65608ed1e279f682b07d62dea1b1498c096c41d625aa3100a4',
+      'b11148c99518cbdd56d58295fa073e189303e0c2acba3f2367949a15e3ec41b8',
     'md4c.h':
-      '391b36c01aa734a67cc1c399c9c342913586a3112eecfb1a0f699ea2ef3b3a33',
+      'bc8b02b24e3e045b8c844db7e1593eccdd54122cf03caba12424a81290f7adca',
     'entity.c':
       '7ea50d695d9210958e01b12b3e4d1db78d783d03d95b040fd7d2d9cfe1f1d39c',
     'entity.h':
@@ -1085,10 +1096,60 @@ describe('inline html', () => {
     ['<subtitle>n</subtitle>', '<subtitle>n</subtitle>', []],
     ['<supplier>n</supplier>', '<supplier>n</supplier>', []],
     ['<brx>a</brx>', '<brx>a</brx>', []],
-    // Every other tag stays literal.
-    ['<b>bold</b>', '<b>bold</b>', []],
-    ['a <span>b</span>', 'a <span>b</span>', []],
-    ['<!-- note -->', '<!-- note -->', []],
+    // A real element with no style of ours is unwrapped, as Streamdown's
+    // sanitizer does, and a name that is not an element stays literal.
+    ['a <span>b</span>', 'a b', []],
+    ['a <b>bold</b>', 'a bold', [['bold', STRONG]]],
+    [
+      '<em>i</em> <i>j</i>',
+      'i j',
+      [
+        ['i', EMPHASIS],
+        ['j', EMPHASIS],
+      ],
+    ],
+    [
+      '<strong>s</strong> <del>d</del> <ins>u</ins>',
+      's d u',
+      [
+        ['s', STRONG],
+        ['d', STRIKE],
+        ['u', UNDERLINE],
+      ],
+    ],
+    [
+      '<mark>m</mark> <u>u</u>',
+      'm u',
+      [
+        ['m', HIGHLIGHT],
+        ['u', UNDERLINE],
+      ],
+    ],
+    [
+      '<code>c</code> <tt>t</tt> <samp>s</samp>',
+      'c t s',
+      [
+        ['c', CODE],
+        ['t', CODE],
+        ['s', CODE],
+      ],
+    ],
+    // A comment emits nothing, rather than being shown as source.
+    ['<!-- note -->', '', []],
+    ['a <!-- note --> b', 'a  b', []],
+    // A dropped element takes its content with it.
+    ['<script>alert(1)</script>', '', []],
+    // An anchor goes through the same policy as a Markdown link.
+    ['<a href="https://x">x</a>', 'x', [['x', LINK]]],
+    // A refused scheme still hides the tag: what a reader gets is the anchor's
+    // text, never its markup, and it is not tappable.
+    ['<a href="javascript:x">x</a>', 'x', []],
+    // A generic in prose is not an element, so it keeps its text.
+    [
+      'Array<string> and <T> and <Vector<int>>',
+      'Array<string> and <T> and <Vector<int>>',
+      [],
+    ],
     // A code span is verbatim.
     ['`<sub>x</sub>`', '<sub>x</sub>', [['<sub>x</sub>', CODE]]],
   ];
@@ -1219,6 +1280,10 @@ describe('preview', () => {
       INLINE_HTML
     );
 
+  test('the HTML subset: the tag table, through the real parser', () => {
+    execFileSync(binary('test_tags'), { timeout: 30_000, stdio: 'inherit' });
+  });
+
   test('a half-arrived tag is hidden for as long as the stream stops there', () => {
     // Only the fragment itself is hidden: the complete tags before it are the
     // document, and the fragment returns the moment its `>` arrives.
@@ -1246,11 +1311,11 @@ describe('preview', () => {
 
   test('a fragment that cannot become an allowed tag is left alone', () => {
     // `<blink` runs past the name, and `<3` is a comparison; neither is a
-    // prefix of `<br>`, `<sub>` or `<sup>`, so neither is ever hidden. A
+    // prefix of any name the tag table acts on, so neither is ever hidden. A
     // candidate whose removal would change what precedes it is refused too: a
     // `<br>` before the fragment draws a line, and a document whose line
     // changed is not the document minus a fragment.
-    for (const source of ['a<b and 2<3', 'a<blink', 'a<subtitle>x', 'a<em>']) {
+    for (const source of ['a<b and 2<3', 'a<blink', 'a<subtitle>x', 'a<my-']) {
       assert.equal(visibleText(previewed(source, PREVIEW_ALL)), source);
     }
     assert.equal(visibleText(previewed('a<br><su', PREVIEW_ALL)), 'a\n<su');
@@ -1779,5 +1844,256 @@ describe('fence slots', () => {
     ]);
     assert.equal(slots.length, 1);
     assert.equal(slots[0].language, 'MERMAID', 'as written, cut at the colon');
+  });
+});
+
+/**
+ * The gap-plan acceptance list.
+ *
+ * Every row of the probe table in `docs/streamdown-gap-plan.html`, plus the rows
+ * each later phase added. Each one states the render model it expects, so a
+ * change that moves one of these is a change to what a reader sees and has to
+ * be a deliberate one.
+ */
+describe('cjk', () => {
+  const withCjk = (source) => parse(source, DEFAULT_VIEW);
+
+  /** [source, visible text, styled substring or null, styles or 0]. */
+  const emphasisCases = [
+    // Already worked; a regression guard rather than a fix.
+    ['**太字**。', '太字。', '太字', STRONG],
+    ['中文**粗体**中文', '中文粗体中文', '粗体', STRONG],
+    // The three that were literal.
+    ['これは**「強調」**です', 'これは「強調」です', '「強調」', STRONG],
+    ['**[リンク](https://x.com)**です', 'リンクです', 'リンク', STRONG | LINK],
+    // CommonMark's own answer, unchanged by the amendment: the run is followed
+    // by a Latin letter, so it may not close.
+    ['**“quoted”**text', '**“quoted”**text', null, 0],
+    // A delimiter between a CJK letter and a Latin one may not open.
+    ['a**太字', 'a**太字', null, 0],
+  ];
+
+  for (const [source, text, styled, styles] of emphasisCases) {
+    test(`emphasis: ${JSON.stringify(source)}`, () => {
+      const document = withCjk(source);
+      assert.equal(visibleText(document), text);
+      if (styled === null) {
+        assert.deepEqual(document.blocks[0].runs ?? [], []);
+      } else {
+        assert.equal(
+          stylesOf(document.blocks[0], styled).reduce(
+            (bits, run) => bits | run[2],
+            0
+          ) & styles,
+          styles
+        );
+      }
+    });
+  }
+
+  test('strikethrough beside a CJK neighbour', () => {
+    assert.equal(visibleText(withCjk('これは~~削除~~です')), 'これは削除です');
+    assert.equal(
+      stylesOf(withCjk('これは~~削除~~です').blocks[0], '削除')[0][2],
+      STRIKE
+    );
+    // GFM's own answer, and the amendment's: flanked by two words.
+    assert.equal(visibleText(withCjk('~~del~~ok')), '~~del~~ok');
+    assert.equal(visibleText(withCjk('~~del~~ ok')), 'del ok');
+  });
+
+  test('the underscore intraword rule is applied before the CJK relaxation', () => {
+    // `__テスト__です` stays literal: the amendment leaves the `_` intraword rule
+    // alone, and it removes the closer before anything reclassifies a neighbour.
+    assert.equal(visibleText(withCjk('__テスト__です')), '__テスト__です');
+    // A single `_` stays literal too, and for the amendment's own reason: the
+    // run is both left- and right-flanking, so to open it needs to be preceded
+    // by punctuation, and a kanji is not punctuation.
+    assert.equal(visibleText(withCjk('これは_強調_です')), 'これは_強調_です');
+  });
+
+  const autolinkCases = [
+    ['請訪問 https://example.com。謝謝', 'https://example.com'],
+    ['see https://example.com） ok', 'https://example.com'],
+    ['見て https://example.com/中文 ok', 'https://example.com/'],
+  ];
+
+  for (const [source, url] of autolinkCases) {
+    test(`autolink: ${JSON.stringify(source)}`, () => {
+      const document = withCjk(source);
+      assert.deepEqual(
+        document.links.map((link) => link.url),
+        [url]
+      );
+      // The URL ends before the CJK character, so the run is exactly the link.
+      const [run] = document.blocks[0].runs;
+      assert.equal(run[2] & LINK, LINK);
+      assert.equal(document.blocks[0].text.slice(run[0], run[1]), url);
+    });
+  }
+
+  test('an angle autolink is unaffected either way', () => {
+    for (const flags of [INLINE_HTML, DEFAULT_VIEW]) {
+      assert.deepEqual(
+        parse('see <https://example.com>。\n', flags).links.map(
+          (link) => link.url
+        ),
+        ['https://example.com']
+      );
+    }
+  });
+
+  /**
+   * The differential test the plan asks for: a document with no CJK in it parses
+   * identically with the bit on and off. This is what justifies the default, and
+   * it is checked against the real corpora rather than a handful of samples.
+   */
+  test('a document with no CJK in it parses identically either way', () => {
+    for (const testCase of cases) {
+      if (/[⺀-鿿가-힯豈-﫿＀-￯]|[ᄀ-ᇿ]/.test(testCase.source)) continue;
+      assert.deepEqual(
+        parse(testCase.source, testCase.parseFlags | CJK).blocks,
+        parse(testCase.source, testCase.parseFlags).blocks,
+        testCase.id
+      );
+    }
+    for (const testCase of adversarialCases) {
+      if (/[⺀-鿿가-힯豈-﫿＀-￯]|[ᄀ-ᇿ]/.test(testCase.source)) continue;
+      assert.deepEqual(
+        parse(testCase.source, testCase.parseFlags | CJK).blocks,
+        parse(testCase.source, testCase.parseFlags).blocks,
+        testCase.id
+      );
+    }
+  });
+
+  test('a CJK source still streams a byte at a time', () => {
+    const source =
+      'これは**「強調」**です\n\n' +
+      '請訪問 https://example.com。謝謝\n\n' +
+      '| a | b |\n| - | - |\n| 1 | 2 |\n\n' +
+      '<details><summary>詳細</summary>\n\n本文\n\n</details>\n';
+    const chunks = Array.from(source).map((character) => character);
+    const framed = Buffer.concat(
+      chunks.flatMap((chunk) => {
+        const bytes = Buffer.from(chunk, 'utf8');
+        const length = Buffer.alloc(4);
+        length.writeUInt32LE(bytes.length);
+        return [length, bytes];
+      })
+    );
+    // --batch holds every prefix against a full parse, which is the property a
+    // streaming CJK document needs and the one a single final parse cannot show.
+    execFileSync(
+      binary('test_incremental'),
+      ['--batch', String(DEFAULT_VIEW)],
+      {
+        input: framed,
+        stdio: ['pipe', 'pipe', 'inherit'],
+      }
+    );
+  });
+});
+
+describe('link policy', () => {
+  test('tel: is actionable only with a number-shaped body', () => {
+    const document = parse(
+      '[a](tel:+15551234) [b](tel:5551234) [c](tel:) [d](tel:x) [e](TEL:555)\n',
+      DEFAULT_VIEW
+    );
+    assert.deepEqual(
+      document.links.map((link) => link.url),
+      ['tel:+15551234', 'tel:5551234', 'TEL:555']
+    );
+  });
+
+  test('irc, ircs and xmpp are actionable, as in Streamdown', () => {
+    const document = parse(
+      '[a](irc://x) [b](ircs://x) [c](xmpp:x@y) [d](ftp://x)\n',
+      DEFAULT_VIEW
+    );
+    assert.deepEqual(
+      document.links.map((link) => link.url),
+      ['irc://x', 'ircs://x', 'xmpp:x@y']
+    );
+  });
+
+  test('a relative reference is a link only when the app asked for one', () => {
+    const source =
+      '[a](/docs/a) [b](./a) [c](../a) [d](#sec) [e](?q=1) [f](docs/a) ' +
+      '[g](javascript:x) [h](data:x) [i](file:x) [j](vbscript:x)\n';
+    assert.deepEqual(parse(source, DEFAULT_VIEW).links, []);
+    assert.deepEqual(
+      parse(source, DEFAULT_VIEW | LINK_RELATIVE).links.map((link) => link.url),
+      ['/docs/a', './a', '../a', '#sec', '?q=1']
+    );
+  });
+
+  test('the raw href survives the press event beside the resolved url', () => {
+    // The engine keeps what the writer wrote; JavaScript resolves it against
+    // `links.defaultOrigin`. A press that reported only the resolved URL could
+    // not be mapped back to the message, so `href` is the source's own string.
+    const source = 'see [rel](../docs/a) ok\n';
+    const document = parse(source, DEFAULT_VIEW | LINK_RELATIVE);
+    const [
+      {
+        url,
+        range: [start, end],
+      },
+    ] = document.links;
+    assert.equal(url, '../docs/a');
+    assert.equal(source.slice(start, end), '[rel](../docs/a)');
+  });
+
+  test('a bare address stops being a link for the protocol it was disabled for', () => {
+    const source = 'a@b.com see https://a.com and www.b.com\n';
+    const urls = (flags) =>
+      parse(source, DEFAULT_VIEW | flags).links.map((link) => link.url);
+    assert.deepEqual(urls(0), [
+      'mailto:a@b.com',
+      'https://a.com',
+      'http://www.b.com',
+    ]);
+    assert.deepEqual(urls(NO_AUTOLINK_MAILTO), [
+      'https://a.com',
+      'http://www.b.com',
+    ]);
+    assert.deepEqual(urls(NO_AUTOLINK_HTTPS), [
+      'mailto:a@b.com',
+      'http://www.b.com',
+    ]);
+    // `www.` is judged by http, because that is the scheme md4c gave it.
+    assert.deepEqual(urls(NO_AUTOLINK_HTTP), [
+      'mailto:a@b.com',
+      'https://a.com',
+    ]);
+  });
+
+  test('the text is unchanged when an autolink is switched off', () => {
+    const source = 'mail a@b.com see https://a.com\n';
+    const document = parse(source, DEFAULT_VIEW | NO_AUTOLINK_MAILTO);
+    assert.equal(visibleText(document), 'mail a@b.com see https://a.com');
+  });
+
+  test('an angle autolink is an autolink too', () => {
+    assert.deepEqual(
+      parse('<mailto:a@b.com>\n', DEFAULT_VIEW | NO_AUTOLINK_MAILTO).links,
+      []
+    );
+    assert.deepEqual(
+      parse('<https://a.com>\n', DEFAULT_VIEW | NO_AUTOLINK_HTTPS).links,
+      []
+    );
+  });
+
+  test('an explicit link is a link whatever the autolink bits say', () => {
+    const document = parse(
+      '[a](mailto:x@y) [b](https://x)\n',
+      DEFAULT_VIEW | NO_AUTOLINK_MAILTO | NO_AUTOLINK_HTTPS
+    );
+    assert.deepEqual(
+      document.links.map((link) => link.url),
+      ['mailto:x@y', 'https://x']
+    );
   });
 });

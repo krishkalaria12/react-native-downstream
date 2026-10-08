@@ -87,9 +87,12 @@ try {
       '-nowarn',
       '-d',
       jar,
-      ...['CodeLayout.kt', 'ImageLayout.kt', 'HostLayout.kt'].map((name) =>
-        join(sources, name)
-      ),
+      ...[
+        'CodeLayout.kt',
+        'ImageLayout.kt',
+        'HostLayout.kt',
+        'TableLayout.kt',
+      ].map((name) => join(sources, name)),
       check,
     ],
     { stdio: 'inherit' }

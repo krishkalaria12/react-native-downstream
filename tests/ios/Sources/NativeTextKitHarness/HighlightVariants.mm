@@ -11,12 +11,12 @@ static void checkHighlightVariants() {
   const downstream::CodeLayout code;
   const downstream::ImageStateLayout images;
   const downstream::HostLayout hosts;
-  const CGSize preparedSize = [prepared sizeForWidth:320 chrome:0 code:code images:images hosts:hosts];
+  const CGSize preparedSize = [prepared sizeForWidth:320 chrome:0 code:code images:images hosts:hosts tables:downstream::TableLayout{}];
   Method ensureMethod = class_getInstanceMethod([NSLayoutManager class], @selector(ensureLayoutForTextContainer:));
   originalEnsureLayout = method_setImplementation(ensureMethod, (IMP)countedEnsureLayout);
   layoutCalls = 0;
   DSRenderedDocument *mounted = obtain(prose, NO);
-  const CGSize mountedSize = [mounted sizeForWidth:320 chrome:0 code:code images:images hosts:hosts];
+  const CGSize mountedSize = [mounted sizeForWidth:320 chrome:0 code:code images:images hosts:hosts tables:downstream::TableLayout{}];
   method_setImplementation(ensureMethod, originalEnsureLayout);
   require(prepared == mounted && CGSizeEqualToSize(preparedSize, mountedSize),
           @"code-free highlighting variants missed prepared rendering");

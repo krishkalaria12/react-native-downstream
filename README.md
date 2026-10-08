@@ -191,6 +191,42 @@ The code card is the fallback, and it is the reason this is safe to ship: a lazy
 
 Matching is case-insensitive, which differs from Streamdown on purpose.
 
+### Every React surface, and what the native answer is
+
+Each of these is a place an app can take over. Where a surface exists on the web
+and not here, the table says what replaces it rather than leaving a gap to find.
+
+| Surface                                      | On the web                                          | Here                                                                                                                                                                                                                                   |
+| -------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A component for one block (`BlockComponent`) | Replace any block kind                              | `plugins.renderers` draws a **fenced** block by its language. For a block that is not a fence, a `<details>` body is drawn from the document and an allowed block tag is a container — see below.                                      |
+| `mode="static"`                              | Renders from a `markdown` prop rather than a stream | The `markdown` prop, which every example in this README uses. A stream reads its `source`; a `markdown` string is the same thing without a session.                                                                                    |
+| A fence that is still arriving               | `isIncomplete` on the renderer                      | The same `isIncomplete`, and the same rule: show a placeholder rather than a half-drawn chart.                                                                                                                                         |
+| A table's full screen                        | A route or a modal the app owns                     | `controls.table.fullscreen.onToggle` reports the press, and `renderTableFullscreen` draws whatever the app wants — a route, a sheet, or nothing at all. The library's own modal is the default.                                        |
+| `<details>`                                  | A browser widget with its own summary               | A container the engine pairs, with `controls.details.expand` as the toggle and `expanded` on the event. The summary is announced as an expandable control, so it is reachable without sight.                                           |
+| An app's own HTML tag                        | `allowedTags` plus a renderer                       | `allowedTags` names it; a **multi-line** tag becomes a container whose `plugins.tags[name]` component draws it in place, with the inner Markdown and `isIncomplete`. An inline tag needs no renderer — `markdownStyle.tags` styles it. |
+| A fenced block with no renderer              | The code card                                       | The code card, with copy and download. `fallbackComponent` replaces it for a fence you would rather not draw at all.                                                                                                                   |
+| `onTagPress`                                 | A press on a custom tag                             | The same event, with the tag's name, its attributes, its text, and the source range.                                                                                                                                                   |
+| `linkVariants`, per-URL link styles          | Style a link by its href                            | `markdownStyle.linkVariants` styles a link by URL prefix — first prefix wins — with its own color and underline, drawn on both platforms. `onLinkPress` still gets the resolved URL and the range, so an app can route by either.      |
+
+Two of these are worth spelling out because they replace something the web has
+and this does not.
+
+**A block that is not a fence.** `BlockComponent` on the web replaces any block.
+Here the unit of layout is a native segment and only four kinds have their own
+drawing — prose, a table, code, and a formula or picture — so the surface is
+`plugins.renderers` and it reaches fenced blocks. Everything else is reached
+through the document: `allowedTags` for the app's own container, `controls` for a
+button, and the callbacks for a press.
+
+**A tag the app allowed.** `allowedTags` takes Streamdown's shape,
+`Record<tag, attributes[]>`. An **inline** tag — `<user>` inside a paragraph —
+keeps its text and is styled by `markdownStyle.tags`, and a press reports
+`onTagPress`. A **block** tag, used with blank lines around it, becomes the same
+kind of container a `<details>` is: the blocks between the pair are inside it, and
+`plugins.tags[name]` draws it in place of them, receiving the inner Markdown and
+`isIncomplete`. Without a renderer it draws its children natively, and
+`fallbackComponent` is what an allowed tag with no renderer of its own uses.
+
 ### Streaming animation and the caret
 
 A message can fade its new words in as they arrive, with a caret at the writing point. Both are off by default and take Streamdown's names and defaults:

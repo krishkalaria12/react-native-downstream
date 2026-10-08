@@ -17,6 +17,7 @@
 #include "Export.h"
 #include "Reveal.h"
 #include "SegmentPlan.h"
+#include "TableLayout.h"
 #include "theme/Theme.h"
 #include "SessionTrace.h"
 #include "WorkerPool.h"
@@ -93,11 +94,11 @@ char16_t resolveSeparator(NSString *configured) {
 
 /// Whether `element` sits above `view`, treating an element with no frame of
 /// its own as the start of the message.
-bool frameIsAbove(CGRect element, UIView *view) {
+bool frameIsAbove(CGRect element, CGRect frame) {
   if (CGRectIsEmpty(element)) {
     return false;
   }
-  return CGRectGetMaxY(element) <= CGRectGetMinY(view.frame);
+  return CGRectGetMaxY(element) <= CGRectGetMinY(frame);
 }
 
 NSString *nameForFormat(NSString *format) {
@@ -114,6 +115,18 @@ NSString *nameForFormat(NSString *format) {
 }
 
 } // namespace
+
+// Hosted children sit above native text. Empty parts of their container must
+// leave native links, details summaries, and toolbar controls reachable.
+@interface DSHostContainer : UIView
+@end
+
+@implementation DSHostContainer
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+  UIView *hit = [super hitTest:point withEvent:event];
+  return hit == self ? nil : hit;
+}
+@end
 
 @interface DownstreamMarkdownView () <RCTDownstreamMarkdownViewViewProtocol, DSLinkDelegate, DSControlDelegate,
                                      DSRevealProvider, DSImageDelegate>
@@ -150,6 +163,14 @@ NSString *nameForFormat(NSString *format) {
   /// from the state beside the image answers, because both are properties of
   /// this view at this moment rather than of the document.
   downstream::HostLayout _hostLayout;
+  /// `tableMaxHeight` in points, 0 for no cap. A height rather than a prop read
+  /// from the segment, because a control press resolves one table's own layout
+  /// and a segment view has no access to the view's props.
+  downstream::TableLayout _tableLayout;
+  /// The reader's one set of choices, which the two layouts above both carry.
+  /// Held beside them so a details toggle can be answered from the state without
+  /// either layout being the place it lives.
+  downstream::ReaderChoices _choices;
   std::string _codeFilename;
   std::string _tableFilename;
   std::string _imageFilename;
@@ -159,6 +180,22 @@ NSString *nameForFormat(NSString *format) {
   NSString *_pressedImageURL;
   NSString *_csvSeparator;
   NSArray<NSString *> *_controlLabels;
+  /// The glyph names the `icons` prop resolved to, in `CONTROL_ICON_KEYS` order.
+  /// An empty string is a key the app removed, which the button reads as "draw no
+  /// icon" — a text-only button is how a quiet header is built.
+  NSArray<NSString *> *_controlIcons;
+  BOOL _linkPreview;
+  /// Per-URL link styles, resolved from `markdownStyle.linkVariants`. Colors
+  /// but no heights, so they travel as view state rather than through the
+  /// shadow node.
+  DSLinkVariants *_linkVariants;
+  /// Styles for app-allowed inline tags: names lowercased, a processed color
+  /// per entry or -1, and bold/italic as bits. Matched at draw time against a
+  /// run's tag name.
+  DSTagStyles *_tagStyles;
+  NSArray<NSString *> *_tagStyleNames;
+  NSArray<NSNumber *> *_tagStyleColors;
+  NSArray<NSNumber *> *_tagStyleFlags;
   CADisplayLink *_traceDisplayLink;
   uint64_t _traceDocumentId;
   uint64_t _controlEpoch;
@@ -198,11 +235,16 @@ NSString *nameForFormat(NSString *format) {
     // compares equal rather than looking like a change.
     _codeLayout.props = {defaultProps->codeBlockWrap, defaultProps->lineNumbers,
                          static_cast<float>(defaultProps->codeBlockMaxHeight)};
+    // The prop's own default, so a props update that never mentions the cap
+    // compares equal rather than looking like a change.
+    _tableLayout.props.maxHeight = static_cast<float>(defaultProps->tableMaxHeight);
+    _choices = downstream::ReaderChoices{};
     _codeFilename = "file";
     _tableFilename = "table";
     _imageFilename = "image";
     _csvSeparator = @",";
     _controlLabels = @[];
+    _controlIcons = @[];
     _exporter = [DSFileExporter new];
     // One observer per view for the platform's own Reduce Motion setting, which a
     // reader can turn on while a message is still fading.
@@ -222,13 +264,19 @@ NSString *nameForFormat(NSString *format) {
     _documentView.controls = _controls;
     self.contentView = _documentView;
     // Above the document, never inside it: see `mountChildComponentView:`.
-    _hostContainer = [[UIView alloc] initWithFrame:self.bounds];
+    _hostContainer = [[DSHostContainer alloc] initWithFrame:self.bounds];
     _hostContainer.userInteractionEnabled = YES;
     [self addSubview:_hostContainer];
 
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap:)];
     tap.cancelsTouchesInView = NO;
     [self addGestureRecognizer:tap];
+    // A hold is recognised beside the tap rather than through it, so the tap's
+    // timing is unchanged for every press that is not a hold.
+    UILongPressGestureRecognizer *hold =
+        [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
+    hold.cancelsTouchesInView = NO;
+    [self addGestureRecognizer:hold];
   }
   return self;
 }
@@ -244,17 +292,21 @@ NSString *nameForFormat(NSString *format) {
   // here rebuilds anything.
   const BOOL themeChanged = [self applyTheme];
   if (!themeChanged && data.document == _document && data.fontSizeMultiplier == _fontScale &&
-      data.chrome == _chrome && data.code == _codeLayout && data.images == _imageState &&
+      data.chrome == _chrome && data.code == _codeLayout.props &&
+      data.tables == _tableLayout.props && data.choices == _choices && data.images == _imageState &&
       data.hosts == _hostLayout) {
     return;
   }
   _document = data.document;
   _fontScale = data.fontSizeMultiplier;
   _chrome = data.chrome;
-  _codeLayout = data.code;
+  _codeLayout = downstream::codeLayout(data.code, data.choices);
+  _tableLayout = downstream::tableLayout(data.tables, data.choices);
+  _choices = data.choices;
   _imageState = data.images;
   _hostLayout = data.hosts;
   _documentView.codeLayout = _codeLayout;
+  _documentView.tableLayout = _tableLayout;
   _documentView.imageState = _imageState;
   _documentView.hostLayout = _hostLayout;
   const uint64_t documentId = _document ? _document->id : 0;
@@ -419,6 +471,35 @@ NSString *nameForFormat(NSString *format) {
   return YES;
 }
 
+/// The strings of a codegen string array, as the view holds them.
+- (NSArray<NSString *> *)stringsOf:(const std::vector<std::string> &)values {
+  NSMutableArray<NSString *> *out = [NSMutableArray arrayWithCapacity:values.size()];
+  for (const std::string &value : values) {
+    [out addObject:@(value.c_str())];
+  }
+  return out;
+}
+
+/// The numbers of a codegen number array.
+- (NSArray<NSNumber *> *)numbersOf:(const std::vector<double> &)values {
+  NSMutableArray<NSNumber *> *out = [NSMutableArray arrayWithCapacity:values.size()];
+  for (double value : values) {
+    [out addObject:@(value)];
+  }
+  return out;
+}
+
+/// The flags of a codegen boolean array, as numbers. `std::vector<bool>` packs
+/// its bits, so it is read by index rather than ranged over.
+- (NSArray<NSNumber *> *)boolsOf:(const std::vector<bool> &)values {
+  NSMutableArray<NSNumber *> *out = [NSMutableArray arrayWithCapacity:values.size()];
+  for (size_t index = 0; index < values.size(); index++) {
+    const bool flag = values[index];
+    [out addObject:@(flag)];
+  }
+  return out;
+}
+
 /// Interns the theme the props carry, or falls back to the default one.
 - (void)updateProps:(const Props::Shared &)props oldProps:(const Props::Shared &)oldProps {
   const auto &newProps = *std::static_pointer_cast<const DownstreamMarkdownViewProps>(props);
@@ -436,6 +517,38 @@ NSString *nameForFormat(NSString *format) {
   if (newProps.controls != _controls) {
     _controls = newProps.controls;
     _documentView.controls = _controls;
+  }
+  // A chat message that previews every link it holds is a message that
+  // navigates by accident, so the default is off and a hold is the app's own
+  // `onLinkLongPress`. The preview is a text view behavior, which is why this
+  // is a view prop rather than state: it changes no height.
+  if (newProps.linkPreview != _linkPreview) {
+    _linkPreview = newProps.linkPreview;
+    _documentView.linkPreview = _linkPreview;
+  }
+  // Per-URL link styles, resolved in JavaScript from `markdownStyle.linkVariants`.
+  // They change colors but no heights, so they travel as view state rather than
+  // through the shadow node: the measurement this view draws from was made
+  // without them, and the heights agree either way.
+  {
+    DSLinkVariants *variants = [DSLinkVariants new];
+    variants.prefixes = [self stringsOf:newProps.linkVariantPrefixes];
+    variants.counts = [self numbersOf:newProps.linkVariantCounts];
+    variants.colors = [self numbersOf:newProps.linkVariantColors];
+    variants.underlines = [self boolsOf:newProps.linkVariantUnderline];
+    _linkVariants = variants;
+    [self applyRendering];
+  }
+  // Styles for app-allowed inline tags, resolved in JavaScript from
+  // `markdownStyle.tags`. Colors but no heights, so like the variants they
+  // travel as view state rather than through the shadow node.
+  {
+    DSTagStyles *styles = [DSTagStyles new];
+    styles.names = [self stringsOf:newProps.tagStyleNames];
+    styles.colors = [self numbersOf:newProps.tagStyleColors];
+    styles.flags = [self numbersOf:newProps.tagStyleFlags];
+    _tagStyles = styles;
+    [self applyRendering];
   }
   // The props that decide code layout, gathered into one value. The height and
   // the gutter are heights, so the shadow node measures with them and the view
@@ -469,6 +582,18 @@ NSString *nameForFormat(NSString *format) {
     // layout will have a different height for it.
     [self applyRendering];
   }
+  if (newProps.allowedTags != previous.allowedTags) {
+    // A tag policy decides which runs exist, so a document parsed under a new one
+    // is a different document. The shadow node reads the prop itself and reparses;
+    // this only has to redraw once it has.
+    [self applyRendering];
+  }
+  if (newProps.tableMaxHeight != previous.tableMaxHeight) {
+    // A height, so it reaches the drawing through the shadow node's state on the
+    // next layout, and the shadow node remeasures against it. Nothing is applied
+    // here: the state that records it arrives in `applyState`, which is the one
+    // path a native view has for changing its own layout without a React render.
+  }
   if (newProps.csvSeparator != previous.csvSeparator) {
     _csvSeparator = newProps.csvSeparator.empty() ? @"," : @(newProps.csvSeparator.c_str());
   }
@@ -479,6 +604,14 @@ NSString *nameForFormat(NSString *format) {
     }
     _controlLabels = labels;
     [_documentView setControlLabels:_controlLabels];
+  }
+  if (newProps.controlIcons != previous.controlIcons) {
+    NSMutableArray<NSString *> *icons = [NSMutableArray arrayWithCapacity:newProps.controlIcons.size()];
+    for (const std::string &icon : newProps.controlIcons) {
+      [icons addObject:@(icon.c_str())];
+    }
+    _controlIcons = icons;
+    [_documentView setControlIcons:_controlIcons];
   }
   // The chrome itself is part of the state, because it is a height and the
   // shadow node is what measures; a prop change reaches it through a state
@@ -519,7 +652,7 @@ NSString *nameForFormat(NSString *format) {
  * makes, and it needs no new information from the engine.
  */
 - (NSArray<id> *)accessibilityElements {
-  NSArray *documentElements = _documentView.accessibilityElements ?: @[];
+  NSArray *documentElements = _documentView.accessibilityElements ?: _documentView.subviews;
   NSArray<UIView *> *hosted = _hostContainer.subviews;
   if (hosted.count == 0) {
     return documentElements;
@@ -542,7 +675,7 @@ NSString *nameForFormat(NSString *format) {
     const CGRect frame = [element isKindOfClass:UIView.class]
                              ? ((UIView *)element).frame
                              : CGRectZero;
-    while (next < ordered.count && frameIsAbove(frame, ordered[next])) {
+    while (next < ordered.count && frameIsAbove(ordered[next].frame, frame)) {
       [interleaved addObject:ordered[next]];
       next++;
     }
@@ -645,7 +778,9 @@ NSString *nameForFormat(NSString *format) {
                                                                   fontScale:_fontScale
                                                          syntaxHighlighting:_syntaxHighlighting
                                                                       theme:_theme
-                                                                     caret:caret]
+                                                                     caret:caret
+                                                                  variants:_linkVariants
+                                                                 tagStyles:_tagStyles]
                                      : nil;
   // The fade is decided after the rendering exists, because the tracker aligns the
   // document it was given against the one this view last showed, and the ticker
@@ -806,9 +941,32 @@ NSString *nameForFormat(NSString *format) {
   if (recognizer.state != UIGestureRecognizerStateEnded) {
     return;
   }
-  const NSInteger linkIndex = [_documentView linkIndexAtPoint:[recognizer locationInView:_documentView]];
+  const CGPoint at = [recognizer locationInView:_documentView];
+  const NSInteger linkIndex = [_documentView linkIndexAtPoint:at];
   if (linkIndex >= 0) {
     [self didPressLinkAtIndex:linkIndex];
+    return;
+  }
+  // A link inside a tag is still the link a reader meant; anything else on a
+  // tag run is the tag.
+  const NSInteger tagIndex = [_documentView tagIndexAtPoint:at];
+  if (tagIndex >= 0) {
+    [self didPressTagAtIndex:tagIndex text:[_documentView tagTextAtPoint:at]];
+  }
+}
+
+/// A hold on a link, for the app to do something else with.
+///
+/// Installed beside the tap rather than instead of it, because the two gestures
+/// recognise independently: a hold that becomes a tap still taps, and a tap never
+/// waits to find out whether it was a hold.
+- (void)handleLongPress:(UILongPressGestureRecognizer *)recognizer {
+  if (recognizer.state != UIGestureRecognizerStateBegan) {
+    return;
+  }
+  const NSInteger linkIndex = [_documentView linkIndexAtPoint:[recognizer locationInView:_documentView]];
+  if (linkIndex >= 0) {
+    [self didLongPressLinkAtIndex:linkIndex];
   }
 }
 
@@ -823,6 +981,56 @@ NSString *nameForFormat(NSString *format) {
   const auto &link = document->links[static_cast<size_t>(linkIndex)];
   std::static_pointer_cast<const DownstreamMarkdownViewEventEmitter>(_eventEmitter)
       ->onLinkPress({
+          .url = link.url,
+          .start = static_cast<int>(link.range.start),
+          .end = static_cast<int>(link.range.end),
+      });
+}
+
+/// A long press on a link, reported rather than acted on.
+///
+/// A tap opens (or asks, through link safety); a hold is the app's: copy the URL,
+/// show a preview, open a sheet. The library does nothing with it, because doing
+/// anything would be a second behavior for one gesture.
+- (void)didPressTagAtIndex:(NSInteger)tagIndex text:(NSString *)text {
+  const auto *emitter = [self emitter];
+  const auto &document = _state ? _state->getData().document : nullptr;
+  if (emitter == nullptr || !document || tagIndex < 0 ||
+      static_cast<size_t>(tagIndex) >= document->tags.size()) {
+    return;
+  }
+  const downstream::Tag &tag = document->tags[static_cast<size_t>(tagIndex)];
+  // JSON `[[name, value], …]`, because codegen events carry no arrays: the
+  // shape is fixed in the spec rather than in a second type.
+  NSMutableArray<NSArray<NSString *> *> *pairs = [NSMutableArray arrayWithCapacity:tag.attributes.size()];
+  for (const auto &pair : tag.attributes) {
+    [pairs addObject:@[ @(pair.first.c_str()), @(pair.second.c_str()) ]];
+  }
+  NSData *json = [NSJSONSerialization dataWithJSONObject:pairs options:0 error:nil];
+  NSString *attributes = json != nil ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : @"[]";
+  emitter->onTagPress({
+      .tag = tag.name,
+      .attributes = std::string(attributes.UTF8String ?: "[]"),
+      .text = std::string(text.UTF8String ?: ""),
+      .start = static_cast<int>(tag.range.start),
+      .end = static_cast<int>(tag.range.end),
+      .generation = _state
+          ? static_cast<int>(std::static_pointer_cast<const DownstreamMarkdownViewProps>(_props)->generation)
+          : 0,
+  });
+}
+
+- (void)didLongPressLinkAtIndex:(NSInteger)linkIndex {
+  if (!_state || !_eventEmitter) {
+    return;
+  }
+  const auto &document = _state->getData().document;
+  if (!document || linkIndex < 0 || static_cast<size_t>(linkIndex) >= document->links.size()) {
+    return;
+  }
+  const auto &link = document->links[static_cast<size_t>(linkIndex)];
+  std::static_pointer_cast<const DownstreamMarkdownViewEventEmitter>(_eventEmitter)
+      ->onLinkLongPress({
           .url = link.url,
           .start = static_cast<int>(link.range.start),
           .end = static_cast<int>(link.range.end),
@@ -872,7 +1080,22 @@ NSString *nameForFormat(NSString *format) {
                     filename:(NSString *)filename
                         url:(NSString *)url
                      wrapped:(BOOL)wrapped
-                    expanded:(BOOL)expanded {
+                    expanded:(BOOL)expanded
+                    markdown:(NSString *)markdown {
+  [self emitControlWithBlock:block action:action format:format language:language filename:filename
+                        url:url wrapped:wrapped expanded:expanded markdown:markdown ordinal:-1];
+}
+
+- (void)emitControlWithBlock:(NSString *)block
+                      action:(NSString *)action
+                      format:(NSString *)format
+                    language:(NSString *)language
+                    filename:(NSString *)filename
+                        url:(NSString *)url
+                     wrapped:(BOOL)wrapped
+                    expanded:(BOOL)expanded
+                    markdown:(NSString *)markdown
+                     ordinal:(int32_t)ordinal {
   const auto *emitter = [self emitter];
   if (emitter == nullptr) {
     return;
@@ -894,6 +1117,14 @@ NSString *nameForFormat(NSString *format) {
       .url = std::string(url.UTF8String ?: ""),
       .wrapped = static_cast<bool>(wrapped),
       .expanded = static_cast<bool>(expanded),
+      // Only a full-screen table carries Markdown: the modal it opens holds a
+      // second view, and the text it renders is the table's own source rather
+      // than a rebuild of it. Empty for every other action.
+      .markdown = std::string(markdown.UTF8String ?: ""),
+      // Every press reports its block's ordinal among its own kind, because an
+      // app that keys a press needs to know which block was pressed and three
+      // kinds count separately. -1 where there is no ordinal to report.
+      .ordinal = ordinal,
       .generation = generation,
   });
 }
@@ -938,7 +1169,8 @@ NSString *nameForFormat(NSString *format) {
                         filename:@""
                             url:@""
                          wrapped:NO
-                        expanded:NO];
+                        expanded:NO
+                        markdown:@""];
       return;
     }
     [self emitControlWithBlock:@"image"
@@ -948,7 +1180,8 @@ NSString *nameForFormat(NSString *format) {
                       filename:filename
                           url:_pressedImageURL ?: @""
                        wrapped:NO
-                      expanded:NO];
+                      expanded:NO
+                        markdown:@""];
     return;
   }
   if (!_document) {
@@ -1016,7 +1249,8 @@ NSString *nameForFormat(NSString *format) {
                         filename:@""
                              url:@""
                          wrapped:NO
-                        expanded:NO];
+                        expanded:NO
+                        markdown:@""];
       return;
     }
     [view->_exporter saveData:data
@@ -1042,7 +1276,8 @@ NSString *nameForFormat(NSString *format) {
                              filename:name
                                  url:@""
                               wrapped:NO
-                             expanded:NO];
+                             expanded:NO
+                        markdown:@""];
       }
     }];
   };
@@ -1133,7 +1368,9 @@ NSString *nameForFormat(NSString *format) {
                     filename:@""
                         url:@""
                      wrapped:wrapped
-                    expanded:NO];
+                    expanded:NO
+                        markdown:@""
+                    ordinal:static_cast<int32_t>(ordinal)];
 }
 
 - (void)didToggleExpandAtOrdinal:(uint32_t)ordinal language:(NSString *)language expanded:(BOOL)expanded {
@@ -1153,7 +1390,125 @@ NSString *nameForFormat(NSString *format) {
                     filename:@""
                         url:@""
                      wrapped:NO
-                    expanded:expanded];
+                    expanded:expanded
+                        markdown:@""
+                    ordinal:static_cast<int32_t>(ordinal)];
+}
+
+- (void)didToggleTableExpandAtOrdinal:(uint32_t)ordinal expanded:(BOOL)expanded {
+  if (!_state) {
+    return;
+  }
+  // The same path as a code block's expand, and for the same reason: the table's
+  // height changes, and only Yoga and the chat list can know that.
+  DownstreamMarkdownState next = _state->getData().toggledTableExpand(ordinal);
+  _state->updateState(std::move(next));
+  [self emitControlWithBlock:@"table"
+                      action:@"expand"
+                      format:@""
+                    language:@""
+                    filename:@""
+                        url:@""
+                     wrapped:NO
+                    expanded:expanded
+                    markdown:@""
+                    ordinal:static_cast<int32_t>(ordinal)];
+}
+
+- (void)didToggleDetailsAtContainer:(uint32_t)containerId open:(BOOL)open {
+  if (!_state) {
+    return;
+  }
+  // The same path as a code block's expand, and for the same reason: the body's
+  // height changes, and only Yoga and the chat list can know that.
+  DownstreamMarkdownState next = _state->getData().toggledDetails(containerId);
+  _state->updateState(std::move(next));
+  [self emitControlWithBlock:@"details"
+                      action:@"expand"
+                      format:@""
+                    language:@""
+                   filename:@""
+                        url:@""
+                     wrapped:NO
+                    expanded:open
+                   markdown:@""
+                    ordinal:static_cast<int32_t>(containerId)];
+}
+
+- (NSString *)markdownForBlocksFrom:(uint32_t)from to:(uint32_t)to {
+  const auto &document = _state ? _state->getData().document : nullptr;
+  if (!document || from >= to || to > document->blocks.size()) {
+    return @"";
+  }
+  return toNSString(exportBlocks(*document, from, to, ExportFormat::Markdown));
+}
+
+- (void)didToggleTaskAtContainer:(uint32_t)containerId checked:(BOOL)checked {
+  const auto *emitter = [self emitter];
+  if (emitter == nullptr) {
+    return;
+  }
+  // A task checkbox is drawn, not stored: the document does not change when a
+  // reader taps one, so the press only reports. The app owns the source, which
+  // is the only thing that can flip `- [ ]` to `- [x]`.
+  const int generation = _state
+      ? static_cast<int>(std::static_pointer_cast<const DownstreamMarkdownViewProps>(_props)->generation)
+      : 0;
+  emitter->onTaskPress({
+      .containerId = static_cast<int32_t>(containerId),
+      .checked = static_cast<bool>(checked),
+      .generation = generation,
+  });
+}
+
+- (void)didRequestTableFullscreenAtOrdinal:(uint32_t)ordinal {
+  const auto *emitter = [self emitter];
+  if (emitter == nullptr) {
+    return;
+  }
+  // Nothing is drawn here and nothing is torn down: the button opens a modal in
+  // JavaScript, holding a second view, and the table behind it keeps its own
+  // cap and its own scroll position. So the press only reports — the table's
+  // source, which is what the modal renders.
+  const int generation = _state
+      ? static_cast<int>(std::static_pointer_cast<const DownstreamMarkdownViewProps>(_props)->generation)
+      : 0;
+  emitter->onControlAction({
+      .block = std::string("table"),
+      .action = std::string("fullscreen"),
+      .format = std::string(),
+      .language = std::string(),
+      .filename = std::string(),
+      .url = std::string(),
+      .wrapped = false,
+      .expanded = false,
+      .markdown = std::string([self markdownForTableAtOrdinal:ordinal].UTF8String ?: ""),
+      .ordinal = static_cast<int32_t>(ordinal),
+      .generation = generation,
+  });
+}
+
+/// The table at `ordinal`'s own Markdown, as the export writes it.
+///
+/// The same `exportBlocks` a copy produces, so a full-screen table is the table
+/// rather than one rebuilt from the model — and a table whose columns were
+/// reordered comes back as the pipe table a reader would have written.
+- (NSString *)markdownForTableAtOrdinal:(uint32_t)ordinal {
+  const auto &document = _state ? _state->getData().document : nullptr;
+  if (document == nullptr) {
+    return @"";
+  }
+  const std::vector<SegmentPlan> plan = planSegments(*document);
+  uint32_t seen = 0;
+  for (const SegmentPlan &segment : plan) {
+    if (segment.kind != SegmentKind::Table) {
+      continue;
+    }
+    if (seen++ == ordinal) {
+      return toNSString(exportBlocks(*document, segment.from, segment.to, ExportFormat::Markdown));
+    }
+  }
+  return @"";
 }
 
 - (void)didFailControlOfKind:(DSBlockKind)kind action:(NSString *)action message:(NSString *)message {

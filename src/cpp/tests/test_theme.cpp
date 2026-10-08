@@ -226,11 +226,11 @@ void testBlockLayout() {
   // paragraph's. Their margins are the paragraph's today, which is what makes
   // the renderers' values fall out of this table rather than out of a case.
   Block quoted = paragraph;
-  quoted.containers.push_back({ContainerKind::Quote, 1, false, TaskState::None, u""});
+  quoted.containers.push_back({ContainerKind::Quote, 1, false, TaskState::None, false, -1, u""});
   CHECK(nearly(blockGap(*theme, BlockSpacing::Normal, &paragraph, quoted), 12),
         "a quoted block keeps twelve by default");
   Block listed = paragraph;
-  listed.containers.push_back({ContainerKind::ListItem, 1, true, TaskState::None, u"-"});
+  listed.containers.push_back({ContainerKind::ListItem, 1, true, TaskState::None, false, -1, u"-"});
   CHECK(nearly(blockGap(*theme, BlockSpacing::Normal, &paragraph, listed), 12),
         "a listed block keeps twelve by default");
 

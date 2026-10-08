@@ -94,9 +94,10 @@ void DownstreamTextLayoutManager::installPlatformServices(
 // thread, so measurement runs on the layout thread without blocking UIKit.
 DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
     const downstream::DocumentHandle &document, Float fontSizeMultiplier, Float maximumWidth,
-    SurfaceId /*surfaceId*/, uint32_t chrome, const downstream::CodeLayout &code,
-    const downstream::PlacedCaret &caret, const downstream::ImageLayout &images,
-    const downstream::HostLayout &hosts, const downstream::Theme::Handle &theme) const {
+    SurfaceId /*surfaceId*/, uint32_t chrome, const downstream::CodeLayoutProps &code,
+    const downstream::ReaderChoices &choices, const downstream::PlacedCaret &caret,
+    const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
+    const downstream::Theme::Handle &theme, const downstream::TableLayoutProps &tables) const {
   @autoreleasepool {
     // The view's own theme, so a themed measure and a themed draw are the same
     // numbers. Colors do not change metrics, so this is valid whether or not the
@@ -109,19 +110,19 @@ DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
                                                         syntaxHighlighting:YES
                                                                      theme:resolve(theme)
                                                                     caret:caret];
-    // The whole code layout comes along, because every input that changes a
-    // card's height is in it: wrapping, the cap, the gutter, and the reader's
-    // per-block choices. A document can hold every combination at once. The image
-    // answers come along for the same reason: a picture's height is its state,
-    // and a document can hold a loaded image and a placeholder at once. The
-    // hosted children's heights come along for the same reason once more: a
-    // fence drawn by a React component is as tall as that component.
+    // The props and the reader's choices travel separately and are bundled
+    // here, because one set of choices serves every collapsible block: a code
+    // toggle, a table toggle, and a details toggle arrive together. Every
+    // input that changes a height is in the bundle — wrapping, caps, gutters,
+    // per-block choices, image answers, table caps, hosted heights — because a
+    // document can hold every combination at once.
     const DSMeasurement measured =
         [rendered measureForWidth:maximumWidth
                            chrome:chrome
-                              code:code
+                              code:downstream::codeLayout(code, choices)
                            images:images.state
-                            hosts:hosts];
+                            hosts:hosts
+                           tables:downstream::tableLayout(tables, choices)];
     DocumentMeasurement measurement;
     measurement.size = Size{static_cast<Float>(measured.size.width), static_cast<Float>(measured.size.height)};
     for (const auto &host : measured.hosts) {
@@ -130,6 +131,13 @@ DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
                                               static_cast<Float>(host.second.origin.y)},
                                         Size{static_cast<Float>(host.second.size.width),
                                              static_cast<Float>(host.second.size.height)}}});
+    }
+    for (const auto &host : measured.tagHosts) {
+      measurement.tagSlots.push_back({host.first,
+                                      Rect{Point{static_cast<Float>(host.second.origin.x),
+                                                 static_cast<Float>(host.second.origin.y)},
+                                           Size{static_cast<Float>(host.second.size.width),
+                                                static_cast<Float>(host.second.size.height)}}});
     }
     return measurement;
   }
@@ -146,9 +154,10 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
                                                                       caret:hint.caret];
       [rendered sizeForWidth:hint.width
                        chrome:hint.chrome
-                          code:hint.code
+                          code:downstream::codeLayout(hint.code, hint.choices)
                         images:hint.images.state
-                         hosts:downstream::HostLayout{}];
+                         hosts:downstream::HostLayout{}
+                        tables:downstream::tableLayout(hint.tables, hint.choices)];
     }
   }
 }

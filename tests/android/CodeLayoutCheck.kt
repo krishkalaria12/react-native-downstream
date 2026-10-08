@@ -36,7 +36,7 @@ fun main() {
   val layout = CodeLayout()
   val noNumbers = CodeLayout(props = CodeLayoutProps(lineNumbers = false))
   val capped = CodeLayout(props = CodeLayoutProps(maxHeight = 400f))
-  val expanded = CodeLayout(props = CodeLayoutProps(maxHeight = 400f), choices = CodeChoices(expanded = intArrayOf(1)))
+  val expanded = CodeLayout(props = CodeLayoutProps(maxHeight = 400f), choices = ReaderChoices(codeExpanded = intArrayOf(1)))
 
   fun of(l: CodeLayout, o: Int, m: FenceMeta) = resolveCodeBlock(l, o, m)
 
@@ -57,14 +57,14 @@ fun main() {
   checkEqF(of(uncapped, 0, plain).maxHeight, 0f, "a zero cap is no cap")
   checkEqF(of(uncapped, 0, plain).maxHeight, of(expanded, 1, plain).maxHeight,
     "uncapped and expanded are the same value to the card")
-  val staleExpand = CodeLayout(props = CodeLayoutProps(maxHeight = 0f), choices = CodeChoices(expanded = intArrayOf(0)))
+  val staleExpand = CodeLayout(props = CodeLayoutProps(maxHeight = 0f), choices = ReaderChoices(codeExpanded = intArrayOf(0)))
   check(!of(staleExpand, 0, plain).expanded, "a block with no cap is never expanded")
 
   // Wrap: the whole table from `testWrapChoices`.
   val unwrapped = CodeLayout()
   val wrapped = CodeLayout(props = CodeLayoutProps(wrap = true))
-  val mixedUnwrapped = CodeLayout(choices = CodeChoices(wrapToggles = intArrayOf(2)))
-  val mixedWrapped = CodeLayout(props = CodeLayoutProps(wrap = true), choices = CodeChoices(wrapToggles = intArrayOf(2)))
+  val mixedUnwrapped = CodeLayout(choices = ReaderChoices(wrapToggles = intArrayOf(2)))
+  val mixedWrapped = CodeLayout(props = CodeLayoutProps(wrap = true), choices = ReaderChoices(wrapToggles = intArrayOf(2)))
   check(!of(unwrapped, 0, plain).wraps, "an untoggled block does not wrap when the prop is off")
   check(of(wrapped, 0, plain).wraps, "an untoggled block wraps when the prop is on")
   check(of(mixedUnwrapped, 2, plain).wraps, "a toggled block wraps when the prop is off")
@@ -75,14 +75,31 @@ fun main() {
   check(!of(mixedUnwrapped, 3, plain).wraps, "a neighbour after the toggle is unaffected")
 
   // Toggling keeps each choice set ascending, which `hasChoice` searches.
-  fun toggledList(values: IntArray, ordinal: Int) = CodeChoices.toggled(values, ordinal).toList()
+  fun toggledList(values: IntArray, ordinal: Int) =
+    ReaderChoices(wrapToggles = values).copyWith(ChoiceKind.Wrap, ordinal).wrapToggles.toList()
   check(toggledList(IntArray(0), 3) == listOf(3), "a first choice is added to an empty set")
   check(toggledList(intArrayOf(2, 5), 0) == listOf(0, 2, 5), "a choice before the rest goes first")
   check(toggledList(intArrayOf(2, 5), 4) == listOf(2, 4, 5), "a choice between two goes between them")
   check(toggledList(intArrayOf(2, 5), 9) == listOf(2, 5, 9), "a choice after the rest goes last")
   check(toggledList(intArrayOf(2, 4, 5), 4) == listOf(2, 5), "toggling a choice again removes it")
-  check(CodeChoices().copyWithExpand(1).expanded.contentEquals(intArrayOf(1)), "expand adds to an empty set")
-  check(CodeChoices().copyWith(1).wrapToggles.contentEquals(intArrayOf(1)), "wrap adds to an empty set")
+  check(
+    ReaderChoices().copyWith(ChoiceKind.CodeExpand, 1).codeExpanded.contentEquals(intArrayOf(1)),
+    "code expand adds to an empty set",
+  )
+  check(ReaderChoices().copyWith(ChoiceKind.Wrap, 1).wrapToggles.contentEquals(intArrayOf(1)),
+    "wrap adds to an empty set")
+  check(ReaderChoices().copyWith(ChoiceKind.TableExpand, 1).tableExpanded.contentEquals(intArrayOf(1)),
+    "table expand adds to an empty set")
+  check(ReaderChoices().copyWith(ChoiceKind.DetailsOpen, 1).detailsOpen.contentEquals(intArrayOf(1)),
+    "details open adds to an empty set")
+  // The four sets are separate, which is the property that lets one bundle of
+  // choices replace four: expanding a code block never uncaps a table that
+  // happens to share its ordinal.
+  val shared = ReaderChoices(codeExpanded = intArrayOf(2), tableExpanded = intArrayOf(2))
+  check(shared.copyWith(ChoiceKind.TableExpand, 2).codeExpanded.contentEquals(intArrayOf(2)),
+    "a table expand leaves the code set alone")
+  check(!shared.copyWith(ChoiceKind.TableExpand, 2).tableExpanded.contentEquals(intArrayOf(2)),
+    "and removes the table's own entry")
 
   checkEq(gutterDigits(1, 1), 2, "one line is at least two digits")
   checkEq(gutterDigits(1, 9), 2, "nine lines are two digits")

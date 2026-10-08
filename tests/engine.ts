@@ -44,10 +44,21 @@ export const STYLE = {
   math: 1 << 7,
   superscript: 1 << 8,
   subscript: 1 << 9,
+  /** The phase 4 tag styles, mirroring `InlineStyle` in `src/cpp/downstream`. */
+  keyboard: 1 << 10,
+  highlight: 1 << 11,
+  underline: 1 << 12,
 } as const;
 
-/** Container kinds, matching `Container::Kind`. */
-export const CONTAINER = { quote: 0, listItem: 1 } as const;
+/** Container kinds, matching `ContainerKind` in `src/cpp/downstream`. */
+export const CONTAINER = {
+  quote: 0,
+  listItem: 1,
+  admonition: 2,
+  footnote: 3,
+  details: 4,
+  custom: 5,
+} as const;
 
 /** Task states, matching `TaskState`. */
 export const TASK = ['none', 'unchecked', 'checked'] as const;
@@ -70,6 +81,8 @@ export type TokenRun = [
 
 export interface Block {
   kind: number;
+  /** The layout direction the engine decided: 0 inherit, 1 ltr, 2 rtl. */
+  direction: number;
   headingLevel: number;
   tableHeader: boolean;
   table: number;
@@ -84,6 +97,10 @@ export interface Block {
     showsMarker: boolean;
     task: number;
     marker: string;
+    /** `<details open>`: the writer's starting state, which a reader overrides. */
+    open: boolean;
+    /** An app-allowed block tag's index in the document's tag list, or -1. */
+    tag: number;
   }[];
   runs: InlineRun[];
   tokens: TokenRun[];
@@ -138,7 +155,6 @@ const TARGETS = {
   'downstream-incremental': [
     join(CPP, 'tests', 'test_incremental.cpp'),
     join(CPP, 'session', 'IncrementalParser.cpp'),
-    join(CPP, 'downstream', 'SegmentPlan.cpp'),
     ...ENGINE,
     ...MD4C_SOURCES,
   ],
@@ -154,13 +170,11 @@ const TARGETS = {
   ],
   'downstream-export': [
     join(CPP, 'tests', 'dump_export.cpp'),
-    join(CPP, 'downstream', 'SegmentPlan.cpp'),
     ...ENGINE,
     ...MD4C_SOURCES,
   ],
   'downstream-export-rules': [
     join(CPP, 'tests', 'test_export.cpp'),
-    join(CPP, 'downstream', 'SegmentPlan.cpp'),
     ...ENGINE,
     ...MD4C_SOURCES,
   ],
@@ -171,7 +185,6 @@ const TARGETS = {
   ],
   'downstream-fence-meta': [
     join(CPP, 'tests', 'test_fence_meta.cpp'),
-    join(CPP, 'downstream', 'SegmentPlan.cpp'),
     ...ENGINE,
     ...MD4C_SOURCES,
   ],
@@ -193,13 +206,15 @@ export const PREVIEW_LINKS = 1 << 2;
 export const PREVIEW_IMAGES = 1 << 3;
 export const PREVIEW_MATH = 1 << 4;
 export const PREVIEW_HTML_TAGS = 1 << 5;
+export const PREVIEW_TABLES = 1 << 6;
 export const PREVIEW_ALL =
   PREVIEW_EMPHASIS |
   PREVIEW_INLINE_CODE |
   PREVIEW_LINKS |
   PREVIEW_IMAGES |
   PREVIEW_MATH |
-  PREVIEW_HTML_TAGS;
+  PREVIEW_HTML_TAGS |
+  PREVIEW_TABLES;
 
 /**
  * Bits of the parse-level `parseFlags` prop, mirroring `src/parseFlags.ts` and
@@ -212,7 +227,16 @@ export const PARSE_BRACKETS = 1 << 2;
 export const PARSE_INLINE_HTML = 1 << 3;
 export const PARSE_SUPERSCRIPT_SYNTAX = 1 << 4;
 export const PARSE_SUBSCRIPT_SYNTAX = 1 << 5;
-export const PARSE_FLAGS_DEFAULT = PARSE_ENABLED | PARSE_BRACKETS;
+/** `/…`, `./…`, `../…`, `?…` and `#…` are links. */
+export const PARSE_LINK_RELATIVE = 1 << 6;
+export const PARSE_NO_AUTOLINK_MAILTO = 1 << 7;
+export const PARSE_NO_AUTOLINK_HTTP = 1 << 8;
+export const PARSE_NO_AUTOLINK_HTTPS = 1 << 9;
+/** The markdown-cjk-friendly amendment. On unless `cjk` is false. */
+export const PARSE_CJK = 1 << 10;
+/** An allowed tag's content is unstyled text. Off unless asked for. */
+export const PARSE_LITERAL_TAG_CONTENT = 1 << 14;
+export const PARSE_FLAGS_DEFAULT = PARSE_ENABLED | PARSE_BRACKETS | PARSE_CJK;
 
 function sessionBinary(): string {
   return compile(TARGETS['downstream-session'], 'downstream-session');
@@ -415,15 +439,52 @@ export function replayReveal(
 }
 
 /** Parses a complete document with the engine that ships in the app. */
-export function parse(source: string | Buffer, parseFlags = 0): RenderModel {
+export function parse(
+  source: string | Buffer,
+  parseFlags = 0,
+  allowedTags?: Record<string, readonly string[]>
+): RenderModel {
   const input =
     typeof source === 'string' ? Buffer.from(source, 'utf8') : source;
+  // The tag policy travels as the flat list `src/allowedTags.ts` writes, sent to
+  // the engine through its own reader rather than built here, so a test exercises
+  // the wire format the library actually sends.
+  const policy =
+    allowedTags === undefined ? '' : encodeAllowedTags(allowedTags);
   return JSON.parse(
-    execFileSync(engineBinary(), parseFlags ? [String(parseFlags)] : [], {
-      input,
-      maxBuffer: 256 << 20,
-    }).toString('utf8')
+    execFileSync(
+      engineBinary(),
+      parseFlags || policy ? [String(parseFlags), policy] : [],
+      {
+        input,
+        maxBuffer: 256 << 20,
+      }
+    ).toString('utf8')
   );
+}
+
+/**
+ * The `allowedTags` wire form, exactly as `src/allowedTags.ts` writes it:
+ * `-1,name,attribute,…,-1,name,…`, sorted by name so the engine's binary search
+ * finds every row.
+ *
+ * Exported so a test can assert on the form itself, not only on what the engine
+ * does with it — a policy that silently stopped being sorted would still work for
+ * one tag and would be invisible to a test that only counted blocks.
+ */
+export function encodeAllowedTags(
+  tags: Record<string, readonly string[]>
+): string {
+  const names = Object.keys(tags).sort();
+  const flat: string[] = [];
+  for (const name of names) {
+    flat.push(
+      '-1',
+      name.toLowerCase(),
+      ...(tags[name] ?? []).map((a) => a.toLowerCase())
+    );
+  }
+  return flat.join(',');
 }
 
 /** One fenced block the engine would hand a renderer, as the module returns it. */

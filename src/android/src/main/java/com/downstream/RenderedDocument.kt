@@ -20,6 +20,7 @@ import android.text.style.LeadingMarginSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StrikethroughSpan
 import android.text.style.TypefaceSpan
+import android.text.style.UnderlineSpan
 import android.util.LruCache
 import android.widget.TextView
 import androidx.annotation.RequiresApi
@@ -48,6 +49,8 @@ internal class RenderedDocument(
   private var cachedCode: CodeLayout? = null
   private var cachedImages: ImageLayout? = null
   private var cachedHosts: HostLayout? = null
+  private var cachedTables: TableLayout? = null
+  private var cachedChoices: ReaderChoices? = null
   private var cachedFrames = IntArray(0)
 
   fun createTextLayout(segment: TextSegment, width: Int): StaticLayout =
@@ -67,9 +70,20 @@ internal class RenderedDocument(
     code: CodeLayout,
     images: ImageLayout,
     hosts: HostLayout,
+    tables: TableLayout,
+    choices: ReaderChoices,
   ): Int =
     when (segment) {
-      is TextSegment -> segment.height(width, paint)
+      // A hosted tag replaces its whole segment with the slot: the component
+      // owns its height, so the text underneath takes none. Only a segment the
+      // plan grouped for one container is ever hosted, which is what makes the
+      // container id the key rather than a block range.
+      is TextSegment ->
+        if (segment.customContainer >= 0 && hosts.hostsTag(segment.customContainer)) {
+          hosts.tagHeightFor(segment.customContainer).toInt()
+        } else {
+          segment.height(width, paint, choices)
+        }
       // A picture's box is the state and the theme, and nothing else: there is no
       // text to lay out and the bytes are not here. The same `imageBox` the
       // shadow node measured with, or the two disagree by the height of a
@@ -121,16 +135,26 @@ internal class RenderedDocument(
           )
         }
       }
-      is TableSegment ->
-        segment.tableHeight + (if (chrome and CHROME_TABLE_TOOLBAR != 0) style.chromeRowHeight else 0)
+      // The same rule as iOS: the cap is decided by the engine's `tableHeight`,
+      // which the shadow node also called, so a measured table and a drawn one are
+      // the same box. The toolbar stays outside the cap, because a capped table is
+      // still the one a reader uses to lift the cap.
+      is TableSegment -> {
+        val toolbar = if (chrome and CHROME_TABLE_TOOLBAR != 0) style.chromeRowHeight else 0
+        ceil(
+          toolbar + segment.visibleGridHeight(resolveTable(tables, segment.ordinal))
+            .toDouble(),
+        ).toInt()
+      }
     }
 
   /**
    * Top and height of each segment at a width, as [top0, height0, top1, ...].
    *
-   * `chrome` and the reader's wrap choices are part of the key rather than the
-   * rendering, so a change to either restacks frames without rebuilding any
-   * spans. A measurement only holds for the choices it was made under.
+   * `chrome`, the reader's wrap choices, and the reader's table expand choices are
+   * all part of the key rather than the rendering, so a change to any of them
+   * restacks frames without rebuilding any spans. A measurement only holds for the
+   * choices it was made under.
    */
   @Synchronized
   fun frames(
@@ -139,6 +163,8 @@ internal class RenderedDocument(
     code: CodeLayout = CodeLayout(),
     images: ImageLayout = ImageLayout(),
     hosts: HostLayout = HostLayout(),
+    tables: TableLayout = TableLayout(),
+    choices: ReaderChoices = ReaderChoices(),
   ): IntArray {
     // A measurement only holds for the layout it was made under, so the whole code
     // layout, the whole image layout, and the hosted heights are all part of the
@@ -148,16 +174,18 @@ internal class RenderedDocument(
     // old box was.
     if (
       width == cachedWidth && chrome == cachedChrome && code == cachedCode &&
-      images == cachedImages && hosts == cachedHosts
+      images == cachedImages && hosts == cachedHosts && tables == cachedTables &&
+      choices == cachedChoices
     ) {
       return cachedFrames
     }
     val frames = IntArray(segments.size * 2)
     var y = 0
     segments.forEachIndexed { index, segment ->
-      y += segment.gapBefore
+      val hidden = insideHiddenDetails(segment.detailsContainers, choices)
+      if (!hidden) y += segment.gapBefore
       frames[index * 2] = y
-      frames[index * 2 + 1] = heightOf(segment, width, chrome, code, images, hosts)
+      frames[index * 2 + 1] = if (hidden) 0 else heightOf(segment, width, chrome, code, images, hosts, tables, choices)
       y += frames[index * 2 + 1]
     }
     cachedWidth = width
@@ -165,6 +193,8 @@ internal class RenderedDocument(
     cachedCode = code
     cachedImages = images
     cachedHosts = hosts
+    cachedTables = tables
+    cachedChoices = choices
     cachedFrames = frames
     return frames
   }
@@ -175,8 +205,10 @@ internal class RenderedDocument(
     code: CodeLayout = CodeLayout(),
     images: ImageLayout = ImageLayout(),
     hosts: HostLayout = HostLayout(),
+    tables: TableLayout = TableLayout(),
+    choices: ReaderChoices = ReaderChoices(),
   ): Int {
-    val frames = frames(width, chrome, code, images, hosts)
+    val frames = frames(width, chrome, code, images, hosts, tables, choices)
     return if (frames.isEmpty()) 0 else frames[frames.size - 2] + frames[frames.size - 1]
   }
 
@@ -190,6 +222,50 @@ internal class RenderedDocument(
    * come from the frames just stacked, so the shadow node places a child where
    * this rendering puts it.
    */
+  /**
+   * Content rectangles of hosted tags, as `[container, left, top, right,
+   * bottom]` groups, in the document's own coordinates.
+   *
+   * Beside `hostFrames` because the two count different things, and one array
+   * mixing them would let a fence claim a tag's rectangle. Read the same way,
+   * for the same reason: only `measureText` reports attachment positions, and
+   * a hosted child is not text.
+   */
+  @Synchronized
+  fun tagHostFrames(
+    width: Int,
+    chrome: Int = 0,
+    code: CodeLayout = CodeLayout(),
+    images: ImageLayout = ImageLayout(),
+    hosts: HostLayout = HostLayout(),
+    tables: TableLayout = TableLayout(),
+    choices: ReaderChoices = ReaderChoices(),
+  ): IntArray {
+    if (hosts.tags.isEmpty()) {
+      return IntArray(0)
+    }
+    val frames = frames(width, chrome, code, images, hosts, tables, choices)
+    val out = IntArray(hosts.tags.size * 5)
+    var count = 0
+    segments.forEachIndexed { index, segment ->
+      if (segment !is TextSegment || segment.customContainer < 0 ||
+        !hosts.hostsTag(segment.customContainer)
+      ) {
+        return@forEachIndexed
+      }
+      val top = frames[index * 2]
+      val height = frames[index * 2 + 1]
+      val leading = segment.contentLeading.toInt()
+      val column = max(0, width - leading)
+      out[count++] = segment.customContainer
+      out[count++] = leading
+      out[count++] = top
+      out[count++] = leading + column
+      out[count++] = top + height
+    }
+    return if (count == out.size) out else out.copyOf(count)
+  }
+
   @Synchronized
   fun hostFrames(
     width: Int,
@@ -197,11 +273,13 @@ internal class RenderedDocument(
     code: CodeLayout = CodeLayout(),
     images: ImageLayout = ImageLayout(),
     hosts: HostLayout = HostLayout(),
+    tables: TableLayout = TableLayout(),
+    choices: ReaderChoices = ReaderChoices(),
   ): IntArray {
     if (hosts.isEmpty()) {
       return IntArray(0)
     }
-    val frames = frames(width, chrome, code, images, hosts)
+    val frames = frames(width, chrome, code, images, hosts, tables, choices)
     val out = IntArray(hosts.entries.size * 5)
     var count = 0
     segments.forEachIndexed { index, segment ->
@@ -367,10 +445,14 @@ internal class RenderedDocument(
       syntaxHighlighting: Boolean = true,
       themeId: Long = 0L,
       caret: PlacedCaret = PlacedCaret.NONE,
+      linkVariants: LinkVariants = LinkVariants(),
     ): RenderedDocument? {
       val night = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
         Configuration.UI_MODE_NIGHT_YES
-      val key = "$documentId:$fontScale:$night:$syntaxHighlighting:$themeId:${caret.kind}:${caret.place}"
+      // Link colors are baked into a segment's text, so two variant sets are two
+      // different renderings even when everything else is the same.
+      val key =
+        "$documentId:$fontScale:$night:$syntaxHighlighting:$themeId:${caret.kind}:${caret.place}:${linkVariants.hashCode()}"
       cache.get(key)?.let { return it }
       // Inline formulas draw from text spans, which have no context of their own.
       MathFonts.attach(context)
@@ -380,6 +462,14 @@ internal class RenderedDocument(
       // would be one crossing per field per picture; this is one for the document.
       // A document with no pictures is ordinary, so an empty list is an answer.
       val images = DownstreamNative.readImages(documentId) ?: NativeImages.EMPTY
+      // The document's link URLs, read once when variants could style them. An
+      // empty list when there is nothing to match against, so a document with no
+      // variants pays for no JNI round trip at all.
+      val linkUrls = if (linkVariants.isEmpty()) {
+        emptyList()
+      } else {
+        DownstreamNative.readLinkUrls(documentId)
+      }
       // A theme can cap the platform's font scale but cannot raise it, and the
       // cap is applied once here so every measurement below works with the
       // result. Resolved in C++ so both platforms read one rule.
@@ -407,16 +497,25 @@ internal class RenderedDocument(
         val caretKey = if (isLast) "${caret.kind}:${caret.place}" else "0:0"
         val segmentKey =
           "${planned.identity}:${planned.to - planned.from}:$ordinal:$scaled:$night:" +
-            "$syntaxHighlighting:$themeId:$caretKey"
+            "$syntaxHighlighting:$themeId:$caretKey:${linkVariants.hashCode()}"
         val segment = (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
           // The theme id goes with the read, because each block's typography is
           // resolved against it in C++; without it every block reads the default.
           ?: DownstreamNative.readDocument(documentId, planned.from, planned.to, themeId)
             ?.let {
               buildSegment(
-                it, images, style, planned, ordinal, syntaxHighlighting, style.px(it.previousBottomMargin),
+                it, images, style, planned, ordinal, planned.tableOrdinal, syntaxHighlighting,
+                style.px(it.previousBottomMargin),
                 if (isLast) caret else PlacedCaret.NONE,
-              )
+                linkVariants, linkUrls,
+              ).also { segment ->
+                segment.detailsContainers = (0 until it.containerCount(0)).mapNotNull { depth ->
+                  if (it.containerKind(0, depth) != NativeDocument.CONTAINER_DETAILS) null
+                  else ContainerDecoration(0f, 0f, null, false, null, 0f, 0f,
+                    kind = CONTAINER_DETAILS, id = it.containerId(0, depth),
+                    open = it.containerOpen(0, depth), summary = it.showsMarker(0, depth))
+                }
+              }
             }
             ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
           ?: return null
@@ -608,9 +707,12 @@ internal class RenderedDocument(
       style: Style,
       planned: PlannedSegment,
       codeOrdinal: Int,
+      tableOrdinal: Int,
       syntaxHighlighting: Boolean,
       previousBottom: Float,
       caret: PlacedCaret = PlacedCaret.NONE,
+      linkVariants: LinkVariants = LinkVariants(),
+      linkUrls: List<String> = emptyList(),
     ): Segment {
       val from = planned.from
       val isCode = planned.kind == SEGMENT_CODE
@@ -641,6 +743,13 @@ internal class RenderedDocument(
       val text = SpannableStringBuilder(document.text)
       val textLanguage = document.blockLanguage(0)
       val accessibleBlocks = ArrayList<AccessibleBlock>(document.blockCount)
+      // Every block inside a `<details>`, whether its body is showing or not. The
+      // reader's choice is resolved against these later, at measurement, because
+      // a segment is built once and a toggle arrives as a new snapshot.
+      val detailsBlocks = ArrayList<DetailsBlock>()
+      // Every task item, whether it is checked or not. A press reports rather
+      // than stores, so the segment only has to know which box is where.
+      val taskBlocks = ArrayList<TaskBlock>()
       val isTable = document.blockKind(0) == NativeDocument.KIND_TABLE_ROW
       val flags = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
 
@@ -660,7 +769,11 @@ internal class RenderedDocument(
               colors.quoteBar
             }
             containers.add(
-              ContainerDecoration(leading, style.quoteIndent, bar, continues, null, style.barWidth, style.markerGap),
+              ContainerDecoration(
+                leading, style.quoteIndent, bar, continues, null, style.barWidth, style.markerGap,
+                kind = kind, id = document.containerId(block, depth), open = document.containerOpen(block, depth),
+                summary = document.showsMarker(block, depth), task = document.taskState(block, depth),
+              ),
             )
             leading += style.quoteIndent
           } else {
@@ -685,6 +798,8 @@ internal class RenderedDocument(
               ContainerDecoration(
                 leading, style.listIndent, null, continues, marker, style.barWidth, style.markerGap,
                 if (marker != null) markerColor else null,
+                kind = kind, id = document.containerId(block, depth), open = document.containerOpen(block, depth),
+                summary = document.showsMarker(block, depth), task = document.taskState(block, depth),
               ),
             )
             leading += style.listIndent
@@ -712,6 +827,22 @@ internal class RenderedDocument(
         val spanEnd = if (block + 1 < document.blockCount) end + 1 else end
         val previous = block - 1
         val (containers, leading, inQuote) = containersOf(block, previous)
+        if (containers.any { it.kind == CONTAINER_DETAILS }) {
+          detailsBlocks.add(
+            DetailsBlock(
+              start, end,
+              summary = isDetailsSummary(containers),
+              containers = containers,
+            ),
+          )
+        }
+        // The box is drawn in the margin of the container's own first leaf, so
+        // only that leaf reports it: a press on any other line of the item is a
+        // press on its words.
+        val task = containers.firstOrNull { it.task != 0 }
+        if (task != null && task.summary) {
+          taskBlocks.add(TaskBlock(start, end, task.id, task.checked))
+        }
 
         // A code card is its own segment and draws its own padding, so its
         // block never reserves any here, and the block that follows one starts
@@ -769,7 +900,7 @@ internal class RenderedDocument(
         }
         text.setSpan(
           BlockSpan(gap.toInt(), leading, decoration, containers, markerPaint, colors, density,
-            isCode || startsRightToLeft(text, start, end), style.ruleHeight),
+            isCode || document.blockIsRtl(block), style.ruleHeight),
           start,
           spanEnd,
           Spanned.SPAN_PARAGRAPH,
@@ -802,6 +933,7 @@ internal class RenderedDocument(
       for (run in 0 until document.runCount) {
         val styles = document.runStyles(run)
         val link = document.runLink(run)
+        val tag = document.runTag(run)
         val start = document.runStart(run)
         val end = document.runEnd(run)
         val bold = styles and NativeDocument.STYLE_STRONG != 0
@@ -916,6 +1048,59 @@ internal class RenderedDocument(
             flags,
           )
         }
+        if (styles and NativeDocument.STYLE_KEYBOARD != 0) {
+          // A key cap draws as inline code with a border. The face and the size
+          // are the code's, and the border is drawn by the background span the
+          // view draws for it — so this only has to set the face.
+          blockPaintFor(blockIndex)
+          text.setSpan(
+            RelativeSizeSpan(theme.inlineCodeRatio(px(theme.number(ThemeSlots.SLOT_CODE_FONT_SIZE)))),
+            start,
+            end,
+            flags,
+          )
+          text.setSpan(
+            InlineCodeBackgroundSpan(colors.codeBackground, metricAscent, metricDescent),
+            start,
+            end,
+            flags,
+          )
+        }
+        if (styles and NativeDocument.STYLE_HIGHLIGHT != 0) {
+          // Highlighted text, in the theme's own mark color over the block's
+          // face. A foreground color rather than a background one, because a
+          // highlight is ink and the text under it stays the text it was.
+          val mark = theme.color(ThemeSlots.SLOT_MARK_COLOR, colors.night)
+          text.setSpan(
+            if (mark != null) {
+              ForegroundColorSpan(mark)
+            } else {
+              BackgroundColorSpan(
+                theme.color(ThemeSlots.SLOT_MARK_BACKGROUND_COLOR, colors.night) ?: colors.codeBackground,
+              )
+            },
+            start,
+            end,
+            flags,
+          )
+        }
+        if (styles and NativeDocument.STYLE_UNDERLINE != 0) {
+          val underline = theme.color(ThemeSlots.SLOT_UNDERLINE_COLOR, colors.night)
+          text.setSpan(
+            if (underline != null) ThemedUnderlineSpan(underline) else UnderlineSpan(),
+            start,
+            end,
+            flags,
+          )
+        }
+        if (styles and NativeDocument.STYLE_SPOILER != 0) {
+          // Hidden until tapped: the text is laid out, measured and selectable,
+          // and only the ink is withheld. The tap that reveals it is a press on
+          // the run, reported the way a link press is.
+          val spoiler = theme.color(ThemeSlots.SLOT_SPOILER_COLOR, colors.night) ?: colors.text
+          text.setSpan(BackgroundColorSpan(spoiler), start, end, flags)
+          text.setSpan(SpoilerSpan(spoiler), start, end, flags)
+        }
         if (styles and NativeDocument.STYLE_IMAGE_ALT != 0) {
           // Alt text reads as secondary by design, so the theme's own alt color
           // wins over the block's text color.
@@ -968,12 +1153,25 @@ internal class RenderedDocument(
             flags,
           )
         }
+        if (tag >= 0) {
+          // A pressable tag names itself on the run, the way a link names its
+          // index: a press has to know which tag it landed on without asking.
+          text.setSpan(TagSpan(tag), start, end, flags)
+        }
         if (link >= 0) {
-          // A theme can turn the underline off, which is what a link that reads
-          // as a link by color alone wants.
-          val linkColor = theme.color(ThemeSlots.SLOT_LINK_COLOR, colors.night) ?: colors.link
+          // A per-URL variant wins over the theme: the first prefix the URL
+          // starts with names the color, and anything it does not name stays the
+          // theme's. The URL is the document's own link string, which is the
+          // same string a press reports.
+          var linkColor = theme.color(ThemeSlots.SLOT_LINK_COLOR, colors.night) ?: colors.link
+          var linkUnderline = theme.flag(ThemeSlots.SLOT_LINK_UNDERLINE)
+          if (!linkVariants.isEmpty()) {
+            val variant = linkUrls.getOrNull(link)?.let { linkVariants.variantFor(it) }
+            if (variant?.color != null) linkColor = variant.color
+            if (variant?.underline != null) linkUnderline = variant.underline
+          }
           text.setSpan(
-            LinkSpan(link, linkColor, theme.flag(ThemeSlots.SLOT_LINK_UNDERLINE)),
+            LinkSpan(link, linkColor, linkUnderline),
             start,
             end,
             flags,
@@ -1029,7 +1227,7 @@ internal class RenderedDocument(
         // its bottom margin in; zero at the very top of the document.
         return buildTable(
           document, text, 0, document.blockCount, style, containersOf(0, -1),
-          style.gapAbove(document, 0, previousBottom).toInt(), identity, from, caret,
+          style.gapAbove(document, 0, previousBottom).toInt(), identity, from, tableOrdinal, caret,
         )
       }
       val caretOffset = appendCaret(text, document, style, caret)
@@ -1074,7 +1272,20 @@ internal class RenderedDocument(
           caret.kind,
         )
       }
-      return TextSegment(displayText, accessibleBlocks, gapBefore, caretOffset, caret.kind)
+      // The plan grouped this segment for one custom container, if it did: the
+      // first block's innermost Custom frame names it, and every block in the
+      // range shares it by construction of the grouping.
+      var custom = -1
+      for (depth in 0 until document.containerCount(0)) {
+        if (document.containerKind(0, depth) == NativeDocument.CONTAINER_CUSTOM) {
+          custom = document.containerId(0, depth)
+        }
+      }
+      return TextSegment(
+        displayText, accessibleBlocks, detailsBlocks, taskBlocks, custom,
+        contentLeading = contentLeading(containersOf(0, -1).first).toInt(),
+        gapBefore = gapBefore, caretOffset = caretOffset, caretKind = caret.kind,
+      )
     }
 
     /**
@@ -1225,7 +1436,10 @@ internal class RenderedDocument(
         codeOrdinal = codeOrdinal,
         containers = containers.first,
         contentLeading = contentLeading(containers.first).toInt(),
-        rtl = startsRightToLeft(text, 0, text.length),
+        // A code card's body reads left to right whatever it contains, which is
+        // the rule `Direction.h` states and the one this side used to reach its
+        // own version of.
+        rtl = false,
         firstLine = firstLine,
         padding = style.codePadding,
         gutterGap = ceil(GUTTER_GAP * style.density).toInt(),
@@ -1258,6 +1472,7 @@ internal class RenderedDocument(
       gapBefore: Int,
       identity: Long,
       blockIndex: Int,
+      tableOrdinal: Int,
       caret: PlacedCaret = PlacedCaret.NONE,
     ): TableSegment {
       val paint = style.paint
@@ -1359,12 +1574,13 @@ internal class RenderedDocument(
         colors = colors,
         density = density,
         borderWidth = border,
-        rtl = startsRightToLeft(text, document.blockStart(from), document.blockEnd(from)),
+        rtl = document.blockIsRtl(from),
         identity = identity,
         blockIndex = blockIndex,
         blockCount = to - from,
         caretKind = caret.kind,
         gapBefore = gapBefore,
+        ordinal = tableOrdinal,
       )
     }
   }

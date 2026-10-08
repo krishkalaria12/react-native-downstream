@@ -12,10 +12,16 @@
 #include "InlineRuns.h"
 #include "MarkdownParser.h"
 #include "SegmentPlan.h"
+#include "BidiTable.h"
+#include "DetailsLayout.h"
+#include "Direction.h"
+#include "TagSlots.h"
+#include "TableLayout.h"
 #include "Unicode.h"
 #include "tests/check.h"
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -67,7 +73,7 @@ void checkPlan(const char *label, std::string_view source, const char *expected)
       shape.push_back(' ');
     }
     // One letter per kind rather than a table flag and a code flag, because the
-    // plan has five kinds and the last two were added after the other three: a
+    // plan has six kinds and the last three were added after the other three: a
     // boolean per kind is how a new one gets drawn as prose and measured as text.
     switch (segment.kind) {
       case SegmentKind::Table: shape += 'T'; break;
@@ -75,6 +81,7 @@ void checkPlan(const char *label, std::string_view source, const char *expected)
       case SegmentKind::Math: shape += 'M'; break;
       case SegmentKind::Image: shape += 'I'; break;
       case SegmentKind::Text: shape += 't'; break;
+      case SegmentKind::Custom: shape += 'U'; break;
     }
     shape += std::to_string(segment.from);
     shape.push_back('-');
@@ -226,26 +233,26 @@ void testWrapChoices() {
 
   // The chrome bit says only whether every block wraps, and the toggle set is
   // what fills in a mixed document.
-  CHECK((chromeForProps(ControlBits::CodeWrap, wrapped) & kChromeCodeWrap) != 0,
+  CHECK((chromeForProps(ControlBits::CodeWrap, CodeLayoutProps{true, true, 400}, ReaderChoices{}) & kChromeCodeWrap) != 0,
         "no toggles with the prop on is all-wrapping chrome");
-  CHECK((chromeForProps(ControlBits::CodeWrap, mixedWrapped) & kChromeCodeWrap) == 0,
+  CHECK((chromeForProps(ControlBits::CodeWrap, CodeLayoutProps{true, true, 400}, mixedWrapped.choices) & kChromeCodeWrap) == 0,
         "any toggle clears the all-wrapping bit");
-  CHECK((chromeForProps(ControlBits::CodeWrap, mixedUnwrapped) & kChromeCodeWrap) == 0,
+  CHECK((chromeForProps(ControlBits::CodeWrap, CodeLayoutProps{}, mixedUnwrapped.choices) & kChromeCodeWrap) == 0,
         "the prop off is never all-wrapping chrome");
 
   // The header and the toolbar do not depend on any of this.
-  CHECK((chromeForProps(ControlBits::CodeCopy, mixedUnwrapped) & kChromeCodeHeader) != 0,
+  CHECK((chromeForProps(ControlBits::CodeCopy, CodeLayoutProps{}, mixedUnwrapped.choices) & kChromeCodeHeader) != 0,
         "a copy control still gives a code block its header");
-  CHECK((chromeForProps(ControlBits::CodeExpand, unwrapped) & kChromeCodeHeader) != 0,
+  CHECK((chromeForProps(ControlBits::CodeExpand, CodeLayoutProps{}, ReaderChoices{}) & kChromeCodeHeader) != 0,
         "an expand control alone still gives a code block its header");
-  CHECK((chromeForProps(ControlBits::TableDownload, unwrapped) & kChromeTableToolbar) != 0,
+  CHECK((chromeForProps(ControlBits::TableDownload, CodeLayoutProps{}, ReaderChoices{}) & kChromeTableToolbar) != 0,
         "a table download still gives a table its toolbar");
-  CHECK((chromeForProps(0, unwrapped) & (kChromeCodeHeader | kChromeTableToolbar)) == 0,
+  CHECK((chromeForProps(0, CodeLayoutProps{}, ReaderChoices{}) & (kChromeCodeHeader | kChromeTableToolbar)) == 0,
         "no controls means no chrome at all");
 
   // The wrap control being off is a different thing from the prop being off: the
   // button disappears but the layout the prop asked for stays.
-  CHECK((chromeForProps(0, wrapped) & kChromeCodeWrap) == 0, "no wrap control means no wrap bit");
+  CHECK((chromeForProps(0, CodeLayoutProps{true, true, 400}, ReaderChoices{}) & kChromeCodeWrap) == 0, "no wrap control means no wrap bit");
 }
 
 // ----------------------------------------------------------- line numbers
@@ -283,7 +290,7 @@ void testCodeBlockLayout() {
   // The cap, and the expand choice that removes it for one block.
   CHECK(numbers(capped, 0, plain).maxHeight == 400.0f, "the cap prop reaches the block");
   CodeLayout expanded = capped;
-  expanded.choices.expanded = {1};
+  expanded.choices.codeExpanded = {1};
   CHECK(numbers(expanded, 1, plain).maxHeight == 0.0f, "an expanded block has no cap");
   CHECK(numbers(expanded, 0, plain).maxHeight == 400.0f, "one expanded block does not cap its neighbour");
   CHECK(numbers(capped, 0, plain).maxHeight == 400.0f, "an uncapped layout leaves the cap alone");
@@ -300,12 +307,422 @@ void testCodeBlockLayout() {
   // With no cap there is nothing to collapse back to, so a leftover choice does
   // not turn into a collapse button.
   CodeLayout staleExpand = uncapped;
-  staleExpand.choices.expanded = {0};
+  staleExpand.choices.codeExpanded = {0};
   CHECK(!numbers(staleExpand, 0, plain).expanded, "a block with no cap is never expanded");
 }
 
+/// The table's cap and the reader's per-table expand choice.
+///
+/// The same rules `resolveCodeBlock` follows for a code block, deliberately: a
+/// table and a code card are the same decision about a different block, and one
+/// definition of "the reader lifted the cap" is what keeps them from drifting.
+/// The ordinals are separate sets, because a code ordinal counts code blocks and
+/// a table ordinal counts tables.
+void testTableLayout() {
+  TableLayout layout;
+  TableLayout capped = layout;
+  capped.props.maxHeight = 300;
+
+  auto tables = [](const TableLayout &value, uint32_t ordinal) { return resolveTable(value, ordinal); };
+
+  CHECK(tables(capped, 0).maxHeight == 300.0f, "the cap prop reaches the table");
+  CHECK(!tables(capped, 0).expanded, "no choice means no expansion");
+
+  TableLayout expanded = capped;
+  expanded.choices.tableExpanded = {1};
+  CHECK(tables(expanded, 1).maxHeight == 0.0f, "an expanded table has no cap");
+  CHECK(tables(expanded, 1).expanded, "an expanded table says so, so it can collapse again");
+  CHECK(tables(expanded, 0).maxHeight == 300.0f, "one expanded table does not cap its neighbour");
+  CHECK(!tables(expanded, 0).expanded, "its neighbour is not expanded");
+
+  // A prop of 0 is no cap, and it must reach the table as the same 0 an expanded
+  // table uses rather than as a truthy "off".
+  TableLayout uncapped = layout;
+  uncapped.props.maxHeight = 0;
+  CHECK(tables(uncapped, 0).maxHeight == 0.0f, "a zero cap is no cap");
+  CHECK(tables(uncapped, 0).maxHeight == tables(expanded, 1).maxHeight,
+        "uncapped and expanded are the same value to the table");
+  // With no cap there is nothing to collapse back to, so a leftover choice does
+  // not turn into a collapse button.
+  TableLayout staleExpand = uncapped;
+  staleExpand.choices.tableExpanded = {0};
+  CHECK(!tables(staleExpand, 0).expanded, "a table with no cap is never expanded");
+
+  // The two caps read different sets of the reader's one choice bundle, so
+  // expanding a code block never uncaps a table that happens to share its
+  // ordinal. This is the property that lets one set of choices replace two.
+  TableLayout codeOnly = capped;
+  codeOnly.choices.codeExpanded = {1};
+  CHECK(!tables(codeOnly, 1).expanded, "a code expand does not uncap a table");
+  CHECK(resolveCodeBlock(CodeLayout{CodeLayoutProps{true, true, 400}, codeOnly.choices}, 1, FenceMeta{}).expanded,
+        "and the code block is the one that expands");
+
+  // A negative ordinal is a caller that does not know which table this is, and
+  // the answer is the same one an uncapped table gets: no cap, and nothing to
+  // collapse. Reading it as a huge unsigned ordinal would silently apply the cap
+  // to a table the reader never chose.
+  CHECK(tables(capped, -1).maxHeight == 0.0f, "an unknown table has no cap");
+  CHECK(!tables(expanded, -1).expanded, "an unknown table is never expanded");
+
+  // A NaN cap must not make two identical props compare different, which is the
+  // same rule `TableLayoutProps` documents and for the same reason.
+  TableLayout nan = layout;
+  nan.props.maxHeight = std::nanf("");
+  TableLayout nanAgain = nan;
+  CHECK(nan == nanAgain, "two NaN props are equal");
+  CHECK(!(nan == layout), "a NaN prop is not the default");
+}
+
+/// The table box is `toolbar + min(rows * rowHeight, max(cap, floor))`.
+///
+/// The toolbar is outside the cap, because a capped table is still the one a
+/// reader uses to lift the cap; the floor is inside it, because a cap that would
+/// show one header row is not a cap anyone can use.
+void testTableHeight() {
+  const float toolbar = 36;
+  // Said explicitly rather than by default-construction, so this test pins the
+  // numbers it is about instead of the header's initialisers.
+  TableBlockLayout uncapped{0};
+  TableBlockLayout capped{300};
+
+  CHECK(tableHeight(uncapped, 2, toolbar) == toolbar + 2 * kTableRowHeight,
+        "a table under the cap is toolbar plus rows");
+  CHECK(tableHeight(capped, 100, toolbar) == toolbar + 300, "a table over the cap is capped");
+  CHECK(tableHeight(capped, 2, toolbar) == toolbar + 2 * kTableRowHeight,
+        "a table shorter than the cap is its own height, not the cap");
+
+  // The floor wins over the cap: a cap of one row still shows three, which is a
+  // header and two rows a reader can act on.
+  TableBlockLayout tiny{static_cast<float>(kTableRowHeight)};
+  CHECK(tableHeight(tiny, 100, toolbar) == toolbar + kMinVisibleTableRows * kTableRowHeight,
+        "a cap below the floor shows the floor");
+
+  // The floor never adds space to a small table: a two-row table is two rows.
+  CHECK(tableHeight(capped, kMinVisibleTableRows - 1, toolbar) == toolbar + (kMinVisibleTableRows - 1) * kTableRowHeight,
+        "the floor does not add space to a table shorter than itself");
+
+  // The toolbar is outside the cap in both directions, so a capped table is
+  // never shorter than an uncapped one with the same rows.
+  CHECK(tableHeight(capped, 100, toolbar) > tableHeight(capped, 100, 0),
+        "the toolbar is outside the cap");
+
+  // An expanded table's cap is already 0 by the time it gets here, and it lays
+  // out as uncapped rather than as a table at height 0.
+  TableBlockLayout expanded;
+  expanded.expanded = true;
+  CHECK(expanded.maxHeight == 0.0f, "a default-constructed block has no cap");
+  CHECK(tableHeight(expanded, 4, toolbar) == tableHeight(uncapped, 4, toolbar),
+        "an expanded table is laid out as uncapped");
+
+  // Every row count, capped and uncapped, is never below its own rows and never
+  // below the floor, which is the two invariants the platforms rely on.
+  const auto gridOf = [](uint32_t rows) { return static_cast<float>(rows) * kTableRowHeight; };
+  for (uint32_t rows = 0; rows <= 200; rows++) {
+    const float grid = gridOf(rows);
+    // Compared against the whole value rather than a difference: `a + b - a` is
+    // not `b` in floating point, and the platforms lay the toolbar out separately
+    // from the grid anyway, so the whole height is the thing that has to agree.
+    const float cappedHeight = tableHeight(capped, rows, toolbar);
+    CHECK(cappedHeight - toolbar >= std::min(grid, 300.0f) - 0.001f,
+          "a capped table is at least the smaller of its rows and its cap");
+    CHECK(cappedHeight - toolbar >= std::min(grid, kMinVisibleTableRows * kTableRowHeight) - 0.001f,
+          "a capped table is at least the smaller of its rows and the floor");
+    CHECK(cappedHeight <= toolbar + std::min(std::max(grid, kMinVisibleTableRows * kTableRowHeight), 300.0f) + 0.001f,
+          "a capped table is no taller than the cap or the floor needs");
+    CHECK(tableHeight(uncapped, rows, toolbar) == toolbar + grid, "an uncapped table is its own rows");
+  }
+}
+
+/// A collapsible block's open state, and the height a closed body takes.
+///
+/// The reader's answer is the later of the two, so a reader who closes a block
+/// the writer opened keeps it closed: the summary is a control, not a caption.
+void testDetailsLayout() {
+  ReaderChoices none;
+  CHECK(!resolveDetails(none, 1, false).open, "a block with neither answer is closed");
+  CHECK(resolveDetails(none, 1, true).open, "the writer's open is the starting state");
+
+  ReaderChoices opened = none.with(ChoiceKind::DetailsOpen, 1, true);
+  CHECK(resolveDetails(opened, 1, false).open, "a reader's choice opens a block the writer closed");
+  CHECK(!resolveDetails(opened, 1, true).open, "and closes one they did not");
+  CHECK(!resolveDetails(opened, 2, false).open, "one opened block does not open its neighbour");
+
+  // Closing a block the writer opened is the case that decides the order the two
+  // answers are read in: the reader's is the later one, so it wins.
+  ReaderChoices closedByReader = none.with(ChoiceKind::DetailsOpen, 3, true);
+  CHECK(resolveDetails(closedByReader, 3, false).open, "a reader can open a block the writer left closed");
+  ReaderChoices noRecord = none.with(ChoiceKind::DetailsOpen, 4, false);
+  CHECK(resolveDetails(noRecord, 4, true).open, "the writer's open stands when the reader said nothing");
+  CHECK(resolveDetails(none, 5, true).open, "with no choice at all, the writer decides");
+  // A reader can also close a block the writer opened, which is what makes a
+  // recorded choice a flip rather than only an open.
+  ReaderChoices readerClosed = none.with(ChoiceKind::DetailsOpen, 6, true);
+  CHECK(!resolveDetails(readerClosed, 6, true).open, "a reader can close a block the writer opened");
+
+  // The choice sets are separate, so a code toggle cannot open a collapsible
+  // block and a collapsible block's toggle cannot unwrap a code block. They share
+  // a container id space, which is exactly why they may not share a set.
+  ReaderChoices codeOnly = none.with(ChoiceKind::CodeExpand, 1, true);
+  CHECK(!resolveDetails(codeOnly, 1, false).open, "a code expand does not open a details block");
+
+  Container outer;
+  outer.kind = ContainerKind::Details;
+  outer.id = 10;
+  outer.showsMarker = true;
+  CHECK(isDetailsSummary({outer}), "the marked leaf is the details summary");
+  CHECK(!insideHiddenDetails({outer}, none), "a closed details keeps its own summary visible");
+  outer.showsMarker = false;
+  CHECK(!isDetailsSummary({outer}), "an unmarked details body is not a summary");
+  CHECK(insideHiddenDetails({outer}, none), "a closed details hides its body");
+  Container inner = outer;
+  inner.id = 11;
+  inner.open = true;
+  inner.showsMarker = true;
+  CHECK(isDetailsSummary({outer, inner}), "a nested marked leaf remains a summary");
+  CHECK(insideHiddenDetails({outer, inner}, none), "a closed ancestor hides an open nested summary");
+  CHECK(!insideHiddenDetails({outer, inner}, none.with(ChoiceKind::DetailsOpen, 10, true)),
+        "opening the ancestor reveals the nested summary");
+  CHECK(!isDetailsSummary({}), "ordinary prose is not a summary");
+
+  // A closed body is zero tall, whatever the body measured to.
+  CHECK(detailsBodyHeight(true, 120) == 120, "an open body is its own height");
+  CHECK(detailsBodyHeight(false, 120) == 0, "a closed body takes no space at all");
+  CHECK(detailsBodyHeight(false, 0) == 0, "and a body that was empty stays empty");
+}
+
+/// The height a text segment shows once its closed bodies are taken out.
+///
+/// The rule is one sentence — a line goes when its first character is inside a
+/// collapsed range — and the rest of this is what that sentence has to be true of.
+void testVisibleTextHeight() {
+  // Four lines of ten points each, laid out from a paragraph with a blank line
+  // between every block: line starts are at the block boundaries.
+  const std::vector<float> tops = {0, 10, 30, 50, 60};
+  const std::vector<uint32_t> starts = {0, 12, 30, 46};
+
+  CHECK(visibleTextHeight(60, tops, starts, {}) == 60, "nothing hidden is the whole height");
+  // The middle block is lines 1 and 2.
+  CHECK(visibleTextHeight(60, tops, starts, {{12, 30}}) == 40, "a collapsed block takes its own lines");
+
+  // The first block, which is a summary but could be some other block's body.
+  CHECK(visibleTextHeight(60, tops, starts, {{0, 12}}) == 50, "a leading block goes too");
+  // The last block: line 3 only, since its range ends at the text's end.
+  CHECK(visibleTextHeight(60, tops, starts, {{46, 1000}}) == 50, "a trailing block goes too");
+
+  // Two collapsed blocks add up, and a block that starts on the same line as
+  // another is counted once.
+  CHECK(visibleTextHeight(60, tops, starts, {{12, 30}, {46, 1000}}) == 30, "two collapsed blocks both go");
+  CHECK(visibleTextHeight(60, tops, starts, {{12, 30}, {13, 30}}) == 40, "overlapping ranges count once");
+
+  // A range that ends exactly where a line starts does not take that line, which
+  // is what makes a block's last line its own rather than the next block's first.
+  CHECK(visibleTextHeight(60, tops, starts, {{12, 30}}) == 40, "a range ending on a line start leaves it");
+
+  // A range that lies wholly inside one line hides nothing: the line belongs to
+  // whatever ran into it, and taking it would remove the last line of a visible
+  // block along with a body that was never on it. This is what a one-line
+  // paragraph between two visible ones does.
+  CHECK(visibleTextHeight(60, tops, starts, {{13, 14}}) == 60,
+        "a range inside one line leaves that line");
+  // One character earlier does take the line, because the line now begins inside
+  // the block — which is the ordinary case of a block that starts a line.
+  CHECK(visibleTextHeight(60, tops, starts, {{12, 14}}) == 40, "and takes it once the line starts inside");
+
+  // A segment with one line hides it when its only block is collapsed, and a
+  // caller with no line table gets the whole height rather than a crash: this is
+  // the measurement path, where a crash would be worse than a wrong number.
+  CHECK(visibleTextHeight(20, {0, 20}, {0}, {{0, 5}}) == 0, "a one-line segment hides its only line");
+  CHECK(visibleTextHeight(20, {}, {}, {{0, 5}}) == 20, "no line table is the whole height");
+  CHECK(visibleTextHeight(20, {0}, {0}, {}) == 20, "a single line top is the whole height");
+}
+
+/// The layout direction of a block, decided once in the engine.
+///
+/// The table itself is generated, so what is pinned here is the rule and the
+/// table's edges: which characters count, which way a tie goes, and the three
+/// cases that were wrong on one platform or the other.
+void testDirection() {
+  const auto utf8 = [](const char *bytes) { return utf8ToUtf16(bytes); };
+
+  // The table's own edges: an ASCII letter and a Hebrew letter are on the sides
+  // they are on, and neither table claims the other's ground.
+  CHECK(isStrongLeftToRight('a'), "an ascii letter reads left to right");
+  CHECK(!isStrongRightToLeft('a'), "and is not right to left");
+  CHECK(isStrongRightToLeft(0x05d0), "a hebrew letter reads right to left");
+  CHECK(!isStrongLeftToRight(0x05d0), "and is not left to right");
+  CHECK(isStrongRightToLeft(0x0627), "an arabic letter reads right to left");
+  // A neutral is in neither table, which is what lets a number-only line
+  // inherit rather than being counted.
+  CHECK(!isStrongLeftToRight('5'), "a digit is neutral");
+  CHECK(!isStrongRightToLeft('5'), "a digit is neutral both ways");
+  CHECK(isStrongLeftToRight(0x200e), "the left-to-right mark is strong left to right");
+  CHECK(isStrongRightToLeft(0x200f), "and the right-to-left mark the other way");
+  // A supplementary letter, which is a surrogate pair in the text and one code
+  // point in the table.
+  CHECK(isStrongLeftToRight(0x10400), "a deseret letter reads left to right");
+
+  // The rule: the majority wins.
+  CHECK(textDirection(utf8("hello world"), BlockDirection::Inherit) == BlockDirection::LeftToRight,
+        "an english paragraph is left to right");
+  CHECK(textDirection(utf8("\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D \xD7\xA2\xD7\x95\xD7\x9C\xD7\x9D"), BlockDirection::Inherit) ==
+            BlockDirection::RightToLeft,
+        "a hebrew paragraph is right to left");
+  CHECK(textDirection(utf8("one two three \xD7\x90\xD7\x91"), BlockDirection::Inherit) == BlockDirection::LeftToRight,
+        "one hebrew letter in english prose does not turn the line");
+  CHECK(textDirection(utf8("\xD7\x90\xD7\x91\xD7\x92\xD7\x93\xD7\x94 one"), BlockDirection::Inherit) ==
+            BlockDirection::RightToLeft,
+        "five hebrew letters against one english word read right to left");
+
+  // A tie goes to the first strong character, because a reader's eye starts at the
+  // beginning of the line.
+  CHECK(textDirection(utf8("a \xD7\x90"), BlockDirection::Inherit) == BlockDirection::LeftToRight,
+        "a tie opens the way its first strong character reads");
+  CHECK(textDirection(utf8("\xD7\x90 a"), BlockDirection::Inherit) == BlockDirection::RightToLeft,
+        "and the same the other way round");
+
+  // A block with no strong character is handed back the direction it was given,
+  // which is what "inherits" means here: the function has no document to look at,
+  // so it does not guess. The builder is what carries the previous block's
+  // direction forward, and a document's first such block inherits left to right.
+  CHECK(textDirection(utf8("123 456"), BlockDirection::Inherit) == BlockDirection::Inherit,
+        "a number-only line inherits rather than deciding");
+  CHECK(textDirection(utf8("123 456"), BlockDirection::RightToLeft) == BlockDirection::RightToLeft,
+        "and inherits right to left where that is what came before");
+  CHECK(textDirection(utf8("123 456"), BlockDirection::LeftToRight) == BlockDirection::LeftToRight,
+        "and left to right where that is");
+  CHECK(textDirection(u"", BlockDirection::RightToLeft) == BlockDirection::RightToLeft,
+        "empty text inherits");
+  CHECK(textDirection(utf8("... --- ..."), BlockDirection::RightToLeft) == BlockDirection::RightToLeft,
+        "punctuation is neutral too");
+
+  // Code and math are skipped rather than counted, which is the case the two
+  // platforms disagreed on: a paragraph that opens with an inline code span and
+  // then Arabic came out two different ways.
+  Block code;
+  code.kind = BlockKind::CodeBlock;
+  code.text = utf8("\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D");
+  CHECK(blockDirection(code, BlockDirection::LeftToRight) == BlockDirection::Inherit,
+        "a code block is laid out left to right whatever it contains");
+  Block math;
+  math.kind = BlockKind::MathBlock;
+  math.text = utf8("\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D");
+  CHECK(blockDirection(math, BlockDirection::Inherit) == BlockDirection::Inherit,
+        "and so is a formula");
+
+  Block prose;
+  prose.kind = BlockKind::Paragraph;
+  prose.text = utf8("`x` \xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D");
+  CHECK(blockDirection(prose, BlockDirection::Inherit) == BlockDirection::RightToLeft,
+        "prose that opens with inline code still reads the way its words do");
+}
+
+/// A custom container's blocks group into their own segment, and the slot query
+/// names them for a renderer.
+///
+/// The plan groups only simple blocks: code, tables, formulas and pictures keep
+/// their own segments wherever they sit, so a container holding any of those is
+/// drawn natively rather than hosted.
+void checkPlanWith(const char *label, std::string_view source, const ParseOptions &options, const char *expected) {
+  const ParseResult result = parseMarkdown(source, options);
+  if (result.status != ParseStatus::Ok || !result.document) {
+    CHECK(false, label);
+    return;
+  }
+  std::string shape;
+  for (const SegmentPlan &segment : planSegments(*result.document)) {
+    if (!shape.empty()) {
+      shape.push_back(' ');
+    }
+    switch (segment.kind) {
+      case SegmentKind::Table: shape += 'T'; break;
+      case SegmentKind::Code: shape += 'C'; break;
+      case SegmentKind::Math: shape += 'M'; break;
+      case SegmentKind::Image: shape += 'I'; break;
+      case SegmentKind::Text: shape += 't'; break;
+      case SegmentKind::Custom: shape += 'U'; break;
+    }
+    shape += std::to_string(segment.from);
+    shape.push_back('-');
+    shape += std::to_string(segment.to);
+  }
+  expectEq(shape, expected, label);
+}
+
+void testCustomSegments() {
+  TagPolicy policy;
+  policy.tags = {AllowedTag{"user", {}}};
+  // Inline HTML on, as the view resolves it: container pairing is an HTML
+  // feature, and without the bit every tag stays source.
+  const ParseOptions options(ParseFlags::Default | ParseFlags::InlineHtml, policy);
+  // One paragraph in one container: one custom segment.
+  checkPlanWith("a custom container groups its blocks", "<user>\n\nHello.\n\n</user>\n", options, "U0-1");
+  checkPlanWith("prose before a hosted tag remains outside its segment",
+                "Before.\n\n<user>\n\nHello.\n\n</user>\n\nAfter.\n", options, "t0-1 U1-2 t2-3");
+  const ParseOptions html(ParseFlags::Default | ParseFlags::InlineHtml);
+  checkPlanWith("details summaries and bodies do not clip surrounding prose",
+                "Before.\n\n<details>\n<summary>A</summary>\n\none\n\n</details>\n\nBetween.\n\n"
+                "<details>\n<summary>B</summary>\n\ntwo\n\n</details>\n\nAfter.\n",
+                html, "t0-1 t1-2 t2-3 t3-4 t4-5 t5-6 t6-7");
+  checkPlanWith("details body paragraphs with the same visibility can group",
+                "<details open>\n<summary>A</summary>\n\none\n\ntwo\n\n</details>\n\nAfter.\n",
+                html, "t0-1 t1-3 t3-4");
+  checkPlanWith("nested summaries have their own segment",
+                "<details>\n<summary>Outer</summary>\n\none\n\n<details open>\n<summary>Inner</summary>\n\ntwo\n\n"
+                "</details>\n\nthree\n\n</details>\n", html, "t0-1 t1-2 t2-3 t3-4 t4-5");
+  checkPlanWith("details inside a custom container retain separate visibility",
+                "<user>\n\nBefore.\n\n<details>\n<summary>A</summary>\n\none\n\n</details>\n\nAfter.\n\n</user>\n",
+                options, "U0-1 U1-2 U2-3 U3-4");
+  // Without the policy the tag is not a container, so the opener, the body and
+  // the closer stay one text segment of ordinary blocks.
+  checkPlan("with no policy there is no custom segment", "<user>\n\nHello.\n\n</user>\n", "t0-3");
+  // A fence inside splits: the container spans three segments and is drawn
+  // natively rather than hosted, because one slot cannot replace two drawings.
+  checkPlanWith("a fence inside splits the container's segments", "<user>\n\nA.\n\n```\nx\n```\n\nB.\n\n</user>\n",
+                options, "U0-1 C1-2 U2-3");
+}
+
+/// The tag slots in a document: one per custom container whose tag the app
+/// named, with the source it holds and whether its closer arrived.
+void testTagSlots() {
+  TagPolicy policy;
+  policy.tags = {AllowedTag{"user", {}}};
+  const ParseOptions options(ParseFlags::Default | ParseFlags::InlineHtml, policy);
+  const std::string source = "<user>\n\nHello **there**.\n\n</user>\n";
+  const ParseResult result = parseMarkdown(source, options);
+  CHECK(result.status == ParseStatus::Ok, "the custom document parses");
+  // A controlled parse treats every block as settled, the way the fence query
+  // does: the source is complete, so nothing in it is still arriving.
+  const uint32_t settled = static_cast<uint32_t>(result.document->blocks.size());
+  const std::vector<TagSlot> slots = tagSlots(*result.document, source, {"user"}, false, settled);
+  CHECK(slots.size() == 1, "one container is one slot");
+  CHECK(slots[0].name == "user", "the slot names its tag");
+  CHECK(slots[0].markdown == "Hello **there**.", "the slot holds the body's source, not a re-serialization");
+  CHECK(!slots[0].incomplete, "a closed container is complete");
+  const auto liveClosed = tagSlots(*result.document, source, {"user"}, true);
+  CHECK(liveClosed.size() == 1 && !liveClosed[0].incomplete,
+        "the last closed container is complete even while the stream is live");
+  CHECK(slots[0].blockCount == 1, "and it spans its one block");
+  // A tag with no renderer draws natively, so there is nothing to mount for it.
+  CHECK(tagSlots(*result.document, source, {"team"}, false, settled).empty(), "an unnamed tag is no slot");
+  CHECK(tagSlots(*result.document, source, {}, false, settled).empty(), "no names is no slots");
+  // No closer yet: the body is still arriving, so the renderer shows a
+  // placeholder rather than half a card.
+  const ParseResult open = parseMarkdown("<user>\n\nHello.\n", options);
+  CHECK(open.status == ParseStatus::Ok, "the unclosed document parses");
+  const std::vector<TagSlot> pending = tagSlots(*open.document, "<user>\n\nHello.\n", {"user"}, true);
+  CHECK(pending.size() == 1, "an open container is still a slot");
+  CHECK(pending[0].incomplete, "but an incomplete one");
+  const auto controlledOpen = tagSlots(*open.document, "<user>\n\nHello.\n", {"user"}, true,
+                                       static_cast<uint32_t>(open.document->blocks.size()));
+  CHECK(controlledOpen.size() == 1 && controlledOpen[0].incomplete,
+        "a controlled unclosed container stays incomplete even with a settled prefix");
+  const auto finishedOpen = tagSlots(*open.document, "<user>\n\nHello.\n", {"user"}, false,
+                                    static_cast<uint32_t>(open.document->blocks.size()));
+  CHECK(finishedOpen.size() == 1 && !finishedOpen[0].incomplete, "finish settles a container without a closer");
+}
+
 /// The gutter is as wide as the widest number it draws, and never narrower than
-/// two digits, which is what keeps Streamdown's "over 100" bug out.
+/// two digits, which is what keeps Streamdown\'s "over 100" bug out.
 void testGutterDigits() {
   CHECK(gutterDigits(1, 1) == 2, "one line is at least two digits");
   CHECK(gutterDigits(1, 9) == 2, "nine lines are two digits");
@@ -697,6 +1114,13 @@ int main() {
   testMathDocuments();
   testWrapChoices();
   testCodeBlockLayout();
+  testTableLayout();
+  testTableHeight();
+  testDetailsLayout();
+  testVisibleTextHeight();
+  testDirection();
+  testCustomSegments();
+  testTagSlots();
   testGutterDigits();
   testCodeCardHeight();
   testCodeLineStarts();

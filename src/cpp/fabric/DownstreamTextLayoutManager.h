@@ -6,6 +6,7 @@
 #include "HostLayout.h"
 #include "ImageLayout.h"
 #include "RenderPreparer.h"
+#include "TableLayout.h"
 #include "theme/Theme.h"
 
 #include <react/renderer/core/LayoutConstraints.h>
@@ -26,6 +27,16 @@ struct HostRect {
   Rect rect;
 };
 
+/// Where one React child that replaced a custom tag goes.
+///
+/// A separate list from `slots` because the two count different things: a fence
+/// slot is keyed by code ordinal and a tag slot by container id, so one list
+/// mixing them would let a fence claim a tag's rectangle.
+struct TagHostRect {
+  uint32_t container{0};
+  Rect rect;
+};
+
 /// What one measurement produced: the document's size, and where each React
 /// child that replaced a fence goes.
 ///
@@ -37,6 +48,10 @@ struct DocumentMeasurement {
   Size size{0, 0};
   /// Both platforms emit rectangles in document order, hence code ordinal order.
   std::vector<HostRect> slots;
+  /// Tag slot rectangles, in container id order, for the same reason `slots`
+  /// exists: a frame that draws at a position has that position from the
+  /// measurement that gave the document its height.
+  std::vector<TagHostRect> tagSlots;
 
   /// The rectangle for `ordinal`, or nullptr when this document hosts no
   /// child there, which is what a stale slot from a lagging render gets.
@@ -44,6 +59,15 @@ struct DocumentMeasurement {
     const auto it = std::lower_bound(slots.begin(), slots.end(), ordinal,
                                     [](const HostRect &slot, uint32_t value) { return slot.ordinal < value; });
     return it != slots.end() && it->ordinal == ordinal ? &it->rect : nullptr;
+  }
+
+  /// The rectangle for a hosted tag's container, or nullptr when this document
+  /// hosts no child there.
+  const Rect *tagSlotFor(uint32_t container) const {
+    const auto it =
+        std::lower_bound(tagSlots.begin(), tagSlots.end(), container,
+                         [](const TagHostRect &slot, uint32_t value) { return slot.container < value; });
+    return it != tagSlots.end() && it->container == container ? &it->rect : nullptr;
   }
 };
 
@@ -97,18 +121,27 @@ public:
   /// The theme keys on `themeLayoutKey` and not on `id`, so a color-only change
   /// reuses every measured size and Yoga sees nothing at all: the drawing
   /// objects are rebuilt, but no measurement is.
+  ///
+  /// The props of every block kind that has one, and the reader's one set of
+  /// choices, rather than a bundle per kind: a collapsible block's toggle and a
+  /// code block's wrap are the same reader's state, and a cache key that carried
+  /// four copies of it would compare four times to answer one question.
   DocumentMeasurement measure(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
                               const LayoutConstraints &layoutConstraints, SurfaceId surfaceId, uint32_t chrome,
-                              const downstream::CodeLayout &code, const downstream::PlacedCaret &caret,
+                              const downstream::CodeLayoutProps &code, const downstream::PlacedCaret &caret,
                               const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
-                              const downstream::Theme::Handle &theme) const;
+                              const downstream::Theme::Handle &theme,
+                              const downstream::TableLayoutProps &tables = {},
+                              const downstream::ReaderChoices &choices = {}) const;
 
 private:
   DocumentMeasurement measurePlatform(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
                                       Float maximumWidth, SurfaceId surfaceId, uint32_t chrome,
-                                      const downstream::CodeLayout &code, const downstream::PlacedCaret &caret,
+                                      const downstream::CodeLayoutProps &code,
+                                      const downstream::ReaderChoices &choices, const downstream::PlacedCaret &caret,
                                       const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
-                                      const downstream::Theme::Handle &theme) const;
+                                      const downstream::Theme::Handle &theme,
+                                      const downstream::TableLayoutProps &tables = {}) const;
 
   /// The theme's id, or 0 for the default theme, which is its id too.
   static uint64_t themeKey(const downstream::Theme::Handle &theme);
@@ -118,12 +151,21 @@ private:
     Float fontSizeMultiplier;
     Float maximumWidth;
     uint32_t chrome;
-    downstream::CodeLayout code;
+    downstream::CodeLayoutProps code;
     /// The caret, resolved. A caret after the last block is in the measured
     /// text, so two layouts that differ only in the caret are two layouts.
     downstream::PlacedCaret caret;
     downstream::ImageLayout images;
     downstream::HostLayout hosts;
+    /// The table's cap, for the same reason `code` is in the key: a capped table
+    /// and an expanded one are different heights, so they are different
+    /// measurements.
+    downstream::TableLayoutProps tables;
+    /// The reader's one set of choices. In the key for the reason the two props
+    /// above are: a wrapped and an unwrapped code block, a capped and an
+    /// uncapped table, and an open and a closed collapsible block are all
+    /// different heights.
+    downstream::ReaderChoices choices;
     /// The theme's layout key, which is 0 for the default theme.
     uint64_t themeLayoutKey;
     DocumentMeasurement measurement;

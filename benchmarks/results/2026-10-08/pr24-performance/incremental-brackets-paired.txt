@@ -1,0 +1,43 @@
+{"scope":"host C++ incremental parse and commit; excludes native layout and paint","baselineScope":"IncrementalParser.cpp only; all other engine sources are shared","host":{"platform":"darwin","arch":"arm64","cpu":"Apple M5"},"compiler":"Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin","optimization":["-O3","-DNDEBUG"]}
+round=0 variant=baseline
+inline_code_runs=256 bytes=3586 chunk=3586 median_ms=0.191708 parsed_bytes=3586 commit_attempts=1 samples_ms=0.187709,0.188083,0.190000,0.190500,0.191708,0.193958,0.195250,0.206458,0.249292
+inline_code_runs=256 bytes=3586 chunk=256 median_ms=0.761500 parsed_bytes=30466 commit_attempts=1 samples_ms=0.748042,0.751708,0.757041,0.758750,0.761500,0.868000,0.874500,0.920583,0.948958
+inline_code_runs=1024 bytes=14338 chunk=14338 median_ms=1.700583 parsed_bytes=14338 commit_attempts=1 samples_ms=1.460167,1.607833,1.678958,1.690833,1.700583,1.704500,1.888292,1.986375,2.094750
+inline_code_runs=1024 bytes=14338 chunk=256 median_ms=5.448750 parsed_bytes=422914 commit_attempts=1 samples_ms=4.791791,5.005417,5.014125,5.253667,5.448750,5.665000,5.953917,6.461375,7.009458
+inline_code_runs=4096 bytes=57346 chunk=57346 median_ms=10.070666 parsed_bytes=57346 commit_attempts=1 samples_ms=10.036666,10.054958,10.058750,10.062875,10.070666,10.073125,10.093250,10.134375,10.141750
+inline_code_runs=4096 bytes=57346 chunk=256 median_ms=67.040375 parsed_bytes=6508546 commit_attempts=1 samples_ms=66.549792,66.683958,66.736458,67.023458,67.040375,67.101125,67.845750,68.056666,71.440167
+round=0 variant=optimized
+inline_code_runs=256 bytes=3586 chunk=3586 median_ms=0.063417 parsed_bytes=3586 commit_attempts=1 samples_ms=0.061375,0.061750,0.062375,0.063250,0.063417,0.064125,0.064541,0.066625,0.078042
+inline_code_runs=256 bytes=3586 chunk=256 median_ms=0.418084 parsed_bytes=30466 commit_attempts=1 samples_ms=0.409291,0.412667,0.415584,0.417667,0.418084,0.421708,0.422958,0.426292,0.434250
+inline_code_runs=1024 bytes=14338 chunk=14338 median_ms=0.202958 parsed_bytes=14338 commit_attempts=1 samples_ms=0.200000,0.200542,0.202417,0.202750,0.202958,0.203208,0.205708,0.206583,0.206875
+inline_code_runs=1024 bytes=14338 chunk=256 median_ms=4.244792 parsed_bytes=422914 commit_attempts=1 samples_ms=4.064750,4.095917,4.096708,4.181750,4.244792,4.328292,4.443917,4.623417,4.833958
+inline_code_runs=4096 bytes=57346 chunk=57346 median_ms=0.561708 parsed_bytes=57346 commit_attempts=1 samples_ms=0.545834,0.557834,0.558583,0.558875,0.561708,0.563792,0.565375,0.566583,0.594000
+inline_code_runs=4096 bytes=57346 chunk=256 median_ms=59.579708 parsed_bytes=6508546 commit_attempts=1 samples_ms=56.235583,57.473125,57.749834,58.986042,59.579708,59.964792,60.344750,60.405291,63.497208
+round=1 variant=optimized
+inline_code_runs=256 bytes=3586 chunk=3586 median_ms=0.044042 parsed_bytes=3586 commit_attempts=1 samples_ms=0.043000,0.043459,0.043500,0.043542,0.044042,0.044583,0.044667,0.046250,0.056333
+inline_code_runs=256 bytes=3586 chunk=256 median_ms=0.327375 parsed_bytes=30466 commit_attempts=1 samples_ms=0.318875,0.321875,0.321875,0.322667,0.327375,0.329542,0.332458,0.335625,0.336166
+inline_code_runs=1024 bytes=14338 chunk=14338 median_ms=0.153750 parsed_bytes=14338 commit_attempts=1 samples_ms=0.152250,0.152292,0.152709,0.153458,0.153750,0.154209,0.155375,0.155625,0.156250
+inline_code_runs=1024 bytes=14338 chunk=256 median_ms=3.925084 parsed_bytes=422914 commit_attempts=1 samples_ms=3.724917,3.764292,3.765375,3.895125,3.925084,3.936458,3.958583,4.047708,4.063375
+inline_code_runs=4096 bytes=57346 chunk=57346 median_ms=0.558458 parsed_bytes=57346 commit_attempts=1 samples_ms=0.533208,0.544000,0.544500,0.549000,0.558458,0.595291,0.603416,0.781084,0.826833
+inline_code_runs=4096 bytes=57346 chunk=256 median_ms=55.662333 parsed_bytes=6508546 commit_attempts=1 samples_ms=55.112792,55.138792,55.219583,55.511958,55.662333,55.682459,56.031958,56.941458,58.527584
+round=1 variant=baseline
+inline_code_runs=256 bytes=3586 chunk=3586 median_ms=0.080833 parsed_bytes=3586 commit_attempts=1 samples_ms=0.079958,0.080125,0.080250,0.080583,0.080833,0.081625,0.083667,0.084292,0.092750
+inline_code_runs=256 bytes=3586 chunk=256 median_ms=0.335250 parsed_bytes=30466 commit_attempts=1 samples_ms=0.326541,0.327709,0.329250,0.332709,0.335250,0.336209,0.339917,0.343625,0.364666
+inline_code_runs=1024 bytes=14338 chunk=14338 median_ms=0.743750 parsed_bytes=14338 commit_attempts=1 samples_ms=0.735584,0.740959,0.741959,0.742667,0.743750,0.744041,0.759625,0.763625,0.771000
+inline_code_runs=1024 bytes=14338 chunk=256 median_ms=4.400000 parsed_bytes=422914 commit_attempts=1 samples_ms=4.263833,4.275292,4.324666,4.327875,4.400000,4.436875,4.442750,4.538958,4.541709
+inline_code_runs=4096 bytes=57346 chunk=57346 median_ms=10.019750 parsed_bytes=57346 commit_attempts=1 samples_ms=9.951917,9.974792,10.016208,10.017334,10.019750,10.025792,10.032875,10.055875,10.122125
+inline_code_runs=4096 bytes=57346 chunk=256 median_ms=65.898125 parsed_bytes=6508546 commit_attempts=1 samples_ms=65.070209,65.100583,65.114667,65.835166,65.898125,66.003958,66.368000,67.237208,67.400500
+round=2 variant=baseline
+inline_code_runs=256 bytes=3586 chunk=3586 median_ms=0.080500 parsed_bytes=3586 commit_attempts=1 samples_ms=0.079042,0.080166,0.080375,0.080458,0.080500,0.080708,0.081083,0.081125,0.093333
+inline_code_runs=256 bytes=3586 chunk=256 median_ms=0.331958 parsed_bytes=30466 commit_attempts=1 samples_ms=0.327792,0.328208,0.329750,0.331166,0.331958,0.333583,0.333750,0.336083,0.337917
+inline_code_runs=1024 bytes=14338 chunk=14338 median_ms=0.740625 parsed_bytes=14338 commit_attempts=1 samples_ms=0.736167,0.736833,0.736916,0.739708,0.740625,0.743042,0.744083,0.751666,0.753083
+inline_code_runs=1024 bytes=14338 chunk=256 median_ms=4.423250 parsed_bytes=422914 commit_attempts=1 samples_ms=4.333959,4.351125,4.356083,4.397667,4.423250,4.446833,4.462208,4.467834,4.634000
+inline_code_runs=4096 bytes=57346 chunk=57346 median_ms=10.031542 parsed_bytes=57346 commit_attempts=1 samples_ms=9.962042,9.969667,9.977834,10.003583,10.031542,10.034666,10.035166,10.041000,10.056417
+inline_code_runs=4096 bytes=57346 chunk=256 median_ms=71.034000 parsed_bytes=6508546 commit_attempts=1 samples_ms=65.786791,66.147500,69.967417,70.657250,71.034000,71.376500,72.346708,73.269459,74.003167
+round=2 variant=optimized
+inline_code_runs=256 bytes=3586 chunk=3586 median_ms=0.041333 parsed_bytes=3586 commit_attempts=1 samples_ms=0.039542,0.040375,0.040625,0.041042,0.041333,0.042167,0.042208,0.044375,0.051292
+inline_code_runs=256 bytes=3586 chunk=256 median_ms=0.293166 parsed_bytes=30466 commit_attempts=1 samples_ms=0.289000,0.290750,0.292500,0.292833,0.293166,0.296334,0.296542,0.301417,0.301875
+inline_code_runs=1024 bytes=14338 chunk=14338 median_ms=0.143042 parsed_bytes=14338 commit_attempts=1 samples_ms=0.138875,0.140041,0.140750,0.142292,0.143042,0.143416,0.143875,0.143958,0.144500
+inline_code_runs=1024 bytes=14338 chunk=256 median_ms=3.739333 parsed_bytes=422914 commit_attempts=1 samples_ms=3.612750,3.638250,3.653791,3.690792,3.739333,3.779000,3.818916,3.825500,3.845542
+inline_code_runs=4096 bytes=57346 chunk=57346 median_ms=0.547042 parsed_bytes=57346 commit_attempts=1 samples_ms=0.540333,0.540459,0.541833,0.546875,0.547042,0.551417,0.553833,0.566542,0.568708
+inline_code_runs=4096 bytes=57346 chunk=256 median_ms=56.415792 parsed_bytes=6508546 commit_attempts=1 samples_ms=55.638917,55.795375,55.811625,56.215416,56.415792,60.293875,60.658000,62.589667,63.300042

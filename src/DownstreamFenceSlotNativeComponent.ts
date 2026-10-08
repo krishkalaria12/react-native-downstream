@@ -19,6 +19,16 @@ import {
  */
 interface NativeProps extends ViewProps {
   ordinal: CodegenTypes.Int32;
+  /**
+   * A hosted custom tag's container id, or -1 for a fence.
+   *
+   * The slot component is shared because a slot's whole job is to hold the
+   * app's component while the shadow node measures and places it: whether the
+   * child replaces a fence or a tag changes which block range it stands in
+   * for, not how it is held. The shadow node reads this to tell the two apart,
+   * and the view never reads either.
+   */
+  containerId?: CodegenTypes.WithDefault<CodegenTypes.Int32, -1>;
 }
 
 export default codegenNativeComponent<NativeProps>(

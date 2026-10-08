@@ -1,6 +1,13 @@
 /** Public API types. The stream controller types describe the planned session API. */
-import type { ComponentType } from 'react';
-import type { ColorValue, StyleProp, TextStyle, ViewStyle } from 'react-native';
+import type { ComponentType, ReactNode } from 'react';
+
+import type {
+  ColorValue,
+  ImageSourcePropType,
+  StyleProp,
+  TextStyle,
+  ViewStyle,
+} from 'react-native';
 
 /** Half-open offsets in the canonical JavaScript UTF-16 source string. */
 export type MarkdownSourceRange = Readonly<{
@@ -53,8 +60,29 @@ export type CustomRenderer = Readonly<{
   component: ComponentType<CustomRendererProps>;
 }>;
 
+/**
+ * Props for a component drawn in place of an allowed block tag.
+ *
+ * The tag name is a prop so one component can serve several tags.
+ */
+export type TagRendererProps = Readonly<{
+  name: string;
+  attributes: ReadonlyArray<readonly [string, string]>;
+  markdown: string;
+  isIncomplete: boolean;
+}>;
+
+export type TagRenderer = Readonly<{
+  name: string | readonly string[];
+  component: ComponentType<TagRendererProps>;
+}>;
+
+export type FallbackRendererProps = CustomRendererProps | TagRendererProps;
+
 export type MarkdownPlugins = Readonly<{
   renderers?: readonly CustomRenderer[];
+  tags?: readonly TagRenderer[];
+  fallbackComponent?: ComponentType<FallbackRendererProps>;
 }>;
 
 /** Thrown by rejected synchronous stream operations. */
@@ -63,7 +91,20 @@ export interface MarkdownOperationError extends Error {
 }
 
 export type MarkdownLinkPressEvent = Readonly<{
+  /**
+   * The destination to open, resolved against `links.defaultOrigin` when the
+   * document held a relative one.
+   *
+   * An app with its own router wants this, because it is the only one of the
+   * two that is a real URL.
+   */
   url: string;
+  /**
+   * The destination as written, never rewritten. This is what maps a press back
+   * to the message's own text, and for a relative link it is the only form that
+   * says what the writer wrote.
+   */
+  href: string;
   range: MarkdownSourceRange;
 }>;
 
@@ -154,6 +195,14 @@ export type MarkdownPreviewOptions = Readonly<{
    * Off by default, as every preview feature.
    */
   htmlTags?: boolean;
+  /**
+   * Hide a table whose rows are still arriving, until it is complete.
+   *
+   * A half-drawn grid is what this mode exists to prevent: not even the rows
+   * that have settled are shown, and when the table completes its rows arrive
+   * together. Off by default, as every preview feature.
+   */
+  tables?: boolean;
 }>;
 
 /**
@@ -171,6 +220,150 @@ export type MarkdownSyntaxOptions = Readonly<{
    * `~x~` is a subscript instead of strikethrough. Off, as in Streamdown.
    */
   subscript?: boolean;
+  /**
+   * `==x==` is highlighted text. Off: a version number in `==` is not a
+   * highlighter, and Streamdown has no such syntax.
+   */
+  highlight?: boolean;
+  /**
+   * `__x__` is underlined text. Off — and it takes `_` away from emphasis, so
+   * turning it on changes what `_x_` means everywhere.
+   */
+  underline?: boolean;
+  /**
+   * `||x||` is hidden until tapped. Off: hiding text behind a tap is an app's
+   * decision about its own messages.
+   */
+  spoiler?: boolean;
+}>;
+
+/**
+ * A protocol a bare address may not autolink to, as Streamdown's
+ * `disableAutolinkProtocols` names it.
+ *
+ * Only the three the engine can autolink: `http`, `https` and `mailto`. A
+ * `www.` autolink is judged by `http`, because that is the scheme it becomes.
+ *
+ * Names are compared trimmed and case-insensitively, and the colon is optional,
+ * so `'mailto'`, `'MailTo'` and `'mailto:'` are one entry. It affects a bare
+ * address only: `[text](mailto:…)` is a link a writer typed the brackets for and
+ * stays one.
+ */
+export type MarkdownAutolinkProtocol =
+  | 'http'
+  | 'https'
+  | 'mailto'
+  | (string & {});
+
+/** The protocols autolinking is off for. An empty or absent list is all of them. */
+export type MarkdownAutolinkProtocols = readonly MarkdownAutolinkProtocol[];
+
+/**
+ * Which link destinations a document may contain.
+ *
+ * Off by default, because a relative reference names no target until something
+ * resolves it, and Streamdown shows such a link as plain text until it is given
+ * a `defaultOrigin` to resolve against.
+ */
+export type MarkdownLinksOptions = Readonly<{
+  /**
+   * `/…`, `./…`, `../…`, `?…` and `#…` are links. A bare `docs/a` is not one of
+   * them even when this is on, because without a base there is nothing to say
+   * which document it means; Streamdown shows that one as text too.
+   */
+  relative?: boolean;
+  /**
+   * The origin a relative link resolves against, as rehype-harden's
+   * `defaultOrigin`. Supplying one turns relative links on, because an origin
+   * with nothing to resolve is not a configuration.
+   *
+   * It does not rewrite the source: `onLinkPress` reports the `href` exactly as
+   * written and a resolved `url` beside it, so an app that maps a press back to
+   * its own state sees the author's text.
+   */
+  defaultOrigin?: string;
+}>;
+
+/**
+ * A tag the source may use, beyond the built-in table, with the attributes it
+ * may carry. Streamdown's shape, so a value written for its `allowedTags` works
+ * as it is.
+ *
+ * `true` allows the tag with no attributes, and an array allows those
+ * attributes. A tag named here is a real HTML element name only by accident:
+ * `Array<string>` is a generic, and a name that is not an HTML element stays
+ * literal whichever way it is written.
+ */
+export type MarkdownAllowedTags = Readonly<
+  Record<string, boolean | readonly string[]>
+>;
+
+/**
+ * A press on a tag the app styled or handles, as `onTagPress` reports it.
+ *
+ * The name, the attributes the policy allowed, the tag's own visible text, and
+ * where it was written — the four things a press needs and none of the parse.
+ */
+export type MarkdownTagEvent = Readonly<{
+  tag: string;
+  attributes: Readonly<Record<string, string>>;
+  text: string;
+  range: MarkdownSourceRange;
+}>;
+
+/** A table's full-screen button. */
+export type MarkdownTableFullscreenEvent = Readonly<{
+  /**
+   * The table's own Markdown, as the engine's export wrote it. A modal or a
+   * route renders this and gets the same table, rather than one rebuilt from the
+   * model.
+   */
+  markdown: string;
+  /** The table's ordinal among the document's tables, for an app that keys on it. */
+  ordinal: number;
+}>;
+
+/**
+ * What a reader is asked before an external link opens.
+ *
+ * On by default, as in Streamdown. A view with an `onLinkPress` is unaffected by
+ * all of it: the app decides what a press means and this never runs.
+ */
+export type MarkdownLinkSafetyOptions = Readonly<{
+  /**
+   * Intercept a press and confirm it before anything opens. On by default. With
+   * it off the view still opens the link itself when the app passed no
+   * `onLinkPress`, just without asking.
+   */
+  enabled?: boolean;
+  /**
+   * Decides whether a URL opens without asking. `true` opens it, `false` shows
+   * the confirmation, and a promise is awaited first, so an app can check a list
+   * against the network.
+   */
+  onLinkCheck?: (url: string) => boolean | Promise<boolean>;
+  /**
+   * Replaces the confirmation. It receives the URL, the strings from
+   * `translations`, and an `onConfirm`/`onCancel` pair; it is responsible for
+   * closing itself, which is what lets an app use a bottom sheet and a native
+   * alert the same way.
+   */
+  renderModal?: (props: MarkdownLinkSafetyModalProps) => ReactNode;
+}>;
+
+/** What `linkSafety.renderModal` is given. */
+export type MarkdownLinkSafetyModalProps = Readonly<{
+  url: string;
+  /** `externalLinkWarning`, as a translation key's value. */
+  title: string;
+  /** `openLink`. */
+  openLabel: string;
+  /** `copyLink`. */
+  copyLabel: string;
+  /** `close`. */
+  cancelLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
 }>;
 
 export type MarkdownStreamOptions = Readonly<{
@@ -199,6 +392,27 @@ export type MarkdownStreamOptions = Readonly<{
   inlineHtml?: boolean;
   /** md4c's `^x^` and `~x~` syntaxes, both off by default. */
   syntax?: MarkdownSyntaxOptions;
+  /**
+   * CJK-friendly emphasis, strikethrough and autolink boundaries. On by default;
+   * `false` restores CommonMark's intraword rules, where `**太字**` next to a
+   * punctuation mark and `~~` next to any letter both stay literal.
+   */
+  cjk?: boolean;
+  /** Which link destinations the source may contain; see `MarkdownLinksOptions`. */
+  links?: MarkdownLinksOptions;
+  /** Protocols a bare address may not autolink to. */
+  disableAutolinkProtocols?: MarkdownAutolinkProtocols;
+  /**
+   * Which HTML tags the source may use, beyond the built-in table; see
+   * `MarkdownAllowedTags`.
+   */
+  allowedTags?: MarkdownAllowedTags;
+  /**
+   * Leave a tag's content unstyled instead of parsing Markdown inside it. Off
+   * by default, and what an app whose custom tags are not Markdown wants:
+   * `<user>Bob</user>` is a name, not a paragraph.
+   */
+  literalTagContent?: boolean;
 }>;
 
 /** Created by createMarkdownStream(options), planned for the native session phase. */
@@ -216,10 +430,29 @@ export interface MarkdownStreamController {
 }
 
 /** Which kind of block a control acted on. */
-export type MarkdownControlKind = 'code' | 'table' | 'image';
+export type MarkdownControlKind = 'code' | 'table' | 'image' | 'details';
+
+/**
+ * A press on a task list item's checkbox.
+ *
+ * `containerId` is the item's own container id, and `checked` is the state the
+ * press leaves it in. The document does not change: the app owns the source,
+ * which is the only thing that can flip the marker — so this is a report, and
+ * flipping the source and re-rendering is what moves the box.
+ */
+export type MarkdownTaskPressEvent = Readonly<{
+  containerId: number;
+  checked: boolean;
+  generation: number;
+}>;
 
 /** What a control button did. */
-export type MarkdownControlAction = 'copy' | 'download' | 'wrap' | 'expand';
+export type MarkdownControlAction =
+  | 'copy'
+  | 'download'
+  | 'wrap'
+  | 'expand'
+  | 'fullscreen';
 
 /** What a native control button did, reported to the matching callback. */
 export type MarkdownControlEvent = Readonly<{
@@ -231,6 +464,14 @@ export type MarkdownControlEvent = Readonly<{
   wrapped?: boolean;
   /** Expand only: whether the block's height cap is lifted after the press. */
   expanded?: boolean;
+  /**
+   * The table's own Markdown, for `fullscreen` only.
+   *
+   * It is the source the table was written as, taken from the engine's export
+   * rather than rebuilt, so a full-screen table is the same table. Empty for
+   * every other action.
+   */
+  markdown?: string;
   /**
    * Fence language as written, in the case the writer used: `ts`, `TS`, and
    * `Ts` all come back as written. It is not a normalized key, so compare
@@ -298,6 +539,24 @@ export type MarkdownControls =
             copy?: MarkdownCopyControl;
             download?: MarkdownDownloadControl;
             csvSeparator?: ',' | ';' | '\t' | 'auto';
+            /**
+             * Per-table expand button, which lifts `tableMaxHeight` for one
+             * table. It appears only on a table taller than the cap.
+             */
+            expand?:
+              | boolean
+              | Readonly<{
+                  onToggle?: (event: MarkdownControlEvent) => void;
+                }>;
+            /**
+             * Per-table full-screen button, which opens the table's own Markdown
+             * in a modal holding a second view. Streamdown's key.
+             */
+            fullscreen?:
+              | boolean
+              | Readonly<{
+                  onToggle?: (event: MarkdownControlEvent) => void;
+                }>;
           }>;
       /**
        * The download button on a loaded image, as Streamdown's
@@ -315,6 +574,26 @@ export type MarkdownControls =
                   filename?: string;
                   onDownload?: (event: MarkdownControlEvent) => void;
                   onError?: (error: MarkdownErrorEvent) => void;
+                }>;
+          }>;
+      /**
+       * The toggle on a `<details>` summary, which shows and hides the body.
+       *
+       * Its own section because a collapsible block is neither a code block nor
+       * a table: an app that turned both of those off for a quiet document keeps
+       * the ability to open a body its writers used.
+       */
+      details?:
+        | boolean
+        | Readonly<{
+            expand?:
+              | boolean
+              | Readonly<{
+                  /**
+                   * Called after the body is shown or hidden. `expanded` on the
+                   * event says which of the two happened.
+                   */
+                  onToggle?: (event: MarkdownControlEvent) => void;
                 }>;
           }>;
     }>;
@@ -359,35 +638,71 @@ export type MarkdownTranslations = Readonly<{
   image: string;
   /** The accessible name of an image the prefix list does not allow. */
   imageBlocked: string;
+  /** Title of the confirmation shown before an external link opens. */
+  externalLinkWarning: string;
+  /** The confirmation's primary action: open the link. */
+  openLink: string;
+  /** The confirmation's copy action. */
+  copyLink: string;
+  /** Dismiss, and the modal's close button's accessible name. */
+  close: string;
+  /** Open a table in its own full-screen view. */
+  viewFullscreen: string;
+  /** Leave the full-screen table view. */
+  exitFullscreen: string;
+  /** Show all of a table taller than `tableMaxHeight`. */
+  expandTable: string;
+  /** Put the table's height cap back. */
+  collapseTable: string;
+  /** Open a collapsed `<details>` body. */
+  expandDetails: string;
+  /** Collapse an open `<details>` body. */
+  collapseDetails: string;
 }>;
 
 /**
  * The tallest a code block's body grows, in points. 400 by default, as in
  * Streamdown.
- *
- * Streamdown's `resolveMaxHeight`, narrowed to numbers. It accepts a CSS
- * length, which has no meaning in a native layout, so every value that is not
- * a non-negative finite number becomes the default instead.
  */
 export const defaultCodeBlockMaxHeight = 400;
 
-/** The values that remove the cap rather than setting one. */
+/**
+ * The tallest a table grows before it scrolls inside its own frame. 300 by
+ * default, as in Streamdown.
+ *
+ * The same rule as a code block's cap and for the same reason: a table is the
+ * one block kind with no way to leave the document, so without a cap a
+ * thousand-row table inside a scrolling chat has no way back. `0` removes the
+ * cap, which is the choice an app that renders its own tables full-height
+ * makes.
+ */
+export const defaultTableMaxHeight = 300;
+
+/** The values that remove a cap rather than setting one. */
 const UNCAPPED: ReadonlySet<string> = new Set(['0', 'none', 'Infinity']);
 
+/**
+ * Streamdown's `resolveMaxHeight`, narrowed to numbers, with the default as a
+ * parameter.
+ *
+ * It accepts a CSS length, which has no meaning in a native layout, so every
+ * value that is not a non-negative finite number becomes the default instead.
+ * One function for both caps rather than two: the rules are the same four
+ * branches, and a copy is a rule that can drift from the one it copied.
+ */
 export function resolveMaxHeight(
-  value: number | '0' | 'none' | 'Infinity' | undefined
+  value: number | '0' | 'none' | 'Infinity' | undefined,
+  fallback: number = defaultCodeBlockMaxHeight
 ): number {
-  if (value === undefined) return defaultCodeBlockMaxHeight;
+  if (value === undefined) return fallback;
   if (typeof value === 'number') {
     // `Infinity` is Streamdown's own "no cap", and native reads 0 as no cap.
     if (value === Infinity) return 0;
     // A negative, `NaN`, or fractional value is not a height, and silently
     // clamping it would draw a card the caller never asked for.
-    return Number.isFinite(value) && value >= 0
-      ? value
-      : defaultCodeBlockMaxHeight;
+    return Number.isFinite(value) && value >= 0 ? value : fallback;
   }
-  return UNCAPPED.has(value) ? 0 : defaultCodeBlockMaxHeight;
+  return UNCAPPED.has(value) ? 0 : fallback;
 }
 
 export const defaultTranslations: MarkdownTranslations = {
@@ -412,6 +727,16 @@ export const defaultTranslations: MarkdownTranslations = {
   downloadImage: 'Download image',
   image: 'Image',
   imageBlocked: 'Image blocked',
+  externalLinkWarning: 'Open this link?',
+  openLink: 'Open',
+  copyLink: 'Copy link',
+  close: 'Close',
+  viewFullscreen: 'View fullscreen',
+  exitFullscreen: 'Exit fullscreen',
+  expandTable: 'Show all rows',
+  collapseTable: 'Show fewer rows',
+  expandDetails: 'Show details',
+  collapseDetails: 'Hide details',
 };
 
 /**
@@ -582,6 +907,36 @@ export type MarkdownStyle = Readonly<{
     fontFamily?: string;
     fontWeight?: TextStyle['fontWeight'];
   };
+  /**
+   * Per-URL link styles, by prefix, as enriched-markdown's `linkVariants`.
+   *
+   * The first prefix a link's URL starts with wins, so an app lists specific
+   * hosts before the scheme they share. A variant styles the link's text the
+   * way `link` does; anything it does not name stays the `link` style.
+   *
+   * This pairs with app-defined link schemes: an app that registers `app:` links
+   * styles them here rather than teaching the theme about every host it links to.
+   */
+  /**
+   * Styles for an app-allowed inline tag, by name, as enriched-markdown's
+   * `linkVariants` styles a link.
+   *
+   * A tag run draws with its entry's color and traits; anything it does not
+   * name stays the surrounding text's. Matched lowercased, as tag names
+   * compare, with the first entry winning when two names collide after
+   * lowercasing.
+   */
+  tags?: Readonly<Record<string, MarkdownTextStyle>>;
+  linkVariants?: ReadonlyArray<
+    Readonly<{
+      /** URL prefixes this variant styles, matched with `startsWith`. */
+      match: string | ReadonlyArray<string>;
+      color?: MarkdownColor;
+      underline?: boolean;
+      fontFamily?: string;
+      fontWeight?: TextStyle['fontWeight'];
+    }>
+  >;
   strong?: {
     color?: MarkdownColor;
     fontFamily?: string;
@@ -657,6 +1012,59 @@ export type MarkdownStyle = Readonly<{
  * own rule that they inherit the base color.
  */
 export type EnrichedSyntaxKey = 'punctuation' | 'variable' | 'embedded';
+
+/**
+ * A control button's glyph. A platform name draws the platform's own glyph — an
+ * SF Symbol on iOS, a named drawable on Android — and a source is fetched or
+ * bundled as an image.
+ *
+ * A URL is deliberately not accepted: `DSImageLoader` only loads HTTPS, and a
+ * control glyph comes from the app's own assets rather than from a message.
+ */
+export type MarkdownIconSource =
+  | Readonly<{ name: string }>
+  | Readonly<{ image: ImageSourcePropType }>;
+
+/**
+ * Every button a control can draw, by the key Streamdown's `icons` uses where
+ * one exists.
+ *
+ * A key here is the same word as the button: `copy` is the copy button on a code
+ * block, a table and an image. The `tableFullscreen` and `detailsChevron` keys
+ * are Downstream's, because Streamdown has no full-screen table and its details
+ * chevron is part of the browser's own widget.
+ */
+export type MarkdownControlIcon =
+  | 'copy'
+  | 'check'
+  | 'download'
+  | 'maximize'
+  | 'close'
+  | 'wrap'
+  | 'expand'
+  | 'collapse'
+  | 'tableFullscreen'
+  | 'detailsChevron';
+
+/**
+ * Every icon key, in the order the native views read them.
+ *
+ * Appended at the end and never reordered: the array travels positionally beside
+ * `controlLabels`, so a key added in the middle would give every later button a
+ * different glyph on a release built against the older list.
+ */
+export const CONTROL_ICON_KEYS = [
+  'copy',
+  'check',
+  'download',
+  'maximize',
+  'close',
+  'wrap',
+  'expand',
+  'collapse',
+  'tableFullscreen',
+  'detailsChevron',
+] as const;
 
 /** One value, or values merged left to right the way a style array is. */
 type Composable<T> = T | ReadonlyArray<T | null | false | undefined>;
@@ -801,6 +1209,116 @@ type MarkdownViewBaseProps = Readonly<{
   inlineHtml?: boolean;
   /** md4c's `^x^` and `~x~` syntaxes, both off by default. */
   syntax?: MarkdownSyntaxOptions;
+  /**
+   * CJK-friendly emphasis, strikethrough and autolink boundaries. On by
+   * default; `false` restores CommonMark's intraword rules, which leave
+   * `「**強調**」` and `~~削除~~` literal.
+   *
+   * A document with no CJK in it parses identically either way, which
+   * `tests/parse-options.test.ts` asserts against the real engine rather than
+   * taking on trust.
+   */
+  cjk?: boolean;
+  /** Which link destinations the source may contain; see `MarkdownLinksOptions`. */
+  links?: MarkdownLinksOptions;
+  /**
+   * Protocols a bare address may not autolink to, as Streamdown's
+   * `disableAutolinkProtocols`. Absent means all of them are.
+   */
+  disableAutolinkProtocols?: MarkdownAutolinkProtocols;
+  /**
+   * Which HTML tags the source may use beyond the built-in table. A named tag
+   * that spans lines is a container, drawn by `plugins.tags` or
+   * `fallbackComponent`; see `MarkdownAllowedTags`.
+   */
+  allowedTags?: MarkdownAllowedTags;
+  /**
+   * Leave a tag's content unstyled instead of parsing Markdown inside it. Off
+   * by default, and what an app whose custom tags are not Markdown wants:
+   * `<user>Bob</user>` is a name, not a paragraph.
+   */
+  literalTagContent?: boolean;
+  /**
+   * Rewrite the indentation of a document that starts with an HTML block,
+   * moving it after the tag instead of dropping it.
+   *
+   * The rewrite keeps the source the same length, so every source offset is
+   * unchanged, and it only runs when the document starts with a tag, which is
+   * Streamdown's own rule.
+   */
+  normalizeHtmlIndentation?: boolean;
+  /** The tallest a table grows before it scrolls, in points. 300 by default. */
+  tableMaxHeight?: number | '0' | 'none' | 'Infinity';
+  /**
+   * Which way the document lays out, as the HTML `dir` attribute.
+   *
+   * `auto` is the default and is the engine's own decision, block by block: a
+   * block reads the way the majority of its strong characters read, and one with
+   * no strong character of its own inherits the block before it. The other two
+   * override that for every block, which is what an app whose whole document is
+   * one direction should reach for rather than being right about each line.
+   *
+   * The decision is made in the engine rather than on either platform, because
+   * "the first strong letter" is not the same rule anywhere and a paragraph that
+   * opened with inline code and then Arabic came out two different ways.
+   */
+  dir?: 'ltr' | 'rtl' | 'auto';
+
+  /**
+   * What a reader is asked before a link opens, when the app passed no
+   * `onLinkPress`. On by default.
+   *
+   * Without an `onLinkPress` a press does nothing at all, which no reader
+   * expects from something drawn as a link; this is what makes it open instead,
+   * after asking.
+   */
+  linkSafety?: boolean | MarkdownLinkSafetyOptions;
+  /**
+   * A press on a tag `allowedTags` allows and `markdownStyle.tags` or
+   * `onTagPress` cares about.
+   */
+  onTagPress?: (event: MarkdownTagEvent) => void;
+  /**
+   * Replaces the full-screen table modal.
+   *
+   * It receives the table's own Markdown and nothing else about the view: an app
+   * that pushes a route needs the text, not this library's modal.
+   */
+  renderTableFullscreen?: (event: MarkdownTableFullscreenEvent) => ReactNode;
+  /** A table's full-screen button, for an app with its own handler. */
+  onTableFullscreen?: (event: MarkdownTableFullscreenEvent) => void;
+  /**
+   * A press on a task list item's checkbox.
+   *
+   * The document does not change: the app owns the source, which is the only
+   * thing that can flip the marker — so this is a report, and flipping the
+   * source and re-rendering is what moves the box.
+   */
+  onTaskPress?: (event: MarkdownTaskPressEvent) => void;
+  /**
+   * A hold on a link.
+   *
+   * A tap opens (or asks, through link safety); a hold is the app's: copy the
+   * URL, show a sheet. The library does nothing with it, because doing anything
+   * would be a second behavior for one gesture.
+   */
+  onLinkLongPress?: (event: MarkdownLinkPressEvent) => void;
+  /**
+   * Whether a hold on a link may show the system's preview of its destination.
+   *
+   * iOS only: a `UITextView` shows a peek-and-pop preview on force touch, and a
+   * chat message that previews every link it holds is a message that navigates
+   * by accident. `true` keeps the platform's default; `false` — the default —
+   * turns it off, so a hold is the app's `onLinkLongPress` and nothing else.
+   */
+  linkPreview?: boolean;
+  /**
+   * Glyphs for the control buttons, by key, as Streamdown's `icons`. A key here
+   * replaces the platform's own glyph for that button; a key with no entry keeps
+   * it.
+   */
+  icons?: Partial<Record<MarkdownControlIcon, MarkdownIconSource>>;
+
   /**
    * Load images. On by default, as in Streamdown.
    *

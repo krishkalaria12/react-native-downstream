@@ -10,9 +10,12 @@ import android.graphics.RectF
 import android.os.Build
 import android.text.Layout
 import android.text.PrecomputedText
+import android.text.Spannable
+import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.TextPaint
 import android.text.style.AbsoluteSizeSpan
+import android.text.style.BackgroundColorSpan
 import android.text.style.ForegroundColorSpan
 import android.text.style.StrikethroughSpan
 import android.util.TypedValue
@@ -27,7 +30,21 @@ import android.widget.TextView
  * A text segment in a TextView configured like the measuring StaticLayout
  * (RenderedDocument.buildLayout), which gives selection and text navigation.
  */
-private class TextReadingPart(val piece: AccessibleTextPiece, val heading: Boolean, val taskState: Int)
+/**
+ * One announced piece of a block.
+ *
+ * `summaryContainer` is the `<details>` container this piece's block is the
+ * summary of, or null. Carried on the part rather than read from the view at
+ * announce time because the reading order is built once per segment and a
+ * screen reader walks it repeatedly, long after the layout that built it.
+ */
+private class TextReadingPart(
+  val piece: AccessibleTextPiece,
+  val heading: Boolean,
+  val taskState: Int,
+  val summaryContainer: Int? = null,
+  val isSummary: Boolean = false,
+)
 
 @SuppressLint("ViewConstructor")
 internal class TextSegmentView(context: Context) : TextView(context) {
@@ -39,6 +56,22 @@ internal class TextSegmentView(context: Context) : TextView(context) {
    */
   private var blockOffset = 0
   private var pressedLink = -1
+  private var pressedTag = -1
+
+  /**
+   * The `<details>` summary this view draws, if it draws one.
+   *
+   * A field rather than a lookup because the chevron is drawn on every frame and
+   * a press is hit-tested against it: the summary is the container's first leaf,
+   * so it is the same answer every time and there is one per text view at most.
+   */
+  private var summary: DetailsBlock? = null
+
+  /** True while the summary's body is showing, which is which way the chevron points. */
+  private var summaryOpen = false
+
+  /** The toggle control's bit, so a document with `controls={false}` draws no chevron. */
+  private var detailsToggle = false
   private val codePaint = Paint()
   private val decorationPaint = TextPaint()
 
@@ -53,6 +86,29 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   private val caretMetrics = Paint.FontMetrics()
   private val revealClipBounds = Rect()
   private val codePath = Path()
+  private var pressedSummary: DetailsBlock? = null
+  private var pressedSpoiler = false
+  private var longPress: LongPress? = null
+  private var pressedTask: TaskPress? = null
+
+  private companion object {
+    /**
+     * The selection menu's "Copy as Markdown" item.
+     *
+     * A fixed id rather than a resource because the menu is built at runtime
+     * and the id only has to be unique within it.
+     */
+    const val MENU_COPY_MARKDOWN = 0xD0E5
+  }
+
+/**
+ * A task checkbox: the container it belongs to and whether it is checked.
+ *
+ * A value rather than a view because the press is reported, not stored: the
+ * document does not change when a reader taps a box.
+ */
+private class TaskPress(val id: Int, val checked: Boolean)
+  private val chevronPath = Path()
   private val codeBounds = RectF()
   private var readingParts = emptyList<TextReadingPart>()
   private var readingBlocks = emptyList<AccessibleBlock>()
@@ -94,6 +150,76 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     }
   }
 
+  /**
+   * Extra items on the text selection menu, and copy as Markdown.
+   *
+   * Installed once, because the menu is built per selection and the callback
+   * would otherwise stack: the wrapper delegates to whatever was there, so the
+   * platform's own items keep working and this only adds.
+   */
+  private var selectionCallbackInstalled = false
+
+  private fun installSelectionCallback() {
+    if (selectionCallbackInstalled) return
+    selectionCallbackInstalled = true
+    val previous = customSelectionActionModeCallback
+    customSelectionActionModeCallback = object : android.view.ActionMode.Callback {
+      override fun onCreateActionMode(mode: android.view.ActionMode?, menu: android.view.Menu?): Boolean {
+        val created = previous?.onCreateActionMode(mode, menu) ?: true
+        menu?.add(0, MENU_COPY_MARKDOWN, 0, "Copy as Markdown")?.apply {
+          setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_NEVER)
+        }
+        return created
+      }
+
+      override fun onPrepareActionMode(mode: android.view.ActionMode?, menu: android.view.Menu?): Boolean {
+        return previous?.onPrepareActionMode(mode, menu) ?: true
+      }
+
+      override fun onActionItemClicked(mode: android.view.ActionMode?, item: android.view.MenuItem?): Boolean {
+        if (item?.itemId == MENU_COPY_MARKDOWN) {
+          copySelectionAsMarkdown()
+          mode?.finish()
+          return true
+        }
+        return previous?.onActionItemClicked(mode, item) ?: false
+      }
+
+      override fun onDestroyActionMode(mode: android.view.ActionMode?) {
+        previous?.onDestroyActionMode(mode)
+      }
+    }
+  }
+
+  /**
+   * The selection as the Markdown that produced it.
+   *
+   * Blocks are the unit the exporter reads, so a selection that starts
+   * mid-paragraph copies the whole block: partial Markdown is not Markdown, and
+   * a paste of it would render as something the reader never saw.
+   */
+  private fun copySelectionAsMarkdown() {
+    if (selectionStart == selectionEnd) return
+    val start = minOf(selectionStart, selectionEnd)
+    val end = maxOf(selectionStart, selectionEnd)
+    val blocks = readingBlocks
+    var first = -1
+    var last = -1
+    for ((index, block) in blocks.withIndex()) {
+      if (block.end > start && block.start < end) {
+        if (first < 0) first = index
+        last = index
+      }
+    }
+    if (first < 0) return
+    val host = findHost() ?: return
+    // `blockOffset` is the document block this view's first block is, so the
+    // accessible blocks map onto the document by position.
+    val markdown = host.exportMarkdown(blockOffset + first, blockOffset + last + 1) ?: return
+    ControlDelivery.copyText(context, COPIED_LABEL, markdown)
+    ControlDelivery.beginCopy()
+  }
+
   override fun onTextContextMenuItem(id: Int): Boolean {
     // A copy that would take the caret's placeholder is written here instead,
     // because the platform's own copy reads the text verbatim and the placeholder
@@ -116,6 +242,7 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   }
 
   fun setSegment(segment: TextSegment, rendered: RenderedDocument, firstBlock: Int) {
+    installSelectionCallback()
     if (segment === this.segment && firstBlock == blockOffset) {
       return
     }
@@ -127,6 +254,26 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     // setContent also serves code bodies and clears this field. Retain the
     // identity afterwards so settled text keeps its layout and selection.
     this.segment = segment
+    readingParts = buildReadingParts(segment.accessibleBlocks, segment.detailsBlocks)
+    accessibility.contentChanged()
+    // The summary is the container's own first leaf, so at most one of a
+    // segment's collapsible blocks is it, and it is the one a chevron belongs to.
+    summary = segment.detailsBlocks.firstOrNull { it.summary }
+    invalidate()
+  }
+
+  /**
+   * Whether the summary's body is showing, and whether the control is on at all.
+   *
+   * Both in one setter because both change the chevron and nothing else: the
+   * glyph points the way the body will move, and a document with the control off
+   * draws no glyph and takes no touches.
+   */
+  fun setDetailsState(toggle: Boolean, open: Boolean) {
+    if (toggle == detailsToggle && open == summaryOpen) return
+    detailsToggle = toggle
+    summaryOpen = open
+    invalidate()
   }
 
   /**
@@ -140,9 +287,33 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     blockOffset = firstBlock
   }
 
+  /**
+   * Whether this view's spoilers are showing.
+   *
+   * One boolean for the whole view rather than a set of ranges: a tap reveals the
+   * spoiler it lands on, and a second tap anywhere on one hides them again. A
+   * reader who wants one word of a hidden sentence is served by revealing the
+   * sentence, not by addressing its words.
+   */
+  private var spoilersRevealed = false
+
+  /**
+   * True when a hosted tag replaces this segment: the React child above draws,
+   * so this view draws nothing. Mirrors the code card's hosted flag, for the
+   * same reason — a hosted block shows none of its own drawing.
+   */
+  var hosted: Boolean = false
+    set(value) {
+      if (field == value) return
+      field = value
+      visibility = if (value) View.GONE else View.VISIBLE
+    }
+
   fun setContent(text: Spanned, accessibleBlocks: List<AccessibleBlock>, rendered: RenderedDocument) {
     bandFrame = null
     segment = null
+    summary = null
+    spoilersRevealed = false
     readingBlocks = accessibleBlocks
     val precomputed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
       PrecomputedTexts.show(this, text, rendered.paint.color)
@@ -160,8 +331,51 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     rendered.style.colors.selectionColor?.let { highlight ->
       highlightColor = highlight
     }
-    readingParts = buildReadingParts(accessibleBlocks)
+    readingParts = buildReadingParts(accessibleBlocks, segment?.detailsBlocks ?: emptyList())
     accessibility.contentChanged()
+  }
+
+  /**
+   * A press on hidden text reveals it; a press on shown text hides it again.
+   *
+   * The colors are the view's own copy to change: `setContent` hands the text
+   * over as a mutable copy whenever it holds a spoiler, so revealing here never
+   * touches the segment another view is drawing from. Hiding rebuilds from the
+   * segment, because the segment is the only place the hidden colors still are.
+   */
+  private fun toggleSpoilers(): Boolean {
+    val content = text as? Spannable ?: return false
+    val spoilers = content.getSpans(0, content.length, SpoilerSpan::class.java)
+    if (spoilers.isEmpty()) return false
+    spoilersRevealed = !spoilersRevealed
+    if (spoilersRevealed) {
+      for (spoiler in spoilers) {
+        val start = content.getSpanStart(spoiler)
+        val end = content.getSpanEnd(spoiler)
+        // Only the spans this spoiler put there: a background in its own color
+        // and a foreground it cleared. Anything else on the range — a link, a
+        // style — stays exactly as it was.
+        for (span in content.getSpans(start, end, BackgroundColorSpan::class.java)) {
+          if (content.getSpanStart(span) >= start && content.getSpanEnd(span) <= end) {
+            content.removeSpan(span)
+          }
+        }
+        for (span in content.getSpans(start, end, ForegroundColorSpan::class.java)) {
+          if (content.getSpanStart(span) >= start && content.getSpanEnd(span) <= end &&
+            span.foregroundColor == 0
+          ) {
+            content.removeSpan(span)
+          }
+        }
+      }
+    } else {
+      val segment = segment
+      if (segment != null) {
+        setText(SpannableStringBuilder(segment.text))
+      }
+    }
+    invalidate()
+    return true
   }
 
   override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = accessibility
@@ -174,14 +388,19 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     info.isFocusable = false
   }
 
-  private fun buildReadingParts(blocks: List<AccessibleBlock>): List<TextReadingPart> = buildList {
+  private fun buildReadingParts(
+    blocks: List<AccessibleBlock>,
+    details: List<DetailsBlock>,
+  ): List<TextReadingPart> = buildList {
     val content = this@TextSegmentView.text as? Spanned ?: return@buildList
     for (block in blocks) {
       val start = block.start.coerceIn(0, content.length)
       val end = block.end.coerceIn(start, content.length)
+      val frame = details.firstOrNull { it.start == block.start && it.end == block.end }
+      val container = frame?.containers?.lastOrNull { it.kind == CONTAINER_DETAILS }?.id
       linkPieces(content, start, end).forEachIndexed { index, piece ->
         add(TextReadingPart(piece, index == 0 && block.heading,
-          if (index == 0) block.taskState else 0))
+          if (index == 0) block.taskState else 0, container, frame?.summary == true))
       }
     }
   }
@@ -210,11 +429,17 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     }
     bounds.offset(0, -scrollY)
     val link = part.piece.linkIndex
+    // A summary is announced as the control it is, so a screen reader says which
+    // words open a body rather than leaving the reader to guess.
+    val summary = part.summaryContainer
+    val toggle = if (detailsToggle && summary != null && part.isSummary) summary else null
     return MarkdownAccessibility.Entry(
       text = label,
       bounds = bounds,
       heading = part.heading,
       linkPress = if (link == null) null else ({ findHost()?.pressLink(link) }),
+      togglePress = toggle?.let { id -> ({ findHost()?.onToggleDetails(id, !isSummaryOpen(readerChoices)) }) },
+      expanded = toggle?.let { isSummaryOpen(readerChoices) },
     )
   }
 
@@ -294,6 +519,9 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && text is PrecomputedText) {
       drawDecorations(canvas)
     }
+    // Drawn after the text because the chevron sits in the leading margin and a
+    // text layout that starts flush to the edge would otherwise paint over it.
+    drawSummaryChevron(canvas)
   }
 
   /**
@@ -467,6 +695,55 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   // A TextView drawing PrecomputedText leaves out underline and
   // strikethrough, so link underlines and strikethrough lines are drawn here
   // at the font's own positions, under or through each line's run.
+  /**
+   * The `<details>` chevron, drawn in the leading margin of the summary's line.
+   *
+   * In the margin rather than in the line because the line is the text: a reader
+   * who selected the summary and copied it should get the words they wrote, not a
+   * glyph. It is drawn here, with the list markers and the quote bars, rather than
+   * as a child view because a `TextView` has no place to put one that follows its
+   * own line breaking — and this one has to follow the line it belongs to.
+   *
+   * The glyph is a path rather than a glyph from a font, so it is the same shape
+   * at every density and needs no asset: two strokes that meet, turned a quarter
+   * either way.
+   */
+  private fun drawSummaryChevron(canvas: Canvas) {
+    val summary = summary ?: return
+    if (!detailsToggle) return
+    val layout = layout ?: return
+    val first = layout.getLineForOffset(summary.start)
+    val line = layout.getLineForOffset((summary.end - 1).coerceAtLeast(summary.start))
+    val baseline = layout.getLineBaseline(line).toFloat()
+    // The line's own ascent and descent rather than the paragraph's, so a
+    // summary line that is shorter than its neighbours gets a chevron sized to
+    // itself. The text is centred in that box, which is where a reader's eye is
+    // already looking.
+    val ascent = layout.getLineAscent(first).toFloat()
+    val descent = layout.getLineDescent(line).toFloat()
+    val centerY = baseline + (ascent + descent) / 2
+    val size = descent - ascent
+    val half = size * 0.22f
+    val tip = if (summaryOpen) centerY + half else centerY - half
+    codePaint.color = currentTextColor
+    codePaint.style = Paint.Style.STROKE
+    codePaint.strokeWidth = maxOf(1f, size * 0.06f)
+    codePaint.strokeCap = Paint.Cap.ROUND
+    codePaint.strokeJoin = Paint.Join.ROUND
+    chevronPath.reset()
+    // In the leading margin, on the side the text itself starts: a right-to-left
+    // paragraph puts the chevron at its right, where a reader of that script
+    // expects the disclosure to be. `getLineLeft` is the horizontal origin of the
+    // line including its indent, which is what the margin is measured from.
+    val x = layout.getLineLeft(line) - size * 0.45f
+    chevronPath.moveTo(x - half, tip - (if (summaryOpen) half else -half))
+    chevronPath.lineTo(x, tip)
+    chevronPath.lineTo(x + half, tip - (if (summaryOpen) half else -half))
+    canvas.drawPath(chevronPath, codePaint)
+    codePaint.style = Paint.Style.FILL
+    codePaint.strokeCap = Paint.Cap.BUTT
+  }
+
   private fun drawDecorations(canvas: Canvas) {
     val layout = layout ?: return
     val text = layout.text as? Spanned ?: return
@@ -558,7 +835,110 @@ internal class TextSegmentView(context: Context) : TextView(context) {
     val x = event.x - totalPaddingLeft + scrollX
     val y = event.y - totalPaddingTop + scrollY
     if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+      // A hold is recognised beside the tap rather than through it, so the tap's
+      // timing is unchanged for every press that is not a hold.
+      longPress?.cancel()
+      val held = linkAt(layout, x, y)
+      if (held >= 0) {
+        longPress = LongPress(context, held) { findHost()?.longPressLink(it) }
+        longPress?.schedule(event.x, event.y)
+      }
+      // The summary is hit-tested before the links under it: the whole line is the
+      // control, and a link inside a summary is still a summary a reader meant to
+      // open. Everything else falls through to the link, then to selection.
+      val summary = this.summary
+      if (detailsToggle && summary != null && onSummaryLine(layout, summary, y)) {
+        pressedSummary = summary
+        return true
+      }
+      // A tag press is hit-tested beside the link: the whole run is the
+      // control, and a link inside a tag is still the tag a reader meant.
+      val tag = tagAt(layout, x, y)
+      if (tag >= 0) {
+        pressedTag = tag
+        return true
+      }
       pressedLink = linkAt(layout, x, y)
+      if (pressedLink < 0) {
+        // A task checkbox is the marker in the margin, and the whole line is not
+        // the control here the way a summary line is: a reader aiming at words
+        // beside a checkbox means to select them, so only the glyph itself counts.
+        val task = taskAt(layout, x, y)
+        if (task != null) {
+          pressedTask = task
+          return true
+        }
+        // No link under the finger: a spoiler is the only other thing a press
+        // can mean here, and it is hit-tested by range rather than by glyph
+        // because hidden text has no ink to aim at.
+        pressedSpoiler = spoilerAt(layout, x, y)
+      }
+    }
+    val task = pressedTask
+    if (task != null) {
+      when (event.actionMasked) {
+        MotionEvent.ACTION_UP -> {
+          pressedTask = null
+          findHost()?.onToggleTask(task.id, !task.checked)
+          return true
+        }
+        MotionEvent.ACTION_CANCEL -> pressedTask = null
+        else -> return true
+      }
+    }
+    if (pressedSpoiler) {
+      when (event.actionMasked) {
+        MotionEvent.ACTION_UP -> {
+          pressedSpoiler = false
+          toggleSpoilers()
+          return true
+        }
+        MotionEvent.ACTION_CANCEL -> pressedSpoiler = false
+        else -> return true
+      }
+    }
+    val pressed = pressedSummary
+    if (pressed != null) {
+      when (event.actionMasked) {
+        MotionEvent.ACTION_UP -> {
+          pressedSummary = null
+          if (pressed === summary) {
+            // The innermost frame is the block's own container, which is the one
+            // whose body the press opens. A summary inside another summary opens
+            // the inner one, the same way pressing it reads.
+            val container = pressed.containers.last { it.kind == CONTAINER_DETAILS }
+            findHost()?.onToggleDetails(container.id, !isSummaryOpen(readerChoices))
+          }
+          return true
+        }
+        MotionEvent.ACTION_CANCEL -> pressedSummary = null
+        else -> return true
+      }
+    }
+    if (event.actionMasked == MotionEvent.ACTION_MOVE) {
+      longPress?.moved(event.x, event.y)
+    }
+    if (event.actionMasked == MotionEvent.ACTION_UP ||
+      event.actionMasked == MotionEvent.ACTION_CANCEL
+    ) {
+      longPress?.cancel()
+      longPress = null
+    }
+    if (pressedTag >= 0) {
+      when (event.actionMasked) {
+        MotionEvent.ACTION_UP -> {
+          val tag = pressedTag
+          pressedTag = -1
+          if (tagAt(layout, x, y) == tag) {
+            // The run's own words, which is what an app shows alongside the
+            // tag it reports.
+            findHost()?.pressTag(tag, tagTextAt(layout, x, y))
+          }
+          return true
+        }
+        MotionEvent.ACTION_CANCEL -> pressedTag = -1
+        else -> return true
+      }
     }
     if (pressedLink < 0) {
       return super.onTouchEvent(event)
@@ -574,6 +954,95 @@ internal class TextSegmentView(context: Context) : TextView(context) {
       MotionEvent.ACTION_CANCEL -> pressedLink = -1
     }
     return true
+  }
+
+  /**
+   * A task checkbox under the point, or null.
+   *
+   * Only the glyph itself counts: a reader aiming at words beside a checkbox
+   * means to select them. The glyph is drawn in the leading margin, so a touch
+   * left of the text's own start on the block's first line is a press on it.
+   * The container id and the checked state come from the block the offset lands
+   * in, which the document already knows.
+   */
+  private fun taskAt(layout: Layout, x: Float, y: Float): TaskPress? {
+    if (y < 0 || y > layout.height) return null
+    val line = layout.getLineForVertical(y.toInt())
+    val offset = layout.getOffsetForHorizontal(line, x)
+    val block = taskBlockAt(offset) ?: return null
+    // Right of the text's own start is the words, not the box — except in a
+    // right-to-left paragraph, where the margin is on the other side.
+    val textStart = layout.getLineLeft(line)
+    val rtl = layout.getParagraphDirection(line) == Layout.DIR_RIGHT_TO_LEFT
+    if (!rtl && x > textStart) return null
+    if (rtl && x < textStart) return null
+    return block
+  }
+
+  /** The task block holding `offset`, with its container id and state, or null. */
+  private fun taskBlockAt(offset: Int): TaskPress? {
+    val blocks = segment?.taskBlocks ?: return null
+    // The box is drawn on the item's first line only, so a press past the first
+    // line's end is a press on words however far into the item it still is.
+    val block = blocks.firstOrNull { offset in it.start until it.end } ?: return null
+    return TaskPress(block.containerId, !block.checked)
+  }
+
+  /** A tag run under the point, or -1. The whole run is the control. */
+  private fun tagAt(layout: Layout, x: Float, y: Float): Int {
+    val content = text as? Spanned ?: return -1
+    if (y < 0 || y > layout.height) return -1
+    val line = layout.getLineForVertical(y.toInt())
+    val offset = layout.getOffsetForHorizontal(line, x)
+    val spans = content.getSpans(offset, offset + 1, TagSpan::class.java)
+    return spans.firstOrNull()?.index ?: -1
+  }
+
+  /** The tag run's own words under the point, or empty. */
+  private fun tagTextAt(layout: Layout, x: Float, y: Float): String {
+    val content = text as? Spanned ?: return ""
+    if (y < 0 || y > layout.height) return ""
+    val line = layout.getLineForVertical(y.toInt())
+    val offset = layout.getOffsetForHorizontal(line, x)
+    val span = content.getSpans(offset, offset + 1, TagSpan::class.java).firstOrNull()
+      ?: return ""
+    return content.subSequence(content.getSpanStart(span), content.getSpanEnd(span)).toString()
+  }
+
+  /** A spoiler run under the point, or null. Hidden text has no ink, so the range is the target. */
+  private fun spoilerAt(layout: Layout, x: Float, y: Float): Boolean {
+    val content = text as? Spanned ?: return false
+    if (y < 0 || y > layout.height) return false
+    val line = layout.getLineForVertical(y.toInt())
+    val offset = layout.getOffsetForHorizontal(line, x)
+    return content.getSpans(offset, offset + 1, SpoilerSpan::class.java).isNotEmpty()
+  }
+
+  /** The summary line under `y`, or null. The whole line is the control. */
+  private fun onSummaryLine(layout: Layout, block: DetailsBlock, y: Float): Boolean {
+    val first = layout.getLineForOffset(block.start)
+    val last = layout.getLineForOffset((block.end - 1).coerceAtLeast(block.start))
+    return y >= layout.getLineTop(first) && y <= layout.getLineBottom(last)
+  }
+
+  /**
+   * The reader's own set of choices, which the accessibility tree is built against.
+   *
+   * The announcement has to say which way the chevron points, and the chevron is
+   * drawn from the same set, so the view holds it rather than re-deriving it from
+   * the document at announce time.
+   */
+  var readerChoices = ReaderChoices()
+    set(value) {
+      field = value
+      accessibility.contentChanged()
+    }
+
+  /** Whether this view's summary has its body showing under [choices]. */
+  fun isSummaryOpen(choices: ReaderChoices): Boolean {
+    val summary = summary ?: return true
+    val frame = summary.containers.last { it.kind == CONTAINER_DETAILS }
+    return resolveDetails(choices, frame.id, frame.open).open
   }
 
   private fun findHost(): DownstreamMarkdownView? {

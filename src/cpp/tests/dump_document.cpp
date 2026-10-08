@@ -23,7 +23,7 @@ using namespace downstream;
 
 int main(int argc, char **argv) {
   const std::string source((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
-  const ParseOptions parse = testdump::parseFlagsFromArg(argc, argv, 1);
+  const ParseOptions parse = testdump::parseOptionsFromArgs(argc, argv);
   ParseResult result = parseMarkdown(source, parse);
   // The controlled path colors after the parse, lays out its formulas, and then
   // marks every block settled, all before the platform text work, so the driver

@@ -13,6 +13,7 @@
 #include "Document.h"
 #include "HostLayout.h"
 #include "ImageLayout.h"
+#include "TableLayout.h"
 #include "RenderPreparer.h"
 #include "math/MathLayout.h"
 #include "theme/Theme.h"
@@ -28,6 +29,10 @@
 struct DSMeasurement {
   CGSize size{0, 0};
   std::vector<std::pair<uint32_t, CGRect>> hosts;
+  /// Content rectangles of hosted tags, by container id. Beside `hosts`
+  /// because the two count different things, and one list mixing them would
+  /// let a fence claim a tag's rectangle.
+  std::vector<std::pair<uint32_t, CGRect>> tagHosts;
 };
 
 /// One stacking pass's answer: every segment frame, the document's size, and
@@ -36,6 +41,7 @@ struct DSMeasurement {
 struct DSStackedLayout {
   std::vector<CGRect> frames;
   std::vector<std::pair<uint32_t, CGRect>> hosts;
+  std::vector<std::pair<uint32_t, CGRect>> tagHosts;
   CGSize size{0, 0};
 };
 #endif
@@ -46,16 +52,69 @@ NS_ASSUME_NONNULL_BEGIN
 extern NSAttributedStringKey const DSBlockInfoAttributeName;
 /// Character attribute holding the NSNumber index into Document::links.
 extern NSAttributedStringKey const DSLinkIndexAttributeName;
+/// Character attribute holding the NSNumber index into Document::tags, for a
+/// run an app-allowed tag styled. Beside the link index because a press has to
+/// know which tag it landed on without asking.
+extern NSAttributedStringKey const DSTagIndexAttributeName;
 
 typedef NS_ENUM(NSInteger, DSContainerKind) {
   DSContainerKindQuote = 0,
   DSContainerKindListItem = 1,
   DSContainerKindAdmonition = 2,
   DSContainerKindFootnote = 3,
+  /// `<details>`: the frame a collapsible block's body sits inside.
+  DSContainerKindDetails = 4,
+  /// An app-allowed block tag, drawn by the React child that replaced it.
+  DSContainerKindCustom = 5,
 };
 
 /// Decoration for one nesting level around a block. Leading offsets are in
 /// points from the segment's leading edge.
+/// Marks a spoiler run, so a press can find it by range rather than by color.
+extern NSString *const DSSpoilerAttributeName;
+
+/**
+ * Per-URL link styles, as the view resolved them from `markdownStyle.linkVariants`.
+ *
+ * One object rather than four arrays because the segment builder asks one
+ * question — "what styles this URL?" — and the answer should not require it to
+ * know how the question is stored. Empty when the app named no variants, which
+ * is the common case and costs nothing to ask.
+ */
+/**
+ * Styles for app-allowed inline tags, as the view resolved them from
+ * `markdownStyle.tags`.
+ *
+ * Beside `DSLinkVariants` because the two answer different questions: a link
+ * variant matches a URL by prefix, and a tag style matches a tag by name. An
+ * empty object costs nothing to ask, which is the common case.
+ */
+@interface DSTagStyles : NSObject
+/// Tag names lowercased, with a processed color per entry or -1, and
+/// bold/italic as bits.
+@property (nonatomic, copy) NSArray<NSString *> *names;
+@property (nonatomic, copy) NSArray<NSNumber *> *colors;
+@property (nonatomic, copy) NSArray<NSNumber *> *flags;
+/// The entry styling `name`, or nil. First entry wins on collision.
+- (NSDictionary *)styleForTag:(NSString *)name;
+/// True when there is nothing to match against.
+- (BOOL)isEmpty;
+@end
+
+@interface DSLinkVariants : NSObject
+/// Every prefix flat in one array, with the counts that say where one variant's
+/// prefixes end.
+@property (nonatomic, copy) NSArray<NSString *> *prefixes;
+@property (nonatomic, copy) NSArray<NSNumber *> *counts;
+/// A processed color per variant, or -1, and whether it underlines.
+@property (nonatomic, copy) NSArray<NSNumber *> *colors;
+@property (nonatomic, copy) NSArray<NSNumber *> *underlines;
+/// The variant styling `url`, or nil. First prefix wins across the whole list.
+- (NSDictionary *)variantForURL:(NSString *)url;
+/// True when there is nothing to match against.
+- (BOOL)isEmpty;
+@end
+
 @interface DSContainerInfo : NSObject
 @property (nonatomic, readonly) DSContainerKind kind;
 @property (nonatomic, readonly) CGFloat leading;
@@ -70,6 +129,15 @@ typedef NS_ENUM(NSInteger, DSContainerKind) {
 /// Zero-width gaps and bars are what a theme that sets them to zero draws.
 @property (nonatomic, readonly) CGFloat barWidth;
 @property (nonatomic, readonly) CGFloat markerGap;
+/// The container's own id, which is what a reader's choice for a `<details>` is
+/// keyed by. Zero for the levels that have no choice of their own.
+@property (nonatomic, readonly) uint32_t containerId;
+/// `<details open>`: the writer's starting state, which the reader's own choice
+/// overrides either way.
+@property (nonatomic, readonly) BOOL writtenOpen;
+/// True on the container's own first leaf, which is where a list item's marker and
+/// a `<details>`'s chevron are drawn.
+@property (nonatomic, readonly) BOOL summary;
 @end
 
 typedef NS_ENUM(NSInteger, DSBlockDecoration) {
@@ -107,6 +175,11 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
 
 /// A run of non-code, non-table blocks laid out as one text layout.
 @interface DSTextSegment : NSObject
+/// The custom container's id when the plan grouped this segment for one, or
+/// UINT32_MAX. Set at build time from the first block's innermost Custom frame,
+/// so a hosted tag is one lookup rather than a walk of the segment's blocks on
+/// every measure.
+@property (nonatomic, readonly) uint32_t customContainer;
 @property (nonatomic, readonly) NSAttributedString *attributedString;
 @property (nonatomic, readonly) NSArray<DSBlockInfo *> *blocks;
 /// Each block's own range in `attributedString`, which is what a reveal unit's
@@ -286,10 +359,18 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
 @property (nonatomic, readonly) BOOL rightToLeft;
 /// Identifies the table across snapshots while its first row is unchanged.
 @property (nonatomic, readonly) uint32_t tableIdentifier;
+/// The table's ordinal among the document's tables, which is what the reader's
+/// expand choice is keyed by. Counted as the segment plan is built, so it is
+/// stable across append-only snapshots.
+@property (nonatomic, readonly) int32_t tableOrdinal;
 @property (nonatomic, readonly) NSString *firstRowText;
 @property (nonatomic, readonly) NSArray<DSContainerInfo *> *containers;
 @property (nonatomic, readonly) NSArray<NSNumber *> *columnWidths;
 @property (nonatomic, readonly) NSArray<NSNumber *> *rowHeights;
+/// How many rows the table has, which is what the cap is counted in. A property
+/// rather than `rows.count` at the call site, so the measurement and the drawing
+/// cannot read a count from two different collections.
+@property (nonatomic, readonly) uint32_t rowCount;
 @property (nonatomic, readonly) CGSize tableSize;
 @property (nonatomic, readonly) UIEdgeInsets cellPadding;
 /// The theme this table was built with, plus the grid and header metrics that
@@ -347,6 +428,15 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
                  syntaxHighlighting:(BOOL)syntaxHighlighting
                               theme:(const downstream::Theme::Handle &)theme
                              caret:(const downstream::PlacedCaret &)caret;
+/// The same, with per-URL link styles. The variants change colors but no
+/// heights, so they join the cache key rather than the measurement.
++ (instancetype)renderedDocumentFor:(const downstream::DocumentHandle &)document
+                          fontScale:(CGFloat)fontScale
+                 syntaxHighlighting:(BOOL)syntaxHighlighting
+                              theme:(const downstream::Theme::Handle &)theme
+                             caret:(const downstream::PlacedCaret &)caret
+                          variants:(DSLinkVariants *)variants
+                         tagStyles:(DSTagStyles *)tagStyles;
 #endif
 
 /// Drops every cached rendering. For tests and for a caller that wants to force
@@ -367,12 +457,14 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
                                      chrome:(uint32_t)chrome
                                         code:(const downstream::CodeLayout &)code
                                       images:(const downstream::ImageStateLayout &)images
-                                       hosts:(const downstream::HostLayout &)hosts;
+                                       hosts:(const downstream::HostLayout &)hosts
+                                      tables:(const downstream::TableLayout &)tables;
 - (CGSize)sizeForWidth:(CGFloat)width
                 chrome:(uint32_t)chrome
                    code:(const downstream::CodeLayout &)code
                  images:(const downstream::ImageStateLayout &)images
-                  hosts:(const downstream::HostLayout &)hosts;
+                  hosts:(const downstream::HostLayout &)hosts
+                 tables:(const downstream::TableLayout &)tables;
 
 #ifdef __cplusplus
 /// The size and the hosted children's rectangles, from one stacking pass.
@@ -385,7 +477,8 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
                           chrome:(uint32_t)chrome
                              code:(const downstream::CodeLayout &)code
                           images:(const downstream::ImageStateLayout &)images
-                           hosts:(const downstream::HostLayout &)hosts;
+                           hosts:(const downstream::HostLayout &)hosts
+                          tables:(const downstream::TableLayout &)tables;
 #endif
 
 @end

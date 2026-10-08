@@ -81,6 +81,33 @@ const suites = [
     sources: [kotlin('HostLayout.kt'), join(here, 'HostLayoutCheck.kt')],
   },
   {
+    // The platform's own files rather than a copy: `CodeLayout.kt` for
+    // `ReaderChoices` and `hasChoice`, `ContainerDecoration.kt` for the frame the
+    // rules read, and `DetailsLayout.kt` for the rules themselves.
+    jar: 'details_layout',
+    sources: [
+      ...kotlin('CodeLayout.kt'),
+      ...kotlin('ContainerDecoration.kt'),
+      ...kotlin('DetailsLayout.kt'),
+      join(here, 'DetailsLayoutCheck.kt'),
+    ],
+  },
+  {
+    jar: 'text_height',
+    sources: [
+      ...kotlin(
+        'Segments.kt',
+        'CodeLayout.kt',
+        'ContainerDecoration.kt',
+        'DetailsLayout.kt'
+      ),
+      join(here, 'TextHeightCheck.kt'),
+      ...readdirSync(join(here, 'text-height-stubs'))
+        .filter((name) => name.endsWith('.kt'))
+        .map((name) => join(here, 'text-height-stubs', name)),
+    ],
+  },
+  {
     jar: 'math_render',
     sources: [
       ...kotlin('MathLayout.kt', 'MathDisplayList.kt', 'MathSegmentView.kt'),
@@ -173,6 +200,9 @@ try {
     }
   );
   execFileSync(process.execPath, [join(here, 'state-application.mjs')], {
+    stdio: 'inherit',
+  });
+  execFileSync(process.execPath, [join(here, 'native-document.mjs')], {
     stdio: 'inherit',
   });
   execFileSync(process.execPath, [join(here, 'table-streaming.mjs')], {

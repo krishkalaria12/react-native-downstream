@@ -78,6 +78,25 @@ private:
     size_t childIndex{0};
   };
 
+  /// A slot child that replaces a custom tag: its container's id rather than a
+  /// code ordinal, because the two count different things. Beside `SlotChild`
+  /// rather than inside it so a fence can never claim a tag's container.
+  struct TagSlotChild {
+    uint32_t container{0};
+    std::shared_ptr<const ShadowNode> node;
+    size_t childIndex{0};
+  };
+
+  /// The tag slot children, beside the fence ones: a child whose `containerId`
+  /// names a custom container. A child whose `display` is `none` is not in the
+  /// list, for the same reason a hidden fence slot hosts nothing.
+  std::vector<TagSlotChild> tagSlotChildren() const;
+  /// Places tag slot children at their measured rectangles, beside the fence
+  /// slots `layoutSlots` places. Takes the child list by reference because both
+  /// passes write it back once.
+  void layoutTagSlots(LayoutContext layoutContext, const DocumentMeasurement &measurement,
+                      std::shared_ptr<std::vector<std::shared_ptr<const ShadowNode>>> &children);
+
   /// The slot children a measurement or a layout has to consider, in child
   /// order. A child whose `display` is `none` — which is what React gives a
   /// suspended subtree — is not in the list, so it hosts nothing and its fence
@@ -134,6 +153,12 @@ private:
   /// than baked into a segment's text.
   uint32_t chromeFor(const DownstreamMarkdownState &state) const;
 
+  /// The table's cap. Its own function beside `codeProps` for the same reason
+  /// one takes props and the reader's choices elsewhere: a prop change lands in
+  /// props a revision before the state that records it does, so measurement
+  /// reads props rather than the state's copy of them.
+  downstream::TableLayoutProps tableProps(const DownstreamMarkdownState &state) const;
+
   /// The theme these theme props resolve to. Interned only when the props
   /// change, so an unchanged theme costs nothing per revision, and the handle is
   /// held beside the rest of the node's state so clones share it.
@@ -144,10 +169,9 @@ private:
   bool themeUnchanged(const DownstreamMarkdownViewProps &previous) const;
   /// The theme's id, or 0 for the default one, which is its id too.
   uint64_t themeId() const;
-  /// The code layout the props and the state's choices together describe. The
-  /// props are read here rather than from the state, because a prop change
-  /// lands in props a revision before the state that records it does.
-  downstream::CodeLayout codeLayout(const DownstreamMarkdownState &state) const;
+  /// The code block's props. Read here rather than from the state, for the same
+  /// reason `tableProps` reads the table's.
+  downstream::CodeLayoutProps codeProps(const DownstreamMarkdownState &state) const;
   /// What each image in the document is, from the process-wide size cache and
   /// the props. Rebuilt on every measurement, which is cheap: the cache is a
   /// lookup per image and a document has as many images as it has pictures.

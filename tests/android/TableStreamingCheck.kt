@@ -94,6 +94,7 @@ private class NativeDocument(val rows: List<List<String>>, val header: Boolean =
   fun cellAlign(row: Int, column: Int) = alignment
   fun blockStart(row: Int) = cellStart(row, 0)
   fun blockEnd(row: Int) = cellEnd(row, rows[row].lastIndex)
+  fun blockIsRtl(row: Int) = false
   companion object { const val ALIGN_CENTER = 1; const val ALIGN_RIGHT = 2 }
 }
 private class TableSegment(
@@ -115,6 +116,7 @@ private class TableSegment(
   val blockCount: Int,
   val caretKind: Int,
   val gapBefore: Int,
+  val ordinal: Int,
 )
 private object Production {
   /* PRODUCTION_CACHE_DECLARATIONS */
@@ -126,8 +128,8 @@ private object Production {
   /* PRODUCTION_TABLE_METHOD */
   /* BASELINE_TABLE_METHOD */
   fun build(document: NativeDocument, style: Style = Style(), quoted: Boolean = false, source: Spanned = SpannedString(document.text), baseline: Boolean = false): TableSegment =
-    if (baseline) baselineTable(document, source, 0, document.blockCount, style, Triple(emptyList(), 0f, quoted), 0, 1, 0)
-    else buildTable(document, source, 0, document.blockCount, style, Triple(emptyList(), 0f, quoted), 0, 1, 0)
+    if (baseline) baselineTable(document, source, 0, document.blockCount, style, Triple(emptyList(), 0f, quoted), 0, 1, 0, 0)
+    else buildTable(document, source, 0, document.blockCount, style, Triple(emptyList(), 0f, quoted), 0, 1, 0, 0)
 }
 private fun assertSameGeometry(left: TableSegment, right: TableSegment) {
   check(left.columnWidths.contentEquals(right.columnWidths))

@@ -6,6 +6,7 @@
 #include "Unicode.h"
 #include "WorkerPool.h"
 
+#include <algorithm>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -67,6 +68,7 @@ public:
     finished_ = false;
     SessionTrace::record(id_, generation, 0, "reset_received");
     snapshot_.reset();
+    snapshotSource_.reset();
     // The new source has shown nothing, so a view that binds to it fades from
     // its first word rather than starting from the previous one's tail.
     shown_.reset();
@@ -86,6 +88,14 @@ public:
       markDirty();
     }
     return true;
+  }
+
+  PublishedSessionSnapshot publishedSnapshot(uint64_t generation, uint64_t sequence) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (generation != readyGeneration_ || sequence != readySequence_ || generation != generation_) {
+      return {};
+    }
+    return {snapshot_, snapshotSource_, snapshotLive_};
   }
 
   DocumentHandle snapshot(uint64_t generation, uint64_t sequence) const {
@@ -136,6 +146,20 @@ public:
       return;
     }
     parse_ = parse;
+    parsePending_ = true;
+    if (!finished_) {
+      markDirty();
+    }
+  }
+
+  /// The same, for the tag policy alone. See `SessionRegistry::setParseTags`.
+  void setParseTags(TagPolicy tags) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopped_) {
+      return;
+    }
+    parse_.tags = std::move(tags);
+    parsePending_ = true;
     if (!finished_) {
       markDirty();
     }
@@ -192,7 +216,10 @@ private:
       replacement.swap(replacement_);
       pending.swap(pending_);
       preview.swap(preview_);
-      parse.swap(parse_);
+      if (parsePending_) {
+        parse = parse_;
+        parsePending_ = false;
+      }
       generation = generation_;
       sequence = sequence_;
       finished = finished_;
@@ -216,6 +243,13 @@ private:
     auto result = parser_.parse(finished);
     SessionTrace::record(id_, generation, sequence, "parse_end");
     const bool parsed = result.status == ParseStatus::Ok && result.document;
+    // Only custom-tag queries need canonical bytes. Copy on the worker before
+    // publication, without holding up appends or ordinary Markdown streams.
+    std::shared_ptr<const std::string> source;
+    if (parsed && std::any_of(result.document->tags.begin(), result.document->tags.end(),
+                              [](const Tag &tag) { return tag.block; })) {
+      source = std::make_shared<const std::string>(parser_.source());
+    }
 
     if (parsed && isCurrentGeneration(generation)) {
       // The view has not measured yet, so the widths other views use are the
@@ -236,6 +270,8 @@ private:
     } else {
       if (parsed) {
         snapshot_ = std::move(result.document);
+        snapshotSource_ = std::move(source);
+        snapshotLive_ = !finished;
         SessionTrace::bindDocument(snapshot_, id_, generation, sequence);
         SessionTrace::record(id_, generation, sequence, "snapshot_ready");
         readyGeneration_ = generation;
@@ -268,12 +304,17 @@ private:
   uint64_t readyGeneration_{0};
   uint64_t readySequence_{0};
   DocumentHandle snapshot_;
+  std::shared_ptr<const std::string> snapshotSource_;
+  bool snapshotLive_{false};
   // The last document a view showed for this session. Not the snapshot: a view
   // may be showing a snapshot that has since been superseded.
   DocumentHandle shown_;
   std::optional<LayoutHint> layout_;
   std::optional<remend::PreviewOptions> preview_;
-  std::optional<ParseOptions> parse_;
+  // Retain the configured options after the worker consumes an update, so
+  // changing tags alone cannot reset the flags to their defaults.
+  ParseOptions parse_;
+  bool parsePending_{false};
   bool dirty_{false};
   bool scheduled_{false};
   bool finished_{false};
@@ -340,6 +381,12 @@ DocumentHandle SessionRegistry::snapshot(const std::string &id, uint64_t generat
   return session ? session->snapshot(generation, sequence) : nullptr;
 }
 
+PublishedSessionSnapshot SessionRegistry::publishedSnapshot(const std::string &id, uint64_t generation,
+                                                            uint64_t sequence) {
+  const auto session = findSession(id);
+  return session ? session->publishedSnapshot(generation, sequence) : PublishedSessionSnapshot{};
+}
+
 bool SessionRegistry::isFinished(const std::string &id) {
   const auto session = findSession(id);
   return session != nullptr && session->isFinished();
@@ -376,7 +423,16 @@ bool SessionRegistry::setParse(const std::string &id, ParseOptions parse) {
   if (!session) {
     return false;
   }
-  session->setParse(parse);
+  session->setParse(std::move(parse));
+  return true;
+}
+
+bool SessionRegistry::setParseTags(const std::string &id, TagPolicy tags) {
+  const auto session = findSession(id);
+  if (!session) {
+    return false;
+  }
+  session->setParseTags(std::move(tags));
   return true;
 }
 

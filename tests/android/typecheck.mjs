@@ -286,6 +286,7 @@ public final class R {
   public static final class drawable {
     public static final int ds_ic_check = 1, ds_ic_collapse = 2, ds_ic_copy = 3;
     public static final int ds_ic_download = 4, ds_ic_expand = 5, ds_ic_wrap = 6;
+    public static final int ds_ic_fullscreen = 7;
   }
   public static final class id { public static final int copy = 1, cut = 2; }
   public static final class string { public static final int link_description = 1; }

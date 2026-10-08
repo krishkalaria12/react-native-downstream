@@ -11,7 +11,10 @@ import kotlin.math.ceil
 import kotlin.math.max
 
 /** One unit of layout. [gapBefore] is the space above it in the document. */
-internal sealed class Segment(val gapBefore: Int)
+internal sealed class Segment(val gapBefore: Int) {
+  /** The planner groups blocks with one details visibility state. */
+  var detailsContainers: List<ContainerDecoration> = emptyList()
+}
 
 /**
  * A picture, as its own segment.
@@ -94,6 +97,41 @@ internal class MathSegment(
 internal class TextSegment(
   val text: Spanned,
   val accessibleBlocks: List<AccessibleBlock>,
+  /**
+   * The blocks that sit inside a `<details>`, with the character range each one
+   * occupies.
+   *
+   * Carried here rather than read from the document at draw time because the
+   * segment is the unit of layout and the document is not on the UI thread: a
+   * collapsed body is a height question, and the height is asked for on every
+   * measurement. Empty for a document with no collapsible block, which is the
+   * common case, so the extra walk is nothing.
+   */
+  val detailsBlocks: List<DetailsBlock> = emptyList(),
+  /**
+   * The task items in this segment, with the character range each one occupies.
+   *
+   * Carried for the same reason the collapsible blocks are: the segment is the
+   * unit of layout and the document is not on the UI thread, and a press has to
+   * know which box it landed on without asking.
+   */
+  val taskBlocks: List<TaskBlock> = emptyList(),
+  /**
+   * The custom container's id when the plan grouped this segment for one, or -1.
+   *
+   * Set at build time from the first block's innermost Custom frame, so a
+   * hosted tag is one lookup rather than a walk of the segment's blocks on
+   * every measure.
+   */
+  val customContainer: Int = -1,
+  /**
+   * The content indent in pixels, from the segment's own container path.
+   *
+   * Carried because a hosted tag's rectangle starts here: the slot is as wide
+   * as the column the text would have taken, which is what the shadow node
+   * measured the child at.
+   */
+  val contentLeading: Int = 0,
   gapBefore: Int,
   /**
    * Where the caret's placeholder sits in [text], or -1 when this segment has
@@ -105,18 +143,100 @@ internal class TextSegment(
   val caretKind: Int,
 ) : Segment(gapBefore) {
   private var heightWidth = -1
+  private var fullHeight = 0
+  private var lineTops = IntArray(0)
+  private var lineStarts = IntArray(0)
   private var height = 0
+  private var hidden = emptyList<HiddenRange>()
 
-  /** Layout height at a width. Committed segments are shared by snapshots, so this is cached. */
+  /**
+   * Layout height at a width, with every closed body's lines taken out.
+   *
+   * The layout itself is built once per width whatever the reader's choices are,
+   * because the visible text has to wrap exactly as it would if the body were
+   * open — opening a body is then a pure height change rather than a re-measure.
+   * Only the subtraction depends on the choices.
+   *
+   * Cached per width *and* per choice set, because committed segments are shared
+   * between snapshots and a toggle arrives as a new snapshot rather than a new
+   * segment.
+   */
   @Synchronized
-  fun height(width: Int, paint: TextPaint): Int {
-    if (width != heightWidth) {
-      height = RenderedDocument.buildLayout(text, paint, width.coerceAtLeast(1), Layout.Alignment.ALIGN_NORMAL).height
-      heightWidth = width
+  fun height(width: Int, paint: TextPaint, choices: ReaderChoices = ReaderChoices()): Int {
+    val layoutWidth = width.coerceAtLeast(1)
+    val widthChanged = layoutWidth != heightWidth
+    if (widthChanged) {
+      val layout = RenderedDocument.buildLayout(
+        text, paint, layoutWidth, Layout.Alignment.ALIGN_NORMAL,
+      )
+      fullHeight = layout.height
+      // Keep only line geometry for details. Retaining a full StaticLayout for
+      // each committed segment would also retain its shaping and span state.
+      if (detailsBlocks.isNotEmpty()) {
+        lineTops = IntArray(layout.lineCount + 1) { layout.getLineTop(it) }
+        lineStarts = IntArray(layout.lineCount) { layout.getLineStart(it) }
+      }
+      heightWidth = layoutWidth
+    }
+    val hiddenRanges = hiddenRanges(choices)
+    if (widthChanged || hiddenRanges != hidden) {
+      hidden = hiddenRanges
+      height = if (hiddenRanges.isEmpty()) {
+        fullHeight
+      } else {
+        visibleTextHeight(
+          fullHeight, lineStarts.size, { lineTops[it] }, { lineStarts[it] }, hiddenRanges,
+        )
+      }
     }
     return height
   }
+
+  /**
+   * The character ranges this segment hides under `choices`.
+   *
+   * The summary is never in one: it is the visible line a reader taps to open the
+   * body, so hiding it would leave nothing to press.
+   */
+  private fun hiddenRanges(choices: ReaderChoices): List<HiddenRange> {
+    if (detailsBlocks.isEmpty()) return emptyList()
+    val ranges = ArrayList<HiddenRange>(detailsBlocks.size)
+    for (block in detailsBlocks) {
+      if (insideHiddenDetails(block.containers, choices)) {
+        ranges.add(HiddenRange(block.start, block.end))
+      }
+    }
+    return ranges
+  }
 }
+
+/**
+ * One task item, as the text segment needs it to report a press on its box.
+ *
+ * `checked` is the state the press leaves behind, which is the opposite of the
+ * state the box draws — because a checkbox is a toggle rather than a report.
+ */
+internal class TaskBlock(
+  val start: Int,
+  val end: Int,
+  val containerId: Int,
+  val checked: Boolean,
+)
+
+/**
+ * One block inside a `<details>`, as the text segment needs it to hide the body.
+ *
+ * `containers` is a copy rather than a reference into the document: the segment
+ * outlives the slice it was built from, and the reader's answer is resolved
+ * against these frames long after that slice is gone.
+ */
+internal class DetailsBlock(
+  val start: Int,
+  val end: Int,
+  /** True for the container's summary line, which is never hidden. */
+  val summary: Boolean,
+  val containers: List<ContainerDecoration>,
+)
 
 /**
  * One code block: a header row above a horizontally scrolling body. The body is
@@ -194,6 +314,14 @@ internal class CodeSegment(
   /** The caret's shape, or 0 for none. */
   val caretKind: Int,
   gapBefore: Int,
+  /**
+   * This table's index among the document's tables, or -1 before it is known.
+   *
+   * The reader's expand choice is keyed by this rather than by the block index,
+   * because a block index counts rows and moves as a table streams, while an
+   * ordinal counts tables and does not.
+   */
+  val ordinal: Int = -1,
 ) : Segment(gapBefore) {
   private val digitAdvance: Float
   private val codeLineHeight: Int
@@ -326,11 +454,25 @@ internal class TableSegment(
    */
   val caretKind: Int,
   gapBefore: Int,
+  /**
+   * This table's index among the document's tables, or -1 before it is known.
+   *
+   * The reader's expand choice is keyed by this rather than by the block index,
+   * because a block index counts rows and moves as a table streams, while an
+   * ordinal counts tables and does not.
+   */
+  val ordinal: Int = -1,
 ) : Segment(gapBefore) {
   // One border width for the closing grid line, so the outer edge the view draws
   // sits inside the size the measurement produced.
   val tableWidth = columnWidths.sum() + borderWidth
   val tableHeight = rowHeights.sum() + borderWidth
+  /** Actual text row metrics, in the same pixels as the cap and native frame. */
+  fun visibleGridHeight(layout: TableBlockLayout): Int {
+    if (layout.maxHeight <= 0f) return tableHeight
+    val minimum = rowHeights.take(MIN_VISIBLE_TABLE_ROWS).sum() + borderWidth
+    return minOf(tableHeight, maxOf(layout.maxHeight.toInt(), minimum))
+  }
   val rowTops = IntArray(rowHeights.size + 1).also { tops ->
     for (index in rowHeights.indices) tops[index + 1] = tops[index] + rowHeights[index]
   }

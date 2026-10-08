@@ -20,6 +20,13 @@ struct SessionEvent {
   std::string message;
 };
 
+/// Source, document, and stream state from the same published parse pass.
+struct PublishedSessionSnapshot {
+  DocumentHandle document;
+  std::shared_ptr<const std::string> source;
+  bool live{false};
+};
+
 /// Called on a worker pool thread, one event at a time per session.
 using SessionCallback = std::function<void(const SessionEvent &)>;
 
@@ -37,6 +44,7 @@ public:
   /// further events.
   static void dispose(const std::string &id);
   static DocumentHandle snapshot(const std::string &id, uint64_t generation, uint64_t sequence);
+  static PublishedSessionSnapshot publishedSnapshot(const std::string &id, uint64_t generation, uint64_t sequence);
   /// Whether the writer finished the stream. A finished stream settles every
   /// block, so a fence it never closed is final rather than still arriving.
   static bool isFinished(const std::string &id);
@@ -67,6 +75,18 @@ public:
    * false when the session does not exist.
    */
   static bool setParse(const std::string &id, ParseOptions parse);
+
+  /**
+   * Replaces the session's HTML tag policy, keeping its flags.
+   *
+   * A separate call for the same reason `setParse` is: `create` is one crossing
+   * with one number in it, and a tag policy is a list. Reading the flags back off
+   * the session rather than taking them as an argument is what keeps a caller that
+   * only knows about tags from clearing the bits that came with `create`.
+   *
+   * Returns false when the session does not exist.
+   */
+  static bool setParseTags(const std::string &id, TagPolicy tags);
 };
 
 } // namespace downstream

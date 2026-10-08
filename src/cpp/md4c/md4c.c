@@ -396,6 +396,88 @@ md_ascii_eq(const CHAR* s1, const CHAR* s2, SZ n)
     return memcmp(s1, s2, n * sizeof(CHAR)) == 0;
 }
 
+/*******************
+ ***  LOCAL PATCH ***
+ *******************/
+
+/* The markdown-cjk-friendly amendment to CommonMark.
+ *
+ * https://github.com/tats-u/markdown-cjk-friendly
+ *
+ * CommonMark calls a delimiter run left- or right-flanking by looking only at
+ * Unicode punctuation on either side of it. That reads punctuation as "not a
+ * word", which is true in English and false in CJK: a fullwidth comma or a
+ * corner bracket is as much a word boundary as a space, so `**「強調」**` — a
+ * strong span wrapped in brackets, which is how a Japanese writer bolds a
+ * quoted phrase — is left with a punctuation opener that cannot open and a
+ * punctuation closer that cannot close.
+ *
+ * The amendment keeps the flanking test and changes what it treats as
+ * punctuation: a run next to a CJK character is flanked as though that
+ * character were punctuation. Everything else is unchanged, which is the whole
+ * reason this can be a patch rather than a fork: with the flag off, no byte
+ * below runs.
+ *
+ * The CJK ranges are the ones the amendment's own `ranges.md` publishes, which
+ * is the same table comrak uses. Unicode 18. See README.md.
+ */
+typedef struct MD_CJK_RANGE_tag {
+    unsigned first;
+    unsigned last;
+} MD_CJK_RANGE;
+
+static const MD_CJK_RANGE md_cjk_ranges[] = {
+    {0x1100, 0x11ff}, {0x20a9, 0x20a9}, {0x2329, 0x232a}, {0x2630, 0x2637},
+    {0x268a, 0x268f}, {0x2e80, 0x2e99}, {0x2e9b, 0x2ef3}, {0x2f00, 0x2fd5},
+    {0x2ff0, 0x303e}, {0x3041, 0x3096}, {0x3099, 0x30ff}, {0x3105, 0x312f},
+    {0x3131, 0x318e}, {0x3190, 0x31e5}, {0x31ef, 0x321e}, {0x3220, 0x3247},
+    {0x3250, 0xa48c}, {0xa490, 0xa4c6}, {0xa960, 0xa97c}, {0xac00, 0xd7a3},
+    {0xd7b0, 0xd7c6}, {0xd7cb, 0xd7fb}, {0xf900, 0xfaff}, {0xfe10, 0xfe19},
+    {0xfe30, 0xfe52}, {0xfe54, 0xfe66}, {0xfe68, 0xfe6b}, {0xff01, 0xffbe},
+    {0xffc2, 0xffc7}, {0xffca, 0xffcf}, {0xffd2, 0xffd7}, {0xffda, 0xffdc},
+    {0xffe0, 0xffe6}, {0xffe8, 0xffee}, {0x16fe0, 0x16fe4}, {0x16ff0, 0x16ff6},
+    {0x17000, 0x18cda}, {0x18cff, 0x18d20}, {0x18d80, 0x18df2}, {0x18e00, 0x19191},
+    {0x191a0, 0x191d2}, {0x1aff0, 0x1aff3}, {0x1aff5, 0x1affb}, {0x1affd, 0x1affe},
+    {0x1b000, 0x1b128}, {0x1b132, 0x1b132}, {0x1b150, 0x1b152}, {0x1b155, 0x1b155},
+    {0x1b164, 0x1b168}, {0x1b170, 0x1b2fb}, {0x1d300, 0x1d356}, {0x1d360, 0x1d376},
+    {0x1f1ae, 0x1f1ae}, {0x1f200, 0x1f200}, {0x1f202, 0x1f202}, {0x1f210, 0x1f219},
+    {0x1f21b, 0x1f22e}, {0x1f230, 0x1f231}, {0x1f237, 0x1f237}, {0x1f23b, 0x1f23b},
+    {0x1f240, 0x1f248}, {0x1f260, 0x1f265}, {0x1f7da, 0x1f7da}, {0x20000, 0x3fffd},
+};
+
+#define N_CJK_RANGES  (sizeof(md_cjk_ranges) / sizeof(MD_CJK_RANGE))
+
+/* Binary search: the table is sorted, and the ranges below U+1100 are all
+ * non-CJK, so the two hottest answers — ASCII and Latin prose — are decided
+ * without touching the table at all. */
+static int
+md_is_cjk__(unsigned codepoint)
+{
+    int lo = 0;
+    int hi = N_CJK_RANGES - 1;
+
+    if(codepoint < 0x1100)
+        return 0;
+
+    while(lo <= hi) {
+        const int mid = lo + (hi - lo) / 2;
+        if(codepoint < md_cjk_ranges[mid].first)
+            hi = mid - 1;
+        else if(codepoint > md_cjk_ranges[mid].last)
+            lo = mid + 1;
+        else
+            return 1;
+    }
+    return 0;
+}
+
+/* Note there is no `md_is_cjk_punct__`, because nothing here needs to tell a
+ * CJK punctuation character from a CJK letter. The amendment's neighbour tests
+ * ask one question — is this character a CJK character — and a fullwidth comma
+ * and a kanji both answer yes to it. The distinction matters in the *flanking*
+ * test, which md4c's three levels express directly: a fullwidth comma is
+ * already level 1 under md4c's own `ISUNICODEPUNCT`, so it needed no help. */
+
 static int
 md_text_with_null_replacement(MD_CTX* ctx, MD_TEXTTYPE type, const CHAR* str, SZ size)
 {
@@ -889,6 +971,11 @@ struct MD_UNICODE_FOLD_INFO_tag {
     #define ISUNICODEPUNCT(off)             md_is_unicode_punct__(md_decode_utf16le__(STR(off), ctx->size - (off), NULL))
     #define ISUNICODEPUNCTBEFORE(off)       md_is_unicode_punct__(md_decode_utf16le_before__(ctx, off))
 
+    /* LOCAL PATCH (see README.md): the CJK amendment's neighbour test. Defined
+     * per encoding so each one decodes its own code units. */
+    #define ISUNICODECJK(off)               md_is_cjk__(md_decode_utf16le__(STR(off), ctx->size - (off), NULL))
+    #define ISUNICODECJKBEFORE(off)         md_is_cjk__(md_decode_utf16le_before__(ctx, off))
+
     static inline int
     md_decode_unicode(const CHAR* str, OFF off, SZ str_size, SZ* p_char_size)
     {
@@ -970,6 +1057,10 @@ struct MD_UNICODE_FOLD_INFO_tag {
     #define ISUNICODEPUNCT(off)             md_is_unicode_punct__(md_decode_utf8__(STR(off), ctx->size - (off), NULL))
     #define ISUNICODEPUNCTBEFORE(off)       md_is_unicode_punct__(md_decode_utf8_before__(ctx, off))
 
+    /* LOCAL PATCH (see README.md): see the UTF-16 branch above. */
+    #define ISUNICODECJK(off)               md_is_cjk__(md_decode_utf8__(STR(off), ctx->size - (off), NULL))
+    #define ISUNICODECJKBEFORE(off)         md_is_cjk__(md_decode_utf8_before__(ctx, off))
+
     static inline unsigned
     md_decode_unicode(const CHAR* str, OFF off, SZ str_size, SZ* p_char_size)
     {
@@ -982,6 +1073,13 @@ struct MD_UNICODE_FOLD_INFO_tag {
 
     #define ISUNICODEPUNCT(off)             ISPUNCT(off)
     #define ISUNICODEPUNCTBEFORE(off)       ISPUNCT((off)-1)
+
+    /* LOCAL PATCH (see README.md): an 8-bit encoding has no code points above
+     * 0xff, and the CJK ranges all start at U+1100, so the test is false for
+     * every character this build can see. The patch stays off rather than
+     * silently changing the flanking of a non-UTF build. */
+    #define ISUNICODECJK(off)               0
+    #define ISUNICODECJKBEFORE(off)         0
 
     static inline void
     md_get_unicode_fold_info(unsigned codepoint, MD_UNICODE_FOLD_INFO* info)
@@ -3331,6 +3429,36 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
                     right_level = 0;
                 }
 
+                /* LOCAL PATCH (see README.md): the markdown-cjk-friendly
+                 * amendment. The `_` intraword rule above is applied first, on
+                 * the unrelaxed levels, because the amendment leaves that rule
+                 * alone — which is what keeps `__テスト__です` literal.
+                 *
+                 * After it, a CJK neighbour is reclassified from "other" to
+                 * "punctuation". md4c decides the opener from `right_level >=
+                 * left_level` and the closer from `left_level >= right_level`,
+                 * so lowering one side only ever enables a flag, and it enables
+                 * exactly the ones the amendment does:
+                 *
+                 *  - opener, `**「` and `**太`: `「` is CJK punctuation, which
+                 *    the amendment's left-flanking test already accepts, and
+                 *    `太` is a CJK sequence, which its fallback accepts. Both
+                 *    were levels 2 against 1 and could not open.
+                 *  - closer, `」**で` and `)**で`: the run is preceded by CJK, so
+                 *    it is right-flanking however it is followed.
+                 *  - but `a**太字`: the run is still followed by a Latin letter,
+                 *    so the amendment does not let it open, and lowering the
+                 *    right level alone keeps it from doing so.
+                 *
+                 * Whitespace and non-CJK text are untouched, which is the
+                 * property `test:cjk differential` holds this patch to. */
+                if((ctx->parser.flags & MD_FLAG_CJKFRIENDLY) != 0) {
+                    if(left_level == 2  &&  off > line->beg  &&  ISUNICODECJKBEFORE(off))
+                        left_level = 1;
+                    if(right_level == 2  &&  tmp < line->end  &&  ISUNICODECJK(tmp))
+                        right_level = 1;
+                }
+
                 if(left_level != 0  ||  right_level != 0) {
                     unsigned flags = 0;
 
@@ -3616,9 +3744,19 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
                     /* Strikethrough: standard GFM left/right-flanking rules. */
                     unsigned flags = MD_MARK_POTENTIAL_OPENER | MD_MARK_POTENTIAL_CLOSER;
 
-                    if(off > line->beg  &&  !ISUNICODEWHITESPACEBEFORE(off)  &&  !ISUNICODEPUNCTBEFORE(off))
+                    /* LOCAL PATCH (see README.md): the markdown-cjk-friendly
+                     * amendment, for `~~` the way
+                     * remark-cjk-friendly-gfm-strikethrough applies it. The two
+                     * clearing tests below already refuse a run flanked by two
+                     * words; a CJK neighbour is a word boundary for the same
+                     * reason a fullwidth comma is, so it stops being one here.
+                     * The run is still refused by a Latin letter, which is what
+                     * keeps `~~del~~ok` literal as GFM has it. */
+                    if(off > line->beg  &&  !ISUNICODEWHITESPACEBEFORE(off)  &&  !ISUNICODEPUNCTBEFORE(off)  &&
+                        !((ctx->parser.flags & MD_FLAG_CJKFRIENDLY) != 0  &&  ISUNICODECJKBEFORE(off)))
                         flags &= ~MD_MARK_POTENTIAL_OPENER;
-                    if(tmp < line->end  &&  !ISUNICODEWHITESPACE(tmp)  &&  !ISUNICODEPUNCT(tmp))
+                    if(tmp < line->end  &&  !ISUNICODEWHITESPACE(tmp)  &&  !ISUNICODEPUNCT(tmp)  &&
+                        !((ctx->parser.flags & MD_FLAG_CJKFRIENDLY) != 0  &&  ISUNICODECJK(tmp)))
                         flags &= ~MD_MARK_POTENTIAL_CLOSER;
                     if(flags != 0)
                         ADD_MARK(ch, off, tmp, flags);
@@ -4448,13 +4586,20 @@ md_analyze_permissive_autolink(MD_CTX* ctx, int mark_index)
 
     /* Verify there's line boundary, whitespace, allowed punctuation or
      * resolved opener mark just before the suspected autolink. */
-    if(beg > line_beg  &&  !ISUNICODEWHITESPACEBEFORE(beg)  &&  !ISANYOF(beg-1, _T("({["))) {
+    if(beg > line_beg  &&  !ISUNICODEWHITESPACEBEFORE(beg)  &&  !ISANYOF(beg-1, _T("({["))  &&
+        !((ctx->parser.flags & MD_FLAG_CJKFRIENDLY) != 0  &&  ISUNICODECJKBEFORE(beg)))
+    {
         MD_MARK* mark;
 
         mark = md_scan_left_for_resolved_mark(ctx, left_cursor, beg-1, &left_cursor);
         if(mark == NULL  ||  !(mark->flags & MD_MARK_OPENER))
             return;
     }
+    /* LOCAL PATCH (see README.md): the markdown-cjk-friendly amendment, for
+     * autolinks. A CJK character or CJK punctuation ends an autolink as a
+     * space does, because neither is a character a URL may contain: without
+     * this a bare URL written as prose is not a link at all, which is a worse
+     * failure than Streamdown's own trailing-character bug. */
 
     /* Scan for hostname segment. Hostname is mandatory and requires at least two
      * components delimited with a dot. */
@@ -4490,8 +4635,13 @@ md_analyze_permissive_autolink(MD_CTX* ctx, int mark_index)
     }
 
     /* Verify there's line boundary, whitespace, allowed punctuation or
-     * resolved closer mark just after the suspected autolink. */
-    if(end < line_end  &&  !ISUNICODEWHITESPACE(end)  &&  !ISANYOF(end, _T(")}].!?,;"))) {
+     * resolved closer mark just after the suspected autolink. The CJK clause is
+     * the same amendment as the one above, at this end: `https://example.com。
+     * 謝謝` ends the URL before the fullwidth stop, which is the split
+     * Streamdown's plugin produces. */
+    if(end < line_end  &&  !ISUNICODEWHITESPACE(end)  &&  !ISANYOF(end, _T(")}].!?,;"))  &&
+        !((ctx->parser.flags & MD_FLAG_CJKFRIENDLY) != 0  &&  ISUNICODECJK(end)))
+    {
         MD_MARK* mark;
 
         mark = md_scan_right_for_resolved_mark(ctx, right_cursor, end, &right_cursor);

@@ -1,5 +1,7 @@
 #include "DownstreamMarkdownShadowNode.h"
 
+#include "TagPolicy.h"
+
 #include "ImageLayout.h"
 #include "ImageSizeCache.h"
 #include "MarkdownParser.h"
@@ -9,6 +11,7 @@
 #include "theme/ThemeLayout.h"
 
 #include <algorithm>
+#include <unordered_map>
 
 #include <react/renderer/components/DownstreamSpec/ShadowNodes.h>
 #include <react/renderer/core/LayoutContext.h>
@@ -67,14 +70,14 @@ DownstreamMarkdownShadowNode::DownstreamMarkdownShadowNode(const ShadowNode &sou
     requestControlledSource();
   } else if (previous.markdown == props.markdown && previous.generation == props.generation &&
              previous.sessionSequence == props.sessionSequence && previous.sessionRevision == props.sessionRevision &&
-             previous.parseFlags == props.parseFlags) {
+             previous.parseFlags == props.parseFlags && previous.allowedTags == props.allowedTags) {
     controlled_ = source.controlled_;
     // A revision that showed a fallback while its source was being prepared
     // collects the result in the next revision.
     needsDocument_ = source.needsDocument_ || source.awaitingPrepared_;
     pendingError_ = source.pendingError_;
   } else if (props.sessionId.empty() && previous.markdown == props.markdown &&
-             previous.parseFlags == props.parseFlags) {
+             previous.parseFlags == props.parseFlags && previous.allowedTags == props.allowedTags) {
     // A generation change without a new source, after a rejected value.
     controlled_ = source.controlled_;
   } else {
@@ -120,16 +123,44 @@ downstream::Theme::Handle DownstreamMarkdownShadowNode::resolveTheme() const {
   return theme_;
 }
 
+/**
+ * The `dir` prop, as the engine's own direction.
+ *
+ * `Inherit` for `auto`, which is the engine's decision per block: a prop that
+ * named a direction would be a second rule, and the whole point of deciding the
+ * direction in C++ was that there is only one.
+ */
+downstream::BlockDirection directionFor(DownstreamMarkdownViewDir value) {
+  switch (value) {
+    case DownstreamMarkdownViewDir::Ltr:
+      return downstream::BlockDirection::LeftToRight;
+    case DownstreamMarkdownViewDir::Rtl:
+      return downstream::BlockDirection::RightToLeft;
+    case DownstreamMarkdownViewDir::Auto:
+      break;
+  }
+  return downstream::BlockDirection::Inherit;
+}
+
 downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale, Float width,
                                                                const downstream::DocumentHandle &document) const {
   const auto &state = getStateData();
-  return downstream::LayoutHint{static_cast<float>(fontScale),
-                                static_cast<float>(width),
-                                chromeFor(state),
-                                codeLayout(state),
-                                state.caret,
-                                imageLayout(document),
-                                theme_};
+  // The table's cap rides beside the code block's rather than inside it, because
+  // a table's height is a different block kind's decision and mixing them would
+  // make every code wrap toggle rebuild the table measurement. The reader's one
+  // set of choices goes in whole: it is the same set for every kind, so there is
+  // nothing to decide here beyond carrying it.
+  downstream::LayoutHint hint{static_cast<float>(fontScale),
+                              static_cast<float>(width),
+                              chromeFor(state),
+                              codeProps(state),
+                              state.choices,
+                              state.caret,
+                              imageLayout(document),
+                              theme_};
+  hint.tables = tableProps(state);
+  hint.direction = directionFor(getConcreteProps().dir);
+  return hint;
 }
 
 /// The two small enums, mapped from the codegen ones.
@@ -150,6 +181,13 @@ downstream::CaretKind caretKind(DownstreamMarkdownViewCaret value) {
   return downstream::CaretKind::None;
 }
 
+/**
+ * The `dir` prop, as the engine's own direction.
+ *
+ * `Inherit` for `auto`, which is the engine's decision per block: a prop that
+ * named a direction would be a second rule, and the whole point of deciding the
+ * direction in C++ was that there is only one.
+ */
 downstream::Animating animatingFor(DownstreamMarkdownViewAnimating value) {
   switch (value) {
     case DownstreamMarkdownViewAnimating::Auto:
@@ -189,8 +227,11 @@ void DownstreamMarkdownShadowNode::requestControlledSource() {
   // The view's math options are parse options: the same string parses to a
   // different document with math on, so they travel with the request and are
   // part of what the preparation cache keys on.
-  downstream::ParseOptions parse;
-  parse.flags = static_cast<uint32_t>(props.parseFlags);
+  // The same string parses to a different document under a different tag policy,
+  // so it travels with the request and is part of what the cache keys on, beside
+  // the flags. The list is the wire form `src/allowedTags.ts` writes.
+  downstream::ParseOptions parse{static_cast<uint32_t>(props.parseFlags),
+                                 downstream::tagPolicyFromStrings(props.allowedTags)};
   controlled_->prepared = downstream::PreparedDocument::request(props.markdown, layoutHint(1, 0, document_), parse);
 }
 
@@ -300,19 +341,22 @@ void DownstreamMarkdownShadowNode::relayoutWhenPrepared() const {
   });
 }
 
-/// The code layout the props and the state's choices together describe.
-downstream::CodeLayout DownstreamMarkdownShadowNode::codeLayout(const DownstreamMarkdownState &state) const {
+/// The code block's props, which measurement reads rather than the state's copy
+/// of them, because a prop change lands in props a revision before the state
+/// that records it does.
+downstream::CodeLayoutProps DownstreamMarkdownShadowNode::codeProps(const DownstreamMarkdownState &) const {
   const auto &props = getConcreteProps();
-  downstream::CodeLayout code;
-  // Measuring reads the props rather than the state's copy of them, because a
-  // prop change lands in props a revision before the state that records it does.
-  code.props = {props.codeBlockWrap, props.lineNumbers, static_cast<float>(props.codeBlockMaxHeight)};
-  code.choices = state.code.choices;
-  return code;
+  return {props.codeBlockWrap, props.lineNumbers, static_cast<float>(props.codeBlockMaxHeight)};
+}
+
+/// The table's cap, read for the same reason `codeProps` reads the code ones.
+downstream::TableLayoutProps DownstreamMarkdownShadowNode::tableProps(const DownstreamMarkdownState &) const {
+  const auto &props = getConcreteProps();
+  return {static_cast<float>(props.tableMaxHeight)};
 }
 
 uint32_t DownstreamMarkdownShadowNode::chromeFor(const DownstreamMarkdownState &state) const {
-  return chromeForProps(getConcreteProps().controls, codeLayout(state));
+  return chromeForProps(getConcreteProps().controls, codeProps(state), state.choices);
 }
 
 /// The `allowedImagePrefixes` prop, as the list `imageUrlAllowed` reads.
@@ -429,6 +473,30 @@ void DownstreamMarkdownShadowNode::imagesChanged(const std::shared_ptr<const Sha
   concrete->relayoutWhenImagesChange(answers);
 }
 
+std::vector<DownstreamMarkdownShadowNode::TagSlotChild> DownstreamMarkdownShadowNode::tagSlotChildren() const {
+  std::vector<TagSlotChild> slots;
+  const auto &children = getChildren();
+  for (size_t index = 0; index < children.size(); index++) {
+    const auto &child = children[index];
+    // The same dedicated component fences use: a slot's whole job is to hold
+    // the app's component, and whether it replaces a fence or a tag changes
+    // which block range it stands in for, not how it is held.
+    const auto *slot = dynamic_cast<const DownstreamFenceSlotShadowNode *>(child.get());
+    if (slot == nullptr) {
+      continue;
+    }
+    const int32_t container = slot->getConcreteProps().containerId;
+    if (container < 0) {
+      continue;
+    }
+    if (slot->getConcreteProps().yogaStyle.display() == yoga::Display::None) {
+      continue;
+    }
+    slots.push_back({static_cast<uint32_t>(container), child, index});
+  }
+  return slots;
+}
+
 std::vector<DownstreamMarkdownShadowNode::SlotChild> DownstreamMarkdownShadowNode::slotChildren() const {
   std::vector<SlotChild> slots;
   const auto &children = getChildren();
@@ -439,6 +507,9 @@ std::vector<DownstreamMarkdownShadowNode::SlotChild> DownstreamMarkdownShadowNod
     // so nothing an app renders itself can be mistaken for a slot.
     const auto *slot = dynamic_cast<const DownstreamFenceSlotShadowNode *>(child.get());
     if (slot == nullptr) {
+      continue;
+    }
+    if (slot->getConcreteProps().containerId >= 0) {
       continue;
     }
     // React hides a suspended subtree with `display: none`, and a hidden child
@@ -460,7 +531,8 @@ downstream::HostLayout DownstreamMarkdownShadowNode::measureSlots(const LayoutCo
   const Float maximumWidth = layoutConstraints.maximumSize.width;
   downstream::HostLayout hosts;
   const std::vector<SlotChild> slots = slotChildren();
-  if (slots.empty()) {
+  const std::vector<TagSlotChild> tagSlots = tagSlotChildren();
+  if (slots.empty() && tagSlots.empty()) {
     // No renderer is mounted: the measurement is the one a view with no
     // renderers has always made, and the cache key is the same empty host
     // layout it was before this existed.
@@ -508,6 +580,53 @@ downstream::HostLayout DownstreamMarkdownShadowNode::measureSlots(const LayoutCo
   }
   std::sort(hosts.entries.begin(), hosts.entries.end(),
             [](const downstream::HostEntry &a, const downstream::HostEntry &b) { return a.ordinal < b.ordinal; });
+  // Tag slots beside fence slots: a child that replaces a custom container is
+  // measured at the container's column, exactly as a fence child is measured
+  // at its block's. The entries land in the tag key space, so a fence can
+  // never claim a tag's height.
+  hosts.tags.reserve(tagSlots.size());
+  // Index custom containers once for every mounted child, the way fences index
+  // code blocks above: one walk, however many tags a message holds.
+  std::unordered_map<uint32_t, const downstream::Block *> tagBlocks;
+  tagBlocks.reserve(tagSlots.size());
+  for (const auto &slot : tagSlots) {
+    tagBlocks.emplace(slot.container, nullptr);
+  }
+  if (document && theme && std::isfinite(maximumWidth) && !tagBlocks.empty()) {
+    size_t remaining = tagBlocks.size();
+    for (const auto &block : document->blocks) {
+      for (const auto &container : block.containers) {
+        if (container.kind != downstream::ContainerKind::Custom) continue;
+        const auto found = tagBlocks.find(container.id);
+        if (found != tagBlocks.end() && found->second == nullptr) {
+          found->second = &block;
+          --remaining;
+        }
+      }
+      if (remaining == 0) break;
+    }
+  }
+  for (const TagSlotChild &slot : tagSlots) {
+    const auto *layoutable = dynamic_cast<const LayoutableShadowNode *>(slot.node.get());
+    if (layoutable == nullptr) {
+      continue;
+    }
+    float column = static_cast<float>(maximumWidth);
+    const auto found = tagBlocks.find(slot.container);
+    if (found != tagBlocks.end() && found->second != nullptr && theme && std::isfinite(maximumWidth)) {
+      const double leading =
+          downstream::theme_layout::contentLeading(*theme, found->second->containers, scale);
+      column = static_cast<float>(std::max(0.0, static_cast<double>(maximumWidth) - leading));
+    }
+    LayoutConstraints constraints{Size{column, 0}, Size{column, std::numeric_limits<Float>::infinity()},
+                                 layoutConstraints.layoutDirection};
+    const Size size = layoutable->measure(layoutContext, constraints);
+    hosts.tags.push_back({slot.container, static_cast<float>(size.height)});
+  }
+  std::sort(hosts.tags.begin(), hosts.tags.end(),
+            [](const downstream::TagHostEntry &a, const downstream::TagHostEntry &b) {
+              return a.container < b.container;
+            });
   return hosts;
 }
 
@@ -534,13 +653,14 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
   measuredHosts_ = measureSlots(layoutContext, layoutConstraints);
   return layoutManager_
       ->measure(document, layoutContext.fontSizeMultiplier, layoutConstraints, getSurfaceId(), chrome,
-                codeLayout(state), caretFor(document), imageLayout(document), measuredHosts_, theme_)
+                codeProps(state), caretFor(document), imageLayout(document), measuredHosts_, theme_,
+                tableProps(state), state.choices)
       .size;
 }
 
 void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
   const std::vector<SlotChild> slots = slotChildren();
-  if (slots.empty()) {
+  if (slots.empty() && tagSlotChildren().empty()) {
     return;
   }
   const downstream::DocumentHandle &document = getDocument();
@@ -556,8 +676,9 @@ void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
                                 getLayoutMetrics().layoutDirection};
   const DocumentMeasurement measurement =
       layoutManager_->measure(document, layoutContext.fontSizeMultiplier, frame, getSurfaceId(), chromeFor(state),
-                              codeLayout(state), caretFor(document), imageLayout(document), measuredHosts_, theme_);
-  if (measurement.slots.empty()) {
+                              codeProps(state), caretFor(document), imageLayout(document), measuredHosts_, theme_,
+                              tableProps(state), state.choices);
+  if (measurement.slots.empty() && measurement.tagSlots.empty()) {
     return;
   }
   if (children_ == nullptr) {
@@ -566,6 +687,7 @@ void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
   // A copy of the child list, written back once every slot is placed: cloning a
   // child while walking the list would otherwise invalidate the walk.
   auto children = std::make_shared<std::vector<std::shared_ptr<const ShadowNode>>>(*children_);
+  layoutTagSlots(layoutContext, measurement, children);
   for (const SlotChild &slot : slots) {
     const size_t index = slot.childIndex;
     // A leaf Yoga node lays its own children out, exactly as the text shadow
@@ -602,6 +724,42 @@ void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
   children_ = std::move(children);
 }
 
+void DownstreamMarkdownShadowNode::layoutTagSlots(
+    LayoutContext layoutContext, const DocumentMeasurement &measurement,
+    std::shared_ptr<std::vector<std::shared_ptr<const ShadowNode>>> &children) {
+  const std::vector<TagSlotChild> slots = tagSlotChildren();
+  for (const TagSlotChild &slot : slots) {
+    const size_t index = slot.childIndex;
+    std::shared_ptr<ShadowNode> cloned = (*children)[index]->clone({});
+    auto *layoutable = dynamic_cast<LayoutableShadowNode *>(cloned.get());
+    if (layoutable == nullptr) {
+      continue;
+    }
+    const Rect *rect = measurement.tagSlotFor(slot.container);
+    if (rect == nullptr) {
+      // A slot whose container has no hosted range in this document: a stale
+      // child from a lagging render, or one that arrived while the source was
+      // still being prepared. Nothing is drawn for it, the way a fence slot
+      // with no block is hidden.
+      layoutable->setLayoutMetrics(LayoutMetrics{.frame = {}, .displayType = DisplayType::None});
+      (*children)[index] = std::move(cloned);
+      continue;
+    }
+    const Size size{rect->size.width, rect->size.height};
+    LayoutConstraints constraints{size, size, getLayoutMetrics().layoutDirection};
+    layoutable->layoutTree(layoutContext, constraints);
+    LayoutMetrics metrics = layoutable->getLayoutMetrics();
+    metrics.frame.size = size;
+    metrics.frame.origin = rect->origin;
+    metrics.displayType = DisplayType::Flex;
+    layoutable->setLayoutMetrics(std::move(metrics));
+    (*children)[index] = std::move(cloned);
+  }
+  // No write-back here: the caller owns the list and writes it back once both
+  // passes are done, so a tag slot placed here is not overwritten by a fence
+  // slot placed after it.
+}
+
 void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   ensureUnsealed();
   ConcreteViewShadowNode::layout(layoutContext);
@@ -614,7 +772,7 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   const uint32_t chrome = chromeFor(state);
   // The theme is compared by id rather than by pointer, so a view whose theme
   // resolved to an equal value it already had does not ask for a state update.
-  const downstream::CodeLayout code = codeLayout(state);
+  const downstream::CodeLayoutProps code = codeProps(state);
   // The caret and the image answers are both part of this comparison for the
   // same reason the code layout is: the node measured with one set and would
   // otherwise mount with another, which is a caret or a picture drawn at a
@@ -627,18 +785,23 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   // not a second measurement: a child measured twice at two widths would put
   // the document and the view at two different heights.
   const downstream::HostLayout hosts = measuredHosts_;
+  // The table layout is in this comparison for the same reason the code one is:
+  // a capped table measures at one height and an expanded one at another, and a
+  // view that mounted with the wrong set would scroll a table by a frame it was
+  // not laid out for.
+  const downstream::TableLayoutProps tables = tableProps(state);
   if (document && state.document != document) {
     reportMathErrors(document, state.document);
   }
   if (state.document != document || state.fontSizeMultiplier != layoutContext.fontSizeMultiplier ||
-      state.chrome != chrome || state.code != code || state.caret != caret || state.images != images ||
-      state.hosts != hosts ||
-      state.themeId() != themeId()) {
+      state.chrome != chrome || state.code != code || state.tables != tables || state.caret != caret ||
+      state.images != images || state.hosts != hosts || state.themeId() != themeId()) {
     DownstreamMarkdownState next{state};
     next.document = document;
     next.fontSizeMultiplier = layoutContext.fontSizeMultiplier;
     next.chrome = chrome;
     next.code = code;
+    next.tables = tables;
     next.caret = caret;
     next.images = images;
     next.hosts = hosts;

@@ -4,6 +4,7 @@
 #include "CodeLayout.h"
 #include "HostLayout.h"
 #include "ImageLayout.h"
+#include "TableLayout.h"
 #endif
 
 #import <UIKit/UIKit.h>
@@ -82,11 +83,28 @@ typedef NS_ENUM(NSInteger, DSControlLabel) {
   DSControlLabelDownloadImage = 18,
   DSControlLabelImage = 19,
   DSControlLabelImageBlocked = 20,
-  DSControlLabelCount = 21,
+  // Phase 1: the link confirmation's four strings.
+  DSControlLabelExternalLinkWarning = 21,
+  DSControlLabelOpenLink = 22,
+  DSControlLabelCopyLink = 23,
+  DSControlLabelClose = 24,
+  // Phase 2: the table's two buttons.
+  DSControlLabelViewFullscreen = 25,
+  DSControlLabelExitFullscreen = 26,
+  DSControlLabelExpandTable = 27,
+  DSControlLabelCollapseTable = 28,
+  // Phase 5: the details summary's chevron and its accessible name.
+  DSControlLabelExpandDetails = 29,
+  DSControlLabelCollapseDetails = 30,
+  DSControlLabelCount = 31,
 };
 
 extern NSString *const kSymbolCopy;
 extern NSString *const kSymbolDownload;
+/// A table's full-screen button, and the two states of a `<details>` chevron.
+extern NSString *const kSymbolMaximize;
+extern NSString *const kSymbolChevronDown;
+extern NSString *const kSymbolChevronRight;
 
 /// One action on a code block or a table. The view that owns the button sends
 /// the delegate a description rather than doing the work itself, because only
@@ -110,6 +128,10 @@ BOOL hasLink(NSAttributedString *text, NSRange range);
 
 /// Link index under a point in a laid-out TextKit stack, or -1.
 NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *container, CGPoint location);
+
+/// Tag index under a point in a laid-out TextKit stack, or -1. Beside the link
+/// lookup because a press has to know which tag it landed on.
+NSInteger tagIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *container, CGPoint location);
 
 /// Detaches the link delegates a view's cached elements hold, so a recycled view
 /// cannot be activated through an element that outlived its text.
@@ -137,8 +159,38 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 /// A per-block wrap toggle. `ordinal` is the block's ordinal among the
 /// document's code blocks, which is what the choice is keyed by.
 - (void)didToggleWrapAtOrdinal:(uint32_t)ordinal language:(NSString *)language wrapped:(BOOL)wrapped;
-/// A per-block height-cap toggle, from the expand button.
+/// A per-block height-cap toggle, from the expand button. `ordinal` is the code
+/// block's ordinal among the document's code blocks.
 - (void)didToggleExpandAtOrdinal:(uint32_t)ordinal language:(NSString *)language expanded:(BOOL)expanded;
+/// A per-table height-cap toggle. `ordinal` is the table's ordinal among the
+/// document's tables, which is a different count from the code blocks'.
+- (void)didToggleTableExpandAtOrdinal:(uint32_t)ordinal expanded:(BOOL)expanded;
+/// A table's full-screen button.
+///
+/// The view that receives this owns the document, so it is the one that exports
+/// the table's Markdown for the second view to render.
+- (void)didRequestTableFullscreenAtOrdinal:(uint32_t)ordinal;
+/// A `<details>` summary press. `containerId` is the container's own id, which is
+/// the same key the choice is stored under, so the press and the state cannot
+/// name different blocks.
+- (void)didToggleDetailsAtContainer:(uint32_t)containerId open:(BOOL)open;
+/// A press on a task list item's checkbox. `containerId` is the item's own
+/// container, and `checked` is the state the press leaves it in — which is the
+/// opposite of the state it found, because a checkbox is a toggle rather than a
+/// report.
+- (void)didToggleTaskAtContainer:(uint32_t)containerId checked:(BOOL)checked;
+/// A press on an app-allowed tag's run.
+///
+/// Reported with the tag's name, its attributes, the pressed text, and the
+/// source range — everything `onTagPress` promises, read here rather than in
+/// JavaScript because the document is what knows them.
+- (void)didPressTagAtIndex:(NSInteger)tagIndex text:(NSString *)text;
+/// Blocks as the Markdown that produced them, for "Copy as Markdown".
+///
+/// The exporter reads block indices, so the caller maps its selection onto the
+/// document first: this only exports, because exporting is the one thing the
+/// engine does identically on both platforms.
+- (NSString *)markdownForBlocksFrom:(uint32_t)from to:(uint32_t)to;
 /// A copy, a download, or a save that failed.
 - (void)didFailControlOfKind:(DSBlockKind)kind action:(NSString *)action message:(NSString *)message;
 @end
@@ -162,6 +214,15 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 - (NSInteger)linkIndexAtPoint:(CGPoint)point;
 @end
 
+/// Tag index at a point, or -1. Beside the segment protocol because only text
+/// carries tag runs: tables and code never name a tag.
+@protocol DSTagPressable <NSObject>
+/// Tag index at a point in the view's coordinates, or -1.
+- (NSInteger)tagIndexAtPoint:(CGPoint)point;
+/// The pressed tag run's text, or empty.
+- (NSString *)tagTextAtPoint:(CGPoint)point;
+@end
+
 /// A segment view that can be told to redraw one block's characters.
 ///
 /// The range is in the *document block's* coordinates rather than the view's own,
@@ -175,8 +236,11 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 
 /// A text segment drawn by UITextView on the same TextKit 1 configuration
 /// that measured it, which gives selection and text navigation.
-@interface DSTextSegmentView : UITextView <DSSegmentView, DSRevealInvalidatable>
+@interface DSTextSegmentView : UITextView <DSSegmentView, DSRevealInvalidatable, UIGestureRecognizerDelegate>
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
+/// Where a `<details>` summary press goes. Weak, like every other delegate here,
+/// because the document view owns this view's place in the tree.
+@property (nonatomic, weak, nullable) id<DSControlDelegate> controlDelegate;
 /// The theme's selection highlight. TextKit draws the selection itself, so this
 /// is the only way a themed `colors.selection` reaches the platform's drawing.
 @property (nonatomic) UIColor *selectionColor;
@@ -186,8 +250,22 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 /// The document block this view's first character belongs to, which is what maps
 /// a reveal unit's block-and-offset pair into this view's own text.
 @property (nonatomic) NSInteger blockOffset;
+/// True when a hosted tag replaces this segment: the React child above draws,
+/// so this view draws nothing. Mirrors the code card's `hosted`, for the same
+/// reason — a hosted block shows none of its own drawing.
+@property (nonatomic) BOOL hosted;
+/// Whether a `<details>` summary draws its chevron, and the reader's choices,
+/// which say which way it points. Both reach the layout manager, which is what
+/// draws the decoration beside the text.
+@property (nonatomic) BOOL detailsToggle;
+@property (nonatomic) downstream::ReaderChoices detailsChoices;
+/// Whether a long press shows the platform's link preview. Off by default.
+@property (nonatomic) BOOL linkPreview;
 - (instancetype)init;
 - (void)setSegment:(DSTextSegment *)segment;
+/// The `<details>` container a touch lands on, or 0. Zero for every touch that is
+/// not on a summary, which is nearly all of them.
+- (uint32_t)detailsContainerAtPoint:(CGPoint)point;
 @end
 
 /// One code block: a header row above a card that scrolls sideways and, when the
@@ -229,9 +307,28 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 @property (nonatomic) UIColor *selectionColor;
 - (void)setSegment:(DSCodeSegment *)segment;
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
+/// The `icons` prop's resolved names, in `CONTROL_ICON_KEYS` order. Empty is the
+/// platform's own glyph.
+- (void)setControlIcons:(NSArray<NSString *> *)icons;
 /// Drops the reader's scroll position when the document generation changes.
 - (void)resetScrollPosition;
 @end
+
+/// A control glyph name, resolved from the `icons` prop.
+///
+/// A name the platform knows is its own symbol or an asset name — anything with a
+/// dot in it is read as an asset. An empty string means no icon at all, which is
+/// how a text-only button is built.
+extern NSString *const DSControlIconCopy;
+extern NSString *const DSControlIconCheck;
+extern NSString *const DSControlIconDownload;
+extern NSString *const DSControlIconMaximize;
+extern NSString *const DSControlIconClose;
+extern NSString *const DSControlIconWrap;
+extern NSString *const DSControlIconExpand;
+extern NSString *const DSControlIconCollapse;
+extern NSString *const DSControlIconTableFullscreen;
+extern NSString *const DSControlIconDetailsChevron;
 
 /// The vertical viewport around a code card's gutter and body.
 ///
@@ -258,12 +355,25 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 @property (nonatomic, weak, nullable) id<DSRevealProvider> revealProvider;
 /// The document block this table's first row is.
 @property (nonatomic) NSInteger blockOffset;
+/// True when a hosted tag replaces this segment: the React child above draws,
+/// so this view draws nothing. Mirrors the code card's `hosted`, for the same
+/// reason — a hosted block shows none of its own drawing.
 @property (nonatomic, weak, nullable) id<DSControlDelegate> controlDelegate;
 @property (nonatomic) BOOL controlsEnabled;
 @property (nonatomic, readwrite) BOOL showsToolbar;
 @property (nonatomic) uint32_t controls;
+/// The whole table layout: the cap and the reader's per-table expand choices.
+/// One value, because a measurement and a draw both resolve it rather than each
+/// deciding for itself whether this table is capped.
+@property (nonatomic) downstream::TableLayout tableLayout;
+/// True while this table is still streaming, which is what makes a capped table
+/// follow its newest row until the reader scrolls away.
+@property (nonatomic) BOOL streaming;
 - (void)setSegment:(DSTableSegment *)segment;
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
+/// The `icons` prop's resolved names, in `CONTROL_ICON_KEYS` order. Empty is the
+/// platform's own glyph.
+- (void)setControlIcons:(NSArray<NSString *> *)icons;
 /// Drops the reader's scroll position when the document generation changes.
 - (void)resetScrollPosition;
 @end
@@ -284,6 +394,9 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 @property (nonatomic) uint32_t controls;
 /// Label strings in the order `src/controls.ts` sends them.
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
+/// The `icons` prop's resolved names, in `CONTROL_ICON_KEYS` order. Empty is the
+/// platform's own glyph.
+- (void)setControlIcons:(NSArray<NSString *> *)icons;
 /// The state each image is in, which is what the boxes are drawn from.
 - (void)setImageState:(const downstream::ImageStateLayout &)state;
 /// True when this block is settled, which is what turns a control on and stops a
@@ -326,10 +439,15 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 @property (nonatomic, weak, nullable) id<DSImageDelegate> imageDelegate;
 @property (nonatomic) BOOL selectable;
 @property (nonatomic) uint32_t controls;
+/// Whether a long press shows the platform's link preview. Fanned out to the
+/// text views, which are the only segments that show links.
+@property (nonatomic) BOOL linkPreview;
 /// The whole code layout: the `lineNumbers`, `codeBlockWrap`, and
 /// `codeBlockMaxHeight` props, plus the reader's own per-block wrap and expand
 /// choices. One value, so a frame and the layout drawn inside it cannot disagree.
 @property (nonatomic) downstream::CodeLayout codeLayout;
+/// The whole table layout: the cap and the reader's per-table expand choices.
+@property (nonatomic) downstream::TableLayout tableLayout;
 /// What each image is, which the image views draw from and the frames are
 /// stacked with.
 @property (nonatomic) downstream::ImageStateLayout imageState;
@@ -345,11 +463,20 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 @property (nonatomic) CGFloat screenScale;
 /// Label strings in the order `src/controls.ts` sends them.
 - (void)setControlLabels:(NSArray<NSString *> *)labels;
+/// The `icons` prop's resolved names, in `CONTROL_ICON_KEYS` order. Empty is the
+/// platform's own glyph.
+- (void)setControlIcons:(NSArray<NSString *> *)icons;
 - (void)setRendered:(nullable DSRenderedDocument *)rendered;
 - (void)setChrome:(uint32_t)chrome;
 /// Drops every reader scroll position, for a new generation.
 - (void)resetScrollPositions;
 - (NSInteger)linkIndexAtPoint:(CGPoint)point;
+/// Tag index at a point, or -1. Only text views answer; tables and code never
+/// name a tag.
+- (NSInteger)tagIndexAtPoint:(CGPoint)point;
+/// The pressed tag run's text, or empty. The run's own words, which is what an
+/// app shows alongside the tag it reports.
+- (NSString *)tagTextAtPoint:(CGPoint)point;
 /// The selection highlight, from the view's theme. Applied to every text view,
 /// so a themed `colors.selection` reaches the platform's own selection drawing
 /// rather than only the parts this library draws itself.

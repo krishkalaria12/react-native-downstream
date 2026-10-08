@@ -4,12 +4,14 @@ import NativeDownstreamSession, {
   type SnapshotReadyEvent,
 } from './NativeDownstreamSession';
 import { checkedUtf8Bytes, MAX_SOURCE_BYTES } from './controlledSource';
+import { resolveAllowedTags } from './allowedTags';
 import { mathAvailable, resolveParseFlags } from './parseFlags';
 import { emitJsStreamTrace } from './streamTrace';
 import type {
   MarkdownErrorCode,
   MarkdownErrorEvent,
   MarkdownOperationError,
+  MarkdownAllowedTags,
   MarkdownPreviewOptions,
   MarkdownStreamController,
   MarkdownStreamOptions,
@@ -30,13 +32,15 @@ const PREVIEW_LINKS = 1 << 2;
 const PREVIEW_IMAGES = 1 << 3;
 const PREVIEW_MATH = 1 << 4;
 const PREVIEW_HTML_TAGS = 1 << 5;
+const PREVIEW_TABLES = 1 << 6;
 const PREVIEW_ALL =
   PREVIEW_EMPHASIS |
   PREVIEW_INLINE_CODE |
   PREVIEW_LINKS |
   PREVIEW_IMAGES |
   PREVIEW_MATH |
-  PREVIEW_HTML_TAGS;
+  PREVIEW_HTML_TAGS |
+  PREVIEW_TABLES;
 
 /**
  * Resolves the public `preview` option to a bitmask.
@@ -63,6 +67,7 @@ function previewFeatures(options: boolean | MarkdownPreviewOptions): number {
   if (options.images) features |= PREVIEW_IMAGES;
   if (options.math) features |= PREVIEW_MATH;
   if (options.htmlTags) features |= PREVIEW_HTML_TAGS;
+  if (options.tables) features |= PREVIEW_TABLES;
   return features;
 }
 const controllers = new Map<string, StreamState>();
@@ -115,6 +120,8 @@ class StreamState implements MarkdownStreamController {
   private bound = false;
   private tracing = false;
   private previewFeatures = 0;
+  /// The session's HTML tag policy, in the engine's wire form.
+  private parseTags: readonly string[] = [];
   private subscribers = new Set<() => void>();
   /// Whether text is still arriving, which is what a stream view sends to native
   /// as `animating: auto`. A view that names `isAnimating` overrides it, so this
@@ -127,15 +134,25 @@ class StreamState implements MarkdownStreamController {
     this.mode = mode;
     this.onError = options.onError;
     this.parseFlags = resolveParseFlags(
-      options.math,
-      options.inlineHtml,
-      options.syntax,
+      {
+        math: options.math,
+        inlineHtml: options.inlineHtml,
+        syntax: options.syntax,
+        cjk: options.cjk,
+        links: options.links,
+        autolinkProtocols: options.disableAutolinkProtocols,
+        literalTagContent: options.literalTagContent,
+      },
       mathAvailable()
     ).flags;
     NativeDownstreamSession.create(this.sessionId, mode, this.parseFlags);
     // Set after create, so a session always exists before it is configured.
     if (options.preview !== undefined) {
       this.setPreview(options.preview);
+    }
+    this.parseTags = resolveAllowedTags(options.allowedTags).tags;
+    if (this.parseTags.length > 0) {
+      NativeDownstreamSession.setParseTags(this.sessionId, this.parseTags);
     }
     controllers.set(this.sessionId, this);
     listenForNativeEvents();
@@ -322,6 +339,26 @@ class StreamState implements MarkdownStreamController {
     this.assertActive();
     NativeDownstreamSession.setTracing(this.sessionId, enabled);
     this.tracing = enabled;
+  }
+
+  /**
+   * Replaces the HTML tags this stream's source may use.
+   *
+   * Read once, at creation, and kept by `reset()`: a tag policy decides which
+   * runs exist, so it is part of the source's identity in the same way the parse
+   * flags are, and a stream cannot change it under a document that is streaming.
+   */
+  setAllowedTags(allowedTags: MarkdownAllowedTags | undefined): void {
+    this.assertActive();
+    const tags = resolveAllowedTags(allowedTags).tags;
+    if (
+      tags.length === this.parseTags.length &&
+      tags.every((entry, index) => entry === this.parseTags[index])
+    ) {
+      return;
+    }
+    this.parseTags = tags;
+    NativeDownstreamSession.setParseTags(this.sessionId, tags);
   }
 
   setPreview(options: boolean | MarkdownPreviewOptions): void {

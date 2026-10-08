@@ -21,6 +21,7 @@ import {
   acceptControlledSource,
   initialControlledSource,
 } from './controlledSource';
+import { resolveAllowedTags, type ResolvedAllowedTags } from './allowedTags';
 import { resolveControls, type ResolvedControls } from './controls';
 import NativeDownstreamMarkdownView from './DownstreamMarkdownViewNativeComponent';
 import { getStreamState, type StreamState } from './createMarkdownStream';
@@ -36,6 +37,77 @@ import {
   resolveParseFlags,
   warnAboutMissingMathEngine,
 } from './parseFlags';
+import { openLinkSafely, resolveLinkUrl, resolvesLinks } from './linkSafety';
+import { resolveIcons } from './icons';
+import {
+  TagSlots,
+  resolveTagRenderers,
+  useStableTagRenderers,
+  useTagSlots,
+} from './tagRenderers';
+import { resolveLinkVariants } from './linkVariants';
+import { resolveTagStyles } from './tagStyles';
+
+/**
+ * The link variants as four flat arrays the native views read.
+ *
+ * Memoized on the style object rather than rebuilt per render, because the
+ * arrays are new identities every time and a new identity is a props update the
+ * shadow node would re-measure for.
+ */
+/**
+ * The tag styles as three flat arrays the native views read.
+ *
+ * Memoized on the style object for the same reason the link variants are: the
+ * arrays are new identities every time, and a new identity is a props update
+ * the shadow node would re-measure for.
+ */
+function useTagStyleProps(markdownStyle: MarkdownViewProps['markdownStyle']) {
+  return useMemo(() => {
+    const style = Array.isArray(markdownStyle)
+      ? markdownStyle[markdownStyle.length - 1]
+      : markdownStyle;
+    const resolved = resolveTagStyles(
+      style === false || style === null || style === undefined
+        ? undefined
+        : style
+    );
+    return {
+      names: resolved.map((entry) => entry.name),
+      colors: resolved.map((entry) => entry.color ?? -1),
+      flags: resolved.map((entry) => entry.flags),
+    };
+  }, [markdownStyle]);
+}
+
+function useLinkVariantProps(
+  markdownStyle: MarkdownViewProps['markdownStyle']
+) {
+  return useMemo(() => {
+    // A composable style is an array; the resolver takes one style, so the last
+    // entry wins the way it does in the theme resolver.
+    const style = Array.isArray(markdownStyle)
+      ? markdownStyle[markdownStyle.length - 1]
+      : markdownStyle;
+    const variants = resolveLinkVariants(
+      style === false || style === null || style === undefined
+        ? undefined
+        : style
+    );
+    const prefixes: string[] = [];
+    const counts: number[] = [];
+    const colors: number[] = [];
+    const underlines: boolean[] = [];
+    for (const variant of variants) {
+      counts.push(variant.match.length);
+      prefixes.push(...variant.match);
+      colors.push(variant.color ?? -1);
+      underlines.push(variant.underline ?? false);
+    }
+    return { prefixes, counts, colors, underlines };
+  }, [markdownStyle]);
+}
+import { TableFullscreen, type InheritedTableProps } from './TableFullscreen';
 import { resolveTheme, type ResolvedTheme } from './theme';
 import type {
   MarkdownControlAction,
@@ -45,15 +117,30 @@ import type {
   MarkdownErrorEvent,
   MarkdownImageEvent,
   MarkdownLinkPressEvent,
+  MarkdownLinkSafetyOptions,
   MarkdownMathErrorEvent,
+  MarkdownTableFullscreenEvent,
+  MarkdownTaskPressEvent,
   MarkdownTranslations,
   MarkdownViewProps,
 } from './types';
-import { resolveMaxHeight } from './types';
+import {
+  defaultTableMaxHeight,
+  defaultTranslations,
+  resolveMaxHeight,
+} from './types';
 
 export type DownstreamMarkdownProps = MarkdownViewProps;
 
 type NativeLinkPress = Readonly<{ url: string; start: number; end: number }>;
+type NativeTagPress = Readonly<{
+  tag: string;
+  attributes: string;
+  text: string;
+  start: number;
+  end: number;
+  generation: number;
+}>;
 type NativeImagePress = Readonly<{
   url: string;
   alt: string;
@@ -85,6 +172,12 @@ type NativeControlAction = Readonly<{
   url: string;
   wrapped: boolean;
   expanded: boolean;
+  ordinal: number;
+  /**
+   * The block's own Markdown, for a full-screen table. Empty otherwise: the
+   * other actions carry nothing a second view would need.
+   */
+  markdown: string;
   generation: number;
 }>;
 
@@ -102,12 +195,14 @@ const CONTROL_BLOCKS: ReadonlySet<string> = new Set<MarkdownControlKind>([
   'code',
   'table',
   'image',
+  'details',
 ]);
 const CONTROL_ACTIONS: ReadonlySet<string> = new Set<MarkdownControlAction>([
   'copy',
   'download',
   'wrap',
   'expand',
+  'fullscreen',
 ]);
 const CONTROL_FORMATS = new Set(['text', 'markdown', 'csv', 'tsv']);
 
@@ -145,11 +240,24 @@ function toControlEvent(action: NativeControlAction) {
     expanded?: boolean;
     filename?: string;
     url?: string;
+    markdown?: string;
+    ordinal?: number;
   } = { block, action: which, language: action.language };
   if (which === 'wrap') {
     event.wrapped = action.wrapped;
   } else if (which === 'expand') {
     event.expanded = action.expanded;
+    // The block's ordinal among its own kind, which is what an app that keys a
+    // press on needs: code, table and image ordinals are three different counts.
+    event.ordinal = action.ordinal;
+  } else if (which === 'fullscreen') {
+    // The table's own Markdown, so a modal holding a second view is the same
+    // table rather than one rebuilt from the model. Native writes it through
+    // `Export.cpp`, so the modal sees exactly what a copy would produce.
+    if (action.markdown !== '') {
+      event.markdown = action.markdown;
+      event.ordinal = action.ordinal;
+    }
   } else {
     if (CONTROL_FORMATS.has(action.format)) {
       event.format = action.format as 'text' | 'markdown' | 'csv' | 'tsv';
@@ -357,6 +465,17 @@ function useStableTheme(resolved: ResolvedTheme): ResolvedTheme {
 }
 
 /**
+ * A ref the control routing reads the full-screen opener through.
+ *
+ * The modal's state lives in the component and the routing lives in `useControls`,
+ * and a ref between them is what lets each own its half without either knowing
+ * about the other's lifecycle.
+ */
+type FullscreenRef = {
+  current: ((event: MarkdownTableFullscreenEvent) => void) | undefined;
+};
+
+/**
  * Resolves the shared control props and the callbacks that route native events
  * back to the caller's handlers.
  *
@@ -371,7 +490,8 @@ function useControls(
   controls: MarkdownControls | undefined,
   translations: Partial<MarkdownTranslations> | undefined,
   onError: ((error: MarkdownErrorEvent) => void) | undefined,
-  generationRef: { current: number }
+  generationRef: { current: number },
+  fullscreen: FullscreenRef
 ) {
   const fresh = useMemo(
     () => resolveControls(controls, translations),
@@ -381,8 +501,11 @@ function useControls(
   const latest = useRef({
     handlers: fresh.handlers,
     generation: generationRef,
+    fullscreen: fullscreen.current,
   });
-  latest.current = { handlers: fresh.handlers, generation: generationRef };
+  latest.current.handlers = fresh.handlers;
+  latest.current.generation = generationRef;
+  latest.current.fullscreen = fullscreen.current;
 
   const handleControlAction = useCallback(
     (native: NativeSyntheticEvent<NativeControlAction>) => {
@@ -393,11 +516,25 @@ function useControls(
       if (payload.generation !== latest.current.generation.current) return;
       const event = toControlEvent(payload);
       if (event === null) return;
-      const { handlers } = latest.current;
+      const { handlers, fullscreen: openFullscreen } = latest.current;
       if (event.action === 'wrap') {
         handlers.codeWrap?.(event);
       } else if (event.action === 'expand') {
-        handlers.codeExpand?.(event);
+        (event.block === 'table'
+          ? handlers.tableExpand
+          : event.block === 'details'
+            ? handlers.detailsExpand
+            : handlers.codeExpand)?.(event);
+      } else if (event.action === 'fullscreen') {
+        // The modal is this view's, not a control handler's: the press has to
+        // open a second view, which only the component holding the first can do.
+        if (event.markdown !== undefined) {
+          openFullscreen?.({
+            markdown: event.markdown,
+            ordinal: event.ordinal ?? 0,
+          });
+        }
+        handlers.tableFullscreen?.(event);
       } else if (event.block === 'image') {
         handlers.imageDownload?.(event);
       } else if (event.action === 'copy') {
@@ -451,8 +588,80 @@ function useControls(
 }
 
 /**
- * Resolves the math and image props, and the callbacks that route their native
- * events back to the caller.
+ * The full-screen table modal.
+ *
+ * Mounted only while a table is open, so the whole second view — including the
+ * native one behind it — is unmounted when the reader closes it. The source is
+ * held rather than derived from the document because the press carried it: that
+ * is the table's own Markdown, which is what makes the modal the same table
+ * rather than a re-parse of a re-export.
+ */
+function useTableFullscreen(
+  onTableFullscreen:
+    | ((event: MarkdownTableFullscreenEvent) => void)
+    | undefined,
+  renderTableFullscreen:
+    | ((event: MarkdownTableFullscreenEvent) => ReactNode)
+    | undefined
+) {
+  const [open, setOpen] = useState<MarkdownTableFullscreenEvent | undefined>(
+    undefined
+  );
+  const latest = useRef({ onTableFullscreen, renderTableFullscreen });
+  latest.current = { onTableFullscreen, renderTableFullscreen };
+
+  // `renderTableFullscreen` is called during render rather than held in state,
+  // so a modal an app draws is a child of this view and gets its own updates,
+  // and closing it is this view's state rather than the app's.
+  const request = useCallback((event: MarkdownTableFullscreenEvent) => {
+    latest.current.onTableFullscreen?.(event);
+    setOpen(event);
+  }, []);
+  const close = useCallback(() => setOpen(undefined), []);
+  return { open, request, close, renderTableFullscreen };
+}
+
+/**
+ * Renders the full-screen table, or nothing.
+ *
+ * Mounted here rather than inside the press handler so the modal is a child of
+ * the view and shares its theme, and closed by the same state that opened it.
+ */
+function TableFullscreenHost({
+  open,
+  close,
+  render,
+  inherited,
+  translations,
+}: Readonly<{
+  open: MarkdownTableFullscreenEvent | undefined;
+  close: () => void;
+  render: ((event: MarkdownTableFullscreenEvent) => ReactNode) | undefined;
+  inherited: InheritedTableProps;
+  translations: Partial<MarkdownTranslations> | undefined;
+}>) {
+  if (open === undefined) {
+    return null;
+  }
+  const custom = render?.(open);
+  if (custom !== undefined && custom !== null) {
+    return <>{custom}</>;
+  }
+  return (
+    <TableFullscreen
+      markdown={open.markdown}
+      closeLabel={
+        translations?.exitFullscreen ?? defaultTranslations.exitFullscreen
+      }
+      inherited={inherited}
+      onClose={close}
+    />
+  );
+}
+
+/**
+ * Resolves the props that reach the parser and the image loader, and the
+ * callbacks that route their native events back to the caller.
  *
  * The math default is settled once per process rather than per render, because
  * it is a question about the binary and not about the document: a view that
@@ -461,7 +670,9 @@ function useControls(
  *
  * `allowedImagePrefixes` is normalized and kept by value for the same reason
  * `controls` is: it is almost always an inline literal, and a new array on every
- * render would send a props update for a policy that has not changed.
+ * render would send a props update for a policy that has not changed. The link
+ * options are the same case, which is why the origin is a trimmed string rather
+ * than the object the caller passed.
  */
 function useMathAndImages(
   props: {
@@ -472,6 +683,11 @@ function useMathAndImages(
     onImagePress?: (event: MarkdownImageEvent) => void;
     inlineHtml?: boolean;
     syntax?: MarkdownViewProps['syntax'];
+    cjk?: boolean;
+    links?: MarkdownViewProps['links'];
+    disableAutolinkProtocols?: MarkdownViewProps['disableAutolinkProtocols'];
+    allowedTags?: MarkdownViewProps['allowedTags'];
+    literalTagContent?: MarkdownViewProps['literalTagContent'];
   },
   currentGeneration: () => number
 ) {
@@ -483,6 +699,11 @@ function useMathAndImages(
     onImagePress,
     inlineHtml,
     syntax,
+    cjk,
+    links,
+    disableAutolinkProtocols,
+    allowedTags,
+    literalTagContent,
   } = props;
 
   // One read of the platform's answer for the lifetime of the process. A test
@@ -491,8 +712,28 @@ function useMathAndImages(
   if (engine.current === undefined) engine.current = mathAvailable();
 
   const resolved = useMemo(
-    () => resolveParseFlags(math, inlineHtml, syntax, engine.current),
-    [math, inlineHtml, syntax]
+    () =>
+      resolveParseFlags(
+        {
+          math,
+          inlineHtml,
+          syntax,
+          cjk,
+          links,
+          autolinkProtocols: disableAutolinkProtocols,
+          literalTagContent,
+        },
+        engine.current
+      ),
+    [
+      math,
+      inlineHtml,
+      syntax,
+      cjk,
+      links,
+      disableAutolinkProtocols,
+      literalTagContent,
+    ]
   );
   const resolvedStable = useRef(resolved);
   if (resolvedStable.current.flags !== resolved.flags) {
@@ -562,10 +803,24 @@ function useMathAndImages(
     []
   );
 
+  // The tag policy is kept by value for the same reason the prefix list is: it is
+  // almost always an inline literal, and a new array on every render would send
+  // a props update — and a reparse, because it is a parse option — for a policy
+  // that has not changed.
+  const tags = resolveAllowedTags(allowedTags);
+  const tagsStable = useRef<ResolvedAllowedTags>(tags);
+  if (
+    tagsStable.current.tags.length !== tags.tags.length ||
+    tagsStable.current.tags.some((entry, index) => entry !== tags.tags[index])
+  ) {
+    tagsStable.current = tags;
+  }
+
   return {
     parseFlags: resolvedStable.current.flags,
     images: images !== false,
     allowedImagePrefixes: prefixesStable.current,
+    allowedTags: tagsStable.current.tags,
     onImagePress: onImagePress ? handleImagePress : undefined,
     onMathError: handleMathError,
   };
@@ -609,6 +864,29 @@ function useStableRenderers(resolved: ResolvedRenderers): ResolvedRenderers {
  * nothing and renders no children, so its behaviour and its cost are exactly
  * what they were before renderers existed.
  */
+function useTagRenderers(
+  plugins: MarkdownViewProps['plugins'],
+  allowedTags: ReadonlyArray<string>,
+  document: {
+    source?: string;
+    sessionId?: string;
+    generation: number;
+    sequence?: number;
+    revision?: number;
+    parseFlags: number;
+  }
+): ReactNode {
+  const resolved = useStableTagRenderers(
+    useMemo(() => resolveTagRenderers(plugins), [plugins])
+  );
+  const slots = useTagSlots({ ...document, allowedTags, resolved });
+  const scope = `${document.sessionId ?? ''}\u0000${document.generation}`;
+  if (slots.length === 0) {
+    return null;
+  }
+  return <TagSlots slots={slots} scope={scope} />;
+}
+
 function useFenceRenderers(
   plugins: MarkdownViewProps['plugins'],
   document: {
@@ -635,6 +913,160 @@ function useFenceRenderers(
     return null;
   }
   return <FenceSlots slots={slots} scope={scope} onFailure={onFailure} />;
+}
+
+/**
+ * What a link press does.
+ *
+ * With an `onLinkPress` the app decides and this is a straight report: the
+ * source's own `href` and, for a relative destination, the `url` it resolves to
+ * beside it. Without one, the press does nothing at all today, which no reader
+ * expects from something drawn as a link, so the view opens it — behind link
+ * safety, which is on by default and asks first.
+ *
+ * The safety config is read through a ref rather than captured, so a caller
+ * writing `linkSafety={{ onLinkCheck }}` inline does not re-register the native
+ * handler on every render. The handler itself is created once.
+ */
+function useLinkPress(
+  onLinkPress: ((event: MarkdownLinkPressEvent) => void) | undefined,
+  safety: {
+    enabled: boolean;
+    origin: string;
+    onLinkCheck?: (url: string) => boolean | Promise<boolean>;
+    renderModal?: MarkdownLinkSafetyOptions['renderModal'];
+  },
+  translations: Partial<MarkdownTranslations> | undefined
+) {
+  const latest = useRef({ onLinkPress, safety, translations });
+  latest.current = { onLinkPress, safety, translations };
+
+  return useCallback((event: NativeSyntheticEvent<NativeLinkPress>) => {
+    const { url: href, start, end } = event.nativeEvent;
+    const current = latest.current;
+    if (current.onLinkPress) {
+      const payload: MarkdownLinkPressEvent = {
+        url: resolveLinkUrl(href, current.safety.origin),
+        href,
+        range: { start, end },
+      };
+      current.onLinkPress(payload);
+      return;
+    }
+    void openLinkSafely(href, {
+      enabled: current.safety.enabled,
+      origin: current.safety.origin,
+      onLinkCheck: current.safety.onLinkCheck,
+      renderModal: current.safety.renderModal,
+      translations: current.translations,
+    });
+  }, []);
+}
+
+/**
+ * Resolves `linkSafety` into what a press needs.
+ *
+ * `true`, `undefined` and `{ enabled: true }` are the same configuration, and
+ * `false` is the only way to turn the confirmation off — which is why a falsy
+ * value is read as "no interception" rather than as "no options".
+ */
+function useLinkSafety(
+  linkSafety: MarkdownViewProps['linkSafety'],
+  links: MarkdownViewProps['links']
+) {
+  const options: MarkdownLinkSafetyOptions | undefined =
+    typeof linkSafety === 'object' && linkSafety !== null
+      ? linkSafety
+      : undefined;
+  const origin = useMemo(
+    () => (resolvesLinks(links) ? (links?.defaultOrigin?.trim() ?? '') : ''),
+    [links]
+  );
+  const enabled = linkSafety !== false && options?.enabled !== false;
+  const onLinkCheck = options?.onLinkCheck;
+  const renderModal = options?.renderModal;
+  return useMemo(
+    () => ({ enabled, origin, onLinkCheck, renderModal }),
+    [enabled, origin, onLinkCheck, renderModal]
+  );
+}
+
+/**
+ * The full-screen table, wired into the control routing.
+ *
+ * One hook rather than three lines in each component: the two bodies are already
+ * near-identical for everything a table's modal needs, and a table's modal that
+ * worked in one and not the other would be a bug nobody would look for.
+ */
+function useFullscreenTable(
+  onTableFullscreen: MarkdownViewProps['onTableFullscreen'],
+  renderTableFullscreen: MarkdownViewProps['renderTableFullscreen'],
+  translations: Partial<MarkdownTranslations> | undefined,
+  inherited: InheritedTableProps
+) {
+  const {
+    open,
+    request,
+    close,
+    renderTableFullscreen: render,
+  } = useTableFullscreen(onTableFullscreen, renderTableFullscreen);
+  const ref = useMemo<FullscreenRef>(() => ({ current: request }), [request]);
+  const element = (
+    <TableFullscreenHost
+      open={open}
+      close={close}
+      render={render}
+      inherited={inherited}
+      translations={translations}
+    />
+  );
+  return { fullscreen: ref, element };
+}
+
+/**
+ * The props a full-screen table inherits from the view around it.
+ *
+ * Written out rather than spread from `props`, because every prop here is a
+ * decision: `style` does not travel because the modal fills the screen, and
+ * `controls` does not because the modal owns its own chrome. A spread would
+ * inherit both by accident and inherit whatever a later release adds without
+ * anyone deciding.
+ */
+function useInheritedTableProps(
+  props: Record<string, unknown>
+): InheritedTableProps {
+  const keys: ReadonlyArray<string> = [
+    'selectable',
+    'syntaxHighlighting',
+    'codeBlockWrap',
+    'lineNumbers',
+    'theme',
+    'markdownStyle',
+    'translations',
+    'math',
+    'onMathError',
+    'inlineHtml',
+    'syntax',
+    'cjk',
+    'links',
+    'disableAutolinkProtocols',
+    'allowedTags',
+    'literalTagContent',
+    'images',
+    'allowedImagePrefixes',
+    'onLinkPress',
+    'onImagePress',
+    'onTagPress',
+    'linkSafety',
+    'onError',
+  ];
+  const inherited = {} as Record<string, unknown>;
+  for (const key of keys) {
+    if (props[key] !== undefined) {
+      inherited[key] = props[key];
+    }
+  }
+  return inherited as InheritedTableProps;
 }
 
 /**
@@ -670,8 +1102,18 @@ function ControlledMarkdown({
   onAnimationStart,
   onAnimationEnd,
   onLinkPress,
+  linkSafety,
+  tableMaxHeight,
+  dir,
+  icons,
+  onTableFullscreen,
+  onTaskPress,
+  onTagPress,
+  onLinkLongPress,
+  linkPreview = false,
+  renderTableFullscreen,
   onError,
-  ...mathAndImages
+  ...rest
 }: Extract<MarkdownViewProps, { markdown: string }>) {
   const [controlled, setControlled] = useState(() =>
     initialControlledSource(markdown)
@@ -694,20 +1136,109 @@ function ControlledMarkdown({
   }, [error]);
 
   const generationRef = useMemo(() => ({ current: generation }), [generation]);
+  const fullscreen = useFullscreenTable(
+    onTableFullscreen,
+    renderTableFullscreen,
+    translations,
+    useInheritedTableProps(rest)
+  );
+  // A task checkbox is drawn, not stored: the document does not change when a
+  // reader taps one, so the press only reports. A press on a document that has
+  // since been replaced is dropped, which is the same generation rule every
+  // other event follows.
+  // A hold on a link is the app's, full stop: the library neither opens nor
+  // asks, so there is no safety flow — only the URL as written, the URL resolved,
+  // and where the link was.
+  // Reads the handler and the generation late, through refs, so the callback
+  // keeps its identity across snapshots: re-registering the native event on
+  // every generation would drop a press that landed between renders. The same
+  // shape `useControls` uses for its own routing, for the same reason.
+  const linkLongPressLatest = useRef({ onLinkLongPress, generationRef });
+  linkLongPressLatest.current = { onLinkLongPress, generationRef };
+  const handleLinkLongPress = useCallback(
+    (native: NativeSyntheticEvent<NativeLinkPress>) => {
+      const { url: href, start, end } = native.nativeEvent;
+      linkLongPressLatest.current.onLinkLongPress?.({
+        url: resolveLinkUrl(href, ''),
+        href,
+        range: { start, end },
+      });
+    },
+    []
+  );
+
+  const taskPressLatest = useRef({ onTaskPress, generationRef });
+  taskPressLatest.current = { onTaskPress, generationRef };
+  // A press on an app-allowed tag's run: the tag's name, its attributes, the
+  // pressed text, and the source range. A press on a document that has since
+  // been replaced is dropped, which is the same generation rule every other
+  // event follows.
+  const tagPressLatest = useRef({ onTagPress, generationRef });
+  tagPressLatest.current = { onTagPress, generationRef };
+  const handleTagPress = useCallback(
+    (native: NativeSyntheticEvent<NativeTagPress>) => {
+      const payload = native.nativeEvent;
+      const current = tagPressLatest.current;
+      if (payload.generation !== current.generationRef.current) return;
+      // Attributes cross as JSON `[[name, value], …]` because codegen events
+      // carry no arrays; an app that never reads them never pays to parse.
+      let attributes: Record<string, string> = {};
+      try {
+        const pairs = JSON.parse(payload.attributes) as unknown;
+        if (Array.isArray(pairs)) {
+          for (const pair of pairs) {
+            if (
+              Array.isArray(pair) &&
+              typeof pair[0] === 'string' &&
+              typeof pair[1] === 'string'
+            ) {
+              attributes[pair[0]] = pair[1];
+            }
+          }
+        }
+      } catch {
+        attributes = {};
+      }
+      current.onTagPress?.({
+        tag: payload.tag,
+        attributes,
+        text: payload.text,
+        range: { start: payload.start, end: payload.end },
+      });
+    },
+    []
+  );
+  const handleTaskPress = useCallback(
+    (native: NativeSyntheticEvent<MarkdownTaskPressEvent>) => {
+      const payload = native.nativeEvent;
+      const latest = taskPressLatest.current;
+      if (payload.generation !== latest.generationRef.current) return;
+      latest.onTaskPress?.({
+        containerId: payload.containerId,
+        checked: payload.checked,
+        generation: payload.generation,
+      } satisfies MarkdownTaskPressEvent);
+    },
+    []
+  );
+
   const { resolved, controlError, handleControlAction } = useControls(
     controls,
     translations,
     onError,
-    generationRef
+    generationRef,
+    fullscreen.fullscreen
   );
   const currentGeneration = useCallback(
     () => generationRef.current,
     [generationRef]
   );
-  const images = useMathAndImages(mathAndImages, currentGeneration);
+  const images = useMathAndImages(rest, currentGeneration);
   const resolvedTheme = useStableTheme(
     useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
   );
+  const linkVariantProps = useLinkVariantProps(markdownStyle);
+  const tagStyleProps = useTagStyleProps(markdownStyle);
   // A controlled view has to say whether text is arriving; the platform has
   // nothing else to go on.
   useAnimationCallbacks(isAnimating, onAnimationStart, onAnimationEnd);
@@ -717,13 +1248,10 @@ function ControlledMarkdown({
     isAnimating ? 'on' : 'off'
   );
 
-  const handleLinkPress = useCallback(
-    (event: NativeSyntheticEvent<NativeLinkPress>) => {
-      const { url, start, end } = event.nativeEvent;
-      const payload: MarkdownLinkPressEvent = { url, range: { start, end } };
-      onLinkPress?.(payload);
-    },
-    [onLinkPress]
+  const handleLinkPress = useLinkPress(
+    onLinkPress,
+    useLinkSafety(linkSafety, rest.links),
+    translations
   );
 
   const handleError = useCallback(
@@ -751,42 +1279,66 @@ function ControlledMarkdown({
     onError,
     currentGeneration
   );
+  const tags = useTagRenderers(plugins, images.allowedTags, {
+    source: current.source,
+    generation,
+    parseFlags: images.parseFlags,
+  });
 
   return (
-    <NativeDownstreamMarkdownView
-      style={style}
-      markdown={current.source}
-      generation={generation}
-      selectable={selectable}
-      syntaxHighlighting={syntaxHighlighting}
-      codeBlockWrap={codeBlockWrap}
-      lineNumbers={lineNumbers}
-      codeBlockMaxHeight={resolveMaxHeight(codeBlockMaxHeight)}
-      controls={resolved.flags}
-      codeFilename={resolved.codeFilename}
-      tableFilename={resolved.tableFilename}
-      imageFilename={resolved.imageFilename}
-      csvSeparator={resolved.csvSeparator}
-      controlLabels={resolved.labels}
-      parseFlags={images.parseFlags}
-      images={images.images}
-      allowedImagePrefixes={images.allowedImagePrefixes}
-      themeSlots={resolvedTheme.slots}
-      themeValues={resolvedTheme.values}
-      themeFonts={resolvedTheme.fonts}
-      animation={animation.animation}
-      animationSplit={animation.animationSplit}
-      animationTiming={animation.animationTiming}
-      animating={animation.animating}
-      caret={animation.caret}
-      onLinkPress={onLinkPress ? handleLinkPress : undefined}
-      onImagePress={images.onImagePress}
-      onMathError={images.onMathError}
-      onMarkdownError={handleError}
-      onControlAction={handleControlAction}
-    >
-      {fences}
-    </NativeDownstreamMarkdownView>
+    <>
+      <NativeDownstreamMarkdownView
+        style={style}
+        markdown={current.source}
+        generation={generation}
+        selectable={selectable}
+        syntaxHighlighting={syntaxHighlighting}
+        codeBlockWrap={codeBlockWrap}
+        lineNumbers={lineNumbers}
+        codeBlockMaxHeight={resolveMaxHeight(codeBlockMaxHeight)}
+        tableMaxHeight={resolveMaxHeight(tableMaxHeight, defaultTableMaxHeight)}
+        dir={dir}
+        controls={resolved.flags}
+        codeFilename={resolved.codeFilename}
+        tableFilename={resolved.tableFilename}
+        imageFilename={resolved.imageFilename}
+        csvSeparator={resolved.csvSeparator}
+        controlLabels={resolved.labels}
+        controlIcons={resolveIcons(icons)}
+        linkVariantPrefixes={linkVariantProps.prefixes}
+        linkVariantCounts={linkVariantProps.counts}
+        linkVariantColors={linkVariantProps.colors}
+        linkVariantUnderline={linkVariantProps.underlines}
+        tagStyleNames={tagStyleProps.names}
+        tagStyleColors={tagStyleProps.colors}
+        tagStyleFlags={tagStyleProps.flags}
+        onTaskPress={handleTaskPress}
+        onTagPress={handleTagPress}
+        onLinkLongPress={handleLinkLongPress}
+        linkPreview={linkPreview}
+        parseFlags={images.parseFlags}
+        images={images.images}
+        allowedImagePrefixes={images.allowedImagePrefixes}
+        allowedTags={images.allowedTags}
+        themeSlots={resolvedTheme.slots}
+        themeValues={resolvedTheme.values}
+        themeFonts={resolvedTheme.fonts}
+        animation={animation.animation}
+        animationSplit={animation.animationSplit}
+        animationTiming={animation.animationTiming}
+        animating={animation.animating}
+        caret={animation.caret}
+        onLinkPress={handleLinkPress}
+        onImagePress={images.onImagePress}
+        onMathError={images.onMathError}
+        onMarkdownError={handleError}
+        onControlAction={handleControlAction}
+      >
+        {fences}
+        {tags}
+      </NativeDownstreamMarkdownView>
+      {fullscreen.element}
+    </>
   );
 }
 
@@ -809,8 +1361,18 @@ function StreamMarkdown({
   onAnimationStart,
   onAnimationEnd,
   onLinkPress,
+  linkSafety,
+  tableMaxHeight,
+  dir,
+  icons,
+  onTableFullscreen,
+  onTaskPress,
+  onTagPress,
+  onLinkLongPress,
+  linkPreview = false,
+  renderTableFullscreen,
   onError,
-  ...mathAndImages
+  ...rest
 }: Extract<
   MarkdownViewProps,
   { stream: NonNullable<MarkdownViewProps['stream']> }
@@ -830,22 +1392,111 @@ function StreamMarkdown({
     () => ({ current: binding.generation }),
     [binding.generation]
   );
+  const fullscreen = useFullscreenTable(
+    onTableFullscreen,
+    renderTableFullscreen,
+    translations,
+    useInheritedTableProps(rest)
+  );
+  // A task checkbox is drawn, not stored: the document does not change when a
+  // reader taps one, so the press only reports. A press on a document that has
+  // since been replaced is dropped, which is the same generation rule every
+  // other event follows.
+  // A hold on a link is the app's, full stop: the library neither opens nor
+  // asks, so there is no safety flow — only the URL as written, the URL resolved,
+  // and where the link was.
+  // Reads the handler and the generation late, through refs, so the callback
+  // keeps its identity across snapshots: re-registering the native event on
+  // every generation would drop a press that landed between renders. The same
+  // shape `useControls` uses for its own routing, for the same reason.
+  const linkLongPressLatest = useRef({ onLinkLongPress, generationRef });
+  linkLongPressLatest.current = { onLinkLongPress, generationRef };
+  const handleLinkLongPress = useCallback(
+    (native: NativeSyntheticEvent<NativeLinkPress>) => {
+      const { url: href, start, end } = native.nativeEvent;
+      linkLongPressLatest.current.onLinkLongPress?.({
+        url: resolveLinkUrl(href, ''),
+        href,
+        range: { start, end },
+      });
+    },
+    []
+  );
+
+  const taskPressLatest = useRef({ onTaskPress, generationRef });
+  taskPressLatest.current = { onTaskPress, generationRef };
+  // A press on an app-allowed tag's run: the tag's name, its attributes, the
+  // pressed text, and the source range. A press on a document that has since
+  // been replaced is dropped, which is the same generation rule every other
+  // event follows.
+  const tagPressLatest = useRef({ onTagPress, generationRef });
+  tagPressLatest.current = { onTagPress, generationRef };
+  const handleTagPress = useCallback(
+    (native: NativeSyntheticEvent<NativeTagPress>) => {
+      const payload = native.nativeEvent;
+      const current = tagPressLatest.current;
+      if (payload.generation !== current.generationRef.current) return;
+      // Attributes cross as JSON `[[name, value], …]` because codegen events
+      // carry no arrays; an app that never reads them never pays to parse.
+      let attributes: Record<string, string> = {};
+      try {
+        const pairs = JSON.parse(payload.attributes) as unknown;
+        if (Array.isArray(pairs)) {
+          for (const pair of pairs) {
+            if (
+              Array.isArray(pair) &&
+              typeof pair[0] === 'string' &&
+              typeof pair[1] === 'string'
+            ) {
+              attributes[pair[0]] = pair[1];
+            }
+          }
+        }
+      } catch {
+        attributes = {};
+      }
+      current.onTagPress?.({
+        tag: payload.tag,
+        attributes,
+        text: payload.text,
+        range: { start: payload.start, end: payload.end },
+      });
+    },
+    []
+  );
+  const handleTaskPress = useCallback(
+    (native: NativeSyntheticEvent<MarkdownTaskPressEvent>) => {
+      const payload = native.nativeEvent;
+      const latest = taskPressLatest.current;
+      if (payload.generation !== latest.generationRef.current) return;
+      latest.onTaskPress?.({
+        containerId: payload.containerId,
+        checked: payload.checked,
+        generation: payload.generation,
+      } satisfies MarkdownTaskPressEvent);
+    },
+    []
+  );
+
   const { resolved, controlError, handleControlAction } = useControls(
     controls,
     translations,
     onError,
-    generationRef
+    generationRef,
+    fullscreen.fullscreen
   );
   const currentGeneration = useCallback(
     () => state.binding().generation,
     [state]
   );
-  const images = useMathAndImages(mathAndImages, currentGeneration);
+  const images = useMathAndImages(rest, currentGeneration);
   // A stream keeps its theme across a rebind, so a theme that has not changed
   // sends nothing however often a snapshot arrives.
   const resolvedTheme = useStableTheme(
     useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
   );
+  const linkVariantProps = useLinkVariantProps(markdownStyle);
+  const tagStyleProps = useTagStyleProps(markdownStyle);
   // A stream view follows its controller's own transitions, so the callbacks fire
   // on the first append of a generation and on `finish()`, unless an explicit
   // `isAnimating` overrides the flag, which takes the callbacks with it.
@@ -865,12 +1516,10 @@ function StreamMarkdown({
     isAnimating === undefined ? 'auto' : isAnimating ? 'on' : 'off'
   );
 
-  const handleLinkPress = useCallback(
-    (event: NativeSyntheticEvent<NativeLinkPress>) => {
-      const { url, start, end } = event.nativeEvent;
-      onLinkPress?.({ url, range: { start, end } });
-    },
-    [onLinkPress]
+  const handleLinkPress = useLinkPress(
+    onLinkPress,
+    useLinkSafety(linkSafety, rest.links),
+    translations
   );
 
   const handleError = useCallback(
@@ -902,44 +1551,70 @@ function StreamMarkdown({
     onError,
     currentGeneration
   );
+  const tags = useTagRenderers(plugins, images.allowedTags, {
+    sessionId: binding.sessionId,
+    generation: binding.generation,
+    sequence: binding.readySequence,
+    revision: binding.revision,
+    parseFlags: images.parseFlags,
+  });
 
   return (
-    <NativeDownstreamMarkdownView
-      style={style}
-      markdown=""
-      generation={binding.generation}
-      sessionId={binding.sessionId}
-      sessionSequence={binding.readySequence}
-      sessionRevision={revision}
-      selectable={selectable}
-      syntaxHighlighting={syntaxHighlighting}
-      codeBlockWrap={codeBlockWrap}
-      lineNumbers={lineNumbers}
-      codeBlockMaxHeight={resolveMaxHeight(codeBlockMaxHeight)}
-      controls={resolved.flags}
-      codeFilename={resolved.codeFilename}
-      tableFilename={resolved.tableFilename}
-      imageFilename={resolved.imageFilename}
-      csvSeparator={resolved.csvSeparator}
-      controlLabels={resolved.labels}
-      parseFlags={images.parseFlags}
-      images={images.images}
-      allowedImagePrefixes={images.allowedImagePrefixes}
-      themeSlots={resolvedTheme.slots}
-      themeValues={resolvedTheme.values}
-      themeFonts={resolvedTheme.fonts}
-      animation={animation.animation}
-      animationSplit={animation.animationSplit}
-      animationTiming={animation.animationTiming}
-      animating={animation.animating}
-      caret={animation.caret}
-      onLinkPress={onLinkPress ? handleLinkPress : undefined}
-      onImagePress={images.onImagePress}
-      onMathError={images.onMathError}
-      onMarkdownError={handleError}
-      onControlAction={handleControlAction}
-    >
-      {fences}
-    </NativeDownstreamMarkdownView>
+    <>
+      <NativeDownstreamMarkdownView
+        style={style}
+        markdown=""
+        generation={binding.generation}
+        sessionId={binding.sessionId}
+        sessionSequence={binding.readySequence}
+        sessionRevision={revision}
+        selectable={selectable}
+        syntaxHighlighting={syntaxHighlighting}
+        codeBlockWrap={codeBlockWrap}
+        lineNumbers={lineNumbers}
+        codeBlockMaxHeight={resolveMaxHeight(codeBlockMaxHeight)}
+        tableMaxHeight={resolveMaxHeight(tableMaxHeight, defaultTableMaxHeight)}
+        dir={dir}
+        controls={resolved.flags}
+        codeFilename={resolved.codeFilename}
+        tableFilename={resolved.tableFilename}
+        imageFilename={resolved.imageFilename}
+        csvSeparator={resolved.csvSeparator}
+        controlLabels={resolved.labels}
+        controlIcons={resolveIcons(icons)}
+        linkVariantPrefixes={linkVariantProps.prefixes}
+        linkVariantCounts={linkVariantProps.counts}
+        linkVariantColors={linkVariantProps.colors}
+        linkVariantUnderline={linkVariantProps.underlines}
+        tagStyleNames={tagStyleProps.names}
+        tagStyleColors={tagStyleProps.colors}
+        tagStyleFlags={tagStyleProps.flags}
+        onTaskPress={handleTaskPress}
+        onTagPress={handleTagPress}
+        onLinkLongPress={handleLinkLongPress}
+        linkPreview={linkPreview}
+        parseFlags={images.parseFlags}
+        images={images.images}
+        allowedImagePrefixes={images.allowedImagePrefixes}
+        allowedTags={images.allowedTags}
+        themeSlots={resolvedTheme.slots}
+        themeValues={resolvedTheme.values}
+        themeFonts={resolvedTheme.fonts}
+        animation={animation.animation}
+        animationSplit={animation.animationSplit}
+        animationTiming={animation.animationTiming}
+        animating={animation.animating}
+        caret={animation.caret}
+        onLinkPress={handleLinkPress}
+        onImagePress={images.onImagePress}
+        onMathError={images.onMathError}
+        onMarkdownError={handleError}
+        onControlAction={handleControlAction}
+      >
+        {fences}
+        {tags}
+      </NativeDownstreamMarkdownView>
+      {fullscreen.element}
+    </>
   );
 }

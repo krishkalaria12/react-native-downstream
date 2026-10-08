@@ -242,6 +242,44 @@ static downstream::Container listItem(uint32_t id) {
   return container;
 }
 
+static void checkHostedTagCache() {
+  auto document = std::make_shared<downstream::Document>();
+  document->id = 9102;
+  auto block = makeBlock(downstream::BlockKind::Paragraph, "Hosted content");
+  downstream::Container container;
+  container.kind = downstream::ContainerKind::Custom;
+  container.id = 42;
+  block.containers.push_back(container);
+  document->blocks.push_back(std::move(block));
+  document->settledBlocks = 1;
+  DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:document
+                                                             fontScale:1 syntaxHighlighting:NO
+                                                                 theme:downstream::Theme::defaultTheme()
+                                                                 caret:downstream::PlacedCaret{}];
+  downstream::HostLayout hosts;
+  hosts.tags = {{42, 90}};
+  downstream::CodeLayout code;
+  downstream::ImageStateLayout images;
+  downstream::TableLayout tables;
+  const DSMeasurement first = [rendered measureForWidth:320 chrome:0 code:code images:images
+                                                 hosts:hosts tables:tables];
+  const DSMeasurement cached = [rendered measureForWidth:320 chrome:0 code:code images:images
+                                                  hosts:hosts tables:tables];
+  require(first.tagHosts.size() == 1, @"hosted tag produced no rectangle");
+  require(cached.tagHosts.size() == 1, @"cached measurement dropped the hosted tag rectangle");
+  require(cached.tagHosts[0].first == 42 && CGRectEqualToRect(first.tagHosts[0].second, cached.tagHosts[0].second),
+          @"cached measurement changed the hosted tag rectangle");
+
+  DSContainerInfo *before = [DSContainerInfo new];
+  DSContainerInfo *after = [DSContainerInfo new];
+  require([before isEqual:after], @"equal container metadata did not compare equally");
+  for (NSString *field in @[@"containerId", @"writtenOpen", @"summary"]) {
+    [after setValue:@1 forKey:field];
+    require(![before isEqual:after], @"TextKit reuse ignored changed container metadata");
+    [after setValue:@0 forKey:field];
+  }
+}
+
 static void checkHostedFenceLayout() {
   // One paragraph, a hosted fence, and a hosted fence inside a list item: the
   // second is the case where the rectangle is not the whole column.
@@ -267,14 +305,14 @@ static void checkHostedFenceLayout() {
   downstream::ImageStateLayout images;
   const CGFloat width = 320;
   downstream::HostLayout empty;
-  const CGFloat cardHeight = [rendered sizeForWidth:width chrome:0 code:code images:images hosts:empty].height;
+  const CGFloat cardHeight = [rendered sizeForWidth:width chrome:0 code:code images:images hosts:empty tables:downstream::TableLayout{}].height;
   // Two hosted fences, at the heights a fixed-size component measured at.
   downstream::HostLayout hosts;
   hosts.entries = {{0, 120}, {1, 80}};
-  const DSMeasurement measured = [rendered measureForWidth:width chrome:0 code:code images:images hosts:hosts];
+  const DSMeasurement measured = [rendered measureForWidth:width chrome:0 code:code images:images hosts:hosts tables:downstream::TableLayout{}];
   require(measured.hosts.size() == 2, @"a hosted fence produced no rectangle");
   require(std::fabs(measured.size.height - [rendered sizeForWidth:width chrome:0 code:code images:images
-                                                                              hosts:hosts]
+                                                                              hosts:hosts tables:downstream::TableLayout{}]
                                              .height) < 0.001,
           @"measure and size disagree about a hosted document");
   require(measured.hosts[0].second.size.height == 120, @"a hosted fence did not take its component's height");
@@ -290,19 +328,19 @@ static void checkHostedFenceLayout() {
   // and a card would not move at all.
   downstream::HostLayout taller;
   taller.entries = {{0, 200}, {1, 80}};
-  const CGFloat tallerHeight = [rendered sizeForWidth:width chrome:0 code:code images:images hosts:taller].height;
+  const CGFloat tallerHeight = [rendered sizeForWidth:width chrome:0 code:code images:images hosts:taller tables:downstream::TableLayout{}].height;
   require(std::fabs(tallerHeight - (measured.size.height + 80)) < 0.001,
           @"a hosted fence's height did not follow its component");
   require(tallerHeight > cardHeight, @"a tall component did not raise the document");
   const CGFloat narrowWidth = 180;
-  const DSMeasurement narrow = [rendered measureForWidth:narrowWidth chrome:0 code:code images:images hosts:hosts];
+  const DSMeasurement narrow = [rendered measureForWidth:narrowWidth chrome:0 code:code images:images hosts:hosts tables:downstream::TableLayout{}];
   require(narrow.hosts[0].second.size.width == narrowWidth, @"a cached hosted rectangle kept the old width");
   require(narrow.hosts[1].second.size.width == narrowWidth - narrow.hosts[1].second.origin.x,
           @"a nested hosted rectangle lost its content column");
   const auto indentedTheme = downstream::ThemeRegistry::intern({downstream::theme::kSlotListMarginLeft}, {48}, {});
   DSRenderedDocument *themed = [DSRenderedDocument renderedDocumentFor:document fontScale:1 syntaxHighlighting:NO
                                                                theme:indentedTheme caret:downstream::PlacedCaret{}];
-  const DSMeasurement themedMeasure = [themed measureForWidth:width chrome:0 code:code images:images hosts:hosts];
+  const DSMeasurement themedMeasure = [themed measureForWidth:width chrome:0 code:code images:images hosts:hosts tables:downstream::TableLayout{}];
   const CGFloat indentDelta = 48 - downstream::Theme::defaultTheme()->number(downstream::theme::kSlotListMarginLeft);
   require(themedMeasure.hosts[1].second.origin.x == measured.hosts[1].second.origin.x + indentDelta,
           @"a themed hosted rectangle kept the default list indent");
@@ -311,11 +349,11 @@ static void checkHostedFenceLayout() {
           @"a theme changed hosted height or placed its content outside the column");
   downstream::HostLayout blank;
   blank.entries = {{0, 0}, {99, 100}};
-  const DSMeasurement zero = [rendered measureForWidth:width chrome:0 code:code images:images hosts:blank];
+  const DSMeasurement zero = [rendered measureForWidth:width chrome:0 code:code images:images hosts:blank tables:downstream::TableLayout{}];
   require(zero.hosts.size() == 1 && zero.hosts[0].first == 0,
           @"an absent fence produced a rectangle or a zero-height fence lost its rectangle");
   require(zero.hosts[0].second.size.height == 0, @"a zero-height hosted fence drew a code card");
-  const DSMeasurement restored = [rendered measureForWidth:width chrome:0 code:code images:images hosts:hosts];
+  const DSMeasurement restored = [rendered measureForWidth:width chrome:0 code:code images:images hosts:hosts tables:downstream::TableLayout{}];
   require(restored.size.height == measured.size.height && restored.hosts.size() == measured.hosts.size(),
           @"changing hosted ordinals reused stale geometry");
 #ifndef BASELINE
@@ -330,7 +368,7 @@ static void checkHostedFenceLayout() {
       const CGFloat localWidth = 180 + index % 31;
       localHosts.entries = {{0, static_cast<float>(localHeight)}, {1, 80}};
       const DSMeasurement result = [rendered measureForWidth:localWidth chrome:0 code:code images:images
-                                                   hosts:localHosts];
+                                                   hosts:localHosts tables:downstream::TableLayout{}];
       if (result.hosts.size() != 2 || result.hosts[0].second.size.height != localHeight ||
           result.hosts[0].second.size.width != localWidth ||
           result.size.height != CGRectGetMaxY(result.hosts.back().second)) {
@@ -343,9 +381,9 @@ static void checkHostedFenceLayout() {
   // An empty host layout is the measurement this view made before fence
   // renderers existed: same size, same frames.
   const NSArray<NSValue *> *plainFrames =
-      [rendered segmentFramesForWidth:width chrome:0 code:code images:images hosts:empty];
+      [rendered segmentFramesForWidth:width chrome:0 code:code images:images hosts:empty tables:downstream::TableLayout{}];
   const NSArray<NSValue *> *emptyFrames = [rendered segmentFramesForWidth:width chrome:0 code:code images:images
-                                                                    hosts:downstream::HostLayout{}];
+                                                                    hosts:downstream::HostLayout{} tables:downstream::TableLayout{}];
   require(plainFrames.count == emptyFrames.count, @"an empty host layout changed the frame count");
   for (NSUInteger index = 0; index < plainFrames.count; index++) {
     require(CGRectEqualToRect(plainFrames[index].CGRectValue, emptyFrames[index].CGRectValue),
@@ -371,21 +409,21 @@ static void benchmarkHostedMeasurements() {
                                                                caret:downstream::PlacedCaret{}];
   const downstream::CodeLayout code;
   const downstream::ImageStateLayout images;
-  (void)[rendered measureForWidth:320 chrome:0 code:code images:images hosts:hosts];
+  (void)[rendered measureForWidth:320 chrome:0 code:code images:images hosts:hosts tables:downstream::TableLayout{}];
   CGFloat checksum = 0;
   const auto sizeStart = std::chrono::steady_clock::now();
   for (size_t index = 0; index < iterations; ++index) {
-    checksum += [rendered sizeForWidth:320 chrome:0 code:code images:images hosts:hosts].height;
+    checksum += [rendered sizeForWidth:320 chrome:0 code:code images:images hosts:hosts tables:downstream::TableLayout{}].height;
   }
   const auto measureStart = std::chrono::steady_clock::now();
   for (size_t index = 0; index < iterations; ++index) {
-    const DSMeasurement result = [rendered measureForWidth:320 chrome:0 code:code images:images hosts:hosts];
+    const DSMeasurement result = [rendered measureForWidth:320 chrome:0 code:code images:images hosts:hosts tables:downstream::TableLayout{}];
     checksum += result.size.height + result.hosts.size();
   }
   const auto alternatingStart = std::chrono::steady_clock::now();
   for (size_t index = 0; index < iterations; ++index) {
     const DSMeasurement result = [rendered measureForWidth:index % 2 ? 240 : 320 chrome:0 code:code images:images
-                                                   hosts:hosts];
+                                                   hosts:hosts tables:downstream::TableLayout{}];
     checksum += result.size.height + result.hosts.size();
   }
   const auto end = std::chrono::steady_clock::now();
@@ -555,12 +593,29 @@ static void checkCellBreakHeight() {
   require(brokenHeight > plainHeight,
           ([NSString stringWithFormat:@"a cell break did not make its row taller: broken %.1f plain %.1f",
                                     brokenHeight, plainHeight]));
+  DSTableSegmentView *tableView = [DSTableSegmentView new];
+  [tableView setSegment:brokenTable];
+  tableView.frame = CGRectMake(0, 0, 120, brokenTable.tableSize.height);
+  [tableView layoutIfNeeded];
+  UIScrollView *viewport = [tableView valueForKey:@"scrollView"];
+  UIView *grid = [tableView valueForKey:@"grid"];
+  UIView *pinnedHeader = [tableView valueForKey:@"header"];
+  const CGFloat headerHeight = brokenTable.rowHeights.firstObject.doubleValue;
+  require(grid.frame.origin.y == -headerHeight, @"scrolling table repeated its pinned header");
+  require(viewport.contentSize.height == brokenTable.tableSize.height - headerHeight,
+          @"scrolling table retained the pinned row in its content height");
+  viewport.contentOffset = CGPointMake(20, 0);
+  [tableView layoutIfNeeded];
+  require(pinnedHeader.frame.origin.x == viewport.frame.origin.x && pinnedHeader.bounds.origin.x == 20,
+          @"pinned table columns did not track horizontal scrolling");
   printf("ios_table_cell_break row_broken=%.1f row_plain=%.1f\n", brokenHeight, plainHeight);
 }
 
 #include "HighlightVariants.mm"
 
 #include "TextTailChecks.mm"
+
+#include "DetailsChecks.mm"
 
 int main() {
   @autoreleasepool {
@@ -592,6 +647,7 @@ int main() {
 #ifndef BASELINE
     require([segment baselineCharacterOffsetAtOrAfter:3] == 4, @"blank-line baseline lookup skipped value line");
 #endif
+    checkDetailsVisibility();
     checkGrowingTextTail();
     checkEmojiGlyphMapping();
     checkBlankSuffixDraw();
@@ -647,6 +703,7 @@ int main() {
     (void)[segment.text heightForWidth:CGFLOAT_MAX];
     require(layoutCalls >= 2, @"measurement cache exceeded its three-width bound");
     method_setImplementation(ensureMethod, originalEnsureLayout);
+    checkHostedTagCache();
     checkHostedFenceLayout();
     benchmarkHostedMeasurements();
     printf("native TextKit checks passed\n");

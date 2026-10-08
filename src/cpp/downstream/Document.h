@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "FenceMeta.h"
+#include "TagPolicy.h"
 #include "math/MathLayout.h"
 
 namespace downstream {
@@ -38,6 +39,12 @@ enum class ContainerKind : uint8_t {
   ListItem = 1,
   Admonition = 2,
   Footnote = 3,
+  /// `<details>`: the first leaf is a synthetic summary, as an admonition's
+  /// title is, and `open` says whether the writer left it open.
+  Details = 4,
+  /// A multi-line tag the app allowed, with no built-in drawing of its own.
+  /// `tag` names it.
+  Custom = 5,
 };
 
 enum class TaskState : uint8_t {
@@ -60,18 +67,23 @@ enum class CellAlign : uint8_t {
   Right = 3,
 };
 
-namespace InlineStyle {
-constexpr uint32_t Strong = 1u << 0;
-constexpr uint32_t Emphasis = 1u << 1;
-constexpr uint32_t Strikethrough = 1u << 2;
-constexpr uint32_t Code = 1u << 3;
-constexpr uint32_t Link = 1u << 4;
-constexpr uint32_t ImageAlt = 1u << 5;
-constexpr uint32_t FootnoteRef = 1u << 6;
-constexpr uint32_t Math = 1u << 7;
-constexpr uint32_t Superscript = 1u << 8;
-constexpr uint32_t Subscript = 1u << 9;
-} // namespace InlineStyle
+/**
+ * Which way a block's text is laid out.
+ *
+ * Decided once in C++ rather than twice on the platforms, because "the first
+ * strong letter" is not the same rule anywhere: iOS took it from a fixed range
+ * list, Android from `Character.getDirectionality`, and neither skipped inline
+ * code — so a paragraph that opens with `` `x` `` then Arabic was laid out
+ * differently on the two. The rule below is the Unicode one both were reaching
+ * for.
+ */
+enum class BlockDirection : uint8_t {
+  /// No strong character of its own. The block inherits the one before it, which
+  /// is why this is a value rather than a resolved direction.
+  Inherit = 0,
+  LeftToRight,
+  RightToLeft,
+};
 
 /// A maximal run of block text sharing one style set. Offsets are UTF-16
 /// code units into Block::text. Runs never overlap; unstyled text has no run.
@@ -81,6 +93,10 @@ struct InlineRun {
   uint32_t styles{0};
   /// Index into Document::links, or -1.
   int32_t link{-1};
+  /// Index into Document::tags, for a run an app-allowed tag styled, or -1.
+  /// Beside `link` rather than inside it because a custom tag may hold a link
+  /// and a link may hold no tag: two orthogonal facts, two fields.
+  int32_t tag{-1};
 };
 
 /// The class of a code token. Platform palettes map these to colors, so the
@@ -125,6 +141,11 @@ struct Container {
   /// where the marker is drawn.
   bool showsMarker{false};
   TaskState task{TaskState::None};
+  /// The `<details open>` attribute, and only for `Details`. False means the
+  /// writer closed it, which is the default: a reader has to ask for the body.
+  bool open{false};
+  /// Custom: the tag's index into `Document::tags`. -1 for every other kind.
+  int32_t tag{-1};
   /// Rendered marker for list items and footnotes ("•", "3.", "1."), or the
   /// admonition type. Markers are decoration and are not part of the text.
   std::u16string marker;
@@ -237,6 +258,16 @@ struct Block {
   BlockKind kind{BlockKind::Paragraph};
   uint8_t headingLevel{0};
   bool tableHeader{false};
+  /**
+   * How this block's text is laid out.
+   *
+   * `Inherit` for a block with no strong character of its own, and for every
+   * block whose text the writer never decided: a heading, a table cell's
+   * content, and a run of punctuation all take the direction of the block before
+   * them rather than the document's first strong character, which is what a
+   * reader comparing two lines expects.
+   */
+  BlockDirection direction{BlockDirection::Inherit};
   /// True when md4c ended this fenced block at the end of the input with no
   /// closing fence after its last line. That is what makes it the block a
   /// writer is still typing into, which is where a caret belongs and where a
@@ -291,12 +322,44 @@ struct Block {
   bool fenceClosed{false};
 };
 
+/**
+ * An HTML tag the source used, beyond the built-in table.
+ *
+ * A document-level list rather than a field on a run, because a tag's
+ * attributes and source range are one record however many runs it styles, and
+ * because a block custom tag is a container rather than a run at all — it needs
+ * the same record and a different answer.
+ */
+struct Tag {
+  /// The name as written, lowercased. An element name for a built-in tag and for
+  /// one the app allowed, and whatever the writer typed for neither.
+  std::string name;
+  /// The attributes the policy allowed, name then value, both as written. Empty
+  /// for a built-in tag, whose attributes are dropped as the web's sanitize
+  /// schema drops them.
+  std::vector<std::pair<std::string, std::string>> attributes;
+  /// The tag's own Markdown occurrence, delimiters included, so a press can be
+  /// mapped back to the source.
+  SourceRange range;
+  /// True for a tag that spans lines, which is a container rather than a run.
+  bool block{false};
+  /// The source bytes between the opening and closing lines, for a block tag
+  /// whose closer arrived. A renderer draws this rather than the parsed
+  /// blocks, because the writer sent it as the tag's content rather than as
+  /// Markdown to parse again. Empty when the closer never arrived.
+  uint32_t bodyStart{0};
+  uint32_t bodyEnd{0};
+};
+
 /// An actionable link. Links that fail the URL policy are plain text and are
 /// not listed here.
 struct Link {
   std::string url;
   /// The link's Markdown occurrence in the source, including delimiters.
   SourceRange range;
+  /// The `<a href>` this came from, or -1 for a Markdown link. It is what lets a
+  /// view tell a writer's own anchor from a link the parser produced.
+  int32_t tag{-1};
 };
 
 /// A list whose leading items are immutable and shared between documents.
@@ -393,6 +456,11 @@ struct Document {
   /// the document: two blocks cannot name the same image, and a linked image's
   /// link is a document-level record like any other.
   SharedList<Image> images;
+  /// Every tag the document's blocks name, indexed by `InlineRun::tag` and by a
+  /// container's `Container::tag`. A separate list for the same reason images
+  /// are: two blocks cannot name the same tag, and an attribute list is the
+  /// document's rather than a run's.
+  SharedList<Tag> tags;
   /// Number of leading blocks that no later input can change. A control, and
   /// text selection, turn on once the block they belong to is inside this
   /// prefix, so a finished block is usable while the rest still streams.

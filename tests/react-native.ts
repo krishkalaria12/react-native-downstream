@@ -6,10 +6,16 @@
  * the trace records. Everything else in the public surface is types, which
  * erase at build time, so nothing else needs stubbing.
  */
+import { createElement } from 'react';
+import type React from 'react';
 import { vi } from 'vitest';
 
 /** The TurboModule surface the stream controller calls. */
 export interface TurboModuleStub {
+  /** `src/parseFlags.ts` settles the `math` default from this. */
+  mathAvailable(): boolean;
+  /** `src/linkSafety.ts`'s confirmation offers "Copy link" through this. */
+  copyText(text: string): Promise<boolean>;
   create(sessionId: string, mode: string): void;
   append(
     sessionId: string,
@@ -34,6 +40,7 @@ export const TurboModuleRegistry: {
   get: vi.fn(() => null),
   getEnforcing: vi.fn(() => ({
     mathAvailable: () => false,
+    copyText: vi.fn(async () => true),
     create: vi.fn(),
     append: vi.fn(),
     reset: vi.fn(),
@@ -71,8 +78,43 @@ export const StyleSheet = {
 };
 
 export const Linking = {
-  openURL: vi.fn(),
+  openURL: vi.fn(async () => true),
+  canOpenURL: vi.fn(async () => true),
   getInitialURL: vi.fn(async () => null),
+};
+
+/**
+ * A native alert, recorded rather than shown.
+ *
+ * `src/linkSafety.ts` uses one for the link confirmation, so a test needs to
+ * answer it. The recorded call is what a test asserts on, and `answer` lets it
+ * press one of the buttons the way a reader would.
+ */
+export interface AlertButton {
+  text?: string;
+  style?: string;
+  onPress?: () => void;
+}
+
+export const Alert = {
+  alert: vi.fn(
+    (
+      title: string,
+      message?: string,
+      buttons?: AlertButton[],
+      options?: { cancelable?: boolean; onDismiss?: () => void }
+    ) => {
+      void title;
+      void message;
+      void options;
+      // `alert.answer` is a test hook: the index of the button to press, or -1
+      // to dismiss. Absent, the alert is recorded and nothing is pressed.
+      const answer = (Alert as unknown as { answer?: number }).answer;
+      if (answer !== undefined && buttons?.[answer]?.onPress) {
+        buttons[answer].onPress?.();
+      }
+    }
+  ),
 };
 export const Settings = { get: vi.fn(), set: vi.fn() };
 export const I18nManager = { isRTL: false };
@@ -165,7 +207,6 @@ export function flattenStyle(style: unknown): unknown {
 export const View = 'View';
 export const Text = 'Text';
 export const ScrollView = 'ScrollView';
-export const Pressable = 'Pressable';
 export const TextInput = 'TextInput';
 export const FlatList = 'FlatList';
 export const SafeAreaView = 'SafeAreaView';
@@ -179,5 +220,60 @@ export const requireNativeComponent = vi.fn((name: string) => name);
 export const Animated = { View: 'Animated.View' };
 export const Easing = { linear: (t: number) => t };
 export const findNodeHandle = vi.fn();
+
+/**
+ * A pressable, as a real button.
+ *
+ * A component rather than a host name, because `accessibilityLabel` is how React
+ * Native names a control and `aria-label` is how the DOM does, and a test should
+ * be able to find a control by the same string a screen reader would read out.
+ * The props the platform reads are translated rather than passed through: a test
+ * DOM would render them as unknown attributes, and that noise says nothing about
+ * whether a reader can use the button.
+ */
+export function Pressable({
+  accessibilityLabel,
+  accessibilityRole,
+  onPress,
+  style,
+  children,
+  ...rest
+}: {
+  accessibilityLabel?: string;
+  accessibilityRole?: string;
+  onPress?: () => void;
+  style?: unknown;
+  children?: unknown;
+  [key: string]: unknown;
+}): React.ReactElement {
+  return createElement(
+    'button',
+    {
+      'aria-label': accessibilityLabel,
+      'data-role': accessibilityRole,
+      style,
+      'onClick': onPress,
+      ...rest,
+    },
+    children as React.ReactNode
+  );
+}
+
+/**
+ * A modal, as a dialog.
+ *
+ * A component rather than a host name, because `role="dialog"` is what an
+ * accessible modal is and the tests should be able to ask the question a reader
+ * would: is a dialog open, and what does it say. The props the platform reads are
+ * dropped rather than passed through, because a test DOM would read them as
+ * unknown attributes and that noise says nothing.
+ */
+export function Modal({
+  children,
+}: {
+  children?: unknown;
+}): React.ReactElement {
+  return createElement('div', { role: 'dialog' }, children as React.ReactNode);
+}
 
 export const __DEV__ = true;

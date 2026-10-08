@@ -59,6 +59,17 @@ public:
   void setPreview(jsi::Runtime &rt, std::string sessionId, double features);
 
   /**
+   * Replaces the session's HTML tag policy, keeping the flags `create` set.
+   *
+   * `tags` is the flat list `src/allowedTags.ts` writes: `name,attribute,…` in
+   * name order. A tag with an odd number of entries after its name, or one whose
+   * attributes are not the same length as the last tag's, is a caller that is not
+   * this library, and the whole list is refused rather than guessed at: a policy
+   * half-read would allow an attribute nobody named.
+   */
+  void setParseTags(jsi::Runtime &rt, std::string sessionId, std::vector<std::string> tags);
+
+  /**
    * Whether a math engine is linked into this process.
    *
    * So JavaScript can settle the `math` prop's default during its first render
@@ -71,6 +82,20 @@ public:
    * TypeScript spec, and codegen rejects anything else.
    */
   bool mathAvailable(jsi::Runtime &rt);
+
+  /**
+   * Puts `text` on the system clipboard.
+   *
+   * React Native core has no clipboard, and the link-safety confirmation offers
+   * "Copy link", so a promise that keeps that promise. The platform installed the
+   * writer when its module loaded; a binary without one resolves `false` rather
+   * than rejecting, because a reader on a platform with no clipboard still gets
+   * the confirmation and its Open button.
+   *
+   * As with the fence slots, the promise is created here and settled here: the
+   * generated binding requires a promise-returning method to return one.
+   */
+  AsyncPromise<bool> copyText(jsi::Runtime &rt, std::string text);
 
   /**
    * The fenced blocks a controlled source holds that name a registered
@@ -119,6 +144,16 @@ public:
   /// mount rather than of whichever snapshot arrived while it was rendering.
   jsi::Array sessionFenceSlots(jsi::Runtime &rt, std::string sessionId, double generation, double sequence,
                                std::vector<std::string> languages);
+  /// The tag slots a controlled source holds, for the tag names the app
+  /// registered. Only containers whose tag is named are reported: a tag with
+  /// no renderer draws its children natively, so there is nothing to mount
+  /// for it.
+  jsi::Array tagSlots(jsi::Runtime &rt, std::string source, double parseFlags, std::vector<std::string> names, std::vector<std::string> tags);
+  /// The tag slots of one published snapshot, which is the snapshot the view
+  /// is mounting for `sessionSequence`. Walks blocks and never parses, so it
+  /// is safe to call on every snapshot of a stream from render.
+  jsi::Array sessionTagSlots(jsi::Runtime &rt, std::string sessionId, double generation, double sequence,
+                             std::vector<std::string> names);
 
 private:
   /// Lets session workers reach the module only while it is alive.

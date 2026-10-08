@@ -715,3 +715,64 @@ describe('inputs too large or too composed for a corpus file', () => {
     assertStreamingBatchMatchesFullParse([partial.split('')]);
   });
 });
+
+/**
+ * Hiding an incomplete trailing table.
+ *
+ * A table whose rows are still arriving is withheld whole — not even its settled
+ * rows are shown — because a half-drawn grid is what the mode exists to prevent.
+ * When the table completes, its rows arrive together.
+ */
+describe('preview.tables', () => {
+  const TABLES = 1 << 6;
+  const TABLE = [
+    '| a | b |',
+    '| --- | --- |',
+    '| 1 | 2 |',
+    '| 3 | 4 |',
+    '',
+  ].join('\n');
+
+  const tableTexts = (model: { blocks: { kind: number; text: string }[] }) =>
+    model.blocks
+      .filter((block) => block.kind === KIND.table)
+      .map((block) => block.text);
+
+  it('shows a complete table', () => {
+    // A table followed by prose is complete, so the mode changes nothing. Three
+    // blocks, not four: the `---` separator is not a block.
+    const model = preview(`${TABLE}\nDone.\n`, TABLES);
+    expect(tableTexts(model)).toHaveLength(3);
+  });
+
+  it('hides a table whose rows are still arriving', () => {
+    // No blank line after the last row: the table is still open, so none of its
+    // rows are shown — not even the ones that have settled.
+    const model = preview(TABLE, TABLES);
+    expect(tableTexts(model)).toHaveLength(0);
+    // And without the mode, the same snapshot shows the rows it has.
+    expect(tableTexts(preview(TABLE, 0))).toHaveLength(3);
+  });
+
+  it('shows the rows together once the table completes', () => {
+    // Streamed in two chunks: the rows alone are withheld, and the prose that
+    // ends the table brings them all back at once.
+    const partial = replaySession('full', [
+      { op: 'preview', features: TABLES },
+      { op: 'append', chunk: TABLE },
+      { op: 'parse', finished: false },
+    ]);
+    expect(tableTexts(partial)).toHaveLength(0);
+    const done = replaySession('full', [
+      { op: 'preview', features: TABLES },
+      { op: 'append', chunk: `${TABLE}\nDone.\n` },
+      { op: 'parse', finished: false },
+    ]);
+    expect(tableTexts(done)).toHaveLength(3);
+  });
+
+  it('keeps the prose around a hidden table', () => {
+    const model = preview(`Before.\n\n${TABLE}`, TABLES);
+    expect(visibleText(model)).toBe('Before.');
+  });
+});
