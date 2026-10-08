@@ -71,13 +71,19 @@ bool hasUnresolvedBracket(const Block &block) {
       block.kind == BlockKind::MathBlock) {
     return false;
   }
+  // MarkdownParser::recordRun appends disjoint runs in text order, merging
+  // adjacent equal styles. Walk that order once instead of searching every
+  // run again for each bracket in an inline-code-heavy paragraph.
+  size_t runIndex = 0;
   for (size_t index = 0; index < block.text.size(); index++) {
     if (block.text[index] != u'[' && block.text[index] != u']') {
       continue;
     }
-    const bool inCode = std::any_of(block.runs.begin(), block.runs.end(), [index](const InlineRun &run) {
-      return run.start <= index && index < run.end && (run.styles & InlineStyle::Code) != 0;
-    });
+    while (runIndex < block.runs.size() && block.runs[runIndex].end <= index) {
+      runIndex++;
+    }
+    const bool inCode = runIndex < block.runs.size() && block.runs[runIndex].start <= index &&
+        (block.runs[runIndex].styles & InlineStyle::Code) != 0;
     if (!inCode) {
       return true;
     }

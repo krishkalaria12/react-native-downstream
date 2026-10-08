@@ -23,6 +23,13 @@ uint64_t fingerprint(const ParseResult &parsed) {
       add(run.start); add(run.end); add(run.styles); add(run.link);
     }
     for (const auto &cell : block.cells) { add(cell.start); add(cell.end); }
+    for (const auto &container : block.containers) {
+      add(static_cast<uint8_t>(container.kind)); add(container.id); add(container.showsMarker);
+    }
+  }
+  for (const auto &link : parsed.document->links) {
+    for (const char unit : link.url) add(static_cast<unsigned char>(unit));
+    add(link.range.start); add(link.range.end);
   }
   return hash;
 }
@@ -80,5 +87,13 @@ int main() {
           [&] { return fingerprint(preview.apply(source, 0, 0, options).parsed); });
   const std::string longTag = "<" + std::string(64 * 1024, 'a') + ">";
   measure("reject_long_tag", longTag.size(), 200,
-          [&] { return static_cast<uint64_t>(scan::matchInlineTag(longTag)); });
+          [&] { return static_cast<uint64_t>(scan::classifyTag(longTag, defaultTagPolicy()).action); });
+  for (const size_t count : {100, 500, 1000}) {
+    std::string details;
+    for (size_t index = 0; index < count; ++index) {
+      details += "<details><summary>Résumé 😀</summary>世界 [link](https://example.com).</details>\n\n";
+    }
+    measure("parse_details_" + std::to_string(count), details.size(), 3,
+            [&] { return fingerprint(parseMarkdown(details, options)); });
+  }
 }

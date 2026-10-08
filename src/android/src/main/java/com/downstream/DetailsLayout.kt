@@ -66,7 +66,7 @@ internal fun isDetailsSummary(containers: List<ContainerDecoration>): Boolean {
  * closed. A range rather than a block index because the platform lays the segment
  * out as one text layout and its *lines* are what is hidden.
  */
-internal class HiddenRange(val start: Int, val end: Int)
+internal data class HiddenRange(val start: Int, val end: Int)
 
 /**
  * The height a text segment shows, from the whole layout's height and the top of
@@ -87,12 +87,37 @@ internal fun visibleTextHeight(
   if (hidden.isEmpty() || lineCount < 1) {
     return totalHeight
   }
+  // Line starts are monotonic. Union the character ranges first, then find
+  // their line boundaries instead of asking every range about every line.
+  // Sorting also preserves the rule for overlapping or out-of-order callers.
+  val ranges = if (hidden.size > 1) hidden.sortedBy { it.start } else hidden
+  fun firstLineAtOrAfter(offset: Int): Int {
+    var low = 0
+    var high = lineCount
+    while (low < high) {
+      val middle = low + (high - low) / 2
+      if (lineStart(middle) < offset) low = middle + 1 else high = middle
+    }
+    return low
+  }
+  fun rangeHeight(start: Int, end: Int): Int =
+    lineTop(firstLineAtOrAfter(end)) - lineTop(firstLineAtOrAfter(start))
+
   var removed = 0
-  for (line in 0 until lineCount) {
-    val at = lineStart(line)
-    if (hidden.any { at >= it.start && at < it.end }) {
-      removed += lineTop(line + 1) - lineTop(line)
+  var start = 0
+  var end = 0
+  var hasRange = false
+  for (range in ranges) {
+    if (range.end <= range.start) continue
+    if (hasRange && range.start <= end) {
+      end = maxOf(end, range.end)
+    } else {
+      if (hasRange) removed += rangeHeight(start, end)
+      start = range.start
+      end = range.end
+      hasRange = true
     }
   }
+  if (hasRange) removed += rangeHeight(start, end)
   return totalHeight - removed
 }

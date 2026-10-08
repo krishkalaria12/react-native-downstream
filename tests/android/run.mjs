@@ -93,6 +93,21 @@ const suites = [
     ],
   },
   {
+    jar: 'text_height',
+    sources: [
+      ...kotlin(
+        'Segments.kt',
+        'CodeLayout.kt',
+        'ContainerDecoration.kt',
+        'DetailsLayout.kt'
+      ),
+      join(here, 'TextHeightCheck.kt'),
+      ...readdirSync(join(here, 'text-height-stubs'))
+        .filter((name) => name.endsWith('.kt'))
+        .map((name) => join(here, 'text-height-stubs', name)),
+    ],
+  },
+  {
     jar: 'math_render',
     sources: [
       ...kotlin('MathLayout.kt', 'MathDisplayList.kt', 'MathSegmentView.kt'),

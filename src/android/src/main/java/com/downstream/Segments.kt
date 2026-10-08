@@ -143,6 +143,9 @@ internal class TextSegment(
   val caretKind: Int,
 ) : Segment(gapBefore) {
   private var heightWidth = -1
+  private var fullHeight = 0
+  private var lineTops = IntArray(0)
+  private var lineStarts = IntArray(0)
   private var height = 0
   private var hidden = emptyList<HiddenRange>()
 
@@ -160,20 +163,31 @@ internal class TextSegment(
    */
   @Synchronized
   fun height(width: Int, paint: TextPaint, choices: ReaderChoices = ReaderChoices()): Int {
-    val hiddenRanges = hiddenRanges(choices)
-    if (width != heightWidth || hiddenRanges != hidden) {
+    val layoutWidth = width.coerceAtLeast(1)
+    val widthChanged = layoutWidth != heightWidth
+    if (widthChanged) {
       val layout = RenderedDocument.buildLayout(
-        text, paint, width.coerceAtLeast(1), Layout.Alignment.ALIGN_NORMAL,
+        text, paint, layoutWidth, Layout.Alignment.ALIGN_NORMAL,
       )
+      fullHeight = layout.height
+      // Keep only line geometry for details. Retaining a full StaticLayout for
+      // each committed segment would also retain its shaping and span state.
+      if (detailsBlocks.isNotEmpty()) {
+        lineTops = IntArray(layout.lineCount + 1) { layout.getLineTop(it) }
+        lineStarts = IntArray(layout.lineCount) { layout.getLineStart(it) }
+      }
+      heightWidth = layoutWidth
+    }
+    val hiddenRanges = hiddenRanges(choices)
+    if (widthChanged || hiddenRanges != hidden) {
       hidden = hiddenRanges
       height = if (hiddenRanges.isEmpty()) {
-        layout.height
+        fullHeight
       } else {
         visibleTextHeight(
-          layout.height, layout.lineCount, { layout.getLineTop(it) }, { layout.getLineStart(it) }, hiddenRanges,
+          fullHeight, lineStarts.size, { lineTops[it] }, { lineStarts[it] }, hiddenRanges,
         )
       }
-      heightWidth = width
     }
     return height
   }

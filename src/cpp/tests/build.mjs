@@ -34,10 +34,19 @@ const LEXILLA_PREFIXES = [
   '-DScintilla=downstream_scintilla',
 ];
 
-const CFLAGS = ['-std=c11', '-O1', '-DMD4C_USE_UTF8', ...SYMBOL_PREFIXES];
+// Release benchmarks share the engine source list and object cache with tests.
+// Flags are part of the cache key, so release objects cannot replace test ones.
+const OPTIMIZATION_FLAGS =
+  process.env.DOWNSTREAM_ENGINE_RELEASE === '1' ? ['-O3', '-DNDEBUG'] : ['-O1'];
+const CFLAGS = [
+  '-std=c11',
+  ...OPTIMIZATION_FLAGS,
+  '-DMD4C_USE_UTF8',
+  ...SYMBOL_PREFIXES,
+];
 const CXXFLAGS = [
   '-std=c++20',
-  '-O1',
+  ...OPTIMIZATION_FLAGS,
   '-Wall',
   '-Wextra',
   '-Werror',

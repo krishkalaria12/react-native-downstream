@@ -11,6 +11,7 @@
 #include "theme/ThemeLayout.h"
 
 #include <algorithm>
+#include <unordered_map>
 
 #include <react/renderer/components/DownstreamSpec/ShadowNodes.h>
 #include <react/renderer/core/LayoutContext.h>
@@ -586,22 +587,23 @@ downstream::HostLayout DownstreamMarkdownShadowNode::measureSlots(const LayoutCo
   hosts.tags.reserve(tagSlots.size());
   // Index custom containers once for every mounted child, the way fences index
   // code blocks above: one walk, however many tags a message holds.
-  uint32_t lastContainer = 0;
+  std::unordered_map<uint32_t, const downstream::Block *> tagBlocks;
+  tagBlocks.reserve(tagSlots.size());
   for (const auto &slot : tagSlots) {
-    lastContainer = std::max(lastContainer, slot.container);
+    tagBlocks.emplace(slot.container, nullptr);
   }
-  std::vector<const downstream::Block *> tagBlocks;
-  if (document) {
+  if (document && theme && std::isfinite(maximumWidth) && !tagBlocks.empty()) {
+    size_t remaining = tagBlocks.size();
     for (const auto &block : document->blocks) {
       for (const auto &container : block.containers) {
-        if (container.kind == downstream::ContainerKind::Custom && container.id <= lastContainer) {
-          tagBlocks.push_back(&block);
-          break;
+        if (container.kind != downstream::ContainerKind::Custom) continue;
+        const auto found = tagBlocks.find(container.id);
+        if (found != tagBlocks.end() && found->second == nullptr) {
+          found->second = &block;
+          --remaining;
         }
       }
-      if (tagBlocks.size() > lastContainer) {
-        break;
-      }
+      if (remaining == 0) break;
     }
   }
   for (const TagSlotChild &slot : tagSlots) {
@@ -610,20 +612,11 @@ downstream::HostLayout DownstreamMarkdownShadowNode::measureSlots(const LayoutCo
       continue;
     }
     float column = static_cast<float>(maximumWidth);
-    for (const downstream::Block *block : tagBlocks) {
-      bool found = false;
-      for (const auto &container : block->containers) {
-        if (container.kind == downstream::ContainerKind::Custom && container.id == slot.container) {
-          found = true;
-          break;
-        }
-      }
-      if (found && theme && std::isfinite(maximumWidth)) {
-        const double leading =
-            downstream::theme_layout::contentLeading(*theme, block->containers, scale);
-        column = static_cast<float>(std::max(0.0, static_cast<double>(maximumWidth) - leading));
-        break;
-      }
+    const auto found = tagBlocks.find(slot.container);
+    if (found != tagBlocks.end() && found->second != nullptr && theme && std::isfinite(maximumWidth)) {
+      const double leading =
+          downstream::theme_layout::contentLeading(*theme, found->second->containers, scale);
+      column = static_cast<float>(std::max(0.0, static_cast<double>(maximumWidth) - leading));
     }
     LayoutConstraints constraints{Size{column, 0}, Size{column, std::numeric_limits<Float>::infinity()},
                                  layoutConstraints.layoutDirection};

@@ -23,7 +23,7 @@
  *   The subtree is memoized on its inputs, which are the only things that can
  *   change what it draws.
  */
-import { createElement, memo, useMemo, type ReactNode } from 'react';
+import { createElement, memo, useMemo, useRef, type ReactNode } from 'react';
 
 import DownstreamFenceSlot from './DownstreamFenceSlotNativeComponent';
 import NativeDownstreamSession, {
@@ -68,6 +68,26 @@ export function resolveTagRenderers(
 }
 
 type MarkdownViewPropsPlugins = MarkdownPlugins | undefined;
+
+/** Inline plugin objects reuse the query when their effective entries agree. */
+export function useStableTagRenderers(
+  resolved: ResolvedTagRenderers
+): ResolvedTagRenderers {
+  const stable = useRef(resolved);
+  const previous = stable.current;
+  if (
+    previous.fallback !== resolved.fallback ||
+    previous.names.length !== resolved.names.length ||
+    previous.names.some(
+      (name, index) =>
+        name !== resolved.names[index] ||
+        previous.components.get(name) !== resolved.components.get(name)
+    )
+  ) {
+    stable.current = resolved;
+  }
+  return stable.current;
+}
 
 /** A mounted tag slot: the engine's slot joined with its component. */
 export type MountedTagSlot = Readonly<{
@@ -186,7 +206,10 @@ function readTagSlots(query: TagQuery): readonly MountedTagSlot[] {
   // With a fallback every allowed tag is a candidate; without one, only the
   // registered names are. Either way there is nothing to ask when the answer
   // is known to be empty.
-  const names = resolved.fallback === undefined ? resolved.names : allowedTags;
+  const names =
+    resolved.fallback === undefined
+      ? resolved.names
+      : allowedTagNames(allowedTags);
   if (names.length === 0) {
     return [];
   }
@@ -206,7 +229,8 @@ function readTagSlots(query: TagQuery): readonly MountedTagSlot[] {
     }
     // The pre-filter: a message that never names a candidate tag costs one
     // substring search per name and no engine call at all.
-    if (!names.some((name) => source.toLowerCase().includes(`<${name}`))) {
+    const lowerSource = source.toLowerCase();
+    if (!names.some((name) => lowerSource.includes(`<${name}`))) {
       return [];
     }
     return joinTagComponents(
@@ -216,6 +240,18 @@ function readTagSlots(query: TagQuery): readonly MountedTagSlot[] {
   } catch {
     return [];
   }
+}
+
+/** The policy wire format is `-1,name,attribute,...`, not a name list. */
+function allowedTagNames(allowedTags: ReadonlyArray<string>): string[] {
+  const names: string[] = [];
+  for (let index = 0; index < allowedTags.length; index++) {
+    if (allowedTags[index] === '-1') {
+      const name = allowedTags[++index];
+      if (name !== undefined) names.push(name);
+    }
+  }
+  return names;
 }
 
 /**

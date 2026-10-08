@@ -289,6 +289,25 @@ void blockTagAttributes() {
   }
 }
 
+void detailsSourceRanges() {
+  std::string source = "😀 Préface [first](https://first.example).\n\n";
+  for (size_t index = 0; index < 40; ++index) {
+    source += "<details><summary>世界 😀</summary>é [link](https://example.com).</details>\n\n";
+  }
+  const auto result = parse(source);
+  CHECK(result.status == ParseStatus::Ok && result.document->links.size() == 41,
+        "sibling details retain every link after Unicode prose");
+  size_t from = 0;
+  for (const auto &link : result.document->links) {
+    const size_t start = source.find('[', from);
+    const size_t end = source.find(')', start) + 1;
+    CHECK(link.range.start == utf16Length(std::string_view(source).substr(0, start)) &&
+              link.range.end == utf16Length(std::string_view(source).substr(0, end)),
+          "details sub-parse ranges retain absolute UTF-16 offsets across siblings");
+    from = end;
+  }
+}
+
 } // namespace
 
 int main() {
@@ -300,5 +319,6 @@ int main() {
   CHECK(literalTagContentRun(), "literalTagContent");
   hostedTagRanges();
   blockTagAttributes();
+  detailsSourceRanges();
   return ds_check_result();
 }

@@ -657,6 +657,68 @@ static int batchedCorpus(ParseOptions parse) {
   return ds_check_result();
 }
 
+bool inlineCodeBracketsAndReferences() {
+  std::string code;
+  for (size_t i = 0; i < 96; i++) {
+    code += "**`[ref]`** plain *`[]`* ~~`[other]`~~ [inline](/inline) ";
+  }
+  // Exercise an unresolved bracket before, between, and after code runs,
+  // including a bracket in a non-code run with the same enclosing style.
+  const std::vector<std::string> paragraphs = {
+      code,
+      "[ref] " + code,
+      code.substr(0, code.size() / 2) + " [ref] " + code.substr(code.size() / 2),
+      code + " [ref]",
+      code + " **[ref]**",
+      code + " *[ref]*",
+  };
+  for (size_t caseIndex = 0; caseIndex < paragraphs.size(); caseIndex++) {
+    IncrementalParser parser(ParseMode::IncrementalTail);
+    std::string source = paragraphs[caseIndex] + "\n\n";
+    const auto first = feed(parser, source, false);
+    if (!scan::sameDocument(*first.document, *parseMarkdown(source).document)) return false;
+    const auto held = first.document;
+    const Block heldBlock = held->blocks.front();
+    if (caseIndex == 0) {
+      if (heldBlock.identity == 0 || held->settledBlocks != 1 || parser.committedBytes() != source.size()) {
+        return false;
+      }
+    } else if (heldBlock.identity != 0 || held->settledBlocks != 0 || parser.committedBytes() != 0) {
+      return false;
+    }
+    bool combinedCodeStyle = false;
+    for (const Block &block : first.document->blocks) {
+      uint32_t previousEnd = 0;
+      for (const InlineRun &run : block.runs) {
+        if (run.start < previousEnd || run.end <= run.start || run.end > block.text.size()) return false;
+        previousEnd = run.end;
+        combinedCodeStyle = combinedCodeStyle ||
+            ((run.styles & InlineStyle::Code) != 0 && run.styles != InlineStyle::Code);
+      }
+    }
+    if (!combinedCodeStyle) return false;
+
+    std::map<uint64_t, std::pair<size_t, Block>> identities;
+    if (!stableIdentities(*first.document, identities)) return false;
+    // Stream the definition byte by byte so a split "]:" must still revoke
+    // provisional text, while code brackets keep their literal contents.
+    const std::string suffix = "Next paragraph with `[]`.\n\n[ref]: /resolved\n";
+    for (const char byte : suffix) {
+      source.push_back(byte);
+      const auto next = feed(parser, source, false);
+      if (!scan::sameDocument(*next.document, *parseMarkdown(source).document) ||
+          !stableIdentities(*next.document, identities) || !equalBlock(held->blocks.front(), heldBlock)) {
+        return false;
+      }
+    }
+    const auto finished = parser.parse(true);
+    if (!scan::sameDocument(*finished.document, *parseMarkdown(source).document) ||
+        finished.document->settledBlocks != finished.document->blocks.size() ||
+        !equalBlock(held->blocks.front(), heldBlock)) return false;
+  }
+  return true;
+}
+
 // A definition-free reference-bearing prefix is reusable, but stays mutable:
 // no provisional block gets an identity or becomes available as settled text.
 bool referenceSafeReuse() {
@@ -816,6 +878,7 @@ bool snapshotsCarryTheirFlags(ParseMode mode) {
 
 int main(int argc, char **argv) {
   if (argc > 1 && std::string(argv[1]) == "--references") {
+    CHECK(inlineCodeBracketsAndReferences(), "inline code brackets preserve commitment and streamed reference resolution");
     CHECK(referenceSafeReuse(), "reference-aware provisional reuse stays equivalent and bounded");
     return ds_check_result();
   }
@@ -853,6 +916,7 @@ int main(int argc, char **argv) {
   CHECK(snapshotsCarryTheirFlags(ParseMode::IncrementalTail), "a pass returns the snapshot it flagged (incremental)");
   CHECK(snapshotsCarryTheirFlags(ParseMode::FullParse), "a pass returns the snapshot it flagged (full)");
   CHECK(referenceSafeReuse(), "reference-aware provisional reuse stays equivalent and bounded");
+  CHECK(inlineCodeBracketsAndReferences(), "inline code brackets preserve commitment and streamed reference resolution");
   CHECK(fullParseOracleSettles(), "the full-parse oracle settles code with a zero highlight budget");
   return ds_check_result();
 }

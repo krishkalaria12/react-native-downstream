@@ -39,7 +39,12 @@ import {
 } from './parseFlags';
 import { openLinkSafely, resolveLinkUrl, resolvesLinks } from './linkSafety';
 import { resolveIcons } from './icons';
-import { TagSlots, resolveTagRenderers, useTagSlots } from './tagRenderers';
+import {
+  TagSlots,
+  resolveTagRenderers,
+  useStableTagRenderers,
+  useTagSlots,
+} from './tagRenderers';
 import { resolveLinkVariants } from './linkVariants';
 import { resolveTagStyles } from './tagStyles';
 
@@ -871,7 +876,9 @@ function useTagRenderers(
     parseFlags: number;
   }
 ): ReactNode {
-  const resolved = useMemo(() => resolveTagRenderers(plugins), [plugins]);
+  const resolved = useStableTagRenderers(
+    useMemo(() => resolveTagRenderers(plugins), [plugins])
+  );
   const slots = useTagSlots({ ...document, allowedTags, resolved });
   const scope = `${document.sessionId ?? ''}\u0000${document.generation}`;
   if (slots.length === 0) {

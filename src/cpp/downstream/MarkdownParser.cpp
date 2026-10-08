@@ -1304,8 +1304,7 @@ private:
       prefix.push_back(std::move(container));
     }
     // UTF-16 base for range rebasing: ranges are in text units, not bytes.
-    const uint32_t utf16Base =
-        static_cast<uint32_t>(utf8ToUtf16(source_.substr(0, bodyStart)).size());
+    const uint32_t utf16Base = offsets_.toUtf16(bodyStart);
     // Source ranges are body-relative in the sub-parse and source-absolute
     // here, so each block's range moves by the body's own start. Blocks and
     // ranges travel together by index, which is how the incremental parser
@@ -1317,9 +1316,7 @@ private:
       // frame just pushed among them — and only the sub-parse's own frames
       // shift past them. Shifting the prepended frames too would move a frame
       // the summary leaf already named.
-      for (auto frame = prefix.rbegin(); frame != prefix.rend(); ++frame) {
-        block.containers.insert(block.containers.begin(), *frame);
-      }
+      block.containers.insert(block.containers.begin(), prefix.begin(), prefix.end());
       for (size_t depth = prefix.size(); depth < block.containers.size(); depth++) {
         block.containers[depth].id += containerBase;
       }
