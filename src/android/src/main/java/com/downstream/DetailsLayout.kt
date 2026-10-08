@@ -41,7 +41,7 @@ internal fun resolveDetails(choices: ReaderChoices, containerId: Int, writtenOpe
  */
 internal fun insideHiddenDetails(containers: List<ContainerDecoration>, choices: ReaderChoices): Boolean =
   containers.any { decoration ->
-    decoration.kind == CONTAINER_DETAILS &&
+    decoration.kind == CONTAINER_DETAILS && !decoration.summary &&
       !resolveDetails(choices, decoration.id, decoration.open).open
   }
 

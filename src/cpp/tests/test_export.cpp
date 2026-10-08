@@ -465,6 +465,25 @@ void testDetailsLayout() {
   ReaderChoices codeOnly = none.with(ChoiceKind::CodeExpand, 1, true);
   CHECK(!resolveDetails(codeOnly, 1, false).open, "a code expand does not open a details block");
 
+  Container outer;
+  outer.kind = ContainerKind::Details;
+  outer.id = 10;
+  outer.showsMarker = true;
+  CHECK(isDetailsSummary({outer}), "the marked leaf is the details summary");
+  CHECK(!insideHiddenDetails({outer}, none), "a closed details keeps its own summary visible");
+  outer.showsMarker = false;
+  CHECK(!isDetailsSummary({outer}), "an unmarked details body is not a summary");
+  CHECK(insideHiddenDetails({outer}, none), "a closed details hides its body");
+  Container inner = outer;
+  inner.id = 11;
+  inner.open = true;
+  inner.showsMarker = true;
+  CHECK(isDetailsSummary({outer, inner}), "a nested marked leaf remains a summary");
+  CHECK(insideHiddenDetails({outer, inner}, none), "a closed ancestor hides an open nested summary");
+  CHECK(!insideHiddenDetails({outer, inner}, none.with(ChoiceKind::DetailsOpen, 10, true)),
+        "opening the ancestor reveals the nested summary");
+  CHECK(!isDetailsSummary({}), "ordinary prose is not a summary");
+
   // A closed body is zero tall, whatever the body measured to.
   CHECK(detailsBodyHeight(true, 120) == 120, "an open body is its own height");
   CHECK(detailsBodyHeight(false, 120) == 0, "a closed body takes no space at all");
@@ -637,6 +656,22 @@ void testCustomSegments() {
   const ParseOptions options(ParseFlags::Default | ParseFlags::InlineHtml, policy);
   // One paragraph in one container: one custom segment.
   checkPlanWith("a custom container groups its blocks", "<user>\n\nHello.\n\n</user>\n", options, "U0-1");
+  checkPlanWith("prose before a hosted tag remains outside its segment",
+                "Before.\n\n<user>\n\nHello.\n\n</user>\n\nAfter.\n", options, "t0-1 U1-2 t2-3");
+  const ParseOptions html(ParseFlags::Default | ParseFlags::InlineHtml);
+  checkPlanWith("details summaries and bodies do not clip surrounding prose",
+                "Before.\n\n<details>\n<summary>A</summary>\n\none\n\n</details>\n\nBetween.\n\n"
+                "<details>\n<summary>B</summary>\n\ntwo\n\n</details>\n\nAfter.\n",
+                html, "t0-1 t1-2 t2-3 t3-4 t4-5 t5-6 t6-7");
+  checkPlanWith("details body paragraphs with the same visibility can group",
+                "<details open>\n<summary>A</summary>\n\none\n\ntwo\n\n</details>\n\nAfter.\n",
+                html, "t0-1 t1-3 t3-4");
+  checkPlanWith("nested summaries have their own segment",
+                "<details>\n<summary>Outer</summary>\n\none\n\n<details open>\n<summary>Inner</summary>\n\ntwo\n\n"
+                "</details>\n\nthree\n\n</details>\n", html, "t0-1 t1-2 t2-3 t3-4 t4-5");
+  checkPlanWith("details inside a custom container retain separate visibility",
+                "<user>\n\nBefore.\n\n<details>\n<summary>A</summary>\n\none\n\n</details>\n\nAfter.\n\n</user>\n",
+                options, "U0-1 U1-2 U2-3 U3-4");
   // Without the policy the tag is not a container, so the opener, the body and
   // the closer stay one text segment of ordinary blocks.
   checkPlan("with no policy there is no custom segment", "<user>\n\nHello.\n\n</user>\n", "t0-3");

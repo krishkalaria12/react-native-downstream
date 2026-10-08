@@ -146,6 +146,7 @@ public:
       return;
     }
     parse_ = parse;
+    parsePending_ = true;
     if (!finished_) {
       markDirty();
     }
@@ -157,10 +158,8 @@ public:
     if (stopped_) {
       return;
     }
-    if (!parse_) {
-      parse_ = ParseOptions();
-    }
-    parse_->tags = std::move(tags);
+    parse_.tags = std::move(tags);
+    parsePending_ = true;
     if (!finished_) {
       markDirty();
     }
@@ -217,7 +216,10 @@ private:
       replacement.swap(replacement_);
       pending.swap(pending_);
       preview.swap(preview_);
-      parse.swap(parse_);
+      if (parsePending_) {
+        parse = parse_;
+        parsePending_ = false;
+      }
       generation = generation_;
       sequence = sequence_;
       finished = finished_;
@@ -309,7 +311,10 @@ private:
   DocumentHandle shown_;
   std::optional<LayoutHint> layout_;
   std::optional<remend::PreviewOptions> preview_;
-  std::optional<ParseOptions> parse_;
+  // Retain the configured options after the worker consumes an update, so
+  // changing tags alone cannot reset the flags to their defaults.
+  ParseOptions parse_;
+  bool parsePending_{false};
   bool dirty_{false};
   bool scheduled_{false};
   bool finished_{false};

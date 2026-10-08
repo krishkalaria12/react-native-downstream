@@ -593,12 +593,29 @@ static void checkCellBreakHeight() {
   require(brokenHeight > plainHeight,
           ([NSString stringWithFormat:@"a cell break did not make its row taller: broken %.1f plain %.1f",
                                     brokenHeight, plainHeight]));
+  DSTableSegmentView *tableView = [DSTableSegmentView new];
+  [tableView setSegment:brokenTable];
+  tableView.frame = CGRectMake(0, 0, 120, brokenTable.tableSize.height);
+  [tableView layoutIfNeeded];
+  UIScrollView *viewport = [tableView valueForKey:@"scrollView"];
+  UIView *grid = [tableView valueForKey:@"grid"];
+  UIView *pinnedHeader = [tableView valueForKey:@"header"];
+  const CGFloat headerHeight = brokenTable.rowHeights.firstObject.doubleValue;
+  require(grid.frame.origin.y == -headerHeight, @"scrolling table repeated its pinned header");
+  require(viewport.contentSize.height == brokenTable.tableSize.height - headerHeight,
+          @"scrolling table retained the pinned row in its content height");
+  viewport.contentOffset = CGPointMake(20, 0);
+  [tableView layoutIfNeeded];
+  require(pinnedHeader.frame.origin.x == viewport.frame.origin.x && pinnedHeader.bounds.origin.x == 20,
+          @"pinned table columns did not track horizontal scrolling");
   printf("ios_table_cell_break row_broken=%.1f row_plain=%.1f\n", brokenHeight, plainHeight);
 }
 
 #include "HighlightVariants.mm"
 
 #include "TextTailChecks.mm"
+
+#include "DetailsChecks.mm"
 
 int main() {
   @autoreleasepool {
@@ -630,6 +647,7 @@ int main() {
 #ifndef BASELINE
     require([segment baselineCharacterOffsetAtOrAfter:3] == 4, @"blank-line baseline lookup skipped value line");
 #endif
+    checkDetailsVisibility();
     checkGrowingTextTail();
     checkEmojiGlyphMapping();
     checkBlankSuffixDraw();

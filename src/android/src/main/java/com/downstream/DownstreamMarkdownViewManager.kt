@@ -440,6 +440,7 @@ class DownstreamMarkdownViewManager :
     // a fence drawn by a React component is as tall as that component, and
     // measuring without it would measure the card the child replaces.
     val hosts = localData?.toHostLayout() ?: HostLayout()
+    val tables = localData?.toTableLayout() ?: TableLayout()
     if (DownstreamNative.preparationContext?.get() !== context) {
       DownstreamNative.preparationContext = WeakReference(context)
     }
@@ -459,7 +460,7 @@ class DownstreamMarkdownViewManager :
     }
     return YogaMeasureOutput.make(
       PixelUtil.toDIPFromPixel(layoutWidth.toFloat()),
-      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth, chrome, code, images, hosts).toFloat()),
+      PixelUtil.toDIPFromPixel(rendered.height(layoutWidth, chrome, code, images, hosts, tables, code.choices).toFloat()),
     )
   }
 
@@ -610,6 +611,7 @@ class DownstreamMarkdownViewManager :
         false,
         view.currentGeneration(),
         ordinal = ordinal.toDouble(),
+        markdown = view.tableMarkdown(ordinal),
       ),
     )
   }
@@ -714,6 +716,7 @@ class DownstreamMarkdownViewManager :
         wrapped,
         expanded,
         view.currentGeneration(),
+        ordinal = ordinal,
       ),
     )
   }
@@ -789,6 +792,7 @@ private class ControlActionEvent(
    * which the native side already had to build.
    */
   private val ordinal: Double = -1.0,
+  private val markdown: String? = null,
 ) : Event<ControlActionEvent>(surfaceId, viewTag) {
   override fun getEventName() = NAME
 
@@ -803,6 +807,7 @@ private class ControlActionEvent(
     putBoolean("expanded", expanded)
     putInt("generation", generation)
     putDouble("ordinal", ordinal)
+    markdown?.let { putString("markdown", it) }
   }
 
   companion object {

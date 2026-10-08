@@ -7,6 +7,7 @@
 
 #include "MarkdownParser.h"
 #include "Scan.h"
+#include "TagSlots.h"
 #include "Unicode.h"
 #include "check.h"
 
@@ -240,6 +241,54 @@ bool literalTagContentRun() {
   return true;
 }
 
+void hostedTagRanges() {
+  TagPolicy policy;
+  policy.tags = {AllowedTag{"user", {}}};
+  const ParseOptions options{ParseFlags::Default | ParseFlags::InlineHtml, policy};
+  const auto slots = [&](const std::string &source) {
+    const auto result = parse(source, options);
+    CHECK(result.status == ParseStatus::Ok, "the hosted tag fixture parses");
+    return tagSlots(*result.document, source, {"user"}, false,
+                    static_cast<uint32_t>(result.document->blocks.size()));
+  };
+  const auto simple = slots("Before.\n\n<user>\n\none\n\ntwo\n\n</user>\n\nAfter.\n");
+  CHECK(simple.size() == 1 && simple[0].blockIndex == 1 && simple[0].blockCount == 2,
+        "one complete custom segment remains hostable after prose");
+  CHECK(slots("<user>\n\none\n\n```js\nx\n```\n\ntwo\n\n</user>\n").empty(),
+        "a tag spanning text and code falls back to native rendering");
+  CHECK(slots("<user>\n\n| x |\n| - |\n| y |\n\n</user>\n").empty(),
+        "a table-only tag has no custom segment to host");
+  CHECK(slots("<user>\n\nBefore.\n\n<details>\n<summary>A</summary>\n\none\n\n</details>\n\nAfter.\n\n</user>\n").empty(),
+        "a tag spanning details visibility boundaries falls back to native rendering");
+  const auto nested = slots("<user>\n\nOuter before.\n\n<user>\n\nInner.\n\n</user>\n\nOuter after.\n\n</user>\n");
+  CHECK(nested.size() == 1 && nested[0].markdown == "Inner.",
+        "a nested tag can be hosted without partially hosting its outer tag");
+}
+
+void blockTagAttributes() {
+  TagPolicy policy;
+  policy.tags = {AllowedTag{"card", {"id"}}};
+  const ParseOptions options{ParseFlags::Default | ParseFlags::InlineHtml, policy};
+  const std::string source = "Before.\n\n<card id=\"safe\" onclick=\"bad\">\n\nBody.\n\n</card>\n";
+  const auto result = parse(source, options);
+  CHECK(result.status == ParseStatus::Ok, "the attributed block tag parses");
+  const std::vector<std::pair<std::string, std::string>> expected{{"id", "safe"}};
+  CHECK(result.document->tags.size() == 1 && result.document->tags[0].attributes == expected,
+        "a block tag preserves only attributes allowed by its policy");
+  const auto slots = tagSlots(*result.document, source, {"card"}, false,
+                             static_cast<uint32_t>(result.document->blocks.size()));
+  CHECK(slots.size() == 1 && slots[0].attributes == expected,
+        "the hosted block slot receives the permitted attribute and excludes onclick");
+  for (const std::string &opener : {
+           "<card data_id=\"x\" id=\"safe\">",
+           "<card $id=\"bad\" id=\"safe\">",
+           "<card _id=\"bad id=evil\" id=\"safe\">",
+           "<card data_id id=\"safe\">"}) {
+    CHECK(classifyTag(opener, policy).attributes == expected,
+          "unsupported attribute names are skipped whole without losing the next permitted attribute");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -249,5 +298,7 @@ int main() {
   CHECK(anchorsLink(), "anchors");
   CHECK(allowedTagsRun(), "allowedTags");
   CHECK(literalTagContentRun(), "literalTagContent");
+  hostedTagRanges();
+  blockTagAttributes();
   return ds_check_result();
 }

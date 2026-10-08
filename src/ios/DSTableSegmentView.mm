@@ -665,7 +665,7 @@ static const CGFloat kTablePinThreshold = 8;
   // Expand appears only on a table past the cap and only while there is a cap to
   // lift, which is the same rule the code card's expand button follows.
   UIButton *expand = (UIButton *)all[2];
-  expand.hidden = (_controls & TableExpand) == 0 || !self.capped;
+  expand.hidden = (_controls & TableExpand) == 0 || !(self.capped || self.tableExpanded);
   ((UIButton *)all[3]).hidden = (_controls & TableFullscreen) == 0;
   for (UIButton *button in all) {
     button.enabled = _controlsEnabled && !button.hidden;
@@ -804,8 +804,9 @@ static const CGFloat kTablePinThreshold = 8;
   _scrollView.frame = CGRectMake(_segment.rightToLeft ? 0 : leading, toolbarHeight + headerHeight,
                                  std::max<CGFloat>(0, self.bounds.size.width - leading),
                                  std::max<CGFloat>(0, self.bounds.size.height - toolbarHeight - headerHeight));
-  _grid.frame = CGRectMake(0, 0, _segment.tableSize.width, _segment.tableSize.height);
-  _scrollView.contentSize = _segment.tableSize;
+  _grid.frame = CGRectMake(0, -headerHeight, _segment.tableSize.width, _segment.tableSize.height);
+  _scrollView.contentSize = CGSizeMake(_segment.tableSize.width,
+      std::max<CGFloat>(0, _segment.tableSize.height - headerHeight));
   // The grid scrolls on both axes only while it is capped. An uncapped table has
   // nothing to scroll vertically, and a scroll view that could would take a
   // reader's drag away from the chat for no reason.
@@ -868,9 +869,9 @@ static const CGFloat kTablePinThreshold = 8;
   // the same columns. Only the frame moves here: the strip draws the same content
   // whatever the offset is, so a scroll costs one assignment rather than a
   // redraw.
-  _header.frame = CGRectMake(_scrollView.frame.origin.x + _scrollView.contentOffset.x, _scrollView.frame.origin.y - headerHeight,
+  _header.frame = CGRectMake(_scrollView.frame.origin.x, _scrollView.frame.origin.y - headerHeight,
                              _scrollView.bounds.size.width, headerHeight);
-  _header.bounds = CGRectMake(0, 0, _header.frame.size.width, headerHeight);
+  _header.bounds = CGRectMake(_scrollView.contentOffset.x, 0, _header.frame.size.width, headerHeight);
 }
 
 // Quote bars and the list marker live in the non-scrolling margin.
@@ -890,7 +891,7 @@ static const CGFloat kTablePinThreshold = 8;
           : container.leading + 2;
       UIRectFill(CGRectMake(x, toolbarHeight, container.barWidth, self.bounds.size.height - toolbarHeight));
     }
-    if (container.marker != nil) {
+    if (container.marker.length > 0) {
       UIFont *font = [container.marker attribute:NSFontAttributeName atIndex:0 effectiveRange:NULL];
       const CGSize markerSize = container.marker.size;
       const CGFloat baseline = toolbarHeight + _segment.cellPadding.top + font.ascender;

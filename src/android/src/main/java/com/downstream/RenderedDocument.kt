@@ -142,7 +142,7 @@ internal class RenderedDocument(
       is TableSegment -> {
         val toolbar = if (chrome and CHROME_TABLE_TOOLBAR != 0) style.chromeRowHeight else 0
         ceil(
-          tableHeight(resolveTable(tables, segment.ordinal), segment.cells.size, toolbar.toFloat())
+          toolbar + segment.visibleGridHeight(resolveTable(tables, segment.ordinal))
             .toDouble(),
         ).toInt()
       }
@@ -182,9 +182,10 @@ internal class RenderedDocument(
     val frames = IntArray(segments.size * 2)
     var y = 0
     segments.forEachIndexed { index, segment ->
-      y += segment.gapBefore
+      val hidden = insideHiddenDetails(segment.detailsContainers, choices)
+      if (!hidden) y += segment.gapBefore
       frames[index * 2] = y
-      frames[index * 2 + 1] = heightOf(segment, width, chrome, code, images, hosts, tables, choices)
+      frames[index * 2 + 1] = if (hidden) 0 else heightOf(segment, width, chrome, code, images, hosts, tables, choices)
       y += frames[index * 2 + 1]
     }
     cachedWidth = width
@@ -278,7 +279,7 @@ internal class RenderedDocument(
     if (hosts.isEmpty()) {
       return IntArray(0)
     }
-    val frames = frames(width, chrome, code, images, hosts)
+    val frames = frames(width, chrome, code, images, hosts, tables, choices)
     val out = IntArray(hosts.entries.size * 5)
     var count = 0
     segments.forEachIndexed { index, segment ->
@@ -507,7 +508,14 @@ internal class RenderedDocument(
                 style.px(it.previousBottomMargin),
                 if (isLast) caret else PlacedCaret.NONE,
                 linkVariants, linkUrls,
-              )
+              ).also { segment ->
+                segment.detailsContainers = (0 until it.containerCount(0)).mapNotNull { depth ->
+                  if (it.containerKind(0, depth) != NativeDocument.CONTAINER_DETAILS) null
+                  else ContainerDecoration(0f, 0f, null, false, null, 0f, 0f,
+                    kind = CONTAINER_DETAILS, id = it.containerId(0, depth),
+                    open = it.containerOpen(0, depth), summary = it.showsMarker(0, depth))
+                }
+              }
             }
             ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
           ?: return null

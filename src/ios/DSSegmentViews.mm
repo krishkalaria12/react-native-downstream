@@ -858,7 +858,13 @@ static Class segmentViewClassFor(id segment) {
                                                               hosts:_hostLayout
                                                              tables:_tableLayout];
   for (NSUInteger index = 0; index < _segmentViews.count && index < frames.count; index++) {
-    _segmentViews[index].frame = frames[index].CGRectValue;
+    UIView *view = _segmentViews[index];
+    const CGRect frame = frames[index].CGRectValue;
+    id segment = _rendered.segments[index];
+    const BOOL hostedTag = [segment isKindOfClass:DSTextSegment.class] &&
+        _hostLayout.hostsTag(((DSTextSegment *)segment).customContainer);
+    view.hidden = frame.size.height == 0 || hostedTag;
+    view.frame = frame;
   }
 }
 

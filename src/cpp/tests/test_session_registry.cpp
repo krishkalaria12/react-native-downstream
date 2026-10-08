@@ -154,6 +154,28 @@ int main() {
   };
   const auto ignore = [](const SessionEvent &) {};
 
+  // Wait for the worker to consume the original options before changing only
+  // tags. A consumed pending update must not erase the configured flags.
+  for (const ParseMode mode : {ParseMode::FullParse, ParseMode::IncrementalTail}) {
+    const std::string policyId = mode == ParseMode::FullParse ? "policy-full" : "policy-incremental";
+    CHECK(SessionRegistry::create(policyId, mode, ignore), "create a session for independent tag updates");
+    CHECK(SessionRegistry::setParse(policyId, ParseOptions((ParseFlags::Default | ParseFlags::InlineHtml) &
+                                                         ~ParseFlags::Cjk)),
+          "configure HTML and disable CJK before the worker runs");
+    CHECK(SessionRegistry::append(policyId, "test <mark>ready</mark> これは~~削除~~です\n", 0, 1),
+          "append source that distinguishes configured flags from defaults");
+    CHECK(shows(policyId, 0, 1, u"test ready これは~~削除~~です"), "wait until the worker has consumed the flags");
+    CHECK(SessionRegistry::setParseTags(policyId, tagPolicyFromStrings({"-1", "user", "id"})),
+          "change only the tags after the flags have been consumed");
+    CHECK(SessionRegistry::append(policyId, "\n<user id=\"7\">\n\nhello\n\n</user>\n", 0, 2),
+          "append an allowed custom tag after changing its policy");
+    const auto policyDocument = shows(policyId, 0, 2, u"hello");
+    CHECK(policyDocument && policyDocument->blocks.front().text == u"test ready これは~~削除~~です",
+          "tag-only updates preserve HTML support and the disabled CJK flag");
+    CHECK(policyDocument && !policyDocument->tags.empty(), "tag-only updates apply the new tag policy");
+    SessionRegistry::dispose(policyId);
+  }
+
   const std::string tagsId = "tag-source-session";
   CHECK(SessionRegistry::create(tagsId, ParseMode::FullParse, ignore), "create a custom-tag session");
   CHECK(SessionRegistry::setParse(tagsId, ParseOptions(ParseFlags::Default | ParseFlags::InlineHtml,

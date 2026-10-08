@@ -100,13 +100,24 @@ NSString *const kPlaceholder = @"\u200b";
   [self toggleSpoilersAtPoint:at];
 }
 
-/// The tap that opens a body only ever begins on one, so the text view's own
-/// gesture recognizers are left alone everywhere else.
+// Summary presses and spoiler presses share this recognizer. Rejecting a
+// summary here prevents handleDetailsTap: from ever receiving its press.
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
-  if (![gestureRecognizer.view isKindOfClass:UITextView.class]) {
+  const CGPoint point = [gestureRecognizer locationInView:self];
+  if ([self detailsContainerAtPoint:point] != 0) {
     return YES;
   }
-  return [self detailsContainerAtPoint:[gestureRecognizer locationInView:self]] == 0;
+  const NSUInteger at = [self.layoutManager glyphIndexForPoint:point inTextContainer:self.textContainer];
+  return at < _stack.textStorage.length &&
+      [_stack.textStorage attribute:DSSpoilerAttributeName atIndex:at effectiveRange:nil] != nil;
+}
+
+// A summary's single tap owns disclosure before UIKit interprets repeated
+// taps as text selection. Long presses keep their native selection behavior.
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+    shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)other {
+  return [other isKindOfClass:UITapGestureRecognizer.class] &&
+      [self detailsContainerAtPoint:[gestureRecognizer locationInView:self]] != 0;
 }
 
 /// The layout manager is what splits the glyph runs, so the provider is its as
@@ -200,6 +211,8 @@ NSString *const kPlaceholder = @"\u200b";
     return;
   }
   _detailsToggle = toggle;
+  invalidateAccessibleLinks(_cachedAccessibilityElements);
+  _cachedAccessibilityElements = nil;
   [self applyDetailsState];
 }
 
@@ -208,6 +221,8 @@ NSString *const kPlaceholder = @"\u200b";
     return;
   }
   _detailsChoices = choices;
+  invalidateAccessibleLinks(_cachedAccessibilityElements);
+  _cachedAccessibilityElements = nil;
   [self applyDetailsState];
 }
 

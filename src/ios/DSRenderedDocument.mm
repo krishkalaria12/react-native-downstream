@@ -1057,76 +1057,6 @@ static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat
   }
 }
 
-/// The height a text segment shows, with every closed body's lines taken out.
-///
-/// The layout is the *whole* text's, laid out once per width, so the visible
-/// lines wrap exactly as they would if the body were open — which is what makes
-/// opening a body a pure height change rather than a re-measure. Only the
-/// subtraction depends on the reader's choices.
-///
-/// `downstream::visibleTextHeight` is the rule, so Android and iOS subtract the
-/// same lines from the same layout rather than each deciding what a collapsed
-/// block costs. The frames are this platform's own type, so the one call that
-/// reads them is here; `testDetailsLayout` and `testVisibleTextHeight` in
-/// `test_export.cpp` are what both sides have to agree on.
-static CGFloat visibleHeight(DSTextSegment *segment, CGFloat width,
-                             const downstream::ReaderChoices &choices) {
-  std::vector<downstream::HiddenRange> hidden;
-  for (DSBlockInfo *info in segment.blocks) {
-    // A block inside two collapsible blocks, the outer of which is closed, is not
-    // visible however open the inner one is — so any closed frame is enough.
-    bool hidden_ = false;
-    bool summary = false;
-    for (DSContainerInfo *frame in info.containers) {
-      if (frame.kind != DSContainerKindDetails) {
-        continue;
-      }
-      if (frame.summary) {
-        summary = true;
-      }
-      if (!downstream::resolveDetails(choices, frame.containerId, frame.writtenOpen).open) {
-        hidden_ = true;
-      }
-    }
-    // The summary is the visible line a reader taps to open the body, so it is
-    // never in a hidden range however its body resolves.
-    if (summary || !hidden_) {
-      continue;
-    }
-    const NSRange range = segment.blockRanges[info.index].rangeValue;
-    hidden.push_back({static_cast<uint32_t>(range.location),
-                      static_cast<uint32_t>(range.location + range.length)});
-  }
-  if (hidden.empty()) {
-    return [segment heightForWidth:width];
-  }
-  DSTextKitStack *stack = [[DSTextKitStack alloc] initWithLayoutManager:[NSLayoutManager new]];
-  stack.textContainer.size = CGSizeMake(std::isfinite(width) ? width : CGFLOAT_MAX, CGFLOAT_MAX);
-  [stack.textStorage setAttributedString:segment.attributedString];
-  NSLayoutManager *layout = stack.layoutManager;
-  [layout ensureLayoutForTextContainer:stack.textContainer];
-  std::vector<float> tops;
-  std::vector<uint32_t> starts;
-  tops.reserve(layout.numberOfGlyphs + 1);
-  starts.reserve(layout.numberOfGlyphs);
-  NSUInteger glyph = 0;
-  CGFloat lastBottom = 0;
-  while (glyph < layout.numberOfGlyphs) {
-    NSRange line;
-    // The effective range is the whole line, which is the one call that gets a
-    // line's extent and its character offset together.
-    const CGRect rect = [layout lineFragmentRectForGlyphAtIndex:glyph effectiveRange:&line];
-    tops.push_back(static_cast<float>(CGRectGetMinY(rect)));
-    starts.push_back(static_cast<uint32_t>([layout characterIndexForGlyphAtIndex:line.location]));
-    lastBottom = CGRectGetMaxY(rect);
-    glyph = NSMaxRange(line);
-  }
-  // One more top than lines, because subtracting a line needs the line after it.
-  tops.push_back(static_cast<float>(lastBottom));
-  const CGFloat total = [segment heightForWidth:width];
-  return downstream::visibleTextHeight(static_cast<float>(total), tops, starts, hidden);
-}
-
 /// Measures at `width` if this width has not been measured yet, and hands back
 /// whichever of the two values the caller needs. One layout answers both, which
 /// is what a code card asks for on every measure and every unconstrained width.
@@ -2324,6 +2254,15 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
                hosts:(const downstream::HostLayout &)hosts
               tables:(const downstream::TableLayout &)tables
              choices:(const downstream::ReaderChoices &)choices {
+  NSArray<DSContainerInfo *> *containers = [segment isKindOfClass:DSTextSegment.class]
+      ? ((DSBlockInfo *)((DSTextSegment *)segment).blocks.firstObject).containers
+      : [segment containers];
+  for (DSContainerInfo *frame in containers) {
+    if (frame.kind == DSContainerKindDetails && !frame.summary &&
+        !downstream::resolveDetails(choices, frame.containerId, frame.writtenOpen).open) {
+      return 0;
+    }
+  }
   if ([segment isKindOfClass:DSTextSegment.class]) {
     DSTextSegment *text = (DSTextSegment *)segment;
     // A hosted tag replaces its whole segment with the slot: the component
@@ -2334,7 +2273,7 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
     if (custom != UINT32_MAX && hosts.hostsTag(custom)) {
       return hosts.tagHeightFor(custom);
     }
-    return visibleHeight(text, width, choices);
+    return [text heightForWidth:width];
   }
   if ([segment isKindOfClass:DSMathSegment.class]) {
     DSMathSegment *formula = segment;
@@ -2493,12 +2432,14 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
   CGFloat unconstrainedWidth = 0;
   const BOOL constrained = std::isfinite(width);
   for (NSUInteger index = 0; index < _segments.count; index++) {
-    y += _gaps[index];
     id segment = _segments[index];
     const CGFloat height =
         [self heightOf:segment atWidth:width chrome:chrome code:code images:images hosts:hosts tables:tables
                choices:choices];
-    if (!constrained) {
+    if (height > 0) {
+      y += _gaps[index];
+    }
+    if (!constrained && height > 0) {
       unconstrainedWidth = std::max(unconstrainedWidth, [self unconstrainedWidthOf:segment
                                                                              atWidth:width
                                                                                 code:code]);

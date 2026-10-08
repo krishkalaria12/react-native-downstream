@@ -94,11 +94,11 @@ char16_t resolveSeparator(NSString *configured) {
 
 /// Whether `element` sits above `view`, treating an element with no frame of
 /// its own as the start of the message.
-bool frameIsAbove(CGRect element, UIView *view) {
+bool frameIsAbove(CGRect element, CGRect frame) {
   if (CGRectIsEmpty(element)) {
     return false;
   }
-  return CGRectGetMaxY(element) <= CGRectGetMinY(view.frame);
+  return CGRectGetMaxY(element) <= CGRectGetMinY(frame);
 }
 
 NSString *nameForFormat(NSString *format) {
@@ -115,6 +115,18 @@ NSString *nameForFormat(NSString *format) {
 }
 
 } // namespace
+
+// Hosted children sit above native text. Empty parts of their container must
+// leave native links, details summaries, and toolbar controls reachable.
+@interface DSHostContainer : UIView
+@end
+
+@implementation DSHostContainer
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+  UIView *hit = [super hitTest:point withEvent:event];
+  return hit == self ? nil : hit;
+}
+@end
 
 @interface DownstreamMarkdownView () <RCTDownstreamMarkdownViewViewProtocol, DSLinkDelegate, DSControlDelegate,
                                      DSRevealProvider, DSImageDelegate>
@@ -252,7 +264,7 @@ NSString *nameForFormat(NSString *format) {
     _documentView.controls = _controls;
     self.contentView = _documentView;
     // Above the document, never inside it: see `mountChildComponentView:`.
-    _hostContainer = [[UIView alloc] initWithFrame:self.bounds];
+    _hostContainer = [[DSHostContainer alloc] initWithFrame:self.bounds];
     _hostContainer.userInteractionEnabled = YES;
     [self addSubview:_hostContainer];
 
@@ -640,7 +652,7 @@ NSString *nameForFormat(NSString *format) {
  * makes, and it needs no new information from the engine.
  */
 - (NSArray<id> *)accessibilityElements {
-  NSArray *documentElements = _documentView.accessibilityElements ?: @[];
+  NSArray *documentElements = _documentView.accessibilityElements ?: _documentView.subviews;
   NSArray<UIView *> *hosted = _hostContainer.subviews;
   if (hosted.count == 0) {
     return documentElements;
@@ -663,7 +675,7 @@ NSString *nameForFormat(NSString *format) {
     const CGRect frame = [element isKindOfClass:UIView.class]
                              ? ((UIView *)element).frame
                              : CGRectZero;
-    while (next < ordered.count && frameIsAbove(frame, ordered[next])) {
+    while (next < ordered.count && frameIsAbove(ordered[next].frame, frame)) {
       [interleaved addObject:ordered[next]];
       next++;
     }
@@ -1070,6 +1082,20 @@ NSString *nameForFormat(NSString *format) {
                      wrapped:(BOOL)wrapped
                     expanded:(BOOL)expanded
                     markdown:(NSString *)markdown {
+  [self emitControlWithBlock:block action:action format:format language:language filename:filename
+                        url:url wrapped:wrapped expanded:expanded markdown:markdown ordinal:-1];
+}
+
+- (void)emitControlWithBlock:(NSString *)block
+                      action:(NSString *)action
+                      format:(NSString *)format
+                    language:(NSString *)language
+                    filename:(NSString *)filename
+                        url:(NSString *)url
+                     wrapped:(BOOL)wrapped
+                    expanded:(BOOL)expanded
+                    markdown:(NSString *)markdown
+                     ordinal:(int32_t)ordinal {
   const auto *emitter = [self emitter];
   if (emitter == nullptr) {
     return;
@@ -1098,7 +1124,7 @@ NSString *nameForFormat(NSString *format) {
       // Every press reports its block's ordinal among its own kind, because an
       // app that keys a press needs to know which block was pressed and three
       // kinds count separately. -1 where there is no ordinal to report.
-      .ordinal = -1,
+      .ordinal = ordinal,
       .generation = generation,
   });
 }
@@ -1343,7 +1369,8 @@ NSString *nameForFormat(NSString *format) {
                         url:@""
                      wrapped:wrapped
                     expanded:NO
-                        markdown:@""];
+                        markdown:@""
+                    ordinal:static_cast<int32_t>(ordinal)];
 }
 
 - (void)didToggleExpandAtOrdinal:(uint32_t)ordinal language:(NSString *)language expanded:(BOOL)expanded {
@@ -1364,7 +1391,8 @@ NSString *nameForFormat(NSString *format) {
                         url:@""
                      wrapped:NO
                     expanded:expanded
-                        markdown:@""];
+                        markdown:@""
+                    ordinal:static_cast<int32_t>(ordinal)];
 }
 
 - (void)didToggleTableExpandAtOrdinal:(uint32_t)ordinal expanded:(BOOL)expanded {
@@ -1383,7 +1411,8 @@ NSString *nameForFormat(NSString *format) {
                         url:@""
                      wrapped:NO
                     expanded:expanded
-                    markdown:@""];
+                    markdown:@""
+                    ordinal:static_cast<int32_t>(ordinal)];
 }
 
 - (void)didToggleDetailsAtContainer:(uint32_t)containerId open:(BOOL)open {
@@ -1402,7 +1431,8 @@ NSString *nameForFormat(NSString *format) {
                         url:@""
                      wrapped:NO
                     expanded:open
-                   markdown:@""];
+                   markdown:@""
+                    ordinal:static_cast<int32_t>(containerId)];
 }
 
 - (NSString *)markdownForBlocksFrom:(uint32_t)from to:(uint32_t)to {

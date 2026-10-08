@@ -390,7 +390,7 @@ DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
 
   DocumentMeasurement measurement;
   measurement.size = yogaMeassureToSize(packed);
-  if (hosts.entries.empty()) {
+  if (hosts.entries.empty() && hosts.tags.empty()) {
     // A view with no renderers pays nothing: no second crossing into Java, and
     // the same measurement it has always made.
     return measurement;

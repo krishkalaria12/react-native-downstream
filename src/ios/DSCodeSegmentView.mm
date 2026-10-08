@@ -1107,7 +1107,7 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
                             : container.leading + 2;
       UIRectFill(CGRectMake(x, headerHeight, container.barWidth, self.bounds.size.height - headerHeight));
     }
-    if (container.marker != nil) {
+    if (container.marker.length > 0) {
       UIFont *font = [container.marker attribute:NSFontAttributeName atIndex:0 effectiveRange:NULL];
       // A hosted block's marker sits at the top of its own height, beside the
       // component, rather than beside the first line of code that is not there.

@@ -65,6 +65,10 @@ fun main() {
     insideHiddenDetails(listOf(details(1, true), details(2, false)), none),
     "the outer closed frame hides the inner block however open the inner one is",
   )
+  check(!insideHiddenDetails(listOf(details(1, false, summary = true)), none),
+    "the summary stays visible when its own body is closed")
+  check(insideHiddenDetails(listOf(details(1, false), details(2, false, summary = true)), none),
+    "a nested summary is hidden by its closed outer body")
   check(isDetailsSummary(listOf(details(1, false, summary = true))), "the marked frame is the summary")
   check(!isDetailsSummary(listOf(details(1, false))), "a frame that is not the first leaf is not the summary")
   check(

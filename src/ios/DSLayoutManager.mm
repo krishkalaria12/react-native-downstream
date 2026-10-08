@@ -207,7 +207,7 @@ using namespace downstream;
   /// of which is closed, is not visible however open the inner one is.
   - (BOOL)blockIsHidden:(DSBlockInfo *)info {
     for (DSContainerInfo *frame in info.containers) {
-      if (frame.kind == DSContainerKindDetails && ![self isOpen:frame]) {
+      if (frame.kind == DSContainerKindDetails && !frame.summary && ![self isOpen:frame]) {
         return YES;
       }
     }
@@ -330,7 +330,7 @@ using namespace downstream;
                                 alpha:blockAlpha];
         }
       }
-      if (containerInfo.marker != nil) {
+      if (containerInfo.marker.length > 0) {
         UIFont *markerFont = [containerInfo.marker attribute:NSFontAttributeName atIndex:0 effectiveRange:NULL];
         const CGSize markerSize = containerInfo.marker.size;
         const CGFloat x = info.rightToLeft

@@ -90,7 +90,7 @@ internal class NativeDocument(
    * decided, and `Character.getDirectionality` reaching its own answer here is
    * the second rule this replaced.
    */
-  fun blockDirection(block: Int) = blocks[block * BLOCK_STRIDE + 16]
+  fun blockDirection(block: Int) = blocks[block * BLOCK_STRIDE + 17]
 
   /** True when the engine laid this block out right to left. */
   fun blockIsRtl(block: Int) = blockDirection(block) == DIRECTION_RTL
@@ -247,7 +247,7 @@ internal class NativeDocument(
     val found = ArrayList<IntArray>()
     var at = 0
     for (index in 0..block) {
-      val count = blocks[index * BLOCK_STRIDE + 17]
+      val count = blocks[index * BLOCK_STRIDE + 16]
       if (index == block) {
         for (pair in 0 until count) {
           found.add(intArrayOf(markValues[at + pair * 2], markValues[at + pair * 2 + 1]))
@@ -604,6 +604,9 @@ internal object DownstreamNative {
           layout.numberAt("chrome", 0.0).toInt(),
           layout.toCodeLayout(),
           layout.toImageLayout(),
+          layout.toHostLayout(),
+          layout.toTableLayout(),
+          layout.toReaderChoices(),
         )
       }
     } catch (error: RuntimeException) {
@@ -647,12 +650,15 @@ internal object DownstreamNative {
       if (hosts.tags.isEmpty()) {
         return FloatArray(0)
       }
+      val code = layout.toCodeLayout()
       val frames = rendered.tagHostFrames(
         PixelUtil.toPixelFromDIP(width).toInt(),
         layout.numberAt("chrome", 0.0).toInt(),
-        layout.toCodeLayout(),
+        code,
         layout.toImageLayout(),
         hosts,
+        layout.toTableLayout(),
+        code.choices,
       )
       // Every fifth value is a container id, not a length: converting it with
       // the edges would hand a tag another container's rectangle.
@@ -677,12 +683,15 @@ internal object DownstreamNative {
       if (hosts.isEmpty()) {
         return FloatArray(0)
       }
+      val code = layout.toCodeLayout()
       val frames = rendered.hostFrames(
         PixelUtil.toPixelFromDIP(width).toInt(),
         layout.numberAt("chrome", 0.0).toInt(),
-        layout.toCodeLayout(),
+        code,
         layout.toImageLayout(),
         hosts,
+        layout.toTableLayout(),
+        code.choices,
       )
       // Every fifth value is an ordinal, not a length: converting it with the
       // edges would hand a chart another fence's rectangle.

@@ -832,6 +832,7 @@ private:
     Kind kind{Kind::Other};
     bool open{false};
     int32_t allowedTag{-1};
+    std::vector<std::pair<std::string, std::string>> attributes;
     /// The tag's own name, lowercased. A closer carries it so it can be matched
     /// against the frame it is meant to end rather than against whatever frame
     /// happens to be innermost.
@@ -907,6 +908,7 @@ private:
       if (allowed >= 0) {
         result.kind = ContainerTagLine::Kind::Allowed;
         result.allowedTag = allowed;
+        result.attributes = scan::classifyTag(utf16ToUtf8(trimmed), options_.tags).attributes;
         result.name = std::u16string(bare);
         return result;
       }
@@ -1066,7 +1068,7 @@ private:
           const size_t bodyStart = openerEnd == std::string_view::npos ? source_.size()
                                                                        : openerEnd + 1;
           searchFrom = bodyStart;
-          pushCustom(line.allowedTag, bodyStart);
+          pushCustom(line.allowedTag, line.attributes, bodyStart);
           break;
         }
         case ContainerTagLine::Kind::Close: {
@@ -1428,8 +1430,10 @@ private:
   /// the reader's press on the tag maps back to where it was written. The record
   /// is made here, at the opener, because that is the one point in the parse at
   /// which the whole tag is known.
-  void pushCustom(int32_t policyIndex, size_t bodyStart) {
-    const int32_t tag = recordAllowedTagAt(policyIndex, leafStart_ == kUnknownOffset ? source_.size() : leafStart_);
+  void pushCustom(int32_t policyIndex, const std::vector<std::pair<std::string, std::string>> &attributes,
+                  size_t bodyStart) {
+    const int32_t tag = recordAllowedTagAt(policyIndex, attributes,
+                                         leafStart_ == kUnknownOffset ? source_.size() : leafStart_);
     pushContainer(ContainerKind::Custom, u"", TaskState::None);
     containers_.back().container.tag = tag;
     // The body's source starts where the opener line ends: the renderer draws
@@ -1441,13 +1445,15 @@ private:
   }
 
   /// A document record for one of the app's own tags, by its policy index.
-  int32_t recordAllowedTagAt(int32_t policyIndex, size_t at) {
+  int32_t recordAllowedTagAt(int32_t policyIndex,
+                            const std::vector<std::pair<std::string, std::string>> &attributes, size_t at) {
     if (policyIndex < 0 || static_cast<size_t>(policyIndex) >= options_.tags.tags.size()) {
       return -1;
     }
     const AllowedTag &allowed = options_.tags.tags[policyIndex];
     Tag record;
     record.name = allowed.name;
+    record.attributes = attributes;
     record.block = true;
     record.range.start = offsets_.toUtf16(at);
     document_->tags.push_back(std::move(record));

@@ -508,6 +508,9 @@ std::vector<DownstreamMarkdownShadowNode::SlotChild> DownstreamMarkdownShadowNod
     if (slot == nullptr) {
       continue;
     }
+    if (slot->getConcreteProps().containerId >= 0) {
+      continue;
+    }
     // React hides a suspended subtree with `display: none`, and a hidden child
     // is not a renderer any more: its fence draws as the code card, which is
     // what the fallback is for. Read from the props, where React writes it, and
@@ -527,7 +530,8 @@ downstream::HostLayout DownstreamMarkdownShadowNode::measureSlots(const LayoutCo
   const Float maximumWidth = layoutConstraints.maximumSize.width;
   downstream::HostLayout hosts;
   const std::vector<SlotChild> slots = slotChildren();
-  if (slots.empty()) {
+  const std::vector<TagSlotChild> tagSlots = tagSlotChildren();
+  if (slots.empty() && tagSlots.empty()) {
     // No renderer is mounted: the measurement is the one a view with no
     // renderers has always made, and the cache key is the same empty host
     // layout it was before this existed.
@@ -579,7 +583,6 @@ downstream::HostLayout DownstreamMarkdownShadowNode::measureSlots(const LayoutCo
   // measured at the container's column, exactly as a fence child is measured
   // at its block's. The entries land in the tag key space, so a fence can
   // never claim a tag's height.
-  const std::vector<TagSlotChild> tagSlots = tagSlotChildren();
   hosts.tags.reserve(tagSlots.size());
   // Index custom containers once for every mounted child, the way fences index
   // code blocks above: one walk, however many tags a message holds.
@@ -664,7 +667,7 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
 
 void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
   const std::vector<SlotChild> slots = slotChildren();
-  if (slots.empty()) {
+  if (slots.empty() && tagSlotChildren().empty()) {
     return;
   }
   const downstream::DocumentHandle &document = getDocument();
@@ -682,7 +685,7 @@ void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
       layoutManager_->measure(document, layoutContext.fontSizeMultiplier, frame, getSurfaceId(), chromeFor(state),
                               codeProps(state), caretFor(document), imageLayout(document), measuredHosts_, theme_,
                               tableProps(state), state.choices);
-  if (measurement.slots.empty()) {
+  if (measurement.slots.empty() && measurement.tagSlots.empty()) {
     return;
   }
   if (children_ == nullptr) {

@@ -1,6 +1,8 @@
 #include "TagSlots.h"
+#include "SegmentPlan.h"
 
 #include <cctype>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace downstream {
@@ -76,6 +78,33 @@ std::vector<TagSlot> tagSlots(const Document &document, const std::string &sourc
     wanted.insert(lowerAscii(name));
   }
 
+  // A hosted view replaces one complete custom segment. Count every frame,
+  // including outer containers around nested tags, so none is hosted partially.
+  struct ContainerRange {
+    size_t from;
+    size_t to;
+    size_t count;
+  };
+  std::unordered_map<int32_t, ContainerRange> ranges;
+  for (size_t index = 0; index < document.blocks.size(); ++index) {
+    for (const Container &frame : document.blocks[index].containers) {
+      if (frame.kind != ContainerKind::Custom) continue;
+      const int32_t id = static_cast<int32_t>(frame.id);
+      auto inserted = ranges.emplace(id, ContainerRange{index, index + 1, 0});
+      inserted.first->second.to = index + 1;
+      ++inserted.first->second.count;
+    }
+  }
+  std::unordered_set<int32_t> hostable;
+  for (const SegmentPlan &segment : planSegments(document)) {
+    if (!segment.isCustom()) continue;
+    const auto found = ranges.find(segment.customContainer);
+    if (found != ranges.end() && found->second.from == segment.from && found->second.to == segment.to &&
+        found->second.count == segment.to - segment.from) {
+      hostable.insert(segment.customContainer);
+    }
+  }
+
   std::vector<TagSlot> slots;
   // One pass over the blocks, tracking the open custom container: a container
   // is reported once, at its first block, with the whole range it holds.
@@ -95,7 +124,7 @@ std::vector<TagSlot> tagSlots(const Document &document, const std::string &sourc
     if (innermost == openContainer) {
       continue;
     }
-    if (openContainer >= 0) {
+    if (openContainer >= 0 && hostable.count(openContainer) != 0) {
       // The container just ended: report it if its tag is wanted. The tag
       // index comes from the range's own first block, so a nested container
       // names its own tag rather than its parent's.

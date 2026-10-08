@@ -1,4 +1,5 @@
 #include "SegmentPlan.h"
+#include "DetailsLayout.h"
 
 namespace downstream {
 
@@ -14,6 +15,28 @@ int32_t innermostCustom(const Block &block) {
     }
   }
   return -1;
+}
+
+/// Text layouts can shrink as a whole when every block has the same details
+/// visibility. Summaries stay separate because each owns a toggle control.
+static bool sameDetailsVisibility(const Block &a, const Block &b) {
+  if (isDetailsSummary(a.containers) || isDetailsSummary(b.containers)) {
+    return false;
+  }
+  auto left = a.containers.begin();
+  auto right = b.containers.begin();
+  for (;;) {
+    while (left != a.containers.end() && left->kind != ContainerKind::Details) ++left;
+    while (right != b.containers.end() && right->kind != ContainerKind::Details) ++right;
+    if (left == a.containers.end() || right == b.containers.end()) {
+      return left == a.containers.end() && right == b.containers.end();
+    }
+    if (left->id != right->id || left->open != right->open) {
+      return false;
+    }
+    ++left;
+    ++right;
+  }
 }
 
 std::vector<SegmentPlan> planSegments(const Document &document) {
@@ -78,6 +101,7 @@ std::vector<SegmentPlan> planSegments(const Document &document) {
         first.kind != BlockKind::Image && first.kind != BlockKind::TableRow) {
       size_t to = from + 1;
       while (to < limit && innermostCustom(blocks[to]) == custom &&
+             sameDetailsVisibility(first, blocks[to]) &&
              blocks[to].kind != BlockKind::CodeBlock && blocks[to].kind != BlockKind::MathBlock &&
              blocks[to].kind != BlockKind::Image && blocks[to].kind != BlockKind::TableRow &&
              !(committed && to - from >= kCommittedChunkBlocks && blocks[to - 1].containers.empty())) {
@@ -100,7 +124,8 @@ std::vector<SegmentPlan> planSegments(const Document &document) {
     }
 
     size_t to = from + 1;
-    while (to < limit && blocks[to].kind != BlockKind::TableRow && blocks[to].kind != BlockKind::CodeBlock &&
+    while (to < limit && innermostCustom(blocks[to]) < 0 && sameDetailsVisibility(first, blocks[to]) &&
+           blocks[to].kind != BlockKind::TableRow && blocks[to].kind != BlockKind::CodeBlock &&
            blocks[to].kind != BlockKind::MathBlock && blocks[to].kind != BlockKind::Image &&
            !(committed && to - from >= kCommittedChunkBlocks && blocks[to - 1].containers.empty())) {
       to++;

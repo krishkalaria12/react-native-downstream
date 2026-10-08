@@ -254,6 +254,8 @@ private class TaskPress(val id: Int, val checked: Boolean)
     // setContent also serves code bodies and clears this field. Retain the
     // identity afterwards so settled text keeps its layout and selection.
     this.segment = segment
+    readingParts = buildReadingParts(segment.accessibleBlocks, segment.detailsBlocks)
+    accessibility.contentChanged()
     // The summary is the container's own first leaf, so at most one of a
     // segment's collapsible blocks is it, and it is the one a chevron belongs to.
     summary = segment.detailsBlocks.firstOrNull { it.summary }
@@ -436,7 +438,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
       bounds = bounds,
       heading = part.heading,
       linkPress = if (link == null) null else ({ findHost()?.pressLink(link) }),
-      togglePress = toggle?.let { id -> ({ findHost()?.toggleDetails(id) }) },
+      togglePress = toggle?.let { id -> ({ findHost()?.onToggleDetails(id, !isSummaryOpen(readerChoices)) }) },
       expanded = toggle?.let { isSummaryOpen(readerChoices) },
     )
   }
@@ -719,8 +721,8 @@ private class TaskPress(val id: Int, val checked: Boolean)
     // already looking.
     val ascent = layout.getLineAscent(first).toFloat()
     val descent = layout.getLineDescent(line).toFloat()
-    val centerY = baseline - (ascent - descent) / 2
-    val size = baseline - ascent
+    val centerY = baseline + (ascent + descent) / 2
+    val size = descent - ascent
     val half = size * 0.22f
     val tip = if (summaryOpen) centerY + half else centerY - half
     codePaint.color = currentTextColor
@@ -841,19 +843,19 @@ private class TaskPress(val id: Int, val checked: Boolean)
         longPress = LongPress(context, held) { findHost()?.longPressLink(it) }
         longPress?.schedule(event.x, event.y)
       }
-      // A tag press is hit-tested beside the link: the whole run is the
-      // control, and a link inside a tag is still the tag a reader meant.
-      val tag = tagAt(layout, x, y)
-      if (tag >= 0) {
-        pressedTag = tag
-        return true
-      }
       // The summary is hit-tested before the links under it: the whole line is the
       // control, and a link inside a summary is still a summary a reader meant to
       // open. Everything else falls through to the link, then to selection.
       val summary = this.summary
       if (detailsToggle && summary != null && onSummaryLine(layout, summary, y)) {
         pressedSummary = summary
+        return true
+      }
+      // A tag press is hit-tested beside the link: the whole run is the
+      // control, and a link inside a tag is still the tag a reader meant.
+      val tag = tagAt(layout, x, y)
+      if (tag >= 0) {
+        pressedTag = tag
         return true
       }
       pressedLink = linkAt(layout, x, y)
@@ -905,7 +907,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
             // whose body the press opens. A summary inside another summary opens
             // the inner one, the same way pressing it reads.
             val container = pressed.containers.last { it.kind == CONTAINER_DETAILS }
-            findHost()?.toggleDetails(container.id)
+            findHost()?.onToggleDetails(container.id, !isSummaryOpen(readerChoices))
           }
           return true
         }

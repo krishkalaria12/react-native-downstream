@@ -1252,6 +1252,11 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     onTableExpandToggle?.invoke(this, ordinal, expanded)
   }
 
+  fun tableMarkdown(ordinal: Int): String? {
+    val planned = rendered?.plan?.firstOrNull { it.isTable && it.tableOrdinal == ordinal } ?: return null
+    return DownstreamNative.export(documentId, planned.from, planned.to, EXPORT_MARKDOWN, ',')
+  }
+
   override fun onTableFullscreen(ordinal: Int) {
     nextOrdinal = ordinal
     onTableFullscreen?.invoke(this, ordinal)
@@ -1667,6 +1672,11 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       val child = segmentViews[index]
       val top = paddingTop + frames[index * 2]
       val height = frames[index * 2 + 1]
+      // A closed details body has a zero frame. Hide its native child as well,
+      // so it cannot draw or expose accessibility content outside that frame.
+      // Hosted children remain GONE because their React slot owns the drawing.
+      if (height <= 0 && child.visibility != View.GONE) child.visibility = View.INVISIBLE
+      else if (height > 0 && child.visibility == View.INVISIBLE) child.visibility = View.VISIBLE
       child.measure(
         MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
         MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY),
@@ -1701,6 +1711,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     segmentLayer.layout(paddingLeft, paddingTop, right - paddingRight, bottom - paddingBottom)
     hostLayer.layout(0, 0, right - left, bottom - top)
     layoutSegments()
+
   }
 
   private var layoutPosted = false

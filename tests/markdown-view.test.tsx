@@ -955,6 +955,7 @@ describe('DownstreamMarkdown controls', () => {
       // same component that renders the table behind it.
       const dialog = rendered().querySelector('[role="dialog"]');
       expect(dialog).not.toBeNull();
+      expect(dialog?.closest('[data-native-view]')).toBeNull();
       expect(dialog?.querySelector('table')).not.toBeNull();
       const cells = [...(dialog?.querySelectorAll('td') ?? [])].map(
         (cell) => cell.textContent

@@ -187,6 +187,9 @@ try {
   execFileSync(process.execPath, [join(here, 'state-application.mjs')], {
     stdio: 'inherit',
   });
+  execFileSync(process.execPath, [join(here, 'native-document.mjs')], {
+    stdio: 'inherit',
+  });
   execFileSync(process.execPath, [join(here, 'table-streaming.mjs')], {
     stdio: 'inherit',
   });

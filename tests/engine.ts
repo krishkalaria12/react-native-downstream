@@ -155,7 +155,6 @@ const TARGETS = {
   'downstream-incremental': [
     join(CPP, 'tests', 'test_incremental.cpp'),
     join(CPP, 'session', 'IncrementalParser.cpp'),
-    join(CPP, 'downstream', 'SegmentPlan.cpp'),
     ...ENGINE,
     ...MD4C_SOURCES,
   ],
@@ -171,13 +170,11 @@ const TARGETS = {
   ],
   'downstream-export': [
     join(CPP, 'tests', 'dump_export.cpp'),
-    join(CPP, 'downstream', 'SegmentPlan.cpp'),
     ...ENGINE,
     ...MD4C_SOURCES,
   ],
   'downstream-export-rules': [
     join(CPP, 'tests', 'test_export.cpp'),
-    join(CPP, 'downstream', 'SegmentPlan.cpp'),
     ...ENGINE,
     ...MD4C_SOURCES,
   ],
@@ -188,7 +185,6 @@ const TARGETS = {
   ],
   'downstream-fence-meta': [
     join(CPP, 'tests', 'test_fence_meta.cpp'),
-    join(CPP, 'downstream', 'SegmentPlan.cpp'),
     ...ENGINE,
     ...MD4C_SOURCES,
   ],

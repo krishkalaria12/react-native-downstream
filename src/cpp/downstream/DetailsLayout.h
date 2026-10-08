@@ -45,11 +45,12 @@ inline DetailsBlockLayout resolveDetails(const ReaderChoices &choices, uint32_t 
 
 /// True when this block sits inside a `<details>` whose body is not shown.
 ///
-/// Any one of them is enough: a block inside two collapsible blocks, the outer of
+/// A summary is exempt from its own marked frame. Any closed ancestor is
+/// enough: a block inside two collapsible blocks, the outer of
 /// which is closed, is not visible however open the inner one is.
 inline bool insideHiddenDetails(const std::vector<Container> &containers, const ReaderChoices &choices) {
   for (const Container &container : containers) {
-    if (container.kind == ContainerKind::Details &&
+    if (container.kind == ContainerKind::Details && !container.showsMarker &&
         !resolveDetails(choices, container.id, container.open).open) {
       return true;
     }
@@ -64,7 +65,6 @@ inline bool insideHiddenDetails(const std::vector<Container> &containers, const 
 /// first leaf of *its* container: a nested summary is inside the outer one, so
 /// asking the outer frame would put two chevrons on the outer line.
 inline bool isDetailsSummary(const std::vector<Container> &containers) {
-  bool inside = false;
   for (const Container &container : containers) {
     if (container.kind != ContainerKind::Details) {
       continue;
@@ -72,9 +72,8 @@ inline bool isDetailsSummary(const std::vector<Container> &containers) {
     if (container.showsMarker) {
       return true;
     }
-    inside = true;
   }
-  return inside;
+  return false;
 }
 
 /**

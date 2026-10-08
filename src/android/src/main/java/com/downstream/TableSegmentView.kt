@@ -161,7 +161,7 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     fullscreenButton.visibility = button(controls and CONTROL_TABLE_FULLSCREEN != 0)
     // Expand appears only on a table past its cap, because that is the only table
     // the cap can come back on. It stays once expanded, so the reader can undo it.
-    expandButton.visibility = button(controls and CONTROL_TABLE_EXPAND != 0 && capped)
+    expandButton.visibility = button(controls and CONTROL_TABLE_EXPAND != 0 && (capped || tableLayout.expanded))
     for (view in listOf(copyButton, downloadButton, fullscreenButton, expandButton)) {
       view.isEnabled = controlsEnabled && view.visibility == View.VISIBLE
       view.alpha = if (view.isEnabled) 1f else 0.4f
@@ -270,11 +270,6 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     // In this view's own coordinates, and at the reserved row height rather than
     // the toolbar's measured one, which as a frame child is the whole table.
     val toolbarHeight = toolbarHeight()
-    toolbar.measure(
-      MeasureSpec.makeMeasureSpec(right - left, MeasureSpec.EXACTLY),
-      MeasureSpec.makeMeasureSpec(toolbarHeight, MeasureSpec.EXACTLY),
-    )
-    toolbar.layout(0, 0, right - left, toolbarHeight)
     val leading = segment.contentLeading.toInt()
     val width = (right - left - leading).coerceAtLeast(0)
     val bodyTop = toolbarHeight
@@ -288,17 +283,20 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     // The cap decides what this table shows, so it is decided once here and the
     // layout engine measured the same number: `tableHeight` put the cap on the
     // grid box with the toolbar outside it, and this is that box.
-    val boxHeight = tableHeight(tableLayout, segment.cells.size, 0f).toInt() - toolbarHeight
+    val boxHeight = segment.visibleGridHeight(tableLayout)
     capped = tableLayout.maxHeight > 0f && segment.tableHeight > boxHeight
     updateButtons()
 
+    toolbar.measure(
+      MeasureSpec.makeMeasureSpec(right - left, MeasureSpec.EXACTLY),
+      MeasureSpec.makeMeasureSpec(toolbarHeight, MeasureSpec.EXACTLY),
+    )
+    toolbar.layout(0, 0, right - left, toolbarHeight)
     // The header strip takes its own row above the scroller rather than floating
     // over the first row, so a reader never sees two headers.
     headerScroll.visibility = if (headerHeight > 0) View.VISIBLE else View.GONE
     val scrollLeft = if (segment.rtl) 0 else leading
     val bodyHeight = (totalHeight - headerHeight).coerceAtLeast(0)
-    viewport.layout(scrollLeft, bodyTop, scrollLeft + width, bodyTop + bodyHeight)
-    headerScroll.layout(scrollLeft, bodyTop, scrollLeft + width, bodyTop + headerHeight)
 
     // The horizontal range is the same for both scrollers, so the strip is
     // restored from the same number rather than from its own previous offset.
@@ -308,10 +306,10 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     } else {
       scroll.scrollX
     }
-    scroll.measure(
-      MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
-      MeasureSpec.makeMeasureSpec(bodyHeight, MeasureSpec.EXACTLY),
-    )
+    // Give the horizontal scroller its full content height before the vertical
+    // viewport measures it; MATCH_PARENT otherwise measures an empty body.
+    grid.layoutParams.height = segment.tableHeight
+    scroll.layoutParams.height = (segment.tableHeight - headerHeight).coerceAtLeast(0)
     viewport.measure(
       MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
       MeasureSpec.makeMeasureSpec(bodyHeight, MeasureSpec.EXACTLY),
@@ -329,7 +327,13 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
       MeasureSpec.makeMeasureSpec(segment.tableWidth, MeasureSpec.EXACTLY),
       MeasureSpec.makeMeasureSpec(headerHeight.coerceAtLeast(0), MeasureSpec.EXACTLY),
     )
+    // Measure the scrollers before layout so their children get current bounds.
+    viewport.layout(scrollLeft, bodyTop + headerHeight, scrollLeft + width, bodyTop + totalHeight)
+    headerScroll.layout(scrollLeft, bodyTop, scrollLeft + width, bodyTop + headerHeight)
     headerGrid.layout(0, 0, segment.tableWidth, headerHeight)
+    // The pinned strip owns the header. Move the full grid's header above the
+    // body's clip, leaving only data rows inside the vertical viewport.
+    grid.layout(0, -headerHeight, segment.tableWidth, segment.tableHeight - headerHeight)
     val newRange = (segment.tableWidth - width).coerceAtLeast(0)
     val restored = (if (segment.rtl) newRange - distance else distance).coerceIn(0, newRange)
     scroll.scrollTo(restored, 0)

@@ -86,14 +86,11 @@ before(async () => {
   );
   const executables = [
     ['dump_document', engine],
-    [
-      'test_incremental',
-      [incremental, downstream('SegmentPlan.cpp'), ...engine],
-    ],
+    ['test_incremental', [incremental, ...engine]],
     ['dump_session', [incremental, ...engine]],
-    ['dump_export', [downstream('SegmentPlan.cpp'), ...engine]],
-    ['test_export', [downstream('SegmentPlan.cpp'), ...engine]],
-    ['test_fence_meta', [downstream('SegmentPlan.cpp'), ...engine]],
+    ['dump_export', engine],
+    ['test_export', engine],
+    ['test_fence_meta', engine],
     ['test_reveal', [incremental, ...engine]],
     ['test_preview', [incremental, ...engine]],
     ['test_session_registry', [registry, incremental, ...pool, ...engine]],

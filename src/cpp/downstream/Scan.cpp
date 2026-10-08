@@ -500,14 +500,20 @@ readAllowedAttributes(std::string_view rest, const std::vector<std::string> &all
   std::vector<std::pair<std::string, std::string>> out;
   size_t i = 0;
   while (i < rest.size()) {
-    while (i < rest.size() && (rest[i] == ' ' || rest[i] == '\t' || rest[i] == '\n')) {
+    while (i < rest.size() && (rest[i] == ' ' || rest[i] == '\t' || rest[i] == '\n' || rest[i] == '\r')) {
       i++;
     }
     if (i >= rest.size() || rest[i] == '/' || rest[i] == '>') {
       break;
     }
     const size_t nameStart = i;
-    while (i < rest.size() && isTagNameChar(rest[i])) {
+    bool supportedName = true;
+    // Consume the whole name even when it contains unsupported characters.
+    // Stopping at one would leave the next iteration on the same byte, or
+    // mistake the suffix of an unsupported name for a permitted attribute.
+    while (i < rest.size() && rest[i] != '=' && rest[i] != ' ' && rest[i] != '\t' &&
+           rest[i] != '\n' && rest[i] != '\r' && rest[i] != '/' && rest[i] != '>') {
+      supportedName = supportedName && isTagNameChar(rest[i]);
       i++;
     }
     const std::string name = lowered(rest.substr(nameStart, i - nameStart));
@@ -542,7 +548,7 @@ readAllowedAttributes(std::string_view rest, const std::vector<std::string> &all
       }
       value = rest.substr(valueStart, i - valueStart);
     }
-    if (std::find(allowed.begin(), allowed.end(), name) != allowed.end()) {
+    if (supportedName && !name.empty() && std::find(allowed.begin(), allowed.end(), name) != allowed.end()) {
       out.emplace_back(name, std::string(value));
     }
   }

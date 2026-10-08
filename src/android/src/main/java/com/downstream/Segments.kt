@@ -11,7 +11,10 @@ import kotlin.math.ceil
 import kotlin.math.max
 
 /** One unit of layout. [gapBefore] is the space above it in the document. */
-internal sealed class Segment(val gapBefore: Int)
+internal sealed class Segment(val gapBefore: Int) {
+  /** The planner groups blocks with one details visibility state. */
+  var detailsContainers: List<ContainerDecoration> = emptyList()
+}
 
 /**
  * A picture, as its own segment.
@@ -185,7 +188,7 @@ internal class TextSegment(
     if (detailsBlocks.isEmpty()) return emptyList()
     val ranges = ArrayList<HiddenRange>(detailsBlocks.size)
     for (block in detailsBlocks) {
-      if (!block.summary && insideHiddenDetails(block.containers, choices)) {
+      if (insideHiddenDetails(block.containers, choices)) {
         ranges.add(HiddenRange(block.start, block.end))
       }
     }
@@ -450,6 +453,12 @@ internal class TableSegment(
   // sits inside the size the measurement produced.
   val tableWidth = columnWidths.sum() + borderWidth
   val tableHeight = rowHeights.sum() + borderWidth
+  /** Actual text row metrics, in the same pixels as the cap and native frame. */
+  fun visibleGridHeight(layout: TableBlockLayout): Int {
+    if (layout.maxHeight <= 0f) return tableHeight
+    val minimum = rowHeights.take(MIN_VISIBLE_TABLE_ROWS).sum() + borderWidth
+    return minOf(tableHeight, maxOf(layout.maxHeight.toInt(), minimum))
+  }
   val rowTops = IntArray(rowHeights.size + 1).also { tops ->
     for (index in rowHeights.indices) tops[index + 1] = tops[index] + rowHeights[index]
   }

@@ -1,5 +1,15 @@
 import { useCallback } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  Modal,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  StatusBar,
+  Text,
+  View,
+} from 'react-native';
 
 import { DownstreamMarkdown } from './DownstreamMarkdown';
 import type { MarkdownTranslations, MarkdownViewProps } from './types';
@@ -66,6 +76,10 @@ export type TableFullscreenProps = Readonly<{
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  safeArea: {
+    flex: 1,
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
+  },
   bar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -100,7 +114,7 @@ export function TableFullscreen({
       presentationStyle="fullScreen"
       onRequestClose={handleRequestClose}
     >
-      <View style={styles.root}>
+      <SafeAreaView style={styles.safeArea}>
         <View style={styles.bar}>
           <Pressable
             accessibilityRole="button"
@@ -111,17 +125,19 @@ export function TableFullscreen({
             <Text style={styles.label}>{closeLabel}</Text>
           </Pressable>
         </View>
-        <DownstreamMarkdown
-          {...inherited}
-          markdown={markdown}
-          // The cap is the only thing removed: a table in a full-screen modal is
-          // the one place in a chat where scrolling the whole page is right.
-          tableMaxHeight={0}
-          // The button that opened this is not in the modal, and a second copy
-          // would be a way out of a modal that is already out of the way.
-          controls={false}
-        />
-      </View>
+        <ScrollView style={styles.root}>
+          <DownstreamMarkdown
+            {...inherited}
+            markdown={markdown}
+            // The cap is the only thing removed: a table in a full-screen modal is
+            // the one place in a chat where scrolling the whole page is right.
+            tableMaxHeight={0}
+            // The button that opened this is not in the modal, and a second copy
+            // would be a way out of a modal that is already out of the way.
+            controls={false}
+          />
+        </ScrollView>
+      </SafeAreaView>
     </Modal>
   );
 }
