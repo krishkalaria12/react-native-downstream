@@ -56,22 +56,6 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
  * digit count of the last number, so a block crossing 99 widens by one digit
  * rather than wrapping onto a second row.
  */
-@interface DSCodeSegmentView ()
-/// The block this card draws, so the document view resolves its layout against
-/// the same meta the measurement used.
-@property (nonatomic, readonly, nullable) DSCodeSegment *segment;
-/// False once the block's fence has closed, which stops a capped card following
-/// its newest line.
-@property (nonatomic) BOOL streaming;
-/// True while a React child draws this block instead of the card.
-///
-/// The card's background, header, gutter and body all belong to a fallback that
-/// is not being shown, and a hosted block draws only what the child cannot: the
-/// quote and admonition bars beside it and the list marker on its first line,
-/// over the full height the child measured.
-@property (nonatomic) BOOL hosted;
-@end
-
 @interface DSCodeGutterView : UIView
 @property (nonatomic, weak, nullable) DSTextSegmentView *body;
 /// Retains the owner of the line starts so mounting a gutter needs no copy.

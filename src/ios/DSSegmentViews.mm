@@ -171,6 +171,7 @@ NSString *const kSymbolCollapse = @"arrow.down.left.and.arrow.up.right";
 /// full-screen table is a browser viewport and its chevron belongs to the
 /// browser's own widget rather than to this library.
 NSString *const kSymbolMaximize = @"arrow.up.left.and.arrow.down.right";
+NSString *const kSymbolClose = @"xmark";
 NSString *const kSymbolChevronDown = @"chevron.down";
 NSString *const kSymbolChevronRight = @"chevron.right";
 
@@ -492,6 +493,7 @@ static Class segmentViewClassFor(id segment) {
         codeView.linkDelegate = _linkDelegate;
         codeView.controlDelegate = self.controlDelegate;
         [codeView setControlLabels:_labels];
+        [codeView setControlIcons:_icons];
         view = codeView;
       } else if ([segment isKindOfClass:DSMathSegment.class]) {
         // A formula has no controls and no links, so it is given neither
@@ -509,6 +511,7 @@ static Class segmentViewClassFor(id segment) {
         tableView.linkDelegate = _linkDelegate;
         tableView.controlDelegate = self.controlDelegate;
         [tableView setControlLabels:_labels];
+        [tableView setControlIcons:_icons];
         view = tableView;
       }
       if (index < _segmentViews.count) {
@@ -774,6 +777,29 @@ static Class segmentViewClassFor(id segment) {
   for (UIView *view in _segmentViews) {
     if ([view respondsToSelector:@selector(setControlLabels:)]) {
       [(id)view setControlLabels:_labels];
+    }
+  }
+}
+
+/// The `icons` prop's resolved names, forwarded like the labels: only code and
+/// table views answer, and a view created later reads the current value.
+- (void)setControlIcons:(NSArray<NSString *> *)icons {
+  _icons = [icons copy];
+  for (UIView *view in _segmentViews) {
+    if ([view respondsToSelector:@selector(setControlIcons:)]) {
+      [(id)view setControlIcons:_icons];
+    }
+  }
+}
+
+/// Whether a long press shows the platform's link preview, forwarded like the
+/// labels: only text views answer, and a view created later reads the current
+/// value.
+- (void)setLinkPreview:(BOOL)linkPreview {
+  _linkPreview = linkPreview;
+  for (UIView *view in _segmentViews) {
+    if ([view respondsToSelector:@selector(setLinkPreview:)]) {
+      [(id)view setLinkPreview:linkPreview];
     }
   }
 }

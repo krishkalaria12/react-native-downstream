@@ -31,6 +31,20 @@ BlockDirection textDirection(std::u16string_view text, BlockDirection inherited)
   BlockDirection first = BlockDirection::Inherit;
 
   for (size_t index = 0; index < text.size(); index++) {
+    const uint32_t unit = text[index];
+    if (unit < 0x80) {
+      // The only strong characters below U+0080 are the ASCII letters: digits
+      // are weak, the rest is neutral, and no right-to-left character lives
+      // down here. Reading them inline keeps an English paragraph out of the
+      // range table entirely, which is where a long document spends its parse.
+      if ((unit >= 'A' && unit <= 'Z') || (unit >= 'a' && unit <= 'z')) {
+        left++;
+        if (first == BlockDirection::Inherit) {
+          first = BlockDirection::LeftToRight;
+        }
+      }
+      continue;
+    }
     const uint32_t code = codePointAt(text, index);
     if (isStrongRightToLeft(code)) {
       right++;

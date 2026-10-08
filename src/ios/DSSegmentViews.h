@@ -129,6 +129,10 @@ BOOL hasLink(NSAttributedString *text, NSRange range);
 /// Link index under a point in a laid-out TextKit stack, or -1.
 NSInteger linkIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *container, CGPoint location);
 
+/// Tag index under a point in a laid-out TextKit stack, or -1. Beside the link
+/// lookup because a press has to know which tag it landed on.
+NSInteger tagIndexInStack(NSLayoutManager *layoutManager, NSTextContainer *container, CGPoint location);
+
 /// Detaches the link delegates a view's cached elements hold, so a recycled view
 /// cannot be activated through an element that outlived its text.
 void invalidateAccessibleLinks(NSArray<UIAccessibilityElement *> *elements);
@@ -255,6 +259,8 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 /// draws the decoration beside the text.
 @property (nonatomic) BOOL detailsToggle;
 @property (nonatomic) downstream::ReaderChoices detailsChoices;
+/// Whether a long press shows the platform's link preview. Off by default.
+@property (nonatomic) BOOL linkPreview;
 - (instancetype)init;
 - (void)setSegment:(DSTextSegment *)segment;
 /// The `<details>` container a touch lands on, or 0. Zero for every touch that is
@@ -272,6 +278,23 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 @interface DSCodeSegmentView : UIView <DSSegmentView, DSRevealInvalidatable>
 @property (nonatomic, weak, nullable) id<DSLinkDelegate> linkDelegate;
 @property (nonatomic, weak, nullable) id<DSControlDelegate> controlDelegate;
+/// The block this card draws, so the document view resolves its layout against
+/// the same meta the measurement used.
+@property (nonatomic, readonly, nullable) DSCodeSegment *segment;
+/// False once the block's fence has closed, which stops a capped card following
+/// its newest line.
+@property (nonatomic) BOOL streaming;
+/// True while a React child draws this block instead of the card.
+///
+/// The card's background, header, gutter and body all belong to a fallback that
+/// is not being shown, and a hosted block draws only what the child cannot: the
+/// quote and admonition bars beside it and the list marker on its first line,
+/// over the full height the child measured.
+@property (nonatomic) BOOL hosted;
+/// Where the code body's fading alphas come from.
+@property (nonatomic, weak, nullable) id<DSRevealProvider> revealProvider;
+/// The document block this code card draws.
+@property (nonatomic) NSInteger blockOffset;
 @property (nonatomic) BOOL controlsEnabled;
 @property (nonatomic, readwrite) BOOL showsHeader;
 /// Buttons to build, as bits of `downstream::ControlBits`.
@@ -287,6 +310,8 @@ void appendAccessibleSlices(NSMutableArray<UIAccessibilityElement *> *elements, 
 /// The `icons` prop's resolved names, in `CONTROL_ICON_KEYS` order. Empty is the
 /// platform's own glyph.
 - (void)setControlIcons:(NSArray<NSString *> *)icons;
+/// Drops the reader's scroll position when the document generation changes.
+- (void)resetScrollPosition;
 @end
 
 /// A control glyph name, resolved from the `icons` prop.
@@ -349,6 +374,8 @@ extern NSString *const DSControlIconDetailsChevron;
 /// The `icons` prop's resolved names, in `CONTROL_ICON_KEYS` order. Empty is the
 /// platform's own glyph.
 - (void)setControlIcons:(NSArray<NSString *> *)icons;
+/// Drops the reader's scroll position when the document generation changes.
+- (void)resetScrollPosition;
 @end
 
 /**
@@ -412,6 +439,9 @@ extern NSString *const DSControlIconDetailsChevron;
 @property (nonatomic, weak, nullable) id<DSImageDelegate> imageDelegate;
 @property (nonatomic) BOOL selectable;
 @property (nonatomic) uint32_t controls;
+/// Whether a long press shows the platform's link preview. Fanned out to the
+/// text views, which are the only segments that show links.
+@property (nonatomic) BOOL linkPreview;
 /// The whole code layout: the `lineNumbers`, `codeBlockWrap`, and
 /// `codeBlockMaxHeight` props, plus the reader's own per-block wrap and expand
 /// choices. One value, so a frame and the layout drawn inside it cannot disagree.

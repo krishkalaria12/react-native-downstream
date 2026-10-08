@@ -167,7 +167,8 @@ export interface Spec extends TurboModule {
   tagSlots(
     source: string,
     parseFlags: CodegenTypes.Int32,
-    names: ReadonlyArray<string>
+    names: ReadonlyArray<string>,
+    tags: ReadonlyArray<string>
   ): ReadonlyArray<TagSlot>;
   /**
    * The tag slots of one published snapshot, which is the snapshot the view is

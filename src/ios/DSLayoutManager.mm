@@ -21,7 +21,10 @@ using namespace downstream;
 
 @end
 
-@implementation DSLayoutManager
+@implementation DSLayoutManager {
+  BOOL _detailsToggle;
+  downstream::ReaderChoices _detailsChoices;
+}
 
 - (BOOL)textBoundsForCharacterRange:(NSRange)range bounds:(DSBlockTextBounds *)bounds {
   const NSRange glyphs = [self glyphRangeForCharacterRange:range actualCharacterRange:NULL];
@@ -189,16 +192,6 @@ using namespace downstream;
 /// first fading word rather than fading on its own, which is what makes a bullet
 /// appear with the text it belongs to; a rule takes its block's single unit. A
 /// quote bar draws at full alpha, as Streamdown draws a border.
-- (void)drawDecorationsForGlyphs:(NSRange)glyphsToShow atPoint:(CGPoint)origin {
-  NSTextStorage *storage = self.textStorage;
-  NSTextContainer *container = self.textContainers.firstObject;
-  if (storage.length == 0 || container == nil) {
-    return;
-  }
-  const CGFloat width = container.size.width;
-  const NSRange visible = [self characterRangeForGlyphRange:glyphsToShow actualGlyphRange:NULL];
-
-  NSUInteger index = visible.location;
   - (void)setDetailsToggle:(BOOL)toggle {
     _detailsToggle = toggle;
   }
@@ -267,6 +260,17 @@ using namespace downstream;
     [path stroke];
     CGContextRestoreGState(context);
   }
+
+- (void)drawDecorationsForGlyphs:(NSRange)glyphsToShow atPoint:(CGPoint)origin {
+  NSTextStorage *storage = self.textStorage;
+  NSTextContainer *container = self.textContainers.firstObject;
+  if (storage.length == 0 || container == nil) {
+    return;
+  }
+  const CGFloat width = container.size.width;
+  const NSRange visible = [self characterRangeForGlyphRange:glyphsToShow actualGlyphRange:NULL];
+
+  NSUInteger index = visible.location;
 
   while (index < NSMaxRange(visible)) {
     NSRange blockRange;

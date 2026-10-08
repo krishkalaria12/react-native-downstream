@@ -148,7 +148,7 @@ public:
   /// registered. Only containers whose tag is named are reported: a tag with
   /// no renderer draws its children natively, so there is nothing to mount
   /// for it.
-  jsi::Array tagSlots(jsi::Runtime &rt, std::string source, double parseFlags, std::vector<std::string> names);
+  jsi::Array tagSlots(jsi::Runtime &rt, std::string source, double parseFlags, std::vector<std::string> names, std::vector<std::string> tags);
   /// The tag slots of one published snapshot, which is the snapshot the view
   /// is mounting for `sessionSequence`. Walks blocks and never parses, so it
   /// is safe to call on every snapshot of a stream from render.

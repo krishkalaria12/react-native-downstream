@@ -1352,6 +1352,13 @@ describe('preview', () => {
 describe('input', () => {
   // stderr is inherited, not piped: a failing CHECK writes its case label to
   // stderr, and a piped child would swallow the reason a run failed.
+  test('incremental parser work bounds, immutable snapshots, and reference dependencies', () => {
+    execFileSync(binary('test_incremental'), {
+      timeout: 30_000,
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
+  });
+
   test('native session versions and lifecycle', () => {
     execFileSync(binary('test_session_registry'), { timeout: 15_000 });
   });

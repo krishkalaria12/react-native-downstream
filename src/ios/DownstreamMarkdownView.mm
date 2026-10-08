@@ -173,13 +173,10 @@ NSString *nameForFormat(NSString *format) {
   /// icon" — a text-only button is how a quiet header is built.
   NSArray<NSString *> *_controlIcons;
   BOOL _linkPreview;
-  /// Per-URL link styles, as four flat arrays: every prefix, the counts that say
-  /// where one variant's prefixes end, a processed color per variant or -1, and
-  /// whether it underlines.
-  NSArray<NSString *> *_linkVariantPrefixes;
-  NSArray<NSNumber *> *_linkVariantCounts;
-  NSArray<NSNumber *> *_linkVariantColors;
-  NSArray<NSNumber *> *_linkVariantUnderlines;
+  /// Per-URL link styles, resolved from `markdownStyle.linkVariants`. Colors
+  /// but no heights, so they travel as view state rather than through the
+  /// shadow node.
+  DSLinkVariants *_linkVariants;
   /// Styles for app-allowed inline tags: names lowercased, a processed color
   /// per entry or -1, and bold/italic as bits. Matched at draw time against a
   /// run's tag name.
@@ -480,6 +477,17 @@ NSString *nameForFormat(NSString *format) {
   return out;
 }
 
+/// The flags of a codegen boolean array, as numbers. `std::vector<bool>` packs
+/// its bits, so it is read by index rather than ranged over.
+- (NSArray<NSNumber *> *)boolsOf:(const std::vector<bool> &)values {
+  NSMutableArray<NSNumber *> *out = [NSMutableArray arrayWithCapacity:values.size()];
+  for (size_t index = 0; index < values.size(); index++) {
+    const bool flag = values[index];
+    [out addObject:@(flag)];
+  }
+  return out;
+}
+
 /// Interns the theme the props carry, or falls back to the default one.
 - (void)updateProps:(const Props::Shared &)props oldProps:(const Props::Shared &)oldProps {
   const auto &newProps = *std::static_pointer_cast<const DownstreamMarkdownViewProps>(props);
@@ -515,7 +523,7 @@ NSString *nameForFormat(NSString *format) {
     variants.prefixes = [self stringsOf:newProps.linkVariantPrefixes];
     variants.counts = [self numbersOf:newProps.linkVariantCounts];
     variants.colors = [self numbersOf:newProps.linkVariantColors];
-    variants.underlines = [self numbersOf:newProps.linkVariantUnderline];
+    variants.underlines = [self boolsOf:newProps.linkVariantUnderline];
     _linkVariants = variants;
     [self applyRendering];
   }
@@ -979,22 +987,19 @@ NSString *nameForFormat(NSString *format) {
       static_cast<size_t>(tagIndex) >= document->tags.size()) {
     return;
   }
-  const Tag &tag = document->tags[static_cast<size_t>(tagIndex)];
+  const downstream::Tag &tag = document->tags[static_cast<size_t>(tagIndex)];
   // JSON `[[name, value], …]`, because codegen events carry no arrays: the
   // shape is fixed in the spec rather than in a second type.
-  NSMutableArray<NSString *> *pairs = [NSMutableArray arrayWithCapacity:tag.attributes.size()];
+  NSMutableArray<NSArray<NSString *> *> *pairs = [NSMutableArray arrayWithCapacity:tag.attributes.size()];
   for (const auto &pair : tag.attributes) {
-    [pairs addObject:@[
-      @(pair.first.c_str()),
-      @(pair.second.c_str()),
-    ]];
+    [pairs addObject:@[ @(pair.first.c_str()), @(pair.second.c_str()) ]];
   }
   NSData *json = [NSJSONSerialization dataWithJSONObject:pairs options:0 error:nil];
+  NSString *attributes = json != nil ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : @"[]";
   emitter->onTagPress({
-      .tag = toNSString(tag.name),
+      .tag = tag.name,
+      .attributes = std::string(attributes.UTF8String ?: "[]"),
       .text = std::string(text.UTF8String ?: ""),
-      .text = std::string(text.UTF8String ?: ""),
-      .attributes = json != nil ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : @"[]",
       .start = static_cast<int>(tag.range.start),
       .end = static_cast<int>(tag.range.end),
       .generation = _state

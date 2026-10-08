@@ -60,6 +60,10 @@ int main() {
     std::cerr << "Snapshot version mismatch\n";
     return 1;
   }
+  const auto firstPublished = SessionRegistry::publishedSnapshot(id, 0, 2);
+  CHECK(firstPublished.document == first && !firstPublished.source && firstPublished.live,
+        "ordinary Markdown publishes state without copying a source for tag queries");
+  CHECK(!SessionRegistry::publishedSnapshot(id, 0, 1).document, "published data requires an exact version");
   SessionTrace::recordDocument(first->id, "measure_start");
   {
     std::lock_guard<std::mutex> lock(traceMutex);
@@ -110,6 +114,7 @@ int main() {
     std::cerr << "Reset did not invalidate old work\n";
     return 1;
   }
+  CHECK(!SessionRegistry::publishedSnapshot(id, 0, 4).document, "reset invalidates the old published tuple");
   auto replacement = SessionRegistry::snapshot(id, 1, 0);
   if (!replacement || replacement->blocks.size() != 1 || replacement->blocks[0].text != u"new" ||
       SessionRegistry::reset(id, std::string(1, static_cast<char>(0xff)), 2) ||
@@ -149,6 +154,25 @@ int main() {
   };
   const auto ignore = [](const SessionEvent &) {};
 
+  const std::string tagsId = "tag-source-session";
+  CHECK(SessionRegistry::create(tagsId, ParseMode::FullParse, ignore), "create a custom-tag session");
+  CHECK(SessionRegistry::setParse(tagsId, ParseOptions(ParseFlags::Default | ParseFlags::InlineHtml,
+                                                      tagPolicyFromStrings({"-1", "user", "id"}))),
+        "allow custom containers with their attribute policy");
+  CHECK(SessionRegistry::append(tagsId, "<user id=\"7\">\n\nhello\n", 0, 1), "append an open custom container");
+  CHECK(shows(tagsId, 0, 1, u"hello"), "publish the open custom container");
+  const auto tagPrefix = SessionRegistry::publishedSnapshot(tagsId, 0, 1);
+  CHECK(tagPrefix.document && tagPrefix.source && *tagPrefix.source == "<user id=\"7\">\n\nhello\n" && tagPrefix.live,
+        "custom tag publication keeps canonical source and live state together");
+  CHECK(SessionRegistry::append(tagsId, "\n</user>\n\nworld\n", 0, 2), "close the container and append a paragraph");
+  CHECK(shows(tagsId, 0, 2, u"world"), "publish the extended custom source");
+  const auto tagExtended = SessionRegistry::publishedSnapshot(tagsId, 0, 2);
+  CHECK(tagExtended.source && *tagExtended.source == "<user id=\"7\">\n\nhello\n\n</user>\n\nworld\n",
+        "the new document has the new canonical source");
+  CHECK(tagPrefix.source && *tagPrefix.source == "<user id=\"7\">\n\nhello\n",
+        "retained published custom source is immutable");
+  SessionRegistry::dispose(tagsId);
+
   const std::string previewId = "preview-session";
   CHECK(SessionRegistry::create(previewId, ParseMode::IncrementalTail, ignore), "create a session to preview on");
   CHECK(SessionRegistry::append(previewId, "hello **bold wor", 0, 1), "append to the preview session");
@@ -185,6 +209,9 @@ int main() {
     const auto settled = shows(settledId, 0, 1, u"hello **bold wor");
     CHECK(settled, "a finished stream is never repaired");
     CHECK(settled && settled->blocks.back().runs.empty(), "a finished stream leaves the open span unstyled");
+    const auto finishedPublished = SessionRegistry::publishedSnapshot(settledId, 0, 1);
+    CHECK(finishedPublished.document == settled && !finishedPublished.live,
+          "finished state is published with its settled document");
 
     // Asking again after the stream settled changes nothing a reader can see.
     CHECK(SessionRegistry::setPreview(settledId, remend::PreviewOptions::all()),

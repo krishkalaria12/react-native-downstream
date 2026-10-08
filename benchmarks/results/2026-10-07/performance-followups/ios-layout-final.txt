@@ -1,0 +1,16 @@
+rendering_cache historical_oversized_tail_cached=0 held_tail_characters=614400 small_hit=1 shared_prefix_hit=1
+highlight_variants code_free_layout_calls=0 shared_prose=1 distinct_code=1
+ios_tail_workspace fresh_geometry_snapshots=16 exact_widths=320,320.2 concurrent_snapshots=32 cap_fallback=1 metric_restyles=1 caret=1 attachments=1
+ios_mounted_tail updates=20 initial_characters=32768 edited_characters=140 full_replacement_characters=656620 edit_calls=20 total_ms=32.213
+emoji_mapping character_offset=111 glyph_count=112 mapped_glyph=111
+gutter_number_calls=2
+blank_suffix_draw_character_reads=14
+ios_script_line_height plain=19.1 with_scripts=19.1
+ios_script_baselines plain=15.2,34.3 with_scripts=15.2,34.3
+ios_table_cell_break row_broken=55.0 row_plain=36.0
+ios_native_code_layout alternating_width_ms=0.000 lines=4100 width_unwrapped=519.3 width_wrapped=233.7
+alternating_width_layout_calls=0
+ios_hosted_fence hosted_height=244.0 card_height=117.0 rectangles=2
+ios_host_measurement fences=512 iterations=5000 size_hit_us=0.233 measure_hit_us=1.700 measure_alternating_us=33.036 checksum=481100000
+native TextKit checks passed
+com.downstream.NativeTextKitHarness: 71952

@@ -123,11 +123,12 @@ std::vector<TagSlot> tagSlots(const Document &document, const std::string &sourc
           if (tag.bodyEnd > tag.bodyStart && tag.bodyEnd <= source.size()) {
             slot.markdown = trimBlankEdgeLines(source, tag.bodyStart, tag.bodyEnd);
           }
-          // A container whose last block is unsettled may still be waiting for
-          // its closer when the stream is live: the renderer shows a
-          // placeholder rather than half a card.
+          // A recorded body end means the closer arrived, even when this is
+          // the live stream's final container. A finished stream also settles
+          // an unclosed container.
+          const bool closed = tag.bodyEnd >= tag.bodyStart && tag.bodyEnd != 0;
           const bool settled = index <= settledBlocks;
-          slot.incomplete = !settled || (live && index == document.blocks.size());
+          slot.incomplete = !closed && (!settled || live);
           slots.push_back(std::move(slot));
         }
       }

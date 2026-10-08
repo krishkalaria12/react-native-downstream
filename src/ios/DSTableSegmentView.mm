@@ -640,7 +640,8 @@ static const CGFloat kTablePinThreshold = 8;
   if (_segment == nil) {
     return;
   }
-  if ([button.action isEqualToString:@"expand"]) {
+  // Built as the subclass, so the cast holds: a plain UIButton has no action.
+  if ([((DSControlButton *)button).action isEqualToString:@"expand"]) {
     [self.controlDelegate didToggleTableExpandAtOrdinal:static_cast<uint32_t>(_segment.tableOrdinal)
                                                 expanded:!self.tableExpanded];
     return;

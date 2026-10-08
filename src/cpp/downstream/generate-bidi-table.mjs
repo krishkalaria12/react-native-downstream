@@ -154,6 +154,7 @@ const banner = [
   '#include "BidiTable.h"',
   '',
   '#include <algorithm>',
+  '#include <iterator>',
   '',
   'namespace downstream {',
   '',

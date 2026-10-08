@@ -6,6 +6,7 @@
 #include "Unicode.h"
 #include "WorkerPool.h"
 
+#include <algorithm>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -67,6 +68,7 @@ public:
     finished_ = false;
     SessionTrace::record(id_, generation, 0, "reset_received");
     snapshot_.reset();
+    snapshotSource_.reset();
     // The new source has shown nothing, so a view that binds to it fades from
     // its first word rather than starting from the previous one's tail.
     shown_.reset();
@@ -88,12 +90,12 @@ public:
     return true;
   }
 
-  /// The canonical source, for slicing a tag slot's inner Markdown. Read
-  /// under the same lock as the snapshot, so the bytes always match the
-  /// document they are sliced for.
-  std::string source() const {
+  PublishedSessionSnapshot publishedSnapshot(uint64_t generation, uint64_t sequence) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return std::string(parser_.source());
+    if (generation != readyGeneration_ || sequence != readySequence_ || generation != generation_) {
+      return {};
+    }
+    return {snapshot_, snapshotSource_, snapshotLive_};
   }
 
   DocumentHandle snapshot(uint64_t generation, uint64_t sequence) const {
@@ -239,6 +241,13 @@ private:
     auto result = parser_.parse(finished);
     SessionTrace::record(id_, generation, sequence, "parse_end");
     const bool parsed = result.status == ParseStatus::Ok && result.document;
+    // Only custom-tag queries need canonical bytes. Copy on the worker before
+    // publication, without holding up appends or ordinary Markdown streams.
+    std::shared_ptr<const std::string> source;
+    if (parsed && std::any_of(result.document->tags.begin(), result.document->tags.end(),
+                              [](const Tag &tag) { return tag.block; })) {
+      source = std::make_shared<const std::string>(parser_.source());
+    }
 
     if (parsed && isCurrentGeneration(generation)) {
       // The view has not measured yet, so the widths other views use are the
@@ -259,6 +268,8 @@ private:
     } else {
       if (parsed) {
         snapshot_ = std::move(result.document);
+        snapshotSource_ = std::move(source);
+        snapshotLive_ = !finished;
         SessionTrace::bindDocument(snapshot_, id_, generation, sequence);
         SessionTrace::record(id_, generation, sequence, "snapshot_ready");
         readyGeneration_ = generation;
@@ -291,6 +302,8 @@ private:
   uint64_t readyGeneration_{0};
   uint64_t readySequence_{0};
   DocumentHandle snapshot_;
+  std::shared_ptr<const std::string> snapshotSource_;
+  bool snapshotLive_{false};
   // The last document a view showed for this session. Not the snapshot: a view
   // may be showing a snapshot that has since been superseded.
   DocumentHandle shown_;
@@ -363,12 +376,10 @@ DocumentHandle SessionRegistry::snapshot(const std::string &id, uint64_t generat
   return session ? session->snapshot(generation, sequence) : nullptr;
 }
 
-std::string SessionRegistry::source(const std::string &id) {
+PublishedSessionSnapshot SessionRegistry::publishedSnapshot(const std::string &id, uint64_t generation,
+                                                            uint64_t sequence) {
   const auto session = findSession(id);
-  if (!session) {
-    return "";
-  }
-  return session ? session->source() : "";
+  return session ? session->publishedSnapshot(generation, sequence) : PublishedSessionSnapshot{};
 }
 
 bool SessionRegistry::isFinished(const std::string &id) {

@@ -9,6 +9,7 @@ import android.text.Layout
 import android.text.PrecomputedText
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import android.text.SpannedString
 import android.text.StaticLayout
 import android.text.TextDirectionHeuristics
 import android.text.TextPaint
@@ -353,7 +354,26 @@ internal class RenderedDocument(
 
     // Worker threads prepare every document in a commit before Fabric
     // measures them, so this holds at least a screenful of messages.
-    private val cache = LruCache<String, RenderedDocument>(128)
+    private val cache = RenderingCache<String, RenderedDocument>(128, 8L * 1024 * 1024) { rendered ->
+      // Plans, segment references and cached frames belong to each snapshot.
+      // Omit shared committed payloads from this tail/metadata estimate. A
+      // rendering can retain them after the separate segment cache evicts them.
+      var cost = 1024L + rendered.plan.size * 128L
+      rendered.plan.forEachIndexed { index, planned ->
+        if (!planned.isCommitted) cost += segmentCost(rendered.segments[index])
+      }
+      cost
+    }
+
+    private fun segmentCost(value: Segment): Long = when (value) {
+      // Precomputed text also keeps a width per character.
+      is TextSegment -> value.text.length * 24L + 256
+      is CodeSegment -> value.text.length * 24L + 512
+      is TableSegment -> value.accessibilityText.length * 32L + 1024
+      // Picture bitmaps belong to the image pipeline's cache.
+      is ImageSegment -> 512L
+      is MathSegment -> 512L
+    }
 
     /**
      * Committed segments by first block identity, block count, font scale,
@@ -361,17 +381,22 @@ internal class RenderedDocument(
      * content. Sized in approximate bytes.
      */
     private val committedSegments = object : LruCache<String, Segment>(16 * 1024 * 1024) {
-      override fun sizeOf(key: String, value: Segment) = when (value) {
-        // Precomputed text also keeps a width per character.
-        is TextSegment -> value.text.length * 24 + 256
-        is CodeSegment -> value.text.length * 24 + 512
-        is TableSegment -> value.accessibilityText.length * 32 + 1024
-        // A picture and a formula hold no text at all, so their weight is what the
-        // view holds: the bitmap belongs to the pipeline's cache and is counted
-        // there, and a formula's glyphs belong to whatever drew them.
-        is ImageSegment -> 512
-        is MathSegment -> 512
-      }
+      override fun sizeOf(key: String, value: Segment) =
+        segmentCost(value).coerceAtMost(16L * 1024 * 1024 + 1).toInt()
+    }
+
+    private data class PreparedTableCell(val text: Spanned, val desiredWidth: Float)
+    private data class TableCellLayoutKey(val content: TableCellKey, val width: Int)
+
+    // A growing table rebuilds its grid but can reuse unchanged plain cells.
+    // Keep the text immutable and bound both caches independently. Inline
+    // spans (links, formulas, scripts, emphasis) keep the uncached path.
+    private const val TABLE_CELL_CACHE_COST = 2L * 1024 * 1024
+    private val tableCellTexts = RenderingCache<TableCellKey, PreparedTableCell>(1024, TABLE_CELL_CACHE_COST) {
+      it.text.length * 24L + 256
+    }
+    private val tableCellLayouts = RenderingCache<TableCellLayoutKey, StaticLayout>(1024, TABLE_CELL_CACHE_COST) {
+      it.text.length * 24L + 256
     }
 
     /** The text layout configuration shared by measurement and TextViews. */
@@ -498,7 +523,7 @@ internal class RenderedDocument(
    * renderers cannot disagree about what a theme means: the values come from the
    * engine's own table over one JNI crossing, and this file only scales them.
    */
-  internal class Style(fontScale: Float, val colors: Palette, val theme: NativeTheme, themeId: Long = 0L) {
+  internal class Style(fontScale: Float, val colors: Palette, val theme: NativeTheme, val themeId: Long = 0L) {
     val scale = if (fontScale > 0) fontScale else 1f
     val density = PixelUtil.toPixelFromDIP(1f)
 
@@ -1452,32 +1477,58 @@ internal class RenderedDocument(
       val maxWidth = style.maxColumnWidth
       val columns = (from until to).maxOf { document.cellCount(it) }
       val widths = FloatArray(columns) { style.minColumnWidth }
+      val cellKeys = ArrayList<List<TableCellKey?>>(to - from)
       val cellText = (from until to).map { row ->
+        val keys = ArrayList<TableCellKey?>(document.cellCount(row))
+        cellKeys.add(keys)
         (0 until document.cellCount(row)).map { column ->
-          val cell = SpannableStringBuilder(text, document.cellStart(row, column), document.cellEnd(row, column))
-          if (document.isTableHeader(row)) {
-            // The header's own weight and family when the theme sets them, and
-            // the plain table face when it does not, so a head is never a
-            // different size from the column under it.
-            val face = theme.slotTypeface(
-              ThemeSlots.SLOT_TABLE_HEADER_FONT_FAMILY,
-              theme.number(ThemeSlots.SLOT_TABLE_HEADER_FONT_WEIGHT),
-              false,
+          val start = document.cellStart(row, column)
+          val end = document.cellEnd(row, column)
+          val header = document.isTableHeader(row)
+          // The source's inline spans can carry snapshot-local link indices or
+          // mutable formula drawing state. Cache only span-free source cells.
+          val key = if (text.getSpans(start, end, Any::class.java).isEmpty() &&
+            (end - start) * 24L + 256 <= TABLE_CELL_CACHE_COST
+          ) {
+            TableCellKey(
+              document.text.substring(start, end), style.themeId, style.scale, density,
+              colors.night, containers.third, header, document.cellAlign(row, column),
+              cellPaint.textLocales.toLanguageTags(),
             )
-            if (face != cellPaint.typeface) {
-              cell.setSpan(TypefaceSpan(face), 0, cell.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+          } else null
+          keys.add(key)
+          val prepared = key?.let { tableCellTexts.get(it) } ?: run {
+            val cell = SpannableStringBuilder(text, start, end)
+            if (header) {
+              // The header's own weight and family when the theme sets them, and
+              // the plain table face when it does not, so a head is never a
+              // different size from the column under it.
+              val face = theme.slotTypeface(
+                ThemeSlots.SLOT_TABLE_HEADER_FONT_FAMILY,
+                theme.number(ThemeSlots.SLOT_TABLE_HEADER_FONT_WEIGHT),
+                false,
+              )
+              if (face != cellPaint.typeface) {
+                cell.setSpan(TypefaceSpan(face), 0, cell.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+              }
+              val headerColor =
+                theme.color(ThemeSlots.SLOT_TABLE_HEADER_TEXT_COLOR, colors.night) ?: cellPaint.color
+              cell.setSpan(
+                ForegroundColorSpan(headerColor),
+                0,
+                cell.length,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+              )
             }
-            val headerColor =
-              theme.color(ThemeSlots.SLOT_TABLE_HEADER_TEXT_COLOR, colors.night) ?: cellPaint.color
-            cell.setSpan(
-              ForegroundColorSpan(headerColor),
-              0,
-              cell.length,
-              Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
-            )
+            PreparedTableCell(
+              if (key != null) SpannedString(cell) else cell,
+              ceil(Layout.getDesiredWidth(cell, cellPaint)),
+            ).also {
+              if (key != null) tableCellTexts.put(key, it)
+            }
           }
-          widths[column] = max(widths[column], min(ceil(Layout.getDesiredWidth(cell, cellPaint)), maxWidth))
-          cell
+          widths[column] = max(widths[column], min(prepared.desiredWidth, maxWidth))
+          prepared.text
         }
       }
 
@@ -1490,7 +1541,11 @@ internal class RenderedDocument(
             NativeDocument.ALIGN_RIGHT -> Layout.Alignment.ALIGN_OPPOSITE
             else -> Layout.Alignment.ALIGN_NORMAL
           }
-          buildLayout(cell, cellPaint, ceil(widths[column]).toInt(), alignment)
+          val width = ceil(widths[column]).toInt()
+          val key = cellKeys[rowIndex][column]?.let { TableCellLayoutKey(it, width) }
+          key?.let { tableCellLayouts.get(it) } ?: buildLayout(cell, cellPaint, width, alignment).also {
+            if (key != null) tableCellLayouts.put(key, it)
+          }
         }
       }
       // One border width for the closing grid line, so the last row and column

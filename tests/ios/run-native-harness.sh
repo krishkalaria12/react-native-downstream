@@ -33,6 +33,9 @@ sources=(
   ios/DSLayoutManager.mm ios/DSThemeColors.mm \
   cpp/theme/Theme.cpp cpp/theme/ThemeLayout.cpp cpp/downstream/CodeLayout.cpp cpp/downstream/SegmentPlan.cpp
 )
+if [ -f "$source_root/src/cpp/downstream/TableLayout.cpp" ]; then
+  sources+=(cpp/downstream/TableLayout.cpp)
+fi
 harness_sources=(DSFontsShim.mm)
 harness_main=${DOWNSTREAM_IOS_HARNESS_MAIN:-$ios_dir/Sources/NativeTextKitHarness/main.mm}
 if [ -f "$source_root/src/ios/DSBoxSegmentViews.mm" ]; then

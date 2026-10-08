@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { Block, RenderModel } from './engine';
 import {
+  assertStreamingBatchMatchesFullParse,
   assertStreamingMatchesFullParse,
   CONTAINER,
   hasStyle,
@@ -173,9 +174,12 @@ describe('the three tags', () => {
   });
 
   it('holds every case to the incremental rule', () => {
-    for (const [source] of GRAMMAR) {
-      assertStreamingMatchesFullParse([...source]);
-    }
+    // One spawn for the whole table: a spawn runs the binary's own suite
+    // beside the fixture, so a spawn per case spends the run there rather
+    // than on the rule this test names.
+    assertStreamingBatchMatchesFullParse(
+      GRAMMAR.map(([source]) => [...source])
+    );
   });
 });
 
@@ -201,9 +205,9 @@ describe('line breaks', () => {
   }
 
   it('holds the break cases to the incremental rule', () => {
-    for (const [source] of CASES) {
-      assertStreamingMatchesFullParse(source.split(/(?<=\n)/));
-    }
+    assertStreamingBatchMatchesFullParse(
+      CASES.map(([source]) => source.split(/(?<=\n)/))
+    );
   });
 
   it('clips only trailing styled whitespace while preserving earlier runs', () => {

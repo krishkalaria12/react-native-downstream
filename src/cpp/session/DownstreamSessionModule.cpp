@@ -2,6 +2,7 @@
 
 #include "Clipboard.h"
 #include "ControlledSlots.h"
+#include "PreparedDocument.h"
 #include "FenceSlots.h"
 #include "TagSlots.h"
 #include "MarkdownParser.h"
@@ -330,7 +331,59 @@ jsi::Array toJs(jsi::Runtime &rt, const std::vector<downstream::TagSlot> &slots)
   return array;
 }
 
+/// The tag slots a source holds: answered from a finished preparation when one
+/// exists and otherwise from a bare parse, like `parsedFenceSlots`. No cache of
+/// its own — the fence cache is what the sync path keyed on, and a source that
+/// is prepared is a source the preparation cache covers. A controlled string
+/// is the whole message, so an unclosed tag reads as incomplete, which is
+/// Streamdown's rule for a streaming string that has not finished.
+std::vector<downstream::TagSlot> parsedTagSlots(const std::string &source,
+                                                downstream::ParseOptions parse,
+                                                const std::vector<std::string> &names) {
+  if (names.empty()) {
+    return {};
+  }
+  if (const auto prepared = downstream::PreparedDocument::completed(source, parse)) {
+    if (prepared->result().status == downstream::ParseStatus::Ok && prepared->result().document) {
+      return downstream::tagSlots(*prepared->result().document, source, names, true,
+                                  static_cast<uint32_t>(prepared->result().document->blocks.size()));
+    }
+  }
+  const downstream::ParseResult result = downstream::parseMarkdown(source, parse);
+  if (result.status != downstream::ParseStatus::Ok || !result.document) {
+    return {};
+  }
+  return downstream::tagSlots(*result.document, source, names, true,
+                              static_cast<uint32_t>(result.document->blocks.size()));
+}
+
 } // namespace
+
+jsi::Array DownstreamSessionModule::tagSlots(jsi::Runtime &rt, std::string source, double parseFlags,
+                                             std::vector<std::string> names, std::vector<std::string> tags) {
+  downstream::ParseOptions parse{static_cast<uint32_t>(std::clamp(parseFlags, 0.0, 4294967295.0))};
+  parse.tags = downstream::tagPolicyFromStrings(tags);
+  try {
+    return toJs(rt, parsedTagSlots(source, parse, names));
+  } catch (const std::exception &) {
+    // Unreadable source, same rule as fence slots: an empty answer rather than
+    // a torn render.
+    return jsi::Array(rt, 0);
+  }
+}
+
+jsi::Array DownstreamSessionModule::sessionTagSlots(jsi::Runtime &rt, std::string sessionId, double generation,
+                                                    double sequence, std::vector<std::string> names) {
+  if (!validCounter(generation) || !validCounter(sequence)) {
+    return jsi::Array(rt, 0);
+  }
+  const auto snapshot = downstream::SessionRegistry::publishedSnapshot(
+      sessionId, static_cast<uint64_t>(generation), static_cast<uint64_t>(sequence));
+  if (!snapshot.document || !snapshot.source) {
+    return jsi::Array(rt, 0);
+  }
+  return toJs(rt, downstream::tagSlots(*snapshot.document, *snapshot.source, names, snapshot.live));
+}
 
 jsi::Object DownstreamSessionModule::fenceSlots(jsi::Runtime &rt, std::string source, double mathFlags,
                                                 std::vector<std::string> languages) {

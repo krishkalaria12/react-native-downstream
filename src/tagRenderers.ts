@@ -210,7 +210,7 @@ function readTagSlots(query: TagQuery): readonly MountedTagSlot[] {
       return [];
     }
     return joinTagComponents(
-      module.tagSlots(source, query.parseFlags, names),
+      module.tagSlots(source, query.parseFlags, names, allowedTags),
       resolved
     );
   } catch {

@@ -483,6 +483,10 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
 
 @end
 
+/// Updates mutable TextKit scratch/view storage without editing an unchanged
+/// attributed prefix. The incoming immutable rendering remains untouched.
+void DSUpdateTextStorage(NSTextStorage *storage, NSAttributedString *text);
+
 /// TextKit 1 objects configured identically for measuring and drawing.
 @interface DSTextKitStack : NSObject
 @property (nonatomic, readonly) NSTextStorage *textStorage;

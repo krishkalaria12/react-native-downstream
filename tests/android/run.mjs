@@ -48,6 +48,13 @@ const kotlin = (...names) =>
 /** Each mirror, its table, and the `main` that runs the table. */
 const suites = [
   {
+    jar: 'rendering_cache',
+    sources: [
+      ...kotlin('RenderingCache.kt'),
+      join(here, 'RenderingCacheCheck.kt'),
+    ],
+  },
+  {
     jar: 'reveal_frame',
     sources: [
       ...kotlin('RevealCurve.kt', 'Reveal.kt'),
@@ -177,6 +184,12 @@ try {
       stdio: ['pipe', 'inherit', 'inherit'],
     }
   );
+  execFileSync(process.execPath, [join(here, 'state-application.mjs')], {
+    stdio: 'inherit',
+  });
+  execFileSync(process.execPath, [join(here, 'table-streaming.mjs')], {
+    stdio: 'inherit',
+  });
 } finally {
   rmSync(output, { recursive: true, force: true });
 }

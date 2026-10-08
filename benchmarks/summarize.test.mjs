@@ -177,6 +177,37 @@ const nativeEvent = (sequence, event, timeNs) => ({
   timeNs: String(timeNs),
 });
 
+test('native intervals do not pair starts and ends from different sequences', () => {
+  const summary = summarizeRun(
+    run({
+      streamEvents: [
+        nativeEvent(1, 'parse_start', 1000000),
+        nativeEvent(2, 'parse_end', 100000000),
+      ],
+    })
+  );
+  assert.equal(summary.parseMs.samples, 0);
+  assert.equal(summary.parseMs.p50, null);
+});
+
+test('interleaved measurements retain their own snapshot durations', () => {
+  const summary = summarizeRun(
+    run({
+      streamEvents: [
+        nativeEvent(1, 'measure_start', 1000000),
+        nativeEvent(2, 'measure_start', 2000000),
+        nativeEvent(2, 'measure_end', 3000000),
+        nativeEvent(1, 'measure_end', 11000000),
+        nativeEvent(3, 'measure_start', 12000000),
+        nativeEvent(4, 'measure_end', 14000000),
+      ],
+    })
+  );
+  assert.equal(summary.measurementMs.samples, 2);
+  assert.equal(summary.measurementMs.min, 1);
+  assert.equal(summary.measurementMs.max, 10);
+});
+
 test('coalesced appends each wait for the parse that consumed them', () => {
   const summary = summarizeRun(
     run({

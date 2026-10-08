@@ -25,6 +25,7 @@ NSAttributedStringKey const DSBlockInfoAttributeName = @"DSBlockInfo";
 NSAttributedStringKey const DSLinkIndexAttributeName = @"DSLinkIndex";
 NSAttributedStringKey const DSTagIndexAttributeName = @"DSTagIndex";
 NSAttributedStringKey const DSCaretKindAttributeName = @"DSCaretKind";
+NSString *const DSSpoilerAttributeName = @"DSSpoiler";
 
 /// The character a caret reserves its space with.
 ///
@@ -56,12 +57,6 @@ CGFloat inlineCodeSizeFor(const Theme &theme, CGFloat blockSize, CGFloat scale) 
   }
   return blockSize * inlineCodeScale(theme);
 }
-
-/// Marks a spoiler run, so a press can find it by range rather than by color.
-///
-/// A string constant rather than a boolean because TextKit attributes are
-/// objects, and the value is never read — only its presence matters.
-NSString *const DSSpoilerAttributeName = @"DSSpoiler";
 
 NSString *toNSString(const std::u16string &text) {
   return [NSString stringWithCharacters:reinterpret_cast<const unichar *>(text.data()) length:text.size()];
@@ -419,6 +414,26 @@ void applyTokens(NSMutableAttributedString *text, const Block &block, DSThemeCol
 @end
 
 @implementation DSContainerInfo
+
+- (BOOL)isEqual:(id)object {
+  if (object == self) {
+    return YES;
+  }
+  if (![object isKindOfClass:[DSContainerInfo class]]) {
+    return NO;
+  }
+  DSContainerInfo *other = object;
+  return self.kind == other.kind && self.leading == other.leading && self.width == other.width &&
+      self.continuesPrevious == other.continuesPrevious && self.barWidth == other.barWidth &&
+       self.markerGap == other.markerGap && self.containerId == other.containerId &&
+       self.writtenOpen == other.writtenOpen && self.summary == other.summary &&
+      (self.marker == other.marker || [self.marker isEqualToAttributedString:other.marker]) &&
+      (self.barColor == other.barColor || [self.barColor isEqual:other.barColor]);
+}
+
+- (NSUInteger)hash {
+  return (NSUInteger)self.kind;
+}
 @end
 
 @implementation DSTagStyles
@@ -486,6 +501,29 @@ void applyTokens(NSMutableAttributedString *text, const Block &block, DSThemeCol
 @end
 
 @implementation DSBlockInfo
+
+/// Text storage can keep metadata on an unchanged prefix only when every
+/// drawing and accessibility field matches the incoming immutable snapshot.
+/// Equality also lets TextKit treat old/new metadata as one block's range.
+- (BOOL)isEqual:(id)object {
+  if (object == self) {
+    return YES;
+  }
+  if (![object isKindOfClass:[DSBlockInfo class]]) {
+    return NO;
+  }
+  DSBlockInfo *other = object;
+  return self.index == other.index && self.decoration == other.decoration && self.headingLevel == other.headingLevel &&
+      self.spacingBefore == other.spacingBefore && self.contentLeading == other.contentLeading &&
+      self.rightToLeft == other.rightToLeft && [self.containers isEqualToArray:other.containers] &&
+      (self.rule == other.rule || [self.rule isEqual:other.rule]) &&
+      (self.accessibilityPrefix == other.accessibilityPrefix ||
+       [self.accessibilityPrefix isEqualToString:other.accessibilityPrefix]);
+}
+
+- (NSUInteger)hash {
+  return (NSUInteger)self.index;
+}
 @end
 
 @interface DSDecorationMetrics ()
@@ -494,6 +532,21 @@ void applyTokens(NSMutableAttributedString *text, const Block &block, DSThemeCol
 @end
 
 @implementation DSDecorationMetrics
+
+- (BOOL)isEqual:(id)object {
+  if (object == self) {
+    return YES;
+  }
+  if (![object isKindOfClass:[DSDecorationMetrics class]]) {
+    return NO;
+  }
+  DSDecorationMetrics *other = object;
+  return self.height == other.height && (self.color == other.color || [self.color isEqual:other.color]);
+}
+
+- (NSUInteger)hash {
+  return self.color.hash;
+}
 @end
 
 /// Keeps a lowered run from lifting its line.
@@ -560,6 +613,60 @@ void applyTokens(NSMutableAttributedString *text, const Block &block, DSThemeCol
 }
 
 @end
+
+/// Compare the rendered characters and attributes, because completing Markdown
+/// can restyle characters that were already visible in an earlier snapshot.
+static NSUInteger unchangedPrefix(NSAttributedString *before, NSAttributedString *after) {
+  const NSUInteger limit = MIN(before.length, after.length);
+  NSString *oldText = before.string;
+  NSString *newText = after.string;
+  NSUInteger prefix = 0;
+  unichar oldCharacters[512];
+  unichar newCharacters[512];
+  while (prefix < limit) {
+    const NSUInteger count = MIN((NSUInteger)512, limit - prefix);
+    [oldText getCharacters:oldCharacters range:NSMakeRange(prefix, count)];
+    [newText getCharacters:newCharacters range:NSMakeRange(prefix, count)];
+    NSUInteger matching = 0;
+    while (matching < count && oldCharacters[matching] == newCharacters[matching]) {
+      matching++;
+    }
+    prefix += matching;
+    if (matching != count) {
+      break;
+    }
+  }
+  NSUInteger index = 0;
+  while (index < prefix) {
+    NSRange oldRange;
+    NSRange newRange;
+    NSDictionary *oldAttributes = [before attributesAtIndex:index effectiveRange:&oldRange];
+    NSDictionary *newAttributes = [after attributesAtIndex:index effectiveRange:&newRange];
+    if (![oldAttributes isEqualToDictionary:newAttributes]) {
+      return index;
+    }
+    index = MIN(prefix, MIN(NSMaxRange(oldRange), NSMaxRange(newRange)));
+  }
+  return prefix;
+}
+
+void DSUpdateTextStorage(NSTextStorage *storage, NSAttributedString *text) {
+  NSUInteger prefix = unchangedPrefix(storage, text);
+  if (prefix == storage.length && prefix == text.length) {
+    return;
+  }
+  if (prefix > 0) {
+    // Include the preceding composed character: appending a combining mark or
+    // completing an emoji sequence can change its glyph without changing its
+    // leading UTF-16 units. Never split a surrogate pair at the edit boundary.
+    prefix = MIN([storage.string rangeOfComposedCharacterSequenceAtIndex:prefix - 1].location,
+                 [text.string rangeOfComposedCharacterSequenceAtIndex:prefix - 1].location);
+  }
+  const NSRange replacement = NSMakeRange(prefix, storage.length - prefix);
+  NSAttributedString *suffix = [text attributedSubstringFromRange:NSMakeRange(prefix, text.length - prefix)];
+  [storage replaceCharactersInRange:replacement withAttributedString:suffix];
+}
+
 
 @implementation DSTextKitStack
 
@@ -695,6 +802,7 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
   NSLock *_measurementLock;
   std::array<Measurement, 3> _measurements;
   NSUInteger _measurementCount;
+  BOOL _allowsTailMeasurementReuse;
 }
 
 /// `inCard` is true for the one-block body of a code card: the card draws the
@@ -714,6 +822,7 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
                            variants:(DSLinkVariants *)variants
                           tagStyles:(DSTagStyles *)tagStyles {
   DSTextSegment *segment = [DSTextSegment new];
+  segment->_allowsTailMeasurementReuse = !inCard;
   segment->_measurementLock = [NSLock new];
   segment.theme = [DSThemeColors colorsFor:theme];
   DSThemeColors *colors = segment.theme;
@@ -901,13 +1010,41 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
   return segment;
 }
 
+- (BOOL)allowsTailMeasurementReuse {
+  return _allowsTailMeasurementReuse;
+}
+
 /// Lays the text out once at `width` and hands back the measurements callers
 /// need, so height and used width come from the same layout.
 static void layoutText(DSTextSegment *segment, NSAttributedString *text, CGFloat width, CGFloat *height,
                        CGFloat *usedWidth) {
-  DSTextKitStack *stack = [[DSTextKitStack alloc] initWithLayoutManager:[NSLayoutManager new]];
-  stack.textContainer.size = CGSizeMake(std::isfinite(width) ? width : CGFLOAT_MAX, CGFLOAT_MAX);
-  [stack.textStorage setAttributedString:text];
+  // Worker-local mutable scratch layouts never belong to an immutable
+  // snapshot or mounted view. Two exact widths and a text cap bound retention.
+  struct Workspace {
+    __strong DSTextKitStack *stack = nil;
+    CGFloat width = 0;
+  };
+  static thread_local std::array<Workspace, 2> workspaces;
+  DSTextKitStack *stack = nil;
+  if ([segment allowsTailMeasurementReuse] && text.length <= 64 * 1024 && std::isfinite(width) && width > 0) {
+    size_t index = 0;
+    while (index < workspaces.size() && (workspaces[index].stack == nil || workspaces[index].width != width)) {
+      index++;
+    }
+    if (index == workspaces.size()) {
+      index = workspaces.size() - 1;
+      workspaces[index].stack = [[DSTextKitStack alloc] initWithLayoutManager:[NSLayoutManager new]];
+      workspaces[index].width = width;
+      workspaces[index].stack.textContainer.size = CGSizeMake(width, CGFLOAT_MAX);
+    }
+    std::swap(workspaces[0], workspaces[index]);
+    stack = workspaces[0].stack;
+    DSUpdateTextStorage(stack.textStorage, text);
+  } else {
+    stack = [[DSTextKitStack alloc] initWithLayoutManager:[NSLayoutManager new]];
+    stack.textContainer.size = CGSizeMake(std::isfinite(width) ? width : CGFLOAT_MAX, CGFLOAT_MAX);
+    [stack.textStorage setAttributedString:text];
+  }
   [stack.layoutManager ensureLayoutForTextContainer:stack.textContainer];
   const CGRect used = [stack.layoutManager usedRectForTextContainer:stack.textContainer];
   // Unrounded, so a run split into several segments stacks to the same height
@@ -1640,6 +1777,81 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
 @implementation DSCommittedSegment
 @end
 
+// Approximate metadata/tail cost, following the segment cache's text weighting.
+// Shared committed payloads are omitted; renderings can retain them even after
+// the separate committed segment cache evicts them.
+static constexpr NSUInteger kRenderedDocumentCostLimit = 8 * 1024 * 1024;
+
+static NSUInteger addingRenderingCost(NSUInteger cost, size_t characters, NSUInteger metadata) {
+  // Only the budget comparison matters above this value. Saturation keeps a
+  // pathological source length from wrapping the estimate back to a small cost.
+  constexpr NSUInteger cap = kRenderedDocumentCostLimit + 1;
+  if (cost >= cap || metadata >= cap - cost) {
+    return cap;
+  }
+  const NSUInteger remaining = cap - cost - metadata;
+  return characters > remaining / 16 ? cap : cost + metadata + characters * 16;
+}
+
+/// NSCache may discard an object larger than its budget immediately. Keep only
+/// the latest such rendering reusable until the next insertion, which releases
+/// that slot's previous owner.
+@interface DSDocumentRenderingCache : NSObject
+- (DSRenderedDocument *)objectForKey:(NSString *)key;
+- (void)setObject:(DSRenderedDocument *)object forKey:(NSString *)key cost:(NSUInteger)cost;
+- (void)removeAllObjects;
+@end
+
+@implementation DSDocumentRenderingCache {
+  NSCache<NSString *, DSRenderedDocument *> *_cache;
+  NSLock *_lock;
+  NSString *_latestOversizedKey;
+  DSRenderedDocument *_latestOversized;
+}
+
+- (instancetype)init {
+  if ((self = [super init])) {
+    _cache = [NSCache new];
+    _cache.countLimit = 128;
+    _cache.totalCostLimit = kRenderedDocumentCostLimit;
+    _lock = [NSLock new];
+  }
+  return self;
+}
+
+- (DSRenderedDocument *)objectForKey:(NSString *)key {
+  [_lock lock];
+  DSRenderedDocument *value = [_latestOversizedKey isEqualToString:key] ? _latestOversized : [_cache objectForKey:key];
+  [_lock unlock];
+  return value;
+}
+
+- (void)setObject:(DSRenderedDocument *)object forKey:(NSString *)key cost:(NSUInteger)cost {
+  [_lock lock];
+  _latestOversizedKey = nil;
+  _latestOversized = nil;
+  if (cost > kRenderedDocumentCostLimit) {
+    _cache.countLimit = 127;
+    [_cache removeObjectForKey:key];
+    _latestOversizedKey = [key copy];
+    _latestOversized = object;
+  } else {
+    _cache.countLimit = 128;
+    [_cache setObject:object forKey:key cost:cost];
+  }
+  [_lock unlock];
+}
+
+- (void)removeAllObjects {
+  [_lock lock];
+  _latestOversizedKey = nil;
+  _latestOversized = nil;
+  [_cache removeAllObjects];
+  _cache.countLimit = 128;
+  [_lock unlock];
+}
+@end
+
 @interface DSRenderedDocument ()
 @property (nonatomic) DSThemeColors *theme;
 @end
@@ -1685,16 +1897,16 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   /// Cache native geometry. Measurement needs no NSValue boxing, and each
   /// caller copies only the frames it consumes while holding the cache lock.
   DSStackedLayout _cachedLayout;
+  NSUInteger _cacheCost;
 }
 
-+ (NSCache<NSString *, DSRenderedDocument *> *)cache {
-  static NSCache *cache;
++ (DSDocumentRenderingCache *)cache {
+  static DSDocumentRenderingCache *cache;
   static dispatch_once_t once;
   dispatch_once(&once, ^{
-    cache = [NSCache new];
     // Worker threads prepare every document in a commit before Fabric
     // measures them, so this holds at least a screenful of messages.
-    cache.countLimit = 128;
+    cache = [DSDocumentRenderingCache new];
   });
   return cache;
 }
@@ -1729,6 +1941,9 @@ static NSString *committedVariantsKey(DSLinkVariants *variants) {
                   caretAfter:(const PlacedCaret &)caretAfter
                   variants:(DSLinkVariants *)variants
                  tagStyles:(DSTagStyles *)tagStyles {
+  // Token colors only affect code. Keep shared prose/table/image segments
+  // reusable when a view toggles highlighting on a document containing code.
+  syntaxHighlighting = kind == SegmentKind::Code ? syntaxHighlighting : NO;
   // The theme is in the key because a segment holds resolved colors and
   // measured sizes, and a second theme must not read the first one's.
   // The plan's kind is in it for the same reason: a math block and an image-only
@@ -1875,6 +2090,13 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
                                   caret:caret
                                variants:variants tagStyles:tagStyles];
   }
+  // Preparation requests highlighting, while mounting uses the view prop.
+  // A code-free document paints identically under either setting, so it can
+  // share the prepared rendering and its exact-width measurements.
+  if (!syntaxHighlighting) {
+    syntaxHighlighting = std::none_of(document->blocks.begin(), document->blocks.end(),
+                                    [](const Block &block) { return block.kind == BlockKind::CodeBlock; });
+  }
   // The theme id is in the key rather than the theme itself, because interned
   // themes are stable for the life of a process and their id is all a cache key
   // needs to tell two of them apart. The caret is in it for the same reason: its
@@ -1890,12 +2112,12 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
   DSRenderedDocument *rendered = [self.cache objectForKey:key];
   if (rendered == nil) {
     rendered = [[self alloc] initWithDocument:document
-                                   fontScale:fontScale
-                          syntaxHighlighting:syntaxHighlighting
-                                    theme:themeHandle ? themeHandle : Theme::defaultTheme()
-                                   caret:caret
-                                variants:variants tagStyles:tagStyles];
-    [self.cache setObject:rendered forKey:key];
+                                     fontScale:fontScale
+                            syntaxHighlighting:syntaxHighlighting
+                                      theme:themeHandle ? themeHandle : Theme::defaultTheme()
+                                       caret:caret
+                                   variants:variants tagStyles:tagStyles];
+    [self.cache setObject:rendered forKey:key cost:rendered->_cacheCost];
   }
   return rendered;
 }
@@ -1938,8 +2160,17 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
   _settledBlocks = document.settledBlocks;
   _variants = variants;
   _tagStyles = tagStyles;
+  _cacheCost = 1024;
 
   for (const SegmentPlan &segment : planSegments(document)) {
+    // Arrays, block indexes, gaps and the cached frame are snapshot-owned even
+    // when the segment's attributed text is shared with earlier snapshots.
+    _cacheCost = addingRenderingCost(_cacheCost, 0, 128);
+    if (!segment.committed) {
+      for (size_t index = segment.from; index < segment.to; ++index) {
+        _cacheCost = addingRenderingCost(_cacheCost, document.blocks[index].text.size(), 256);
+      }
+    }
     // The caret belongs to the last segment, whichever kind it is, because that is
     // where the document ends. The plan is in order, so that is the one segment
     // that reaches the last block.
@@ -2023,6 +2254,7 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
   // text arrives it is simply gone and the block that arrives has the same gap
   // above it.
   if (caret.place == CaretPlace::OwnLine) {
+    _cacheCost = addingRenderingCost(_cacheCost, 0, 384);
     [segments addObject:[DSRenderedDocument ownLineCaretSegmentWithTheme:theme
                                                                   scale:scale
                                                              markerFont:markerFont
@@ -2090,6 +2322,7 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
                 code:(const downstream::CodeLayout &)code
               images:(const downstream::ImageStateLayout &)images
                hosts:(const downstream::HostLayout &)hosts
+              tables:(const downstream::TableLayout &)tables
              choices:(const downstream::ReaderChoices &)choices {
   if ([segment isKindOfClass:DSTextSegment.class]) {
     DSTextSegment *text = (DSTextSegment *)segment;
@@ -2242,6 +2475,7 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
     }
     if (includeHosts) {
       cached.hosts = _cachedLayout.hosts;
+      cached.tagHosts = _cachedLayout.tagHosts;
     }
     cached.size = _cachedLayout.size;
     [_lock unlock];
@@ -2286,7 +2520,10 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
       // id rather than code ordinal.
       const uint32_t custom = text.customContainer;
       if (custom != UINT32_MAX && hosts.hostsTag(custom)) {
-        const CGFloat leading = text.contentLeading;
+        // The container's own column, from the segment's first block: the slot
+        // child is the container, so it starts where the container's text would.
+        DSBlockInfo *first = (DSBlockInfo *)text.blocks.firstObject;
+        const CGFloat leading = first != nil ? first.contentLeading : 0;
         const CGFloat column = constrained ? std::max<CGFloat>(0, width - leading) : 0;
         stacked.tagHosts.emplace_back(custom, CGRectMake(leading, top, column, bottom - top));
       }

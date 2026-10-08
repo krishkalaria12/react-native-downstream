@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -75,6 +76,11 @@ struct IncrementalCounters {
 /// blocks live in storage shared by every later snapshot, so an update copies
 /// only its tail. Their identities are unique across all parsers and never
 /// reused, so an identity always names the same block content.
+///
+/// Closed blocks with unresolved references may also be shared provisionally
+/// while the source has no definition markers or bracket-math openers. They
+/// have no identities and are not settled. A dependency marker revokes that
+/// provisional prefix before the next parse, leaving the strict prefix intact.
 class IncrementalParser {
 public:
   explicit IncrementalParser(ParseMode mode = ParseMode::FullParse,
@@ -89,7 +95,16 @@ public:
   /// document changing. JavaScript takes the option at `createMarkdownStream` and
   /// keeps it across `reset()` for the same reason.
   const ParseOptions &options() const { return parse_; }
-  void setParse(ParseOptions parse) { parse_ = parse; }
+  void setParse(ParseOptions parse) {
+    if (parse_ == parse) return;
+    parse_ = parse;
+    clearCommitted();
+    dependencyScannedBytes_ = 0;
+    referenceDependentSource_ = false;
+    openFence_ = false;
+    highlight_.clear();
+    replaced_ = true;
+  }
 
   /// Appends accepted bytes to the canonical source.
   void append(std::string_view chunk);
@@ -105,7 +120,10 @@ public:
   std::string_view source() const { return source_; }
   DocumentHandle document() const { return document_; }
   IncrementalCounters counters() const { return counters_; }
-  size_t committedBytes() const { return committedBytes_; }
+  size_t committedBytes() const { return referencePrefix_ ? referencePrefix_->bytes : committedBytes_; }
+  /// Source prefix reused while no reference definition or bracket-math opener
+  /// has arrived. Unlike committedBytes(), this prefix can be revoked.
+  size_t reusedBytes() const { return committedBytes_; }
 
   /// Opts the unstable tail into provisional styling. Off by default, which is
   /// why every open span renders literally unless a caller asks for this.
@@ -162,6 +180,9 @@ private:
   bool appendOpenFence();
   void watchOpenFence(std::string_view source, size_t from, size_t blocksBefore);
   size_t committedCount() const;
+  size_t settledCount() const;
+  void invalidateReferencePrefix();
+  void scanReferenceDependencies();
   void clearCommitted();
   void resetScan();
 
@@ -183,6 +204,22 @@ private:
   uint32_t committedUtf16_{0};
   uint32_t committedContainers_{0};
   uint32_t committedTables_{0};
+
+  // A closed, definition-free region with unresolved references can be reused
+  // provisionally. Its blocks have no identities and never count as settled.
+  // A definition marker revokes everything after this strict-prefix checkpoint.
+  struct ReferencePrefix {
+    std::shared_ptr<const SharedList<Block>::Prefix> blocks;
+    std::shared_ptr<const SharedList<Link>::Prefix> links;
+    std::shared_ptr<const SharedList<Image>::Prefix> images;
+    size_t bytes;
+    uint32_t utf16;
+    uint32_t containers;
+    uint32_t tables;
+  };
+  std::optional<ReferencePrefix> referencePrefix_;
+  size_t dependencyScannedBytes_{0};
+  bool referenceDependentSource_{false};
 
   // Complete lines are scanned once for commit candidates. A rejected
   // candidate backs off in proportion to the uncommitted region.

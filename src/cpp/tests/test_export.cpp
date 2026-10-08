@@ -663,6 +663,9 @@ void testTagSlots() {
   CHECK(slots[0].name == "user", "the slot names its tag");
   CHECK(slots[0].markdown == "Hello **there**.", "the slot holds the body's source, not a re-serialization");
   CHECK(!slots[0].incomplete, "a closed container is complete");
+  const auto liveClosed = tagSlots(*result.document, source, {"user"}, true);
+  CHECK(liveClosed.size() == 1 && !liveClosed[0].incomplete,
+        "the last closed container is complete even while the stream is live");
   CHECK(slots[0].blockCount == 1, "and it spans its one block");
   // A tag with no renderer draws natively, so there is nothing to mount for it.
   CHECK(tagSlots(*result.document, source, {"team"}, false, settled).empty(), "an unnamed tag is no slot");
@@ -674,6 +677,13 @@ void testTagSlots() {
   const std::vector<TagSlot> pending = tagSlots(*open.document, "<user>\n\nHello.\n", {"user"}, true);
   CHECK(pending.size() == 1, "an open container is still a slot");
   CHECK(pending[0].incomplete, "but an incomplete one");
+  const auto controlledOpen = tagSlots(*open.document, "<user>\n\nHello.\n", {"user"}, true,
+                                       static_cast<uint32_t>(open.document->blocks.size()));
+  CHECK(controlledOpen.size() == 1 && controlledOpen[0].incomplete,
+        "a controlled unclosed container stays incomplete even with a settled prefix");
+  const auto finishedOpen = tagSlots(*open.document, "<user>\n\nHello.\n", {"user"}, false,
+                                    static_cast<uint32_t>(open.document->blocks.size()));
+  CHECK(finishedOpen.size() == 1 && !finishedOpen[0].incomplete, "finish settles a container without a closer");
 }
 
 /// The gutter is as wide as the widest number it draws, and never narrower than

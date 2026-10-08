@@ -70,7 +70,7 @@ NSString *const kPlaceholder = @"\u200b";
   _segment = segment;
   ((DSLayoutManager *)self.layoutManager).blockRanges = segment.blockRanges;
   [self applyDetailsState];
-  [_stack.textStorage setAttributedString:segment.attributedString];
+  DSUpdateTextStorage(_stack.textStorage, segment.attributedString);
   self.selectedRange = NSMakeRange(0, 0);
   invalidateAccessibleLinks(_cachedAccessibilityElements);
   _cachedAccessibilityElements = nil;
@@ -81,27 +81,6 @@ NSString *const kPlaceholder = @"\u200b";
 - (void)setBlockOffset:(NSInteger)blockOffset {
   _blockOffset = blockOffset;
   ((DSLayoutManager *)self.layoutManager).blockOffset = blockOffset;
-}
-
-- (void)handleDetailsTap:(UITapGestureRecognizer *)recognizer {
-  if (recognizer.state != UIGestureRecognizerStateEnded) {
-    return;
-  }
-  const uint32_t container = [self detailsContainerAtPoint:[recognizer locationInView:self]];
-  if (container == 0) {
-    return;
-  }
-  [self.controlDelegate didToggleDetailsAtContainer:container
-                                               open:![self isOpenForContainer:container]];
-}
-
-/// The tap that opens a body only ever begins on one, so the text view's own
-/// gesture recognizers are left alone everywhere else.
-- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
-  if (![gestureRecognizer.view isKindOfClass:UITextView.class]) {
-    return YES;
-  }
-  return [self detailsContainerAtPoint:gestureRecognizer.locationInView:self] == 0;
 }
 
 - (void)handleDetailsTap:(UITapGestureRecognizer *)recognizer {
@@ -119,6 +98,15 @@ NSString *const kPlaceholder = @"\u200b";
   // mean here, and it is hit-tested by range rather than by glyph because hidden
   // text has no ink to aim at.
   [self toggleSpoilersAtPoint:at];
+}
+
+/// The tap that opens a body only ever begins on one, so the text view's own
+/// gesture recognizers are left alone everywhere else.
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
+  if (![gestureRecognizer.view isKindOfClass:UITextView.class]) {
+    return YES;
+  }
+  return [self detailsContainerAtPoint:[gestureRecognizer locationInView:self]] == 0;
 }
 
 /// The layout manager is what splits the glyph runs, so the provider is its as
@@ -144,10 +132,16 @@ NSString *const kPlaceholder = @"\u200b";
                        }];
   UIMenu *menu = [UIMenu menuWithTitle:@""
                                  image:nil
-                            identifier:UIMenuNone
+                            identifier:nil
                                options:UIMenuOptionsDisplayInline
                               children:@[ copyMarkdown ]];
-  [builder insertSiblingMenu:menu afterMenuForAction:@selector(copy:)];
+  // Beside the platform's standard edit menu rather than after the Copy item:
+  // the action-based sibling API is gone from the SDK, and the standard menu
+  // only has a public identifier from iOS 16. Below that the platform's own
+  // menu stands as is, and the item is unavailable rather than misplaced.
+  if (@available(iOS 16.0, *)) {
+    [builder insertSiblingMenu:menu afterMenuForIdentifier:UIMenuStandardEdit];
+  }
 }
 
 /// The selection as the Markdown that produced it, or nothing when there is no
@@ -185,9 +179,11 @@ NSString *const kPlaceholder = @"\u200b";
 }
 
 - (void)setLinkPreview:(BOOL)linkPreview {
-  if ([self respondsToSelector:@selector(setAllowsLinkPreview:)]) {
-    self.allowsLinkPreview = linkPreview;
-  }
+  // UITextView offers no link preview API to forward this to: a long press is
+  // the app's, through `onLinkLongPress`, on every iOS this library builds
+  // for. Kept as a setter so the document view's fan-out compiles, and a
+  // no-op so a prop that does nothing is visibly nothing.
+  (void)linkPreview;
 }
 
 - (void)setRevealProvider:(id<DSRevealProvider>)revealProvider {
@@ -301,7 +297,7 @@ NSString *const kPlaceholder = @"\u200b";
   if (!_detailsToggle || _segment == nil) {
     return 0;
   }
-  const NSUInteger at = [self layoutManager glyphIndexForPoint:point inTextContainer:self.textContainer];
+  const NSUInteger at = [self.layoutManager glyphIndexForPoint:point inTextContainer:self.textContainer];
   if (at >= self.textStorage.length) {
     return 0;
   }
