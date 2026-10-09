@@ -619,6 +619,9 @@ static void checkCellBreakHeight() {
 
 #import "DSSegmentViewport.h"
 #include "PerformanceChecks.mm"
+#ifndef BASELINE
+#include "SnapshotStringChecks.mm"
+#endif
 
 int main() {
   @autoreleasepool {
@@ -626,6 +629,7 @@ int main() {
     checkHighlightVariants();
 #ifndef BASELINE
     checkTableCellReuse();
+    checkSnapshotStrings();
     checkExactStackWidths();
     checkLazyHostedFallback();
     checkVisibleLineMarks();

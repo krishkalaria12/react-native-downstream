@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -44,6 +45,13 @@ class SnapshotText {
       node = node->children[(index / capacity(level - 1)) % kBranches].get();
     }
     return *node;
+  }
+  static std::shared_ptr<const Node> pageOwnerAt(const Pages &pages, size_t index) {
+    auto node = pages.root;
+    for (size_t level = pages.levels; level > 0; level--) {
+      node = node->children[(index / capacity(level - 1)) % kBranches];
+    }
+    return node;
   }
   static std::shared_ptr<const Node> put(std::shared_ptr<const Node> node, size_t levels,
                                        size_t index, std::u16string page, uint64_t &copied) {
@@ -85,6 +93,44 @@ public:
     return pages_ ? pageAt(*pages_, index / kPageUnits).page[index % kPageUnits] : (*builder_)[index];
   }
   char16_t back() const { return (*this)[size() - 1]; }
+  /// Immutable chunks let bridges transfer or copy ranges without flat(). The
+  /// snapshot owns their views; retain chunkOwner when a view outlives it.
+  size_t chunkCount() const { return size() / kPageUnits + (size() % kPageUnits != 0); }
+  bool hasPages() const { return pages_ != nullptr; }
+  std::u16string_view chunk(size_t index) const {
+    if (index >= chunkCount()) throw std::out_of_range("SnapshotText chunk");
+    if (pages_) return pageAt(*pages_, index).page;
+    return std::u16string_view(*builder_).substr(index * kPageUnits, kPageUnits);
+  }
+  std::shared_ptr<const void> chunkOwner(size_t index) const {
+    if (index >= chunkCount()) throw std::out_of_range("SnapshotText chunk owner");
+    if (pages_) return pageOwnerAt(*pages_, index);
+    return builder_;
+  }
+  template<class Visitor>
+  void forEachChunk(size_t start, size_t count, Visitor &&visitor) const {
+    if (start > size() || count > size() - start) throw std::out_of_range("SnapshotText range");
+    while (count != 0) {
+      const auto units = chunk(start / kPageUnits);
+      const size_t offset = start % kPageUnits;
+      const size_t take = std::min(count, units.size() - offset);
+      visitor(units.substr(offset, take));
+      start += take;
+      count -= take;
+    }
+  }
+  void copyTo(char16_t *destination, size_t start, size_t count) const {
+    forEachChunk(start, count, [&](std::u16string_view units) {
+      std::copy(units.begin(), units.end(), destination);
+      destination += units.size();
+    });
+  }
+  std::u16string copyRange(size_t start, size_t count = std::u16string::npos) const {
+    if (start > size()) throw std::out_of_range("SnapshotText substring");
+    std::u16string result(std::min(count, size() - start), u'\0');
+    copyTo(result.data(), start, result.size());
+    return result;
+  }
   const std::u16string &flat() const {
     static const std::u16string emptyText;
     if (!pages_) return builder_ ? *builder_ : emptyText;
@@ -109,10 +155,20 @@ public:
   const char16_t *c_str() const { return flat().c_str(); }
   auto begin() const { return flat().begin(); }
   auto end() const { return flat().end(); }
-  std::u16string substr(size_t start, size_t count = std::u16string::npos) const { return flat().substr(start, count); }
+  std::u16string substr(size_t start, size_t count = std::u16string::npos) const { return copyRange(start, count); }
   int compare(size_t start, size_t count, std::u16string_view other) const { return flat().compare(start, count, other); }
   size_t find(std::u16string_view needle, size_t start = 0) const { return flat().find(needle, start); }
-  size_t find(char16_t needle, size_t start = 0) const { return flat().find(needle, start); }
+  size_t find(char16_t needle, size_t start = 0) const {
+    if (start >= size()) return std::u16string::npos;
+    while (start < size()) {
+      const auto units = chunk(start / kPageUnits);
+      const size_t offset = start % kPageUnits;
+      const size_t found = units.find(needle, offset);
+      if (found != std::u16string::npos) return start - offset + found;
+      start += units.size() - offset;
+    }
+    return std::u16string::npos;
+  }
   size_t rfind(std::u16string_view needle, size_t start = std::u16string::npos) const { return flat().rfind(needle, start); }
   void clear() { builder_.reset(); pages_.reset(); }
   void reserve(size_t size) { write().reserve(size); }

@@ -791,6 +791,14 @@ void testCodeLineStarts() {
 
   const std::vector<uint32_t> empty = codeLineStarts(u"");
   CHECK(empty.size() == 1 && empty[0] == 0, "an empty block has one line to number");
+  SnapshotText pages;
+  const std::u16string source = std::u16string(1023, u'x') + u"\n\xd83d\xde00\n\xd83d";
+  pages.appendSnapshot(source);
+  CHECK(codeLineStarts(pages) == codeLineStarts(std::u16string_view(source)),
+        "code line lookup reads pages across newline and surrogate boundaries");
+  CHECK(utf16ToUtf8(pages) == utf16ToUtf8(std::u16string_view(source)),
+        "UTF-8 export preserves valid pairs and isolated surrogate replacement across pages");
+  CHECK(pages.flattenedBytes() == 0, "code metadata and UTF-8 conversion do not flatten snapshot pages");
 }
 
 // ------------------------------------------------------------- code export

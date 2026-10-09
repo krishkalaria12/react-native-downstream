@@ -8,12 +8,13 @@ import com.facebook.react.uimanager.PixelUtil
 import java.lang.ref.WeakReference
 
 /**
- * A range of a parsed document's blocks, flattened by the native engine
- * (DownstreamJni.cpp). Block indices and text offsets are relative to the
- * range. Table layouts must match that file.
+ * A range of a parsed document's blocks exported by the native engine.
+ * Single nonempty code blocks use immutable UTF-16 pages; other ranges use a
+ * String. Block indices and text offsets are relative to the range, independent
+ * of text storage. Table layouts must match DownstreamJni.cpp.
  */
 internal class NativeDocument(
-  val text: String,
+  val text: CharSequence,
   private val blocks: IntArray,
   private val containers: IntArray,
   private val runs: IntArray,
@@ -723,7 +724,11 @@ internal object DownstreamNative {
     val parts = nativeReadDocument(id, from, to, themeId) ?: return null
     @Suppress("UNCHECKED_CAST")
     return NativeDocument(
-      text = parts[0] as String,
+      text = when (val value = parts[0]) {
+        is String -> value
+        is Array<*> -> PagedText(value as Array<String>)
+        else -> error("Unexpected native text representation")
+      },
       blocks = parts[1] as IntArray,
       containers = parts[2] as IntArray,
       runs = parts[3] as IntArray,

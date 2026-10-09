@@ -370,7 +370,7 @@ internal class RenderedDocument(
     private fun segmentCost(value: Segment): Long = when (value) {
       // Precomputed text also keeps a width per character.
       is TextSegment -> value.text.length * 24L + 256
-      is CodeSegment -> value.textLength * 24L + 512
+      is CodeSegment -> value.textLength * 24L + 512 + (value.sourcePages?.length ?: 0) * 2L
       is TableSegment -> value.accessibilityText.length * 32L + 1024
       // Picture bitmaps belong to the image pipeline's cache.
       is ImageSegment -> 512L
@@ -1287,10 +1287,11 @@ internal class RenderedDocument(
         }
         val seedKey = listOf(style.themeId, style.scale, style.density, colors.night,
           planned.from, streamingPaint.textLocales.toLanguageTags()).joinToString(":")
-        val previous = streamingParagraphs.matching(seedKey, document.text)
-        StreamingParagraphLayout(document.text, streamingPaint, previous,
+        val paragraphText = document.text.toString()
+        val previous = streamingParagraphs.matching(seedKey, paragraphText)
+        StreamingParagraphLayout(paragraphText, streamingPaint, previous,
           px(document.blockLineHeight(0)).toInt()).also {
-          streamingParagraphs.put(seedKey, document.text, it)
+          streamingParagraphs.put(seedKey, paragraphText, it)
         }
       } else null
       val displayText = if (streamingParagraph != null) {
@@ -1335,6 +1336,7 @@ internal class RenderedDocument(
           caretOffset,
           caret.kind,
           traceId,
+          sourcePages = document.text as? PagedText,
         )
       }
       // The plan grouped this segment for one custom container, if it did: the
@@ -1382,7 +1384,7 @@ internal class RenderedDocument(
       if (planned.kind != SEGMENT_TEXT || caret.kind != 0 ||
         document.text.length > 32 * 1024 || !document.isPlainParagraph()
       ) return null
-      return PlainParagraphKey(document.text, listOf(
+      return PlainParagraphKey(document.text.toString(), listOf(
         style.themeId, style.scale, style.density, style.colors.night,
         document.blockFontSize(0), document.blockFontWeight(0), document.blockItalic(0),
         document.blockFontFamily(0), document.blockLineHeight(0), document.blockColorSlot(0),
@@ -1453,7 +1455,7 @@ internal class RenderedDocument(
       // The literal with its delimiters, which is what `Block::text` holds and what a
       // copy produces. It is the segment's text whether or not a layout exists, so
       // the fallback needs nothing extra to be the same words.
-      val literal = document.text
+      val literal = document.text.toString()
       val display = document.blockMathDisplay(0)
       return MathSegment(
         literal = literal,
@@ -1522,6 +1524,7 @@ internal class RenderedDocument(
       caretOffset: Int = -1,
       caretKind: Int = 0,
       traceId: Long = 0L,
+      sourcePages: CharSequence? = null,
     ): CodeSegment {
       val newline = text.indexOfFirst { it == '\n' }
       val firstLine = text.substring(0, if (newline < 0) text.length else newline).toString()
@@ -1563,6 +1566,7 @@ internal class RenderedDocument(
         caretOffset = caretOffset,
         caretKind = caretKind,
         gapBefore = gapBefore,
+        sourcePages = sourcePages,
         prepareText = {
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             PrecomputedTexts.create(displayText, style.paint, traceId)

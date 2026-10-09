@@ -105,7 +105,8 @@ int main(int argc, char **argv) {
       (void)flattenedTailBytes;
       std::printf("\"fence_snapshot_storage_bytes_copied\":null,\"fence_append_scan_bytes\":null,\"flattened_last_tail_bytes\":null,");
 #endif
-      std::printf("\"samples_ms\":[");
+      std::printf("\"highlight_token_bytes_copied\":%llu,\"samples_ms\":[",
+          static_cast<unsigned long long>(counters.highlightTokenBytesCopied));
       for (size_t index = 0; index < samples.size(); ++index) std::printf("%s%.6f", index ? "," : "", samples[index]);
       std::puts("]}");
     }

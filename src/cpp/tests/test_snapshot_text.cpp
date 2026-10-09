@@ -9,6 +9,45 @@
 using namespace downstream;
 
 int main() {
+  {
+    SnapshotText builder(std::u16string(2049, u'a'));
+    const auto view = builder.chunk(0);
+    const auto owner = builder.chunkOwner(0);
+    CHECK(builder.chunkCount() == 3 && view.size() == 1024 && builder.chunk(2).size() == 1,
+          "builder chunks have the same bounded shape as persistent pages");
+    builder.assign(u"changed");
+    CHECK(view[0] == u'a' && owner != nullptr, "owned builder chunk survives later mutation");
+
+    SnapshotText pages;
+    std::u16string source(3073, u'x');
+    source[1023] = 0xd83d;
+    source[1024] = 0xde00;
+    source[2048] = u'\n';
+    pages.appendSnapshot(source);
+    const auto firstOwner = pages.chunkOwner(0);
+    std::weak_ptr<const void> lastOwner = pages.chunkOwner(3);
+    for (size_t start : {size_t{0}, size_t{1023}, size_t{1024}, size_t{2048}, source.size()}) {
+      for (size_t count : {size_t{0}, size_t{1}, size_t{1031}, std::u16string::npos}) {
+        CHECK(pages.copyRange(start, count) == source.substr(start, count),
+              "range copies match UTF-16 string semantics across pages and surrogate seams");
+      }
+    }
+    std::u16string copied(source.size(), u'\0');
+    pages.copyTo(copied.data(), 0, copied.size());
+    CHECK(copied == source && pages.find(u'\n') == 2048 && pages.find(u'\n', 2049) == std::u16string::npos,
+          "bridge copy and newline lookup preserve exact content");
+    CHECK(pages.substr(1023, 2) == source.substr(1023, 2) && pages.flattenedBytes() == 0,
+          "chunk, range, substring and newline operations never flatten the source");
+    bool rejected = false;
+    try { pages.copyTo(copied.data(), pages.size(), 1); } catch (const std::out_of_range &) { rejected = true; }
+    CHECK(rejected, "invalid exact ranges fail instead of overflowing");
+    rejected = false;
+    try { pages.chunk(pages.chunkCount()); } catch (const std::out_of_range &) { rejected = true; }
+    CHECK(rejected, "invalid chunk indexes fail");
+    pages.appendSnapshot(u"more");
+    CHECK(firstOwner == pages.chunkOwner(0) && lastOwner.expired(),
+          "appends retain completed page identity and release an unretained replaced tail page");
+  }
   SnapshotText builder;
   builder.append(u"builder");
   SnapshotText copiedBuilder = builder;

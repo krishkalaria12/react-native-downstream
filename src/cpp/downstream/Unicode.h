@@ -35,6 +35,8 @@ uint32_t utf16Length(std::string_view bytes);
 
 std::u16string utf8ToUtf16(std::string_view bytes);
 std::string utf16ToUtf8(std::u16string_view text);
+/// Converts immutable pages without first materializing contiguous UTF-16.
+std::string utf16ToUtf8(const SnapshotText &text);
 
 /// Converts UTF-8 byte offsets in one source into UTF-16 offsets. Lookups are
 /// linear from the previous lookup, so ascending queries cost O(source) total.

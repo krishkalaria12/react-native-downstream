@@ -1,6 +1,7 @@
 // JNI access to parsed documents for com.downstream.DownstreamNative.
 
 #include "DocumentRegistry.h"
+#include "PagedTextBridge.h"
 #include "ImageSizeCache.h"
 #include "Export.h"
 #include "Reveal.h"
@@ -27,6 +28,8 @@
 using namespace downstream;
 
 namespace {
+
+PagedTextBridge pagedTextBridge;
 
 jstring toJavaString(JNIEnv *env, const std::u16string &text) {
   return env->NewString(reinterpret_cast<const jchar *>(text.data()), static_cast<jsize>(text.size()));
@@ -553,8 +556,9 @@ void appendDisplayList(std::vector<double> &out, const MathLayout &layout) {
 
 } // namespace
 
-/// Flattens blocks [from, to) of a document into one text and integer
-/// tables, with block indices and text offsets relative to `from`. Layouts
+/// Exports blocks [from, to) as one text and integer tables. A single nonempty
+/// code block crosses as shared UTF-16 pages; other ranges are joined strings.
+/// Block indices and text offsets are relative to `from`. Layouts
 /// must match NativeDocument.kt. Empty blocks get a zero-width space so they
 /// occupy a line. Links are read one at a time by nativeReadLink.
 extern "C" JNIEXPORT jobjectArray JNICALL
@@ -576,7 +580,13 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
     theme = Theme::defaultTheme();
   }
 
+  const SnapshotText *pagedText = nullptr;
+  if (to - from == 1) {
+    const auto &block = document->blocks[static_cast<size_t>(from)];
+    if (block.kind == BlockKind::CodeBlock && !block.text.empty()) pagedText = &block.text;
+  }
   std::u16string text;
+  size_t textLength = 0;
   std::vector<jint> blocks;
   /// The `{1,3-5}` marks, flattened across every block: a count per block and
   /// then that many inclusive `first,last` pairs, in block order.
@@ -628,16 +638,18 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
     const Block &block = document->blocks[index];
     if (index > static_cast<size_t>(from)) {
       text.push_back(u'\n');
+      textLength++;
     }
-    const auto start = static_cast<jint>(text.size());
-    text.append(block.text.empty() ? std::u16string(u"\u200B") : block.text);
+    const auto start = static_cast<jint>(textLength);
+    if (!pagedText) text.append(block.text.empty() ? std::u16string(u"\u200B") : block.text);
+    textLength += block.text.empty() ? 1 : block.text.size();
     blocks.insert(blocks.end(), {
                                     static_cast<jint>(block.kind),
                                     block.headingLevel,
                                     block.tableHeader ? 1 : 0,
                                     static_cast<jint>(block.spacingBefore),
                                     start,
-                                    static_cast<jint>(text.size()),
+                                    static_cast<jint>(textLength),
                                     static_cast<jint>(containers.size() / 6),
                                     static_cast<jint>(block.containers.size()),
                                     static_cast<jint>(cells.size() / 3),
@@ -757,7 +769,12 @@ Java_com_downstream_DownstreamNative_nativeReadDocument(JNIEnv *env,
   }
 
   jobjectArray result = env->NewObjectArray(11, objectClass, nullptr);
-  env->SetObjectArrayElement(result, 0, toJavaString(env, text));
+  if (!result) return nullptr;
+  jobject exportedText = pagedText ? static_cast<jobject>(pagedTextBridge.text(env, *pagedText))
+                                  : static_cast<jobject>(toJavaString(env, text));
+  if (!exportedText) return nullptr;
+  env->SetObjectArrayElement(result, 0, exportedText);
+  env->DeleteLocalRef(exportedText);
   env->SetObjectArrayElement(result, 1, toJavaArray(env, blocks));
   env->SetObjectArrayElement(result, 2, toJavaArray(env, containers));
   env->SetObjectArrayElement(result, 3, toJavaArray(env, runs));

@@ -173,9 +173,59 @@ void testCheckedCallAlwaysRefreshes() {
   CHECK(!state.resumed && sameTokens(runs, expected), "a split surrogate rebuilds the UTF-8 prefix");
 }
 
+
+void testManyCompletedLines() {
+  IncrementalParser parser(ParseMode::IncrementalTail);
+  parser.append("```ts\n");
+  parser.parse(false);
+  std::vector<DocumentHandle> retained;
+  for (size_t line = 0; line < 5200; line++) {
+    parser.append("let x=1;\n");
+    const auto result = parser.parse(false);
+    const Block &block = result.document->blocks.back();
+    CHECK(block.highlightComplete, "each completed tiny line has fresh tokens");
+    CHECK(block.tokens.flattenedBytes() == 0, "live tiny-line token publication never flattens its stable prefix");
+    if (line % 101 == 0) {
+      retained.push_back(result.document);
+      checkComplete(block);
+    }
+  }
+  const auto counters = parser.counters();
+  CHECK(counters.highlightTokenBytesCopied < 5 * 1024 * 1024,
+        "over five thousand tiny lines copy token pages rather than growing full vectors");
+  for (const auto &snapshot : retained) {
+    CHECK(validTokens(snapshot->blocks.back()), "retained completed-line tokens keep their original offsets");
+    checkComplete(snapshot->blocks.back());
+  }
+  const auto finished = parser.parse(true);
+  checkComplete(finished.document->blocks.back());
+
+  // Strings/comments may join a token across a completed line. The token
+  // touching the stable boundary belongs to the dirty suffix, not its prefix.
+  for (const std::string code : {"/*first\nsecond\nthird*/", "`first\nsecond\nthird`"}) {
+    parser.replace("```ts\n");
+    parser.parse(false);
+    DocumentHandle first;
+    std::vector<TokenRun> firstTokens;
+    for (const char unit : code) {
+      parser.append(std::string_view(&unit, 1));
+      const auto result = parser.parse(false);
+      if (!first && unit == '\n') {
+        first = result.document;
+        firstTokens = first->blocks.back().tokens;
+      }
+      if (result.document->blocks.back().highlightComplete) checkComplete(result.document->blocks.back());
+    }
+    checkComplete(parser.parse(true).document->blocks.back());
+    CHECK(first && sameTokens(first->blocks.back().tokens, firstTokens),
+          "retained tokens crossing line joins remain immutable after suffix merge");
+  }
+}
+
 } // namespace
 
 int main() {
+  testManyCompletedLines();
   testSkippedStorage();
   testLongLine();
   testUnicodeAndClose();

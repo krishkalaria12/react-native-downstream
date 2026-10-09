@@ -60,6 +60,7 @@
     "bench:native": "node benchmarks/native-highlight.mjs",
     "bench:stream-scaling": "node benchmarks/native-stream-scaling.mjs",
     "bench:snapshot-retention": "node benchmarks/native-snapshot-retention.mjs",
+    "bench:token-retention": "node benchmarks/native-token-retention.mjs",
     "bench:fence-slots": "node benchmarks/native-fence-slots.mjs",
     "bench:fences": "node benchmarks/fence-renderers.mjs",
     "bench:inline-html": "node benchmarks/native-inline-html.mjs",

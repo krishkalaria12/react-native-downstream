@@ -14,7 +14,7 @@ import android.widget.FrameLayout
 // Test-only collaborators outside the plain paragraph path. Framework layout,
 // TextSegment/View, reveal, caret, accessibility and precomputed text are real.
 internal sealed class Segment(val gapBefore: Int)
-internal class ReaderChoices
+internal class Palette
 internal class ContainerDecoration(val kind: Int = 0, val id: Int = 0, val open: Boolean = false)
 internal class HiddenRange(val start: Int, val end: Int)
 internal const val CONTAINER_DETAILS = 4

@@ -261,14 +261,13 @@ private:
   void tokenizeTrustedDelta(std::string_view info, const SnapshotText &, std::u16string_view delta,
                             HighlightState *state, SnapshotVector<TokenRun> *runs, double budgetMs,
                             bool live, bool terminalLineComplete) override {
-    std::vector<TokenRun> next;
-    tokenizeImpl(info, state->text, state, &next, budgetMs, true, live, terminalLineComplete, &delta);
-    if (state->lastStop != HighlightStop::Deferred) *runs = std::move(next);
+    tokenizeImpl(info, state->text, state, nullptr, budgetMs, true, live, terminalLineComplete, &delta, runs);
   }
 
   void tokenizeImpl(std::string_view info, std::u16string_view text, HighlightState *state,
                     std::vector<TokenRun> *runs, double budgetMs, bool trustedAppend, bool live,
-                    bool terminalLineComplete, const std::u16string_view *delta = nullptr) {
+                    bool terminalLineComplete, const std::u16string_view *delta = nullptr,
+                    SnapshotVector<TokenRun> *publication = nullptr) {
     state->resumed = false;
     state->bytesLexed = state->runsBuilt = state->tokenBytesCopied = state->textBytesCopied = 0;
     const HighlightStop previousStop = state->lastStop;
@@ -278,7 +277,8 @@ private:
     const size_t textLength = text.size() + (delta ? delta->size() : 0);
     if (language == nullptr || textLength == 0 || textLength > kMaxHighlightBytes) {
       state->clear();
-      runs->clear();
+      if (runs) runs->clear();
+      if (publication) publication->clear();
       state->lastStop = HighlightStop::Skipped;
       return;
     }
@@ -320,7 +320,8 @@ private:
       state->textBytesCopied = text.size() * sizeof(char16_t);
       state->engine = createEngine(*language);
       if (state->engine == nullptr) {
-        runs->clear();
+        if (runs) runs->clear();
+        if (publication) publication->clear();
         state->lastStop = HighlightStop::Skipped;
         return;
       }
@@ -328,7 +329,8 @@ private:
     if (state->document.length() > kMaxHighlightBytes) {
       state->clear();
       state->overByteLimit = true;
-      runs->clear();
+      if (runs) runs->clear();
+      if (publication) publication->clear();
       state->lastStop = HighlightStop::Skipped;
       return;
     }
@@ -355,6 +357,11 @@ private:
 
     // The last line is rebuilt every pass, so what the previous pass made of it
     // goes before the new runs are added.
+    // The last retained run can merge with the rebuilt suffix, even when it
+    // ends exactly at the stable boundary. Publish that run again as well.
+    const size_t retainedRuns = state->resumed ? static_cast<size_t>(std::lower_bound(
+        state->runs.begin(), state->runs.end(), baseUtf16,
+        [](const TokenRun &run, uint32_t boundary) { return run.end < boundary; }) - state->runs.begin()) : 0;
     dropRunsFrom(&state->runs, baseUtf16);
     buildRuns(utf8, state->document, *language, state->engine->classes, from, styledEnd, baseUtf16, &scratch());
     appendRuns(&state->runs, scratch());
@@ -364,8 +371,14 @@ private:
     // A block whose last line has no newline yet is fully colored but not yet
     // final; only bytes the pass never reached mean it ran out of budget.
     state->lastStop = styledEnd < end ? HighlightStop::Budget : HighlightStop::Complete;
-    *runs = state->runs;
-    state->tokenBytesCopied = state->runs.size() * sizeof(TokenRun);
+    if (publication) {
+      const TokenRun *suffix = state->runs.empty() ? nullptr : state->runs.data() + retainedRuns;
+      state->tokenBytesCopied = publication->replaceSuffix(
+          retainedRuns, suffix, state->runs.size() - retainedRuns).payloadBytes;
+    } else {
+      *runs = state->runs;
+      state->tokenBytesCopied = state->runs.size() * sizeof(TokenRun);
+    }
     state->liveLineStart = lineStart;
     state->nextLiveLineRefresh = std::max(kLiveLineRefreshThreshold, lineLength * 2);
   }

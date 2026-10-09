@@ -90,6 +90,9 @@ struct HighlightState {
   /// not any additional backward reads performed inside a lexer.
   uint64_t bytesLexed{0};
   uint64_t runsBuilt{0};
+  /// Token payload copied into immutable publications, including the retained
+  /// fragment of a partially rewritten page. Shared page-index nodes are not
+  /// token payload; checked vector callers still copy their whole result.
   uint64_t tokenBytesCopied{0};
   uint64_t textBytesCopied{0};
 

@@ -1,4 +1,5 @@
 #include "CodeLayout.h"
+#include "SnapshotText.h"
 
 namespace downstream {
 
@@ -52,6 +53,19 @@ CodeLineStarts codeLineStarts(std::u16string_view text) {
       starts.push_back(index + 1);
     }
   }
+  return starts;
+}
+
+CodeLineStarts codeLineStarts(const SnapshotText &text) {
+  CodeLineStarts starts{0};
+  starts.reserve(std::min<size_t>(text.size(), 4096) / 24 + 1);
+  size_t offset = 0;
+  text.forEachChunk(0, text.size(), [&](std::u16string_view units) {
+    for (size_t index = 0; index < units.size(); ++index) {
+      if (units[index] == u'\n') starts.push_back(static_cast<uint32_t>(offset + index + 1));
+    }
+    offset += units.size();
+  });
   return starts;
 }
 

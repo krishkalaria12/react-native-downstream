@@ -48,6 +48,14 @@ const kotlin = (...names) =>
 /** Each mirror, its table, and the `main` that runs the table. */
 const suites = [
   {
+    jar: 'paged_text',
+    sources: [
+      ...kotlin('PagedText.kt'),
+      join(here, 'PagedTextCheck.kt'),
+      join(here, 'paged-text-stubs/GetChars.kt'),
+    ],
+  },
+  {
     jar: 'rendering_cache',
     sources: [
       ...kotlin('RenderingCache.kt'),
@@ -103,6 +111,7 @@ const suites = [
         'DetailsLayout.kt'
       ),
       join(here, 'TextHeightCheck.kt'),
+      join(here, 'paged-text-stubs/DoNotStrip.kt'),
       ...readdirSync(join(here, 'text-height-stubs'))
         .filter((name) => name.endsWith('.kt'))
         .map((name) => join(here, 'text-height-stubs', name)),

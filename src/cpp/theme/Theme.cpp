@@ -176,7 +176,8 @@ Theme::Handle Theme::create(const std::vector<uint32_t> &slots,
                              uint64_t id,
                              uint64_t layoutKey) {
   auto theme = std::shared_ptr<Theme>(new Theme());
-  const size_t count = kSlotIdCount;
+  // Slot arrays use id - 1; kSlotIdCount is one past the highest valid id.
+  const size_t count = kSlotIdCount - 1;
   theme->numbers_.resize(count);
   theme->colors_.resize(count);
   theme->fonts_.assign(count, -1);

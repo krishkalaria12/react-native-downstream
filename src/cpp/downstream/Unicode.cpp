@@ -124,7 +124,8 @@ std::u16string utf8ToUtf16(std::string_view bytes) {  std::u16string out;
   return out;
 }
 
-std::string utf16ToUtf8(std::u16string_view text) {
+template<class Text>
+static std::string convertUtf16ToUtf8(const Text &text) {
   std::string out;
   out.reserve(text.size());
   for (size_t i = 0; i < text.size(); i++) {
@@ -154,6 +155,26 @@ std::string utf16ToUtf8(std::u16string_view text) {
     }
   }
   return out;
+}
+
+std::string utf16ToUtf8(std::u16string_view text) { return convertUtf16ToUtf8(text); }
+
+std::string utf16ToUtf8(const SnapshotText &text) {
+  struct Cursor {
+    const SnapshotText &text;
+    mutable size_t page{std::u16string::npos};
+    mutable std::u16string_view units{};
+    size_t size() const { return text.size(); }
+    char16_t operator[](size_t index) const {
+      constexpr size_t pageUnits = 1024;
+      if (page != index / pageUnits) {
+        page = index / pageUnits;
+        units = text.chunk(page);
+      }
+      return units[index % pageUnits];
+    }
+  };
+  return convertUtf16ToUtf8(Cursor{text});
 }
 
 uint32_t Utf16OffsetMap::toUtf16(size_t byteOffset) {

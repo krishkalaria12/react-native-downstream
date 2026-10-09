@@ -914,8 +914,8 @@ bool definitionContextReuse() {
   parser.replace("[ref]" + padding + "tail");
   if (!scan::sameDocument(*parser.parse(false).document, *parseMarkdown(parser.source()).document)) return false;
   parser.reset();
-  if (!scan::sameDocument(*feed(parser, "[ref]" + padding + "tail", false).document,
-                          *parseMarkdown(parser.source()).document)) return false;
+  const auto reset = feed(parser, "[ref]" + padding + "tail", false);
+  if (!scan::sameDocument(*reset.document, *parseMarkdown(parser.source()).document)) return false;
 
   // Preview still uses its canonical full-document proof with definitions.
   IncrementalParser preview(ParseMode::IncrementalTail), full(ParseMode::FullParse);

@@ -228,5 +228,7 @@ inline float codeCardHeight(const CodeBlockLayout &block, float headerHeight, fl
 using CodeLineStarts = std::vector<uint32_t>;
 
 CodeLineStarts codeLineStarts(std::u16string_view text);
+class SnapshotText;
+CodeLineStarts codeLineStarts(const SnapshotText &text);
 
 } // namespace downstream

@@ -103,6 +103,8 @@ try {
   ]);
   const productionRoot = join(repo, 'src/android/src/main/java/com/downstream');
   const productionSources = [
+    'CodeLayout.kt',
+    'PagedText.kt',
     'StreamingParagraphLayout.kt',
     'StreamingParagraphSeeds.kt',
     'TextSegmentView.kt',
@@ -118,6 +120,9 @@ try {
   const textSegment = segmentSource.match(
     /^internal class TextSegment\([\s\S]*?^\}/m
   )?.[0];
+  const codeSegment = segmentSource.match(
+    /^internal class CodeSegment\([\s\S]*?^\}/m
+  )?.[0];
   const taskBlock = segmentSource.match(
     /^internal class TaskBlock\([\s\S]*?^\)/m
   )?.[0];
@@ -132,19 +137,30 @@ try {
     join(productionRoot, 'Controls.kt'),
     'utf8'
   ).match(/^internal fun linkAt\([\s\S]*?^\}/m)?.[0];
-  if (!textSegment || !taskBlock || !detailsBlock || !precomputed || !linkAt)
+  if (
+    !codeSegment ||
+    !textSegment ||
+    !taskBlock ||
+    !detailsBlock ||
+    !precomputed ||
+    !linkAt
+  )
     throw new Error(
       'Missing production TextSegment/PrecomputedTexts/linkAt declaration.'
     );
   const extracted = join(temporary, 'ProductionTextSegment.kt');
   writeFileSync(
     extracted,
-    `package com.downstream\nimport android.text.*\nimport android.widget.TextView\n${textSegment}\n${taskBlock}\n${detailsBlock}\n${precomputed}\n${linkAt}\n`
+    `package com.downstream\nimport android.text.*\nimport android.widget.TextView\nimport android.graphics.Paint\nimport android.graphics.Typeface\nimport kotlin.math.*\nimport com.facebook.proguard.annotations.DoNotStrip\n${codeSegment}\n${textSegment}\n${taskBlock}\n${detailsBlock}\n${precomputed}\n${linkAt}\n`
   );
   const hash = createHash('sha256');
   for (const path of [
     ...productionSources,
     extracted,
+    join(here, '../paged-text-stubs/DoNotStrip.kt'),
+    join(here, 'NativePagesBridge.cpp'),
+    join(repo, 'src/cpp/downstream/SnapshotText.h'),
+    join(repo, 'src/android/src/main/jni/PagedTextBridge.h'),
     ...readdirSync(here)
       .filter((name) => name.endsWith('.kt'))
       .map((name) => join(here, name)),
@@ -163,10 +179,12 @@ try {
     jar,
     ...productionSources,
     extracted,
+    join(here, '../paged-text-stubs/DoNotStrip.kt'),
     join(here, 'FixtureDependencies.kt'),
     join(here, 'AccessibilityCompat.kt'),
     join(here, 'RequiresApi.kt'),
     join(here, 'ReactResources.kt'),
+    join(here, 'PagedTextChecks.kt'),
     join(here, 'ParagraphChecks.kt'),
     join(here, 'ParagraphInstrumentation.kt'),
   ]);
@@ -188,6 +206,53 @@ try {
       .filter((name) => name.endsWith('.dex'))
       .map((name) => join(dex, name)),
   ]);
+  // Production JNI page caching and native snapshots, linked into the same APK.
+  const ndk = join(
+    sdk,
+    'ndk',
+    readdirSync(join(sdk, 'ndk'))
+      .filter((name) =>
+        existsSync(
+          join(
+            sdk,
+            'ndk',
+            name,
+            'toolchains/llvm/prebuilt/darwin-x86_64/bin/clang++'
+          )
+        )
+      )
+      .sort()
+      .at(-1)
+  );
+  const abi = run(adb, [...adbArgs, 'shell', 'getprop', 'ro.product.cpu.abi'], {
+    encoding: 'utf8',
+    stdio: 'pipe',
+  }).trim();
+  const target = {
+    'arm64-v8a': 'aarch64',
+    'x86_64': 'x86_64',
+    'armeabi-v7a': 'armv7a',
+    'x86': 'i686',
+  }[abi];
+  if (!target) throw new Error(`Unsupported Android ABI: ${abi}`);
+  const nativeLibRoot = join(temporary, 'lib', abi);
+  mkdirSync(nativeLibRoot, { recursive: true });
+  run(join(ndk, 'toolchains/llvm/prebuilt/darwin-x86_64/bin/clang++'), [
+    `--target=${target}-linux-android28`,
+    '-std=c++20',
+    '-shared',
+    '-fPIC',
+    '-O2',
+    '-static-libstdc++',
+    `-I${join(repo, 'src/cpp/downstream')}`,
+    `-I${join(repo, 'src/android/src/main/jni')}`,
+    join(here, 'NativePagesBridge.cpp'),
+    '-o',
+    join(nativeLibRoot, 'libdownstream_pages_test.so'),
+  ]);
+  run('zip', ['-q', apk, `lib/${abi}/libdownstream_pages_test.so`], {
+    cwd: temporary,
+  });
   run(join(build, 'apksigner'), [
     'sign',
     '--ks',
@@ -211,6 +276,9 @@ try {
       'instrument',
       '-w',
       '-r',
+      ...(process.env.DOWNSTREAM_PAGED_ONLY === '1'
+        ? ['-e', 'pagesOnly', 'true']
+        : []),
       'com.downstream.paragraphruntime/com.downstream.ParagraphInstrumentation',
     ],
     { encoding: 'utf8', stdio: 'pipe' }

@@ -1,6 +1,7 @@
 #import "DSRenderedDocument.h"
 
 #import "DSMathFonts.h"
+#import "DSSnapshotString.h"
 
 #import "DSFonts.h"
 #import "DSThemeColors.h"
@@ -60,6 +61,10 @@ CGFloat inlineCodeSizeFor(const Theme &theme, CGFloat blockSize, CGFloat scale) 
 
 NSString *toNSString(const std::u16string &text) {
   return [NSString stringWithCharacters:reinterpret_cast<const unichar *>(text.data()) length:text.size()];
+}
+
+NSString *toNSString(const SnapshotText &text) {
+  return [[DSSnapshotString alloc] initWithSnapshot:text];
 }
 
 /// The writing direction a resolved block direction draws with.
@@ -1462,7 +1467,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   segment.rightToLeft = block.direction == downstream::BlockDirection::RightToLeft;
   segment.containers = containers;
   const size_t newline = block.text.find(u'\n');
-  segment.firstLine = toNSString(block.text.substr(0, newline == std::u16string::npos ? block.text.size() : newline));
+  segment.firstLine = [toNSString(block.text)
+      substringToIndex:newline == std::u16string::npos ? block.text.size() : newline];
   return segment;
 }
 
@@ -1654,7 +1660,9 @@ static NSCache<NSArray *, DSTableCell *> *plainTableCells() {
     const bool headerRow = segment.hasHeader && index == from;
     NSMutableArray<DSTableCell *> *row = [NSMutableArray arrayWithCapacity:block.cells.size()];
     for (const TableCell &cell : block.cells) {
-      NSString *string = toNSString(block.text.substr(cell.start, cell.end - cell.start));
+      // The shared plain-cell cache can outlive this row. Own only its range so
+      // a small cached cell cannot retain the rest of a large snapshot.
+      NSString *string = toNSString(block.text.copyRange(cell.start, cell.end - cell.start));
       // Link/tag indexes and attachment objects belong to one document. Share
       // only cells with no inline runs, using full value equality for paint,
       // typography and alignment rather than a hash-only style identifier.

@@ -7,6 +7,7 @@ import android.text.Spanned
 import android.text.StaticLayout
 import android.text.TextDirectionHeuristics
 import android.text.TextPaint
+import com.facebook.proguard.annotations.DoNotStrip
 import kotlin.math.ceil
 import kotlin.math.max
 
@@ -327,6 +328,8 @@ internal class CodeSegment(
   val ordinal: Int = -1,
   /** Deferred measurement is unnecessary while a React child hosts the fence. */
   prepareText: (() -> Spanned)? = null,
+  /** Retains shared JNI pages until this model is evicted, including across GC. */
+  @field:DoNotStrip val sourcePages: CharSequence? = null,
 ) : Segment(gapBefore) {
   val textLength = text.length
   val text: Spanned by lazy { prepareText?.invoke() ?: text }

@@ -119,6 +119,7 @@ before(async () => {
     ['test_highlight_streaming', [incremental, ...engine]],
     ['test_shared_list', []],
     ['test_snapshot_text', []],
+    ['test_snapshot_vector', []],
     ['dump_tokens', [downstream('Unicode.cpp')]],
     ['test_theme', theme],
     ['test_images', [downstream('ImageLayout.cpp')]],
@@ -704,6 +705,12 @@ test('shared snapshot block index retains immutable prefixes', () => {
 });
 
 describe('syntax highlighting', () => {
+  test('token pages retain immutable stable prefixes', () => {
+    execFileSync(binary('test_snapshot_vector'), {
+      timeout: 30_000,
+      stdio: 'inherit',
+    });
+  });
   test('snapshot text pages and immutable token publication', () => {
     execFileSync(binary('test_snapshot_text'), {
       timeout: 30_000,
