@@ -3,6 +3,7 @@
 #include "Document.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -38,6 +39,11 @@ struct TagSlot {
   size_t blockCount{0};
   /// True while the closing tag has not arrived; the exact rule is below.
   bool incomplete{false};
+  /// Internal reuse provenance; identities must prove the entire body stable.
+  std::vector<uint64_t> blockIdentities;
+  size_t bodyStart{0};
+  size_t bodyEnd{0};
+  std::shared_ptr<const std::string> sourceBody;
 };
 
 /// The tag slots in a document, for the tag names the app registered.
@@ -53,5 +59,21 @@ std::vector<TagSlot> tagSlots(const Document &document, const std::string &sourc
 /// bare parses use this to treat every block as settled.
 std::vector<TagSlot> tagSlots(const Document &document, const std::string &source,
                               const std::vector<std::string> &names, bool live, uint32_t settledBlocks);
+
+/// Source-independent ranges, planned once for all subscribers of a snapshot.
+struct TagSlotRange {
+  uint32_t container{0};
+  int32_t tag{-1};
+  size_t blockIndex{0};
+  size_t blockCount{0};
+};
+std::vector<TagSlotRange> planTagSlots(const Document &document);
+using TagSourceBodies = std::vector<std::shared_ptr<const std::string>>;
+std::string tagSourceBody(std::string_view source, size_t start, size_t end);
+
+std::vector<std::shared_ptr<const TagSlot>> sharedTagSlots(
+    const Document &document, const std::string &source, const std::vector<std::string> &names, bool live,
+    const std::vector<std::shared_ptr<const TagSlot>> &previous,
+    const std::vector<TagSlotRange> *structure = nullptr, const TagSourceBodies *bodies = nullptr);
 
 } // namespace downstream

@@ -343,6 +343,7 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   private val cardBackground = GradientDrawable()
   /** True while a React child draws this block instead of the card. */
   private var hosted = false
+  private var boundSegment: CodeSegment? = null
   /** Whether the chrome asks for a header row, apart from whether it is hosted. */
   private var headerWanted = true
   private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -494,7 +495,7 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
       intArrayOf(segment.colors.text, segment.colors.headerButtonColor),
     )
     for (button in allButtons) button.imageTintList = tint
-    body.setContent(segment.text, segment.accessibleBlocks, rendered)
+    if (!hosted) bindFallback()
     // A fence's title replaces the language, and the spoken label keeps both plus
     // the start line, so a screen reader still hears what kind of code this is.
     language.text = if (segment.title.isNotEmpty()) segment.title else segment.language
@@ -567,12 +568,26 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   fun setHosted(hosted: Boolean) {
     if (this.hosted == hosted) return
     this.hosted = hosted
+    // The fallback is bound synchronously before it becomes visible, including
+    // failure/suspension/unmount of a hosted child.
+    if (!hosted) bindFallback() else {
+      body.clearContent()
+      boundSegment = null
+    }
     applyHeaderVisibility()
     viewport.visibility = if (hosted) View.GONE else View.VISIBLE
     gutter.visibility = if (hosted) View.GONE else View.VISIBLE
     cardBackground.setColor(if (hosted) android.graphics.Color.TRANSPARENT else segment?.colors?.codeBlockBackground ?: 0)
     requestLayout()
     invalidate()
+  }
+
+  private fun bindFallback() {
+    val segment = segment ?: return
+    val rendered = rendered ?: return
+    if (boundSegment === segment) return
+    body.setContent(segment.text, segment.accessibleBlocks, rendered)
+    boundSegment = segment
   }
 
   fun setHeaderVisible(visible: Boolean) {

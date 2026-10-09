@@ -17,6 +17,12 @@ struct HighlightStats {
   uint64_t resumes{0};
   /// Passes by why they stopped, indexed by HighlightStop.
   uint64_t stops[kHighlightStopCount]{};
+  /// Requested lexer input and explicit copies inside highlighting. Snapshot
+  /// cloning and lexer-internal backward reads are outside these counters.
+  uint64_t bytesLexed{0};
+  uint64_t runsBuilt{0};
+  uint64_t tokenBytesCopied{0};
+  uint64_t textBytesCopied{0};
 };
 
 /// Colors one fenced code block in place, using `state` so a block that is still

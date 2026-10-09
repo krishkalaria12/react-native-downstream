@@ -1,6 +1,11 @@
 #include "Unicode.h"
+#include "SnapshotText.h"
 
 namespace downstream {
+
+void appendUtf8(SnapshotText &out, std::string_view bytes) {
+  appendUtf8(out.write(), bytes);
+}
 
 namespace {
 

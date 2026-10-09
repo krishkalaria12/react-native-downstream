@@ -47,6 +47,7 @@ import NativeDownstreamSession, {
   type FenceSlot,
   type FenceSlotsResult,
 } from './NativeDownstreamSession';
+import { applySlotChanges, type SlotChangeState } from './slotChanges';
 import type {
   CustomRenderer,
   CustomRendererProps,
@@ -319,24 +320,44 @@ export function useFenceSlots(query: FenceQuery): readonly MountedSlot[] {
     resolved,
   } = query;
   const languages = resolved.languages;
+  const streamState = useMemo<
+    SlotChangeState<FenceSlot> & { mounted: readonly MountedSlot[] }
+  >(
+    () => ({ token: 0, slots: [], mounted: [] }),
+    // Reset this subscriber's native token when its session or filter changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionId, generation, languages]
+  );
   // A small identity token names this exact query without copying the source
   // into a serialized key. Results are accepted during render, before effects
   // can clean up a previous query, so a replacement never mounts stale slots.
   const current = useMemo(
     () => ({
       token: {},
-      answer: readSlots({
-        source,
-        sessionId,
-        generation,
-        sequence,
-        parseFlags,
-        resolved,
-      }),
+      answer: readSlots(
+        {
+          source,
+          sessionId,
+          generation,
+          sequence,
+          parseFlags,
+          resolved,
+        },
+        streamState
+      ),
     }),
     // `revision` names a settled snapshot even when its sequence is unchanged.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [source, sessionId, generation, sequence, revision, parseFlags, resolved]
+    [
+      source,
+      sessionId,
+      generation,
+      sequence,
+      revision,
+      parseFlags,
+      resolved,
+      streamState,
+    ]
   );
   const [asyncResult, setAsyncResult] = useState<Readonly<{
     token: object;
@@ -383,7 +404,8 @@ export function useFenceSlots(query: FenceQuery): readonly MountedSlot[] {
  * readable without any renderer.
  */
 function readSlots(
-  query: FenceQuery
+  query: FenceQuery,
+  streamState: SlotChangeState<FenceSlot> & { mounted: readonly MountedSlot[] }
 ): Readonly<{ slots: readonly MountedSlot[]; pending: boolean }> {
   const { source, sessionId, generation, sequence, parseFlags, resolved } =
     query;
@@ -397,18 +419,27 @@ function readSlots(
   }
   try {
     if (sessionId !== undefined) {
-      return {
-        slots: joinComponents(
-          module.sessionFenceSlots(
-            sessionId,
-            generation,
-            sequence ?? 0,
-            languages
-          ),
-          resolved
-        ),
-        pending: false,
-      };
+      const raw =
+        typeof module.sessionFenceSlotChanges === 'function'
+          ? applySlotChanges(
+              streamState,
+              module.sessionFenceSlotChanges(
+                sessionId,
+                generation,
+                sequence ?? 0,
+                languages,
+                streamState.token
+              ),
+              (slot) => slot.ordinal
+            )
+          : module.sessionFenceSlots(
+              sessionId,
+              generation,
+              sequence ?? 0,
+              languages
+            );
+      streamState.mounted = joinComponents(raw, resolved, streamState.mounted);
+      return { slots: streamState.mounted, pending: false };
     }
     if (source === undefined || !mayHoldRenderers(source, languages)) {
       // The pre-filter: a message that never names a registered language costs
@@ -439,18 +470,32 @@ function readSlots(
  */
 function joinComponents(
   slots: readonly FenceSlot[],
-  resolved: ResolvedRenderers
+  resolved: ResolvedRenderers,
+  previous: readonly MountedSlot[] = NO_SLOTS
 ): readonly MountedSlot[] {
   if (slots.length === 0) {
     return NO_SLOTS;
   }
   const joined: MountedSlot[] = [];
+  const prior = new Map(previous.map((slot) => [slot.ordinal, slot]));
   for (const slot of slots) {
     const component = resolved.components.get(normalizeLanguage(slot.language));
     if (component === undefined) {
       continue;
     }
-    joined.push({
+    const old = prior.get(slot.ordinal);
+    if (
+      old !== undefined &&
+      old.component === component &&
+      old.language === slot.language &&
+      old.code === slot.code &&
+      old.meta === (slot.meta === '' ? undefined : slot.meta) &&
+      old.incomplete === slot.incomplete
+    ) {
+      joined.push(old);
+      continue;
+    }
+    const mounted: MountedSlot = {
       ordinal: slot.ordinal,
       language: slot.language,
       code: slot.code,
@@ -458,7 +503,8 @@ function joinComponents(
       incomplete: slot.incomplete,
       props: rendererProps(slot),
       component,
-    });
+    };
+    joined.push(mounted);
   }
   return joined.length === 0 ? NO_SLOTS : joined;
 }

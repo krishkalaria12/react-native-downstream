@@ -16,6 +16,16 @@ namespace {
 /// means the block is pathological rather than merely large.
 constexpr double kSettleBudgetMs = 250.0;
 
+void noteWork(const HighlightState &state, HighlightStats *stats) {
+  if (stats == nullptr) {
+    return;
+  }
+  stats->bytesLexed += state.bytesLexed;
+  stats->runsBuilt += state.runsBuilt;
+  stats->tokenBytesCopied += state.tokenBytesCopied;
+  stats->textBytesCopied += state.textBytesCopied;
+}
+
 void note(const HighlightState &state, HighlightStats *stats) {
   if (stats == nullptr) {
     return;
@@ -23,6 +33,7 @@ void note(const HighlightState &state, HighlightStats *stats) {
   stats->blocks++;
   stats->resumes += state.resumed ? 1 : 0;
   stats->stops[static_cast<size_t>(state.lastStop)]++;
+  noteWork(state, stats);
 }
 
 /// One highlighting pass over a block, without counting it. Both the streaming
@@ -37,8 +48,10 @@ void colorOnce(CodeHighlighter &highlighter, Block *block, HighlightState *state
     block->highlightComplete = true;
     return;
   }
-  highlighter.tokenize(block->language, block->text, state, &block->tokens, budgetMs);
-  block->highlightComplete = state->lastStop != HighlightStop::Budget;
+  std::vector<TokenRun> tokens;
+  highlighter.tokenize(block->language, block->text, state, &tokens, budgetMs);
+  block->tokens = std::move(tokens);
+  block->highlightComplete = state->lastStop != HighlightStop::Budget && state->lastStop != HighlightStop::Deferred;
 }
 
 } // namespace
@@ -52,6 +65,7 @@ void highlightCodeBlock(CodeHighlighter &highlighter, Block *block, HighlightSta
 void highlightSettledCodeBlock(CodeHighlighter &highlighter, Block *block, HighlightState *state, double budgetMs,
                                HighlightStats *stats) {
   colorOnce(highlighter, block, state, budgetMs);
+  noteWork(*state, stats);
   // A pass that ran out of budget leaves the rest of the block plain. For a
   // streaming tail that is fine, because the next snapshot resumes from where
   // this one stopped. This block is settled, so nothing would ever resume it and
@@ -66,6 +80,7 @@ void highlightSettledCodeBlock(CodeHighlighter &highlighter, Block *block, Highl
   while (state->lastStop == HighlightStop::Budget) {
     const size_t reached = state->finalEnd;
     colorOnce(highlighter, block, state, budgetMs);
+    noteWork(*state, stats);
     retries++;
     const double spent =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();

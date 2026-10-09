@@ -29,6 +29,7 @@ import DownstreamFenceSlot from './DownstreamFenceSlotNativeComponent';
 import NativeDownstreamSession, {
   type TagSlot,
 } from './NativeDownstreamSession';
+import { applySlotChanges, type SlotChangeState } from './slotChanges';
 import type { MarkdownPlugins, TagRenderer, TagRendererProps } from './types';
 
 /** A tag name, normalized the one way the engine compares them. */
@@ -134,12 +135,14 @@ function tagRendererProps(slot: TagSlot): TagRendererProps {
  */
 function joinTagComponents(
   slots: readonly TagSlot[],
-  resolved: ResolvedTagRenderers
+  resolved: ResolvedTagRenderers,
+  previous: readonly MountedTagSlot[] = []
 ): readonly MountedTagSlot[] {
   if (slots.length === 0) {
     return [];
   }
   const joined: MountedTagSlot[] = [];
+  const prior = new Map(previous.map((slot) => [slot.container, slot]));
   for (const slot of slots) {
     const entry = resolved.components.get(normalizeTagName(slot.name));
     const component =
@@ -150,12 +153,30 @@ function joinTagComponents(
     if (component === undefined) {
       continue;
     }
-    joined.push({
+    const old = prior.get(slot.container);
+    if (
+      old !== undefined &&
+      old.component === component &&
+      old.name === slot.name &&
+      old.props.markdown === slot.markdown &&
+      old.props.isIncomplete === slot.incomplete &&
+      old.props.attributes.length === slot.attributes.length &&
+      old.props.attributes.every(
+        (pair, index) =>
+          pair[0] === slot.attributes[index]?.[0] &&
+          pair[1] === slot.attributes[index]?.[1]
+      )
+    ) {
+      joined.push(old);
+      continue;
+    }
+    const mounted: MountedTagSlot = {
       container: slot.container,
       name: slot.name,
       component,
       props: tagRendererProps(slot),
-    });
+    };
+    joined.push(mounted);
   }
   return joined;
 }
@@ -200,7 +221,10 @@ export type TagQuery = Readonly<{
   resolved: ResolvedTagRenderers;
 }>;
 
-function readTagSlots(query: TagQuery): readonly MountedTagSlot[] {
+function readTagSlots(
+  query: TagQuery,
+  streamState: SlotChangeState<TagSlot> & { mounted: readonly MountedTagSlot[] }
+): readonly MountedTagSlot[] {
   const { source, sessionId, generation, sequence, allowedTags, resolved } =
     query;
   // With a fallback every allowed tag is a candidate; without one, only the
@@ -219,10 +243,26 @@ function readTagSlots(query: TagQuery): readonly MountedTagSlot[] {
   }
   try {
     if (sessionId !== undefined) {
-      return joinTagComponents(
-        module.sessionTagSlots(sessionId, generation, sequence ?? 0, names),
-        resolved
+      const raw =
+        typeof module.sessionTagSlotChanges === 'function'
+          ? applySlotChanges(
+              streamState,
+              module.sessionTagSlotChanges(
+                sessionId,
+                generation,
+                sequence ?? 0,
+                names,
+                streamState.token
+              ),
+              (slot) => slot.container
+            )
+          : module.sessionTagSlots(sessionId, generation, sequence ?? 0, names);
+      streamState.mounted = joinTagComponents(
+        raw,
+        resolved,
+        streamState.mounted
       );
+      return streamState.mounted;
     }
     if (source === undefined) {
       return [];
@@ -273,21 +313,31 @@ export function useTagSlots(query: TagQuery): readonly MountedTagSlot[] {
     allowedTags,
     resolved,
   } = query;
+  const streamState = useMemo<
+    SlotChangeState<TagSlot> & { mounted: readonly MountedTagSlot[] }
+  >(
+    () => ({ token: 0, slots: [], mounted: [] }),
+    // Native tokens belong to one session generation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionId, generation]
+  );
   const current = useMemo(
     () => ({
-      slots: readTagSlots({
-        source,
-        sessionId,
-        generation,
-        sequence,
-        revision,
-        parseFlags,
-        allowedTags,
-        resolved,
-      }),
+      slots: readTagSlots(
+        {
+          source,
+          sessionId,
+          generation,
+          sequence,
+          revision,
+          parseFlags,
+          allowedTags,
+          resolved,
+        },
+        streamState
+      ),
     }),
     // `revision` names a settled snapshot even when its sequence is unchanged.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       source,
       sessionId,
@@ -297,6 +347,7 @@ export function useTagSlots(query: TagQuery): readonly MountedTagSlot[] {
       parseFlags,
       allowedTags,
       resolved,
+      streamState,
     ]
   );
   return current.slots;

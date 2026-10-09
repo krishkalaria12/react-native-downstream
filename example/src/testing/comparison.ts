@@ -1,9 +1,13 @@
 /** Metrics collected for one candidate while it replays the shared source. */
 export interface CandidateMetrics {
-  /** Milliseconds from the first chunk to the animation frame after it. */
+  /** Milliseconds from the first chunk to the next JS animation callback. */
   firstFrameMs: number | null;
-  /** Milliseconds from the first chunk to the frame after the final chunk. */
+  /** Scheduled run duration, including delivery and candidate-specific drain. */
   totalMs: number;
+  /** Time spent delivering the schedule, measured from run start. */
+  deliveryMs: number;
+  /** Post-delivery drain to the completion callback, not native presentation. */
+  drainMs: number;
   /** Animation frames observed between the first chunk and the final frame. */
   frames: number;
   /** Frame gaps longer than the 60 Hz budget of about 20 ms. */
@@ -64,21 +68,35 @@ const METRICS: {
 }[] = [
   {
     id: 'totalMs',
-    label: 'Time to final frame',
+    label: 'Scheduled run duration',
     unit: 'ms',
     read: (metrics) => metrics.totalMs,
-    lowerIsBetter: true,
+    lowerIsBetter: false,
+  },
+  {
+    id: 'deliveryMs',
+    label: 'Schedule delivery duration',
+    unit: 'ms',
+    read: (metrics) => metrics.deliveryMs,
+    lowerIsBetter: false,
+  },
+  {
+    id: 'drainMs',
+    label: 'Post-delivery drain estimate',
+    unit: 'ms',
+    read: (metrics) => metrics.drainMs,
+    lowerIsBetter: false,
   },
   {
     id: 'firstFrameMs',
-    label: 'Time to first frame',
+    label: 'First JS callback after arrival',
     unit: 'ms',
     read: (metrics) => metrics.firstFrameMs,
     lowerIsBetter: true,
   },
   {
     id: 'longestFrameMs',
-    label: 'Longest frame gap',
+    label: 'Longest JS callback gap',
     unit: 'ms',
     read: (metrics) => metrics.longestFrameMs,
     lowerIsBetter: true,
@@ -92,14 +110,14 @@ const METRICS: {
   },
   {
     id: 'longFrames',
-    label: 'Frames over 20 ms',
+    label: 'JS callback gaps over 20 ms',
     unit: '',
     read: (metrics) => metrics.longFrames,
     lowerIsBetter: false,
   },
   {
     id: 'frames',
-    label: 'Frames observed',
+    label: 'JS callback intervals',
     unit: '',
     read: (metrics) => metrics.frames,
     lowerIsBetter: false,
@@ -172,11 +190,10 @@ export function buildComparison(
   return {
     rows: buildRows(downstream, streamdown),
     parity: compareText(downstream.source, streamdown.source),
-    verdict: verdictFor(
-      round(downstream.totalMs),
-      round(streamdown.totalMs),
-      true
-    ),
+    // The candidates do not expose equivalent native completion fences.
+    // Callback responsiveness and input equality cannot establish a renderer
+    // presentation winner.
+    verdict: 'unavailable',
   };
 }
 

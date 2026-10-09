@@ -145,6 +145,7 @@ private:
   /// it carries: the node's resolved document when measuring, and the fallback
   /// it already holds when requesting a preparation, because resolving the
   /// document there would read a preparation that does not exist yet.
+  bool usesIncrementalParagraphs() const;
   downstream::LayoutHint layoutHint(react::Float fontScale, react::Float width,
                                     const downstream::DocumentHandle &document) const;
 

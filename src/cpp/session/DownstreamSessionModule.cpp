@@ -278,17 +278,16 @@ AsyncPromise<bool> DownstreamSessionModule::copyText(jsi::Runtime &rt, std::stri
 namespace {
 
 /// The engine's slots in the shape codegen bridges to JavaScript.
+Slot bridged(const downstream::FenceSlot &slot) {
+  return Slot{static_cast<std::int32_t>(slot.ordinal), slot.language,
+              slot.meta.empty() ? std::nullopt : std::optional<std::string>(slot.meta),
+              downstream::utf16ToUtf8(slot.code), slot.incomplete, static_cast<double>(slot.identity)};
+}
+
 std::vector<Slot> bridged(const std::vector<downstream::FenceSlot> &slots) {
   std::vector<Slot> out;
   out.reserve(slots.size());
-  for (const downstream::FenceSlot &slot : slots) {
-    out.push_back(Slot{static_cast<std::int32_t>(slot.ordinal),
-                       slot.language,
-                       slot.meta.empty() ? std::nullopt : std::optional<std::string>(slot.meta),
-                       downstream::utf16ToUtf8(slot.code),
-                       slot.incomplete,
-                       static_cast<double>(slot.identity)});
-  }
+  for (const auto &slot : slots) out.push_back(bridged(slot));
   return out;
 }
 
@@ -378,11 +377,14 @@ jsi::Array DownstreamSessionModule::sessionTagSlots(jsi::Runtime &rt, std::strin
     return jsi::Array(rt, 0);
   }
   const auto snapshot = downstream::SessionRegistry::publishedSnapshot(
-      sessionId, static_cast<uint64_t>(generation), static_cast<uint64_t>(sequence));
-  if (!snapshot.document || !snapshot.source) {
+      sessionId, static_cast<uint64_t>(generation), static_cast<uint64_t>(sequence), false);
+  if (!snapshot.document || !snapshot.tagBodies) {
     return jsi::Array(rt, 0);
   }
-  return toJs(rt, downstream::tagSlots(*snapshot.document, *snapshot.source, names, snapshot.live));
+  std::vector<downstream::TagSlot> slots;
+  for (const auto &slot : downstream::sharedTagSlots(*snapshot.document, {}, names, snapshot.live, {},
+                                                   nullptr, snapshot.tagBodies.get())) slots.push_back(*slot);
+  return toJs(rt, slots);
 }
 
 jsi::Object DownstreamSessionModule::fenceSlots(jsi::Runtime &rt, std::string source, double mathFlags,
@@ -453,13 +455,52 @@ jsi::Array DownstreamSessionModule::sessionFenceSlots(jsi::Runtime &rt, std::str
   // answer renders beside name that exact version, so a snapshot that arrives
   // mid-render cannot make the view mount slots from a document it never
   // asked for.
-  const downstream::DocumentHandle document =
-      downstream::SessionRegistry::snapshot(sessionId, static_cast<uint64_t>(generation), static_cast<uint64_t>(sequence));
-  if (document) {
-    const bool live = !downstream::SessionRegistry::isFinished(sessionId);
-    slots = bridged(downstream::fenceSlots(*document, languages, live));
+  const auto snapshot = downstream::SessionRegistry::publishedSnapshot(
+      sessionId, static_cast<uint64_t>(generation), static_cast<uint64_t>(sequence), false);
+  if (snapshot.document) {
+    slots = bridged(downstream::fenceSlots(*snapshot.document, languages, snapshot.live));
   }
   return toJs(rt, slots);
+}
+
+
+jsi::Object DownstreamSessionModule::sessionFenceSlotChanges(jsi::Runtime &rt, std::string sessionId,
+    double generation, double sequence, std::vector<std::string> languages, double baseToken) {
+  downstream::SlotChanges<downstream::FenceSlot> changes;
+  if (validCounter(generation) && validCounter(sequence) && validCounter(baseToken)) {
+    changes = downstream::SessionRegistry::fenceSlotChanges(sessionId, static_cast<uint64_t>(generation),
+        static_cast<uint64_t>(sequence), languages, static_cast<uint64_t>(baseToken));
+  }
+  jsi::Object result(rt);
+  result.setProperty(rt, "token", static_cast<double>(changes.token));
+  jsi::Array order(rt, changes.order.size());
+  for (size_t i = 0; i < changes.order.size(); ++i) order.setValueAtIndex(rt, i, static_cast<double>(changes.order[i]));
+  result.setProperty(rt, "order", std::move(order));
+  jsi::Array slots(rt, changes.changed.size());
+  for (size_t i = 0; i < changes.changed.size(); ++i) {
+    slots.setValueAtIndex(rt, i, NativeDownstreamSessionFenceSlotBridging<Slot>::toJs(
+        rt, bridged(*changes.changed[i]), nullptr));
+  }
+  result.setProperty(rt, "changed", std::move(slots));
+  return result;
+}
+
+jsi::Object DownstreamSessionModule::sessionTagSlotChanges(jsi::Runtime &rt, std::string sessionId,
+    double generation, double sequence, std::vector<std::string> names, double baseToken) {
+  downstream::SlotChanges<downstream::TagSlot> changes;
+  if (validCounter(generation) && validCounter(sequence) && validCounter(baseToken)) {
+    changes = downstream::SessionRegistry::tagSlotChanges(sessionId, static_cast<uint64_t>(generation),
+        static_cast<uint64_t>(sequence), names, static_cast<uint64_t>(baseToken));
+  }
+  jsi::Object result(rt);
+  result.setProperty(rt, "token", static_cast<double>(changes.token));
+  jsi::Array order(rt, changes.order.size());
+  for (size_t i = 0; i < changes.order.size(); ++i) order.setValueAtIndex(rt, i, static_cast<double>(changes.order[i]));
+  result.setProperty(rt, "order", std::move(order));
+  jsi::Array slots(rt, changes.changed.size());
+  for (size_t i = 0; i < changes.changed.size(); ++i) slots.setValueAtIndex(rt, i, tagSlotToJs(rt, *changes.changed[i]));
+  result.setProperty(rt, "changed", std::move(slots));
+  return result;
 }
 
 

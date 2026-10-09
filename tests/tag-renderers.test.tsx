@@ -14,7 +14,11 @@ import {
 import type { MarkdownPlugins, TagRendererProps } from '../src/types';
 import { resetEngine } from './real-engine-module';
 
-const queries = vi.hoisted(() => ({ controlled: vi.fn(), stream: vi.fn() }));
+const queries = vi.hoisted(() => ({
+  controlled: vi.fn(),
+  stream: vi.fn(),
+  delta: vi.fn(),
+}));
 vi.mock('../src/NativeDownstreamSession', async () => {
   const { realEngineModule } = await import('./real-engine-module');
   return {
@@ -23,6 +27,7 @@ vi.mock('../src/NativeDownstreamSession', async () => {
       ...realEngineModule.default,
       tagSlots: queries.controlled,
       sessionTagSlots: queries.stream,
+      sessionTagSlotChanges: queries.delta,
     },
   };
 });
@@ -71,6 +76,14 @@ beforeEach(() => {
   resetEngine();
   queries.controlled.mockReset().mockReturnValue(slots);
   queries.stream.mockReset().mockReturnValue(slots);
+  queries.delta.mockReset().mockImplementation((...args) => {
+    const answer = queries.stream(...args.slice(0, 4));
+    return {
+      token: 1,
+      order: answer.map((slot: { container: number }) => slot.container),
+      changed: answer,
+    };
+  });
   host = document.body.appendChild(document.createElement('div'));
   root = createRoot(host);
 });
@@ -81,6 +94,116 @@ afterEach(() => {
 });
 
 describe('tag renderer query reuse', () => {
+  it('delta subscribers retain unchanged slot props and remove obsolete hosted IDs', () => {
+    const snapshots: Array<ReturnType<typeof useTagSlots>> = [];
+    const resolved = resolveTagRenderers({
+      tags: [{ name: 'chart', component: Chart }],
+    });
+    function Capture({
+      revision,
+      subscriber,
+    }: {
+      revision: number;
+      subscriber: string;
+    }) {
+      const current = useTagSlots({
+        sessionId: subscriber,
+        generation: 0,
+        sequence: 1,
+        revision,
+        parseFlags: 0,
+        allowedTags: [],
+        resolved,
+      });
+      snapshots.push(current);
+      return <TagSlots slots={current} scope={subscriber} />;
+    }
+    const deltaCalls: number[] = [];
+    queries.delta.mockImplementation(
+      (_id, _generation, _sequence, _names, baseToken: number) => {
+        deltaCalls.push(baseToken);
+        return baseToken === 0
+          ? { token: 11, order: [1], changed: slots }
+          : { token: 12, order: [1], changed: [] };
+      }
+    );
+    mount(
+      <>
+        <Capture revision={1} subscriber="a" />
+        <Capture revision={1} subscriber="b" />
+      </>
+    );
+    const first = snapshots.slice();
+    mount(
+      <>
+        <Capture revision={2} subscriber="a" />
+        <Capture revision={2} subscriber="b" />
+      </>
+    );
+    expect(deltaCalls).toEqual([0, 0, 11, 11]);
+    expect(snapshots[2]?.[0]).toBe(first[0]?.[0]);
+    expect(snapshots[3]?.[0]?.props).toBe(first[1]?.[0]?.props);
+    expect(host.textContent).toBe('firstfirst');
+    queries.delta.mockReturnValue({ token: 13, order: [], changed: [] });
+    mount(
+      <>
+        <Capture revision={3} subscriber="a" />
+        <Capture revision={3} subscriber="b" />
+      </>
+    );
+    expect(snapshots.at(-1)).toEqual([]);
+    expect(host.textContent).toBe('');
+  });
+
+  it('same-sequence closure and generation replacement receive fresh renderer props', () => {
+    const snapshots: Array<ReturnType<typeof useTagSlots>> = [];
+    const resolved = resolveTagRenderers({
+      tags: [{ name: 'chart', component: Chart }],
+    });
+    function Capture({
+      revision,
+      generation,
+    }: {
+      revision: number;
+      generation: number;
+    }) {
+      const current = useTagSlots({
+        sessionId: 'a',
+        generation,
+        sequence: 1,
+        revision,
+        parseFlags: 0,
+        allowedTags: [],
+        resolved,
+      });
+      snapshots.push(current);
+      return <TagSlots slots={current} scope={`a:${generation}`} />;
+    }
+    queries.delta.mockReturnValueOnce({
+      token: 1,
+      order: [1],
+      changed: [{ ...slots[0], incomplete: true }],
+    });
+    mount(<Capture revision={1} generation={0} />);
+    queries.delta.mockReturnValueOnce({
+      token: 2,
+      order: [1],
+      changed: [{ ...slots[0], incomplete: false }],
+    });
+    mount(<Capture revision={2} generation={0} />);
+    expect(snapshots[0]?.[0]?.props.isIncomplete).toBe(true);
+    expect(snapshots[1]?.[0]?.props.isIncomplete).toBe(false);
+    expect(snapshots[1]?.[0]?.props).not.toBe(snapshots[0]?.[0]?.props);
+    queries.delta.mockReturnValueOnce({
+      token: 3,
+      order: [1],
+      changed: [{ ...slots[0], markdown: 'replacement' }],
+    });
+    mount(<Capture revision={3} generation={1} />);
+    expect(queries.delta.mock.calls.at(-1)?.[4]).toBe(0);
+    expect(host.textContent).toBe('replacement');
+  });
+
   it('equivalent inline plugins and policies do not query again on parent updates', () => {
     const seen = vi.fn(Chart);
     function Parent({ tick }: { tick: number }) {

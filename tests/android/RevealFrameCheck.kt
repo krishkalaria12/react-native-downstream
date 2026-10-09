@@ -53,6 +53,18 @@ fun main() {
   // Targets read retained ranges even when every frame unit has completed.
   frame.build(ranges, starts, 200.0)
   check(frame.size == 0 && targets.size == 3) { "completion must still invalidate its roots" }
+  // Retire only after scheduling the completed roots' opaque redraw. A native
+  // block maps through segment ends, not through the active-frame unit index.
+  frame.build(ranges, starts, 175.0)
+  targets.retainActive(frame, segmentEnds)
+  check(targets.size == 1 && targets.indexAt(0) == 3) { "completed roots must stop redrawing while the tail fades" }
+  frame.build(ranges, starts, 200.0)
+  targets.retainActive(frame, segmentEnds)
+  check(targets.size == 0) { "last root must retire after its opaque invalidation" }
+  targets.build(longArrayOf(3, 0, 2, 5, 0, 2, 10, 0, 2), segmentEnds)
+  frame.build(longArrayOf(3, 0, 2, 5, 0, 2, 10, 0, 2), doubleArrayOf(0.0, 100.0, 300.0), 175.0)
+  targets.retainActive(frame, segmentEnds)
+  check((0 until targets.size).map(targets::indexAt) == listOf(2, 3)) { "one active unit keeps its multi-block root; future roots stay scheduled" }
   targets.build(longArrayOf(), segmentEnds)
   check(targets.size == 0)
   targets.build(longArrayOf(5, 0, 2, 10, 0, 2), intArrayOf())

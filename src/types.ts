@@ -1134,6 +1134,13 @@ type MarkdownViewBaseProps = Readonly<{
    */
   syntaxHighlighting?: boolean;
   /**
+   * Android layout for an unfinished plain ASCII paragraph. `incremental`
+   * reuses completed lines with greedy wrapping while streaming, then restores
+   * canonical high-quality wrapping when the paragraph settles. Unsupported
+   * text and typography use canonical layout. Defaults to `canonical`.
+   */
+  androidParagraphLayout?: 'canonical' | 'incremental';
+  /**
    * Wrap long code lines instead of scrolling them sideways. Off by default,
    * as in Streamdown and GitHub. Changes layout only, never copied text.
    */

@@ -88,7 +88,8 @@ DownstreamMarkdownShadowNode::DownstreamMarkdownShadowNode(const ShadowNode &sou
   // The worker can use this hint if it has not collected its layouts yet.
   // Later changes use the normal on-demand platform rendering cache.
   if (controlled_ && controlled_->prepared &&
-      (!sameTheme || previous.controls != props.controls || previous.codeBlockWrap != props.codeBlockWrap)) {
+      (!sameTheme || previous.controls != props.controls || previous.codeBlockWrap != props.codeBlockWrap ||
+       previous.incrementalParagraphs != props.incrementalParagraphs)) {
     controlled_->prepared->noteHint(layoutHint(1, 0, document_));
   }
 }
@@ -142,6 +143,11 @@ downstream::BlockDirection directionFor(DownstreamMarkdownViewDir value) {
   return downstream::BlockDirection::Inherit;
 }
 
+bool DownstreamMarkdownShadowNode::usesIncrementalParagraphs() const {
+  const auto &props = getConcreteProps();
+  return props.incrementalParagraphs && props.dir != DownstreamMarkdownViewDir::Rtl;
+}
+
 downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale, Float width,
                                                                const downstream::DocumentHandle &document) const {
   const auto &state = getStateData();
@@ -160,6 +166,7 @@ downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale,
                               theme_};
   hint.tables = tableProps(state);
   hint.direction = directionFor(getConcreteProps().dir);
+  hint.incrementalParagraphs = usesIncrementalParagraphs();
   return hint;
 }
 
@@ -654,7 +661,8 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
   return layoutManager_
       ->measure(document, layoutContext.fontSizeMultiplier, layoutConstraints, getSurfaceId(), chrome,
                 codeProps(state), caretFor(document), imageLayout(document), measuredHosts_, theme_,
-                tableProps(state), state.choices)
+                tableProps(state), state.choices,
+                usesIncrementalParagraphs())
       .size;
 }
 
@@ -677,7 +685,8 @@ void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
   const DocumentMeasurement measurement =
       layoutManager_->measure(document, layoutContext.fontSizeMultiplier, frame, getSurfaceId(), chromeFor(state),
                               codeProps(state), caretFor(document), imageLayout(document), measuredHosts_, theme_,
-                              tableProps(state), state.choices);
+                              tableProps(state), state.choices,
+                usesIncrementalParagraphs());
   if (measurement.slots.empty() && measurement.tagSlots.empty()) {
     return;
   }
@@ -795,18 +804,29 @@ void DownstreamMarkdownShadowNode::layout(LayoutContext layoutContext) {
   }
   if (state.document != document || state.fontSizeMultiplier != layoutContext.fontSizeMultiplier ||
       state.chrome != chrome || state.code != code || state.tables != tables || state.caret != caret ||
-      state.images != images || state.hosts != hosts || state.themeId() != themeId()) {
+      state.images != images || state.hosts != hosts || state.themeId() != themeId() ||
+      state.incrementalParagraphs != usesIncrementalParagraphs()) {
     DownstreamMarkdownState next{state};
     next.document = document;
     next.fontSizeMultiplier = layoutContext.fontSizeMultiplier;
     next.chrome = chrome;
     next.code = code;
+    next.incrementalParagraphs = usesIncrementalParagraphs();
     next.tables = tables;
     next.caret = caret;
     next.images = images;
     next.hosts = hosts;
     next.theme = theme_;
     setStateData(std::move(next));
+  }
+  // Yoga's mounted width may differ from the measurement constraint after
+  // pixel rounding. Record that exact width for subsequent worker snapshots,
+  // including documents without hosted children. Nearby widths cannot share
+  // wrapping geometry.
+  const auto mountedHint = layoutHint(layoutContext.fontSizeMultiplier, getLayoutMetrics().frame.size.width, document);
+  downstream::RenderPreparer::noteLayout(mountedHint);
+  if (!getConcreteProps().sessionId.empty()) {
+    downstream::SessionRegistry::noteLayout(getConcreteProps().sessionId, mountedHint);
   }
   layoutSlots(layoutContext);
 

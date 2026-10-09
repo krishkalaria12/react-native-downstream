@@ -17,6 +17,8 @@ void appendCodePoint(std::u16string &out, uint32_t codePoint);
 
 /// Decodes UTF-8 into UTF-16. Malformed sequences decode as U+FFFD.
 void appendUtf8(std::u16string &out, std::string_view bytes);
+class SnapshotText;
+void appendUtf8(SnapshotText &out, std::string_view bytes);
 
 /// One UTF-8 sequence: how many bytes it spans and how many UTF-16 code units
 /// it occupies. A malformed or truncated sequence spans one byte and one unit,

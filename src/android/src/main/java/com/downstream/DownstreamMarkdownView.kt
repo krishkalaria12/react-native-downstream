@@ -2,10 +2,13 @@ package com.downstream
 
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
+import android.view.accessibility.AccessibilityManager
 import java.lang.ref.WeakReference
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.uimanager.PixelUtil
@@ -168,6 +171,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   internal fun linkVariants(): LinkVariants =
     LinkVariants(variantPrefixes, variantCounts, variantColors, variantUnderlines)
   private var syntaxHighlighting = true
+  private var incrementalParagraphs = false
   // Every control on, which is the default and matches the codegen default.
   private var controls = CONTROL_CODE_COPY or CONTROL_CODE_DOWNLOAD or CONTROL_TABLE_COPY or
     CONTROL_TABLE_DOWNLOAD or CONTROL_CODE_WRAP or CONTROL_CODE_EXPAND or CONTROL_IMAGE_DOWNLOAD
@@ -315,6 +319,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     buildRevealFrame()
     revealTargets.build(ranges, revealSegmentEnds)
     invalidateReveal()
+    revealTargets.retainActive(frame, revealSegmentEnds)
   }
 
   /** The frame at this instant, or an empty one when nothing is fading. */
@@ -414,11 +419,13 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     chrome: Int,
     caret: PlacedCaret,
     tables: TableLayoutProps,
+    incrementalParagraphs: Boolean = false,
   ) {
     stateWrapper = wrapper
     val resolved = if (stateThemeId != 0L) stateThemeId else internProps()
     val documentChanged = documentId != this.documentId || fontScale != this.fontScale ||
-      resolved != themeId || (documentId != 0L && rendered == null)
+      resolved != themeId || incrementalParagraphs != this.incrementalParagraphs ||
+      (documentId != 0L && rendered == null)
     val refreshRendering = documentChanged || caret != this.caret
     val codeChanged = code != codeLayout
     val hostsChanged = hosts != hostLayout
@@ -436,6 +443,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     hostLayout = hosts
     this.chrome = chrome
     this.caret = caret
+    this.incrementalParagraphs = incrementalParagraphs
     // One set of reader choices and one table layout, derived from the same
     // state the shadow node measured with: a code toggle, a table toggle, and
     // a details toggle all live in it.
@@ -456,7 +464,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     if (tracing) DownstreamNative.traceDocument(documentId, "apply_start")
     if (refreshRendering) {
       rendered = if (documentId != 0L) {
-        RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, caret, linkVariants())
+        RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, caret, linkVariants(), incrementalParagraphs = incrementalParagraphs && direction != View.TEXT_DIRECTION_RTL)
       } else {
         null
       }
@@ -493,6 +501,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
+    observeSegmentViewport()
     scheduleTraceFrame()
     buildRevealFrame()
     invalidateReveal()
@@ -501,6 +510,9 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   override fun onDetachedFromWindow() {
     stopRevealTick()
+    segmentViewportObserver?.let { if (it.isAlive) it.removeOnPreDrawListener(segmentViewportListener) }
+    segmentViewportObserver = null
+    segmentViewportKnown = false
     super.onDetachedFromWindow()
   }
 
@@ -519,11 +531,21 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     }
     if (next == direction) return
     direction = next
-    applySettledState()
+    applyDocumentState(refreshRendering = true, updateReveal = false)
+    requestLayout()
+  }
+
+  fun setIncrementalParagraphs(enabled: Boolean) {
+    if (enabled == incrementalParagraphs) return
+    incrementalParagraphs = enabled
+    applyDocumentState(refreshRendering = true, updateReveal = false)
+    requestLayout()
   }
 
   fun setSelectable(selectable: Boolean) {
+    if (this.selectable == selectable) return
     this.selectable = selectable
+    syncSegmentViews()
     applySettledState()
   }
 
@@ -757,7 +779,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     val id = documentId
     val scale = fontScale
     rendered = if (id != 0L) {
-      RenderedDocument.obtain(context, id, scale, syntaxHighlighting, themeId, value, linkVariants = linkVariants())
+      RenderedDocument.obtain(context, id, scale, syntaxHighlighting, themeId, value, linkVariants = linkVariants(), incrementalParagraphs = incrementalParagraphs && direction != View.TEXT_DIRECTION_RTL)
     } else {
       null
     }
@@ -772,7 +794,8 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    */
   private fun applySettledState() {
     val plan = rendered?.plan ?: return
-    for (index in 0 until minOf(segmentViews.size, plan.size)) {
+    val indices: Iterable<Int> = viewportOnlyIndices?.asIterable() ?: (0 until minOf(segmentViews.size, plan.size))
+    for (index in indices) {
       val planned = plan[index]
       val settled = planned.from + 1 <= planned.settledBlocks
       when (val child = segmentViews[index]) {
@@ -910,6 +933,9 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     // that reads it.
     buildRevealFrame()
     invalidateReveal()
+    // A finished root has now been dirtied for its final opaque display list.
+    // Retire it before the next tick while other roots can keep fading.
+    revealTargets.retainActive(frame, revealSegmentEnds)
     if (DownstreamNative.revealPrune(handle, uptimeMillis(), timing)) {
       // The prune dropped what finished, so this frame draws it at full alpha and
       // the next has nothing left to do.
@@ -985,9 +1011,9 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   /** Redraws whatever the fade touched. */
   internal fun invalidateReveal() {
-    // Targets come from the retained JNI ranges, so they include units that
-    // became opaque this tick. Settled siblings keep their display lists. A
-    // target is a segment index, so it is looked up among the segments: this
+    // Targets retain the previous frame until this invalidation, including
+    // roots whose last unit became opaque this tick. Settled siblings keep their
+    // display lists. A target is a segment index, so it is looked up among the segments: this
     // view's own children are the segment and host layers.
     for (index in 0 until revealTargets.size) {
       val child = segmentViews.getOrNull(revealTargets.indexAt(index)) ?: continue
@@ -1137,7 +1163,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     if (enabled != syntaxHighlighting) {
       syntaxHighlighting = enabled
       if (documentId != 0L) {
-        rendered = RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, linkVariants = linkVariants())
+        rendered = RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, linkVariants = linkVariants(), incrementalParagraphs = incrementalParagraphs && direction != View.TEXT_DIRECTION_RTL)
         syncSegmentViews()
       }
     }
@@ -1167,6 +1193,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     themeFonts = null
     rendered = null
     syntaxHighlighting = true
+    incrementalParagraphs = false
     generation = 0
     sessionId = null
     sourceEpoch++
@@ -1410,7 +1437,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
     if (documentId != 0L) {
-      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, linkVariants = linkVariants())?.let {
+      RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, linkVariants = linkVariants(), incrementalParagraphs = incrementalParagraphs && direction != View.TEXT_DIRECTION_RTL)?.let {
         rendered = it
         syncSegmentViews()
       }
@@ -1463,14 +1490,134 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   // because the group also holds the React children mounted over the slots.
   private var segmentViews = mutableListOf<View>()
 
+  // Plain unselectable text can release its TextView while outside the actual
+  // ancestor clip. Index placeholders preserve reveal and host reconciliation.
+  private class DeferredTextView(context: Context) : View(context)
+  private val recycledTextViews = java.util.ArrayDeque<TextSegmentView>()
+  private val segmentEligibility = java.util.WeakHashMap<TextSegment, Boolean>()
+  private val segmentViewport = Rect()
+  private var segmentViewportKnown = false
+  private var segmentAccessibilityEnabled = false
+  private var segmentViewportObserver: ViewTreeObserver? = null
+  private var viewportOnlyIndices: IntArray? = null
+  private var virtualizedDocument: RenderedDocument? = null
+  private var virtualizedFrames: IntArray? = null
+  private var virtualizedInterval = 0 until 0
+  private var checkedFrameOrder: IntArray? = null
+  private var virtualizedFramesOrdered = false
+  private val segmentViewportListener = ViewTreeObserver.OnPreDrawListener {
+    if (!selectable) refreshSegmentViewport()
+    true
+  }
+
+  private fun observeSegmentViewport() {
+    val observer = viewTreeObserver
+    if (segmentViewportObserver === observer) return
+    segmentViewportObserver?.let { if (it.isAlive) it.removeOnPreDrawListener(segmentViewportListener) }
+    segmentViewportObserver = observer
+    observer.addOnPreDrawListener(segmentViewportListener)
+    refreshSegmentViewport()
+  }
+
+  private fun refreshSegmentViewport() {
+    val visible = Rect()
+    val known = isAttachedToWindow && width > 0 && height > 0
+    if (known && !getLocalVisibleRect(visible)) visible.setEmpty()
+    val accessible = (context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager)?.isEnabled == true
+    if (known == segmentViewportKnown && visible == segmentViewport && accessible == segmentAccessibilityEnabled) return
+    segmentViewportKnown = known
+    segmentViewport.set(visible)
+    segmentAccessibilityEnabled = accessible
+    val document = rendered
+    val column = width - paddingLeft - paddingRight
+    val frames = if (!selectable && !accessible && known && column > 0) {
+      document?.frames(column, chrome, codeLayout, imageLayout, hostLayout, tableLayout, readerChoices)
+    } else null
+    if (document === virtualizedDocument && frames != null && frames === virtualizedFrames && virtualizedFramesOrdered) {
+      val next = viewportSegmentInterval(frames)
+      viewportOnlyIndices = (virtualizedInterval.asSequence() + next.asSequence()).distinct().sorted().toList().toIntArray()
+    }
+    try { syncSegmentViews() } finally { viewportOnlyIndices = null }
+  }
+
+  private fun viewportSegmentInterval(frames: IntArray): IntRange {
+    if (segmentViewport.isEmpty) return 0 until 0
+    val overscan = maxOf((64 * resources.displayMetrics.density).toInt(), segmentViewport.height() / 2)
+    val top = segmentViewport.top - segmentLayer.top - paddingTop - overscan
+    val bottom = segmentViewport.bottom - segmentLayer.top - paddingTop + overscan
+    val count = frames.size / 2
+    var low = 0; var high = count
+    while (low < high) {
+      val middle = (low + high) ushr 1
+      if (frames[middle * 2] + frames[middle * 2 + 1] < top) low = middle + 1 else high = middle
+    }
+    val first = low
+    high = count
+    while (low < high) {
+      val middle = (low + high) ushr 1
+      if (frames[middle * 2] <= bottom) low = middle + 1 else high = middle
+    }
+    return first until low
+  }
+
+  private fun checkViewportFrameOrder(frames: IntArray): Boolean {
+    if (checkedFrameOrder === frames) return virtualizedFramesOrdered
+    checkedFrameOrder = frames
+    virtualizedFramesOrdered = (1 until frames.size / 2).all { index ->
+      frames[index * 2] >= frames[(index - 1) * 2] &&
+        frames[index * 2] + frames[index * 2 + 1] >= frames[(index - 1) * 2] + frames[(index - 1) * 2 + 1]
+    }
+    return virtualizedFramesOrdered
+  }
+
+  private fun canDeferSegment(segment: TextSegment): Boolean = segmentEligibility.getOrPut(segment) {
+    segment.customContainer < 0 && segment.caretOffset < 0 && segment.detailsContainers.isEmpty() &&
+      segment.detailsBlocks.isEmpty() && segment.taskBlocks.isEmpty() &&
+      segment.text.getSpans(0, segment.text.length, LinkSpan::class.java).isEmpty() &&
+      segment.text.getSpans(0, segment.text.length, TagSpan::class.java).isEmpty() &&
+      segment.text.getSpans(0, segment.text.length, SpoilerSpan::class.java).isEmpty() &&
+      segment.text.getSpans(0, segment.text.length, MathInlineSpan::class.java).isEmpty()
+  }
+
+  private fun recycleTextView(view: View) {
+    segmentLayer.removeView(view)
+    if (view is TextSegmentView && recycledTextViews.size < 8) {
+      view.clearContent()
+      recycledTextViews.addLast(view)
+    }
+  }
+
   // Reuse views of the same kind in place, so unchanged segments keep their
   // selection and scroll position across updates.
   private fun syncSegmentViews() {
     val document = rendered
     val segments = document?.segments.orEmpty()
-    revealSegmentEnds = IntArray(document?.plan?.size ?: 0) { document!!.plan[it].to }
-    segments.forEachIndexed { index, segment ->
+    val column = width - paddingLeft - paddingRight
+    val frames = if (!selectable && !segmentAccessibilityEnabled && segmentViewportKnown && column > 0) {
+      document?.frames(column, chrome, codeLayout, imageLayout, hostLayout, tableLayout, readerChoices)
+    } else null
+    val indices: Iterable<Int> = viewportOnlyIndices?.asIterable() ?: segments.indices
+    if (viewportOnlyIndices == null) revealSegmentEnds = IntArray(document?.plan?.size ?: 0) { document!!.plan[it].to }
+    val overscan = maxOf((64 * resources.displayMetrics.density).toInt(), segmentViewport.height() / 2)
+    fun deferAt(index: Int): Boolean {
+      val segment = segments[index]
+      return segment is TextSegment && frames != null && canDeferSegment(segment) &&
+        (segmentViewport.isEmpty || segmentLayer.top + paddingTop + frames[index * 2] > segmentViewport.bottom + overscan ||
+          segmentLayer.top + paddingTop + frames[index * 2] + frames[index * 2 + 1] < segmentViewport.top - overscan)
+    }
+    if (frames != null) while (segmentViews.size < segments.size) segmentViews.add(DeferredTextView(context))
+    // Retire first so scrolling upwards can reuse the views below the viewport.
+    for (index in indices) {
+      if (deferAt(index) && segmentViews.getOrNull(index) !is DeferredTextView) {
+        segmentViews.getOrNull(index)?.let { recycleTextView(it) }
+        val placeholder = DeferredTextView(context)
+        if (index < segmentViews.size) segmentViews[index] = placeholder else segmentViews.add(placeholder)
+      }
+    }
+    for (index in indices) {
+      val segment = segments[index]
       var view = segmentViews.getOrNull(index)
+      if (deferAt(index)) continue
       val reusable = when (segment) {
         is TextSegment -> view is TextSegmentView
         is CodeSegment -> view is CodeSegmentView
@@ -1480,11 +1627,11 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       }
       if (!reusable) {
         if (view != null) {
-          segmentLayer.removeView(view)
+          recycleTextView(view)
           segmentViews.removeAt(index)
         }
         view = when (segment) {
-          is TextSegment -> TextSegmentView(context)
+          is TextSegment -> if (recycledTextViews.isEmpty()) TextSegmentView(context) else recycledTextViews.removeLast()
           is CodeSegment -> CodeSegmentView(context).apply { setControlHost(this@DownstreamMarkdownView) }
           is TableSegment -> TableSegmentView(context).apply { setControlHost(this@DownstreamMarkdownView) }
           is ImageSegment -> ImageSegmentView(context).also { new ->
@@ -1538,11 +1685,14 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     }
     while (segmentViews.size > segments.size) {
       val extra = segmentViews.removeAt(segmentViews.size - 1)
-      segmentLayer.removeView(extra)
+      recycleTextView(extra)
     }
-    revealTargets.build(revealRanges, revealSegmentEnds)
+    if (viewportOnlyIndices == null) revealTargets.build(revealRanges, revealSegmentEnds)
     applySettledState()
     layoutSegments()
+    virtualizedDocument = if (frames != null) document else null
+    virtualizedFrames = frames
+    virtualizedInterval = if (frames != null && checkViewportFrameOrder(frames)) viewportSegmentInterval(frames) else 0 until 0
   }
 
   /**
@@ -1668,8 +1818,10 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     val frames = document.frames(
       width, chrome, codeLayout, imageLayout, hostLayout, tableLayout, readerChoices,
     )
-    for (index in 0 until minOf(segmentViews.size, frames.size / 2)) {
+    val indices: Iterable<Int> = viewportOnlyIndices?.asIterable() ?: (0 until minOf(segmentViews.size, frames.size / 2))
+    for (index in indices) {
       val child = segmentViews[index]
+      if (child is DeferredTextView) continue
       val top = paddingTop + frames[index * 2]
       val height = frames[index * 2 + 1]
       // A closed details body has a zero frame. Hide its native child as well,
@@ -1677,11 +1829,19 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       // Hosted children remain GONE because their React slot owns the drawing.
       if (height <= 0 && child.visibility != View.GONE) child.visibility = View.INVISIBLE
       else if (height > 0 && child.visibility == View.INVISIBLE) child.visibility = View.VISIBLE
-      child.measure(
-        MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
-        MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY),
-      )
-      child.layout(paddingLeft, top, paddingLeft + width, top + height)
+      // Preserve child requests for text, controls and scroll range changes.
+      // Settled siblings with identical exact bounds need no native layout pass.
+      val requested = child.isLayoutRequested
+      if (requested || child.measuredWidth != width || child.measuredHeight != height) {
+        child.measure(
+          MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+          MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY),
+        )
+      }
+      if (requested || child.isLayoutRequested || child.left != paddingLeft || child.top != top ||
+        child.right != paddingLeft + width || child.bottom != top + height) {
+        child.layout(paddingLeft, top, paddingLeft + width, top + height)
+      }
     }
   }
 
@@ -1710,7 +1870,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     // down rather than swallowing it.
     segmentLayer.layout(paddingLeft, paddingTop, right - paddingRight, bottom - paddingBottom)
     hostLayer.layout(0, 0, right - left, bottom - top)
-    layoutSegments()
+    syncSegmentViews()
 
   }
 
@@ -1724,7 +1884,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       layoutPosted = true
       post {
         layoutPosted = false
-        layoutSegments()
+        syncSegmentViews()
       }
     }
   }
@@ -1747,7 +1907,7 @@ internal class SegmentLayer(context: Context) : ViewGroup(context) {
     // the measurement stacked, so this layer only has to hand them through.
     for (index in 0 until childCount) {
       val child = getChildAt(index)
-      child.layout(child.left, child.top, child.right, child.bottom)
+      if (child.isLayoutRequested) child.layout(child.left, child.top, child.right, child.bottom)
     }
   }
 

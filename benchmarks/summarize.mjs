@@ -12,10 +12,17 @@ const samples = {
 
 const nativeIntervals = {
   parseMs: ['parse_start', 'parse_end'],
+  preparationMs: ['prepare_start', 'prepare_end'],
   snapshotTransferMs: ['parse_end', 'snapshot_ready'],
   measurementMs: ['measure_start', 'measure_end'],
   applyMs: ['apply_start', 'apply_end'],
   applyToFrameEstimateMs: ['apply_end', 'frame_estimate'],
+  androidSpanBuildMs: ['android_text_spans_start', 'android_text_spans_end'],
+  androidShapingMs: ['android_text_shape_start', 'android_text_shape_end'],
+  androidTextAssignmentMs: [
+    'android_text_assign_start',
+    'android_text_assign_end',
+  ],
 };
 
 /// The session worker coalesces every append that arrives while it is parsing

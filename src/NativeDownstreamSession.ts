@@ -72,6 +72,19 @@ export type TagSlot = Readonly<{
   incomplete: boolean;
 }>;
 
+/** Internal stream queries send bodies only when their native payload changed. */
+export type FenceSlotChanges = Readonly<{
+  token: CodegenTypes.Double;
+  order: ReadonlyArray<CodegenTypes.Int32>;
+  changed: ReadonlyArray<FenceSlot>;
+}>;
+
+export type TagSlotChanges = Readonly<{
+  token: CodegenTypes.Double;
+  order: ReadonlyArray<CodegenTypes.Int32>;
+  changed: ReadonlyArray<TagSlot>;
+}>;
+
 export interface Spec extends TurboModule {
   /**
    * Creates a session. `parseFlags` is the parse option bitmask, read once here
@@ -181,6 +194,20 @@ export interface Spec extends TurboModule {
     sequence: CodegenTypes.Int32,
     names: ReadonlyArray<string>
   ): ReadonlyArray<TagSlot>;
+  sessionFenceSlotChanges(
+    sessionId: string,
+    generation: CodegenTypes.Int32,
+    sequence: CodegenTypes.Int32,
+    languages: ReadonlyArray<string>,
+    baseToken: CodegenTypes.Double
+  ): FenceSlotChanges;
+  sessionTagSlotChanges(
+    sessionId: string,
+    generation: CodegenTypes.Int32,
+    sequence: CodegenTypes.Int32,
+    names: ReadonlyArray<string>,
+    baseToken: CodegenTypes.Double
+  ): TagSlotChanges;
   readonly onSnapshotReady: CodegenTypes.EventEmitter<SnapshotReadyEvent>;
   readonly onSessionError: CodegenTypes.EventEmitter<SessionErrorEvent>;
   readonly onTrace: CodegenTypes.EventEmitter<NativeTraceEvent>;

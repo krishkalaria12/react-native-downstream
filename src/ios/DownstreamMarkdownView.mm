@@ -506,6 +506,7 @@ NSString *nameForFormat(NSString *format) {
   // Fabric passes no old props when it mounts a new or recycled view; the
   // view's current props are the previous value then.
   const auto &previous = *std::static_pointer_cast<const DownstreamMarkdownViewProps>(oldProps ? oldProps : _props);
+  BOOL needsRendering = NO;
   if (newProps.sessionId != previous.sessionId || newProps.generation != previous.generation) {
     ++_controlEpoch;
     [_documentView resetScrollPositions];
@@ -530,25 +531,30 @@ NSString *nameForFormat(NSString *format) {
   // They change colors but no heights, so they travel as view state rather than
   // through the shadow node: the measurement this view draws from was made
   // without them, and the heights agree either way.
-  {
+  if (newProps.linkVariantPrefixes != previous.linkVariantPrefixes ||
+      newProps.linkVariantCounts != previous.linkVariantCounts ||
+      newProps.linkVariantColors != previous.linkVariantColors ||
+      newProps.linkVariantUnderline != previous.linkVariantUnderline) {
     DSLinkVariants *variants = [DSLinkVariants new];
     variants.prefixes = [self stringsOf:newProps.linkVariantPrefixes];
     variants.counts = [self numbersOf:newProps.linkVariantCounts];
     variants.colors = [self numbersOf:newProps.linkVariantColors];
     variants.underlines = [self boolsOf:newProps.linkVariantUnderline];
     _linkVariants = variants;
-    [self applyRendering];
+    needsRendering = YES;
   }
   // Styles for app-allowed inline tags, resolved in JavaScript from
   // `markdownStyle.tags`. Colors but no heights, so like the variants they
   // travel as view state rather than through the shadow node.
-  {
+  if (newProps.tagStyleNames != previous.tagStyleNames ||
+      newProps.tagStyleColors != previous.tagStyleColors ||
+      newProps.tagStyleFlags != previous.tagStyleFlags) {
     DSTagStyles *styles = [DSTagStyles new];
     styles.names = [self stringsOf:newProps.tagStyleNames];
     styles.colors = [self numbersOf:newProps.tagStyleColors];
     styles.flags = [self numbersOf:newProps.tagStyleFlags];
     _tagStyles = styles;
-    [self applyRendering];
+    needsRendering = YES;
   }
   // The props that decide code layout, gathered into one value. The height and
   // the gutter are heights, so the shadow node measures with them and the view
@@ -580,13 +586,13 @@ NSString *nameForFormat(NSString *format) {
     // A formula that has just become literal, or just become typeset, is a
     // different rendering of the same document, and the shadow node's next
     // layout will have a different height for it.
-    [self applyRendering];
+    needsRendering = YES;
   }
   if (newProps.allowedTags != previous.allowedTags) {
     // A tag policy decides which runs exist, so a document parsed under a new one
     // is a different document. The shadow node reads the prop itself and reparses;
     // this only has to redraw once it has.
-    [self applyRendering];
+    needsRendering = YES;
   }
   if (newProps.tableMaxHeight != previous.tableMaxHeight) {
     // A height, so it reaches the drawing through the shadow node's state on the
@@ -622,9 +628,12 @@ NSString *nameForFormat(NSString *format) {
     _syntaxHighlighting = newProps.syntaxHighlighting;
     // Tokens are computed whatever the flag says, so this only picks the
     // rendering, and the cache keys the two apart.
-    [self applyRendering];
+    needsRendering = YES;
   }
   [super updateProps:props oldProps:oldProps];
+  if (needsRendering) {
+    [self applyRendering];
+  }
 }
 
 #pragma mark - Hosted children

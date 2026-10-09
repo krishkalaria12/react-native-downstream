@@ -86,7 +86,12 @@ export type StreamBinding = Readonly<{
   revision: number;
 }>;
 
-type PendingBatch = { text: string; bytes: number; sequence: number };
+type PendingBatch = {
+  pieces: string[];
+  text?: string;
+  bytes: number;
+  sequence: number;
+};
 type InFlight = { bytes: number; sequence: number };
 
 class StreamState implements MarkdownStreamController {
@@ -105,6 +110,8 @@ class StreamState implements MarkdownStreamController {
   private readonly parseFlags: number;
   private onError?: (error: MarkdownErrorEvent) => void;
   private source = '';
+  private sourcePages: string[] = [];
+  private sourcePieces: string[] = [];
   private sourceBytes = 0;
   private generation = 0;
   private sequence = 0;
@@ -197,17 +204,24 @@ class StreamState implements MarkdownStreamController {
     // refreshes a preview policy does not, so this is not on `setPreview`.
     this.noteAnimating(true);
     this.trace('receipt', this.sequence + 1);
-    this.source += chunk;
+    // Keep accepted bytes without repeatedly joining the response. The public
+    // source is materialized only when requested; pages bound piece overhead.
+    this.sourcePieces.push(chunk);
+    if (this.sourcePieces.length === 64) {
+      this.sourcePages.push(this.sourcePieces.join(''));
+      this.sourcePieces = [];
+    }
     this.sourceBytes += bytes;
     this.queuedBytes += bytes;
     this.sequence++;
     const last = this.pending[this.pending.length - 1];
     if (last && last.bytes + bytes <= MAX_CHUNK_BYTES) {
-      last.text += chunk;
+      last.pieces.push(chunk);
+      last.text = undefined;
       last.bytes += bytes;
       last.sequence = this.sequence;
     } else {
-      this.pending.push({ text: chunk, bytes, sequence: this.sequence });
+      this.pending.push({ pieces: [chunk], bytes, sequence: this.sequence });
     }
     if (this.frame === undefined) {
       this.frame = requestAnimationFrame(() => {
@@ -228,6 +242,7 @@ class StreamState implements MarkdownStreamController {
       const batch = this.pending[0]!;
       this.trace('batch_flush_start', batch.sequence);
       try {
+        batch.text ??= batch.pieces.join('');
         NativeDownstreamSession.append(
           this.sessionId,
           batch.text,
@@ -265,6 +280,8 @@ class StreamState implements MarkdownStreamController {
     if (this.frame !== undefined) cancelAnimationFrame(this.frame);
     this.frame = undefined;
     this.source = source;
+    this.sourcePages = [];
+    this.sourcePieces = [];
     this.sourceBytes = bytes;
     this.generation = generation;
     this.sequence = 0;
@@ -312,6 +329,9 @@ class StreamState implements MarkdownStreamController {
     this.pending = [];
     this.inFlight = [];
     this.subscribers.clear();
+    this.source = '';
+    this.sourcePages = [];
+    this.sourcePieces = [];
     this.animationListeners.clear();
     controllers.delete(this.sessionId);
     NativeDownstreamSession.dispose(this.sessionId);
@@ -320,6 +340,11 @@ class StreamState implements MarkdownStreamController {
 
   async getSource(): Promise<string> {
     this.assertActive();
+    if (this.sourcePages.length || this.sourcePieces.length) {
+      this.source += this.sourcePages.join('') + this.sourcePieces.join('');
+      this.sourcePages = [];
+      this.sourcePieces = [];
+    }
     return this.source;
   }
 

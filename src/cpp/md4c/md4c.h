@@ -471,6 +471,13 @@ typedef struct MD_PARSER {
     /* Reserved. Set to NULL.
      */
     void (*syntax)(void);
+
+    /* LOCAL PATCH: source range of each confirmed link definition.
+     * Footnotes deliberately do not call this optional callback. */
+    int (*reference_definition)(MD_OFFSET /*begin*/, MD_OFFSET /*end*/, void* /*userdata*/);
+    /* Optional canonical budget for a spliced parse and its consumed output. */
+    const MD_SIZE* reference_output_budget;
+    void (*reference_output)(MD_SIZE /*spent*/, int /*limited*/, void* /*userdata*/);
 } MD_PARSER;
 
 

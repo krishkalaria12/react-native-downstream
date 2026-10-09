@@ -173,39 +173,32 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
   const CGFloat inset = body.textContainerInset.top;
   const uint32_t *starts = segment.lineStarts->data();
   const uint32_t firstNumber = segment.fenceMeta.startLine;
+  const CGRect visible = CGRectOffset(rect, 0, -inset);
+  const NSRange glyphs = [manager glyphRangeForBoundingRect:visible inTextContainer:body.textContainer];
   [color setFill];
-  for (const LineMark &mark : marks) {
-    // Marked lines are the fence's own numbering, so a fence that started at line
-    // 10 marks line 10 first — which is what makes `{1,3-5}` on a diff mean the
-    // same thing as it does in every other diff viewer.
-    for (int64_t index = static_cast<int64_t>(mark.first) - firstNumber;
-         index <= static_cast<int64_t>(mark.last) - firstNumber; index++) {
-      if (index < 0 || index >= self.lineCount) {
-        continue;
-      }
-      const uint32_t offset = starts[index];
-      if (offset >= body.textStorage.length) {
-        continue;
-      }
-      NSRange line;
-      // The effective range is the whole line, which is what finds a wrapped
-      // line's continuation rows as well as the one it starts on.
-      const CGRect fragment = [manager lineFragmentRectForGlyphAtIndex:[manager glyphIndexForCharacterAtIndex:offset]
-                                                       effectiveRange:&line];
-      for (NSUInteger glyph = line.location; glyph < NSMaxRange(line); glyph++) {
-        const CGRect row = [manager lineFragmentRectForGlyphAtIndex:glyph effectiveRange:NULL];
-        const CGRect drawn = CGRectOffset(row, 0, inset);
-        if (CGRectGetMinY(drawn) > CGRectGetMaxY(rect)) {
-          break;
-        }
-        if (CGRectGetMaxY(drawn) < CGRectGetMinY(rect)) {
-          continue;
-        }
-        UIRectFill(CGRectMake(0, drawn.origin.y, CGRectGetWidth(self.bounds), drawn.size.height));
-      }
-      (void)fragment;
+  // Each visual fragment is visited once. Its first character identifies the
+  // logical source line, including continuation fragments of a wrapped line.
+  [manager enumerateLineFragmentsForGlyphRange:glyphs
+                                    usingBlock:^(CGRect fragment, CGRect used, NSTextContainer *container,
+                                                 NSRange range, BOOL *stop) {
+    const CGRect drawn = CGRectOffset(fragment, 0, inset);
+    if (CGRectGetMinY(drawn) > CGRectGetMaxY(rect)) {
+      *stop = YES;
+      return;
     }
-  }
+    if (CGRectGetMaxY(drawn) < CGRectGetMinY(rect) || range.length == 0) {
+      return;
+    }
+    const NSUInteger character = [manager characterIndexForGlyphAtIndex:range.location];
+    const uint32_t *after = std::upper_bound(starts, starts + self.lineCount, character);
+    const uint64_t number = firstNumber + (after == starts ? 0 : after - starts - 1);
+    for (const LineMark &mark : marks) {
+      if (number >= mark.first && number <= mark.last) {
+        UIRectFill(CGRectMake(0, drawn.origin.y, CGRectGetWidth(self.bounds), drawn.size.height));
+        break;
+      }
+    }
+  }];
 }
 
 - (void)drawRect:(CGRect)rect {
@@ -225,7 +218,7 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
   }
   const CGFloat inset = body.textContainerInset.top;
   const CGFloat width = CGRectGetWidth(self.bounds);
-  [self drawLineMarksInRect:CGRectOffset(rect, 0, -inset)];
+  [self drawLineMarksInRect:rect];
 
   // Only the numbers whose lines intersect the dirty rect are drawn, so a block
   // with two thousand lines costs the same per frame as one with twenty.
@@ -649,6 +642,10 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
   _viewport.hidden = hosted;
   _gutter.hidden = hosted;
   if (!hosted) {
+    // The newest immutable segment is retained while the child owns this card.
+    // Restore it immediately when the host suspends, fails or unmounts.
+    [_body setSegment:_segmentStorage.text];
+    [self setNeedsLayout];
     [self setNeedsDisplay];
   }
 }
@@ -691,7 +688,9 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
   _streaming = YES;
   _segmentStorage = segment;
   _body.linkDelegate = self.linkDelegate;
-  [_body setSegment:segment.text];
+  if (!_hosted) {
+    [_body setSegment:segment.text];
+  }
   _body.blockOffset = _blockOffset;
   _gutter.body = _body;
   _gutter.segment = segment;
@@ -974,7 +973,7 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
 
 - (void)layoutSubviews {
   [super layoutSubviews];
-  if (_segmentStorage == nil) {
+  if (_segmentStorage == nil || _hosted) {
     return;
   }
   const CGFloat headerHeight = self.showsHeader ? kChromeRowHeight : 0;
@@ -1174,13 +1173,16 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
 }
 
 - (NSInteger)linkIndexAtPoint:(CGPoint)point {
+  if (_hosted) {
+    return -1;
+  }
   return [_body linkIndexAtPoint:[self convertPoint:point toView:_body]];
 }
 
 - (NSArray *)accessibilityElements {
   // Header label, then the buttons, then the code, which is the order
   // Streamdown's DOM reads in. The gutter is not listed: it holds no text.
-  if (_segmentStorage == nil) {
+  if (_segmentStorage == nil || _hosted) {
     return @[];
   }
   NSMutableArray *elements = [NSMutableArray new];

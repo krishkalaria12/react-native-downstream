@@ -617,10 +617,21 @@ static void checkCellBreakHeight() {
 
 #include "DetailsChecks.mm"
 
+#import "DSSegmentViewport.h"
+#include "PerformanceChecks.mm"
+
 int main() {
   @autoreleasepool {
     checkRenderingCacheBudget();
     checkHighlightVariants();
+#ifndef BASELINE
+    checkTableCellReuse();
+    checkExactStackWidths();
+    checkLazyHostedFallback();
+    checkVisibleLineMarks();
+    checkUnchangedSegmentAssignments();
+    checkSegmentViewport();
+#endif
     if (getenv("DOWNSTREAM_IOS_HOST_BENCH_ONLY") != nullptr) {
       benchmarkHostedMeasurements();
       printf("native TextKit checks passed\n");

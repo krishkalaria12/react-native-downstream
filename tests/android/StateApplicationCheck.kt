@@ -2,6 +2,7 @@ package com.downstream
 
 // Host stand-ins record calls made by production state methods. Segment
 // reconciliation/drawing, the Android event loop, and JNI are not executed.
+internal object View { const val TEXT_DIRECTION_RTL = 4 }
 internal class StateWrapper
 internal object PixelUtil {
   fun toPixelFromDIP(value: Double): Double = value * 2
@@ -12,12 +13,12 @@ internal object DownstreamNative {
   fun traceDocument(id: Long, name: String) { traces.add(id to name) }
 }
 internal class LinkVariants
-internal class RenderedDocument(val id: Long, val scale: Float, val theme: Long, val caret: PlacedCaret) {
+internal class RenderedDocument(val id: Long, val scale: Float, val theme: Long, val caret: PlacedCaret, val incrementalParagraphs: Boolean = false) {
   companion object {
     val obtains = mutableListOf<RenderedDocument>()
     fun obtain(context: Any, id: Long, scale: Float, syntax: Boolean, theme: Long, caret: PlacedCaret,
-               linkVariants: LinkVariants? = null): RenderedDocument =
-      RenderedDocument(id, scale, theme, caret).also { obtains.add(it) }
+               linkVariants: LinkVariants? = null, incrementalParagraphs: Boolean = false): RenderedDocument =
+      RenderedDocument(id, scale, theme, caret, incrementalParagraphs).also { obtains.add(it) }
   }
 }
 internal data class MountedState(
@@ -31,6 +32,8 @@ internal class StateHost {
   private var themeId = 0L
   private var rendered: RenderedDocument? = null
   private var syntaxHighlighting = true
+  private var incrementalParagraphs = false
+  private var direction = 0
   private var codeLayout = CodeLayout()
   private var imageLayout = ImageLayout()
   private var hostLayout = HostLayout()
@@ -77,6 +80,7 @@ internal class StateHost {
     caret = PlacedCaret.NONE
     codeLayout = CodeLayout()
     pendingTraceDocumentId = 0
+    incrementalParagraphs = false
   }
 
   /* PRODUCTION_STATE_METHODS */
@@ -118,6 +122,22 @@ fun main() {
   check(DownstreamNative.traces == listOf(1L to "frame_unavailable", 2L to "apply_start", 2L to "apply_end"))
   check(atomic.frameRequests == 1)
   println("ok Fabric state work: sync $oldSyncs -> ${atomic.mounted.size}, obtain $oldObtains -> ${RenderedDocument.obtains.size}")
+
+  // Policy switches at one document/sequence rebuild once, then become a hit.
+  val policyHost = StateHost()
+  policyHost.setDocument(10, 1f, 0)
+  policyHost.clearCounts()
+  policyHost.applyState(wrapper, 10, 1f, 0, CodeLayout(), ImageLayout(), HostLayout(), 0,
+    PlacedCaret.NONE, TableLayoutProps(), true)
+  check(RenderedDocument.obtains.single().incrementalParagraphs)
+  policyHost.clearCounts()
+  policyHost.applyState(wrapper, 10, 1f, 0, CodeLayout(), ImageLayout(), HostLayout(), 0,
+    PlacedCaret.NONE, TableLayoutProps(), true)
+  check(RenderedDocument.obtains.isEmpty())
+  policyHost.applyState(wrapper, 10, 1f, 0, CodeLayout(), ImageLayout(), HostLayout(), 0,
+    PlacedCaret.NONE, TableLayoutProps(), false)
+  check(!RenderedDocument.obtains.single().incrementalParagraphs)
+  policyHost.clearCounts()
 
   // A repeated snapshot must still replace its wrapper for future interactions.
   atomic.clearCounts()

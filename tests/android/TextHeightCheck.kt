@@ -56,6 +56,20 @@ fun main() {
     "plain text must not allocate or copy line geometry"
   }
 
+  val streaming = StreamingParagraphLayout { width -> if (width >= 100) 91 else null }
+  val live = TextSegment(
+    SpannedText("growing plain"), emptyList(), gapBefore = 0, caretOffset = -1,
+    caretKind = 0, streamingParagraph = streaming,
+  )
+  val buildsBeforeLive = RenderedDocument.builds
+  check(live.height(100, paint) == 91)
+  check(live.height(100, paint, openBoth) == 91)
+  check(RenderedDocument.builds == buildsBeforeLive) { "eligible live layout bypasses canonical shaping" }
+  check(live.height(50, paint) == 80)
+  check(RenderedDocument.builds == buildsBeforeLive + 1) { "bounded live fallback uses canonical layout" }
+  check(live.height(50, paint) == 80)
+  check(RenderedDocument.builds == buildsBeforeLive + 1)
+
   // Compare arbitrary order, overlap, empty/reversed ranges, and unequal line
   // heights against the original per-line membership rule.
   val random = Random(420)
@@ -80,5 +94,26 @@ fun main() {
   check(visibleTextHeight(count * 10, count,
     { topProbes++; it * 10 }, { startProbes++; it }, ranges) == 800_000)
   check(startProbes <= 34_000 && topProbes == 2000)
+  var preparations = 0
+  val rawCode = SpannedText("some code")
+  val face = android.graphics.Typeface()
+  val code = CodeSegment(
+    text = rawCode, accessibleBlocks = emptyList(), language = "ts", title = "",
+    fenceMeta = FenceMeta(), lineStarts = intArrayOf(0), codeTextSize = 16,
+    codeFace = face, blockIndex = 0, codeOrdinal = 0, containers = emptyList(),
+    contentLeading = 0, rtl = false, firstLine = "some code", padding = 4,
+    gutterGap = 4, colors = Palette(), radius = 0f, borderWidth = 0f,
+    headerFace = face, headerSize = 16f, markerFace = face, markerSize = 16f,
+    markerGap = 4f, caretOffset = -1, caretKind = 0, gapBefore = 0,
+    prepareText = { preparations++; SpannedText("some code") },
+  )
+  repeat(100) { check(code.textLength == 9) }
+  check(preparations == 0) { "hosted code metadata/cache accounting must not shape fallback text" }
+  val threads = List(8) { Thread { repeat(100) { check(code.text.length == 9) } } }
+  threads.forEach { it.start() }
+  threads.forEach { it.join() }
+  check(preparations == 1) { "fallback must prepare once, including simultaneous worker/view access" }
+  check(rawCode.length == 9)
+  println("hosted code fallback: 100 metadata reads, 0 preparations; first fallback access, 1 preparation")
   println("text height checks passed: 3000 toggles, 1 layout; 100000 lines × 1000 ranges: $startProbes start probes, $topProbes top probes")
 }

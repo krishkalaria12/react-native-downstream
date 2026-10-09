@@ -1,14 +1,19 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
+#include <variant>
 
 #include "FenceMeta.h"
 #include "TagPolicy.h"
+#include "SnapshotText.h"
+#include "SnapshotVector.h"
 #include "math/MathLayout.h"
 
 namespace downstream {
@@ -280,7 +285,7 @@ struct Block {
   std::vector<Container> containers;
   /// Visible text. Hard line breaks and code lines are '\n'; table cells are
   /// separated by '\t'. Thematic breaks have empty text.
-  std::u16string text;
+  SnapshotText text;
   std::vector<InlineRun> runs;
   std::vector<TableCell> cells;
   /// Fenced code info string language, UTF-8.
@@ -297,7 +302,7 @@ struct Block {
   /// block is over the highlight limit, or highlighting is disabled. Tokens
   /// live here rather than in runs so the open-fence fast path and inline-code
   /// semantics stay untouched.
-  std::vector<TokenRun> tokens;
+  SnapshotVector<TokenRun> tokens;
   /// True when highlighting finished or deliberately skipped this exact text.
   /// A later full parse may reuse its tokens; a budget-cut pass must retry.
   bool highlightComplete{false};
@@ -371,29 +376,84 @@ public:
   /// Immutable leading items, stored in the chunks they were added in.
   class Prefix {
   public:
-    size_t size() const { return items_.size(); }
-    const T &operator[](size_t index) const { return *items_[index]; }
+    size_t size() const { return size_; }
+    const T &operator[](size_t index) const {
+      const size_t pageIndex = index / kPageSize;
+      const Node *page = last_.get();
+      if (pageIndex != (size_ - 1) / kPageSize) {
+        page = root_.get();
+        for (size_t level = levels_; level != 0; --level) {
+          const size_t slot = (pageIndex >> ((level - 1) * kBranchBits)) & (kBranches - 1);
+          page = std::get<Children>(page->storage)[slot].get();
+        }
+      }
+      return *std::get<Page>(page->storage).items[index % kPageSize];
+    }
 
     /// Returns a new prefix with `chunk` appended. `prefix` may be null and
     /// is not changed, so documents that share it are unaffected.
     static std::shared_ptr<const Prefix> extend(const std::shared_ptr<const Prefix> &prefix, std::vector<T> chunk) {
       auto next = std::make_shared<Prefix>();
       if (prefix) {
-        next->chunks_ = prefix->chunks_;
-        next->items_ = prefix->items_;
+        *next = *prefix;
       }
+      if (chunk.empty()) return next;
       auto stored = std::make_shared<const std::vector<T>>(std::move(chunk));
-      next->items_.reserve(next->items_.size() + stored->size());
-      for (const T &item : *stored) {
-        next->items_.push_back(&item);
+      size_t offset = 0;
+      while (offset < stored->size()) {
+        const size_t pageIndex = next->size_ / kPageSize;
+        const size_t used = next->size_ % kPageSize;
+        auto page = used == 0 ? std::make_shared<Node>(Page{}) : std::make_shared<Node>(*next->last_);
+        auto &data = std::get<Page>(page->storage);
+        data.chunks.push_back(stored);
+        const size_t count = std::min(kPageSize - used, stored->size() - offset);
+        for (size_t index = 0; index < count; ++index) {
+          data.items[used + index] = &(*stored)[offset + index];
+        }
+        // The radix index shares complete pages and copies only the path to
+        // the active page. Even one-item commits do not copy the old index.
+        if (!next->root_) next->root_ = page;
+        while (pageIndex >= (size_t{1} << (next->levels_ * kBranchBits))) {
+          Children children{};
+          children[0] = next->root_;
+          next->root_ = std::make_shared<Node>(std::move(children));
+          ++next->levels_;
+        }
+        next->root_ = replacePage(next->root_, next->levels_, pageIndex, page);
+        next->last_ = std::move(page);
+        next->size_ += count;
+        offset += count;
       }
-      next->chunks_.push_back(std::move(stored));
       return next;
     }
 
   private:
-    std::vector<std::shared_ptr<const std::vector<T>>> chunks_;
-    std::vector<const T *> items_;
+    static constexpr size_t kPageSize = 64;
+    static constexpr size_t kBranchBits = 5;
+    static constexpr size_t kBranches = size_t{1} << kBranchBits;
+    struct Page {
+      std::array<const T *, kPageSize> items{};
+      std::vector<std::shared_ptr<const std::vector<T>>> chunks;
+    };
+    struct Node;
+    using Children = std::array<std::shared_ptr<const Node>, kBranches>;
+    struct Node {
+      std::variant<Page, Children> storage;
+      explicit Node(Page page) : storage(std::move(page)) {}
+      explicit Node(Children children) : storage(std::move(children)) {}
+    };
+    static std::shared_ptr<const Node> replacePage(const std::shared_ptr<const Node> &root, size_t level,
+                                                 size_t index, const std::shared_ptr<const Node> &page) {
+      if (level == 0) return page;
+      Children children = root ? std::get<Children>(root->storage) : Children{};
+      const size_t slot = (index >> ((level - 1) * kBranchBits)) & (kBranches - 1);
+      children[slot] = replacePage(children[slot], level - 1, index, page);
+      return std::make_shared<Node>(std::move(children));
+    }
+    size_t size_{0};
+    size_t levels_{0};
+    std::shared_ptr<const Node> root_;
+    std::shared_ptr<const Node> last_;
   };
 
   class const_iterator {

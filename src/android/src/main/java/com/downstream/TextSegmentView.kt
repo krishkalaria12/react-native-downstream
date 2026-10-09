@@ -49,6 +49,12 @@ private class TextReadingPart(
 @SuppressLint("ViewConstructor")
 internal class TextSegmentView(context: Context) : TextView(context) {
   private var segment: TextSegment? = null
+  private var streamingFrame: StreamingParagraphFrame? = null
+  // Candidate metadata survives a canonical fallback at another width.
+  private var streamingRendered: RenderedDocument? = null
+  private var streamingCanonicalAssigned = false
+  private fun displayLayout(): Layout? = streamingFrame?.layout ?: layout
+  private fun displayText(): CharSequence = if (streamingRendered != null) segment?.text ?: text else text
 
   /**
    * The document block this view's first block is, which is what maps a reveal
@@ -145,6 +151,16 @@ private class TaskPress(val id: Int, val checked: Boolean)
   }
 
   fun setSelectable(selectable: Boolean) {
+    if (selectable && streamingRendered != null && !streamingCanonicalAssigned) {
+      val current = segment
+      val rendered = streamingRendered
+      if (current != null && rendered != null) {
+        setContent(current.text, current.accessibleBlocks, rendered)
+        segment = current
+        streamingRendered = rendered
+        streamingCanonicalAssigned = true
+      }
+    }
     if (isTextSelectable != selectable) {
       setTextIsSelectable(selectable)
     }
@@ -250,7 +266,33 @@ private class TaskPress(val id: Int, val checked: Boolean)
     // segment itself only knows its own text, and a reveal unit names a document
     // block.
     blockOffset = firstBlock
-    setContent(segment.text, segment.accessibleBlocks, rendered)
+    streamingFrame = null
+    streamingRendered = null
+    streamingCanonicalAssigned = false
+    val live = segment.streamingParagraph
+    if (live != null) {
+      // The host applies settled/selectable state after assigning the segment.
+      // A recycled settled view may still be selectable here, but this model
+      // identifies plain active text whose selection uses canonical settlement.
+      if (isTextSelectable) setTextIsSelectable(false)
+      this.segment = segment
+      streamingRendered = rendered
+      // A newly mounted/virtualized view has width zero. Its actual measure
+      // width may have a reusable frame even when a fictitious one-pixel frame
+      // would exceed the suffix cap. Choose fallback only in onMeasure.
+      streamingFrame = if (width > 0) live.frame(width) else null
+      summary = null
+      spoilersRevealed = false
+      readingBlocks = segment.accessibleBlocks
+      bandFrame = null
+      paint.set(rendered.paint)
+      // Clear the platform layout once on entry; subsequent updates never assign
+      // growing text to TextView. Reading and reveal use the composite layout.
+      if (text.isNotEmpty()) text = ""
+      requestLayout()
+    } else {
+      setContent(segment.text, segment.accessibleBlocks, rendered)
+    }
     // setContent also serves code bodies and clears this field. Retain the
     // identity afterwards so settled text keeps its layout and selection.
     this.segment = segment
@@ -310,11 +352,15 @@ private class TaskPress(val id: Int, val checked: Boolean)
     }
 
   fun setContent(text: Spanned, accessibleBlocks: List<AccessibleBlock>, rendered: RenderedDocument) {
+    streamingFrame = null
+    streamingRendered = null
+    streamingCanonicalAssigned = false
     bandFrame = null
     segment = null
     summary = null
     spoilersRevealed = false
     readingBlocks = accessibleBlocks
+    if (rendered.tracing) DownstreamNative.traceDocument(rendered.documentId, "android_text_assign_start")
     val precomputed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
       PrecomputedTexts.show(this, text, rendered.paint.color)
     if (!precomputed) {
@@ -325,6 +371,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
       // static layout.
       setText(text, if (isTextSelectable) BufferType.SPANNABLE else BufferType.NORMAL)
     }
+    if (rendered.tracing) DownstreamNative.traceDocument(rendered.documentId, "android_text_assign_end")
     // A themed selection highlight. `textHighlightColor` is what a TextView
     // draws its selection in, and it is the only handle on it that has existed
     // across every supported API level.
@@ -332,6 +379,20 @@ private class TaskPress(val id: Int, val checked: Boolean)
       highlightColor = highlight
     }
     readingParts = buildReadingParts(accessibleBlocks, segment?.detailsBlocks ?: emptyList())
+    accessibility.contentChanged()
+  }
+
+  /** A hosted fence need not retain the previous native body's text/layout. */
+  fun clearContent() {
+    streamingFrame = null
+    streamingRendered = null
+    streamingCanonicalAssigned = false
+    bandFrame = null
+    segment = null
+    summary = null
+    readingBlocks = emptyList()
+    readingParts = emptyList()
+    text = ""
     accessibility.contentChanged()
   }
 
@@ -392,7 +453,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
     blocks: List<AccessibleBlock>,
     details: List<DetailsBlock>,
   ): List<TextReadingPart> = buildList {
-    val content = this@TextSegmentView.text as? Spanned ?: return@buildList
+    val content = displayText() as? Spanned ?: return@buildList
     for (block in blocks) {
       val start = block.start.coerceIn(0, content.length)
       val end = block.end.coerceIn(start, content.length)
@@ -406,11 +467,11 @@ private class TaskPress(val id: Int, val checked: Boolean)
   }
 
   private fun accessiblePart(index: Int): MarkdownAccessibility.Entry? {
-    val layout = layout ?: return null
+    val layout = displayLayout() ?: return null
     val part = readingParts.getOrNull(index) ?: return null
     val start = part.piece.start
     val end = part.piece.end
-    val content = text ?: return null
+    val content = displayText()
     val visible = content.subSequence(start, end).toString()
     val label = when (part.taskState) {
       NativeDocument.TASK_CHECKED -> "Checked, $visible"
@@ -443,6 +504,37 @@ private class TaskPress(val id: Int, val checked: Boolean)
     )
   }
 
+  override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    val current = segment
+    val model = current?.streamingParagraph
+    val rendered = streamingRendered
+    if (model != null && rendered != null && !isTextSelectable) {
+      val availableWidth = View.MeasureSpec.getSize(widthMeasureSpec).coerceAtLeast(1)
+      val frame = model.frame((availableWidth - paddingLeft - paddingRight).coerceAtLeast(1))
+      if (frame != null) {
+        // Return from canonical fallback at a cold width without retaining or
+        // displaying its full TextView layout at this warm width.
+        if (text.isNotEmpty()) text = ""
+        streamingCanonicalAssigned = false
+        streamingFrame = frame
+        setMeasuredDimension(
+          View.resolveSize(availableWidth, widthMeasureSpec),
+          View.resolveSize(frame.height + paddingTop + paddingBottom, heightMeasureSpec),
+        )
+        return
+      }
+      // A suffix without a safe word boundary can grow beyond the work cap.
+      // Restore canonical assignment before TextView measures that snapshot.
+      if (!streamingCanonicalAssigned) {
+        setContent(current.text, current.accessibleBlocks, rendered)
+        segment = current
+        streamingRendered = rendered
+        streamingCanonicalAssigned = true
+      }
+    }
+    super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+  }
+
   override fun onDraw(canvas: Canvas) {
     val band = findHost()?.revealFrame()?.let { bandFor(it) }
     if (band == null || band.count == 0) {
@@ -463,7 +555,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
     // twice.
     val paddingLeft = totalPaddingLeft.toFloat()
     val paddingTop = totalPaddingTop.toFloat()
-    val layout = layout ?: return
+    val layout = displayLayout() ?: return
     val paths = revealPaths ?: RevealClipPaths().also { revealPaths = it }
     // Exclude only active ranges, preserving settled gaps and trailing text.
     val buckets = paths.build(layout, band, paddingLeft, paddingTop)
@@ -515,7 +607,15 @@ private class TaskPress(val id: Int, val checked: Boolean)
   /** Everything the segment draws: the one call the clipped passes repeat. */
   private fun drawContent(canvas: Canvas) {
     drawInlineCodeBackgrounds(canvas)
-    super.onDraw(canvas)
+    val live = streamingFrame
+    if (live != null) {
+      canvas.save()
+      canvas.translate(totalPaddingLeft.toFloat(), totalPaddingTop.toFloat())
+      live.layout.draw(canvas)
+      canvas.restore()
+    } else {
+      super.onDraw(canvas)
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && text is PrecomputedText) {
       drawDecorations(canvas)
     }
@@ -557,7 +657,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
   private fun drawCaret(canvas: Canvas, band: RevealBand?) {
     val current = segment ?: return
     if (current.caretKind == 0) return
-    val layout = layout ?: return
+    val layout = displayLayout() ?: return
     // The frontier is where the first unit that has not started begins, which is
     // the end of the last one that has. With nothing fading it is the placeholder.
     // [band] is this frame's, sorted by offset, so the first unstarted unit in it
@@ -649,7 +749,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
     // its own: `setContent` records them for both.
     val blocks = readingBlocks
     if (blocks.isEmpty()) return null
-    val length = text?.length ?: return null
+    val length = displayText().length
     val first = hostFrame.firstUnitForBlock(blockOffset)
     val last = hostFrame.firstUnitForBlock(blockOffset + blocks.size)
     val count = last - first
@@ -711,7 +811,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
   private fun drawSummaryChevron(canvas: Canvas) {
     val summary = summary ?: return
     if (!detailsToggle) return
-    val layout = layout ?: return
+    val layout = displayLayout() ?: return
     val first = layout.getLineForOffset(summary.start)
     val line = layout.getLineForOffset((summary.end - 1).coerceAtLeast(summary.start))
     val baseline = layout.getLineBaseline(line).toFloat()
@@ -745,7 +845,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
   }
 
   private fun drawDecorations(canvas: Canvas) {
-    val layout = layout ?: return
+    val layout = displayLayout() ?: return
     val text = layout.text as? Spanned ?: return
     val links = text.getSpans(0, text.length, LinkSpan::class.java)
     val strikes = text.getSpans(0, text.length, StrikethroughSpan::class.java)
@@ -800,7 +900,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
   // horizontal extent, which follows wrapping and bidirectional text, and the
   // code's own ascent and descent.
   private fun drawInlineCodeBackgrounds(canvas: Canvas) {
-    val layout = layout ?: return
+    val layout = displayLayout() ?: return
     val text = layout.text as? Spanned ?: return
     val spans = text.getSpans(0, text.length, InlineCodeBackgroundSpan::class.java)
     if (spans.isEmpty()) {
@@ -831,7 +931,9 @@ private class TaskPress(val id: Int, val checked: Boolean)
   // sees it, so selection neither highlights the link nor clicks its span.
   @SuppressLint("ClickableViewAccessibility")
   override fun onTouchEvent(event: MotionEvent): Boolean {
-    val layout = layout ?: return super.onTouchEvent(event)
+    // This opt-in branch contains only noninteractive plain active text.
+    if (streamingRendered != null && !isTextSelectable) return false
+    val layout = displayLayout() ?: return super.onTouchEvent(event)
     val x = event.x - totalPaddingLeft + scrollX
     val y = event.y - totalPaddingTop + scrollY
     if (event.actionMasked == MotionEvent.ACTION_DOWN) {

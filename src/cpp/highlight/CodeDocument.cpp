@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <utility>
 
 namespace downstream {
 namespace {
@@ -227,6 +228,13 @@ CodeDocumentView codeDocumentView(CodeDocument &document) {
 
 void CodeDocument::reset(std::string_view utf8) {
   text_.assign(utf8);
+  lineStates_.clear();
+  styles_.assign(text_.size(), 0);
+  indexLines();
+}
+
+void CodeDocument::resetOwned(std::string utf8) {
+  text_ = std::move(utf8);
   lineStates_.clear();
   styles_.assign(text_.size(), 0);
   indexLines();

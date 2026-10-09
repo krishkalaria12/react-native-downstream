@@ -28,7 +28,7 @@ done
 [ "$source_root" = "$repo" ] || flags+=(-DBASELINE)
 objects=()
 sources=(
-  ios/DSRenderedDocument.mm ios/DSSegmentViews.mm ios/DSTextSegmentView.mm \
+  ios/DSRenderedDocument.mm ios/DSSegmentViews.mm ios/DSSegmentViewport.mm ios/DSTextSegmentView.mm \
   ios/DSCodeSegmentView.mm ios/DSTableSegmentView.mm \
   ios/DSLayoutManager.mm ios/DSThemeColors.mm \
   cpp/theme/Theme.cpp cpp/theme/ThemeLayout.cpp cpp/downstream/CodeLayout.cpp cpp/downstream/SegmentPlan.cpp

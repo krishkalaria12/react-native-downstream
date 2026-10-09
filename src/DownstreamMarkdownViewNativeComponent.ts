@@ -129,6 +129,8 @@ export interface NativeProps extends ViewProps {
   /** Changes even when finish produces a second snapshot at the same sequence. */
   sessionRevision?: CodegenTypes.WithDefault<CodegenTypes.Int32, 0>;
   selectable?: CodegenTypes.WithDefault<boolean, true>;
+  /** Android unfinished paragraph policy, resolved by the public component. */
+  incrementalParagraphs?: CodegenTypes.WithDefault<boolean, false>;
   /**
    * Colors fenced code blocks by language. Tokens are always computed by the
    * engine, so this only chooses whether the platform applies them.

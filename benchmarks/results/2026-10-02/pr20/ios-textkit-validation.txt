@@ -1,6 +1,0 @@
-emoji_mapping character_offset=111 glyph_count=112 mapped_glyph=111
-gutter_number_calls=2
-blank_suffix_draw_character_reads=14
-ios_native_code_layout alternating_width_ms=0.000 lines=4100 width_unwrapped=519.3 width_wrapped=233.7
-alternating_width_layout_calls=0
-native TextKit checks passed

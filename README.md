@@ -56,6 +56,8 @@ Fenced code is colored by the language in its info string, on the same worker th
 
 `ts`, `tsx`, `js`, `java`, `c`, `cpp`, `cs`, `go`, `swift`, `kt`, `dart`, `scala`, `objc`, `py`, `sh`, `json`, `html`, `xml`, `css`, `sql`, `rs`, `yaml`, `toml`, `rb`, `lua`, `diff`, and `md` are colored; anything else renders plain, as it does in Streamdown. The palette follows GitHub's light and dark code themes and is the same on both platforms. A block with no language, an unknown language, and a block over 64 KiB of code stay plain, and a document with no fenced code never loads a lexer. Highlighting only sets colors, so selection, copy, and accessibility text are unchanged.
 
+While streaming, an unfinished code line longer than 4 KiB refreshes its colors as its length doubles. New text can stay plain and earlier colors provisional between refreshes, including while the stream pauses. A newline, fence closure or `finish()` refreshes the colors immediately on the next parse.
+
 ### Images and math
 
 An image-only paragraph becomes a picture, fetched through the platform's own image pipeline so your HTTP stack, cache and URL handlers apply. A picture that has not arrived shows a placeholder, one that fails shows its alt text, and `allowedImagePrefixes` decides what may be fetched at all. A press on a picture reports `onImagePress`; the package opens nothing.
@@ -168,6 +170,16 @@ Code copies as plain text; a table copies as `text/html` first, so pasting into 
 A download opens the platform's own save dialog and the user picks the location, so the library never writes to a path it chose. `filename` is a base name; the extension comes from the block, not from the name. Every press reaches the matching callback, and a failure reports `control_failed` to that control's `onError` or to the view's. A control turns on as soon as its own block is settled, so a finished code block can be copied while the rest of the answer is still streaming.
 
 `selectable` is on by default: a long press on settled text starts a text selection, and text that is still streaming is never selectable. An app that opens its own message menu on a long press — react, reply, delete — passes `selectable={false}`.
+
+On Android, `androidParagraphLayout="incremental"` lets eligible live paragraphs reuse completed line layouts and shape only their unfinished suffix:
+
+```tsx
+<DownstreamMarkdown stream={stream} androidParagraphLayout="incremental" />
+```
+
+The default is `"canonical"`. Incremental mode uses greedy wrapping while an ordinary ASCII paragraph is streaming, then restores high-quality wrapping when it settles. Text can reflow at settlement. Styled text, contextual scripts, custom fonts, right-to-left text, carets and oversized unfinished suffixes use the canonical path. Selection becomes available after settlement as usual, and live accessibility and reveal remain supported. iOS keeps its existing layout. See the [Android paragraph measurements](docs/android-paragraph-layout.md) for coverage and limits.
+
+With `selectable={false}`, long documents can recycle offscreen plain-text views using the actual ancestor viewport and cached segment frames. Scrolling reconciles the previous and next visible segment ranges. Interactive text, nested details, hosted renderers, code, tables, images and math keep their native views. Selection and accessibility retain the complete document. Android disables recycling while accessibility services are enabled; iOS restores all text views when VoiceOver, Switch Control or explicit accessibility enumeration requires them. iOS shares one weakly registered display link among eligible attached documents to detect ancestor clipping changes. Source data, export and full document measurement remain available; this reduces mounted text-view work rather than replacing layout measurement.
 
 ### Fence renderers
 

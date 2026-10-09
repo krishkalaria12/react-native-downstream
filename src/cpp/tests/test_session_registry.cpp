@@ -15,6 +15,15 @@
 
 using namespace downstream;
 
+namespace {
+std::mutex preparedMutex;
+std::vector<LayoutHint> preparedHints;
+void captureHints(const DocumentHandle &, const std::vector<LayoutHint> &hints) {
+  std::lock_guard<std::mutex> lock(preparedMutex);
+  preparedHints = hints;
+}
+}
+
 int main() {
   std::mutex mutex;
   std::condition_variable ready;
@@ -245,6 +254,181 @@ int main() {
 
   CHECK(!SessionRegistry::setPreview("no-such-session", remend::PreviewOptions::all()),
         "an unknown session rejects a policy change");
+
+  // Each subscriber carries its own native token. Settled bodies are exported
+  // once; later prose and a second policy must not invalidate that lineage.
+  for (const ParseMode mode : {ParseMode::FullParse, ParseMode::IncrementalTail}) {
+    const std::string slotsId = mode == ParseMode::FullParse ? "slots-full" : "slots-incremental";
+    CHECK(SessionRegistry::create(slotsId, mode, ignore), "create a slot-delta session");
+    CHECK(SessionRegistry::append(slotsId, "```mermaid title\ngraph TD; A-->B\n```\n\n```chart\nsecond\n```\n\ntail", 0, 1),
+          "append settled fences and a growing tail");
+    CHECK(shows(slotsId, 0, 1, u"tail"), "publish initial custom fences");
+    CHECK(SessionRegistry::append(slotsId, "\n\nmore", 0, 2), "prove the leading fence identities");
+    CHECK(shows(slotsId, 0, 2, u"more"), "publish proven identities");
+    const auto firstSlots = SessionRegistry::fenceSlotChanges(slotsId, 0, 2, {"mermaid", "chart"}, 0);
+    CHECK(firstSlots.token != 0 && firstSlots.changed.size() == 2 && firstSlots.order.size() == 2,
+          "the first subscriber receives both payloads");
+    const auto secondSlots = SessionRegistry::fenceSlotChanges(slotsId, 0, 2, {"CHART", "MERMAID", "chart"}, 0);
+    CHECK(secondSlots.token == firstSlots.token && secondSlots.changed.size() == 2,
+          "another subscriber receives a full answer under the normalized policy");
+    const auto subset = SessionRegistry::fenceSlotChanges(slotsId, 0, 2, {"chart"}, firstSlots.token);
+    CHECK(subset.changed.size() == 1 && subset.order.size() == 1 && subset.changed[0]->code == u"second",
+          "a policy change receives its full payload instead of borrowing another policy token");
+    const auto beforeWork = SessionRegistry::slotWork(slotsId);
+    CHECK(SessionRegistry::append(slotsId, "\n\nlast", 0, 3), "append unrelated prose");
+    CHECK(shows(slotsId, 0, 3, u"last"), "publish unrelated prose");
+    const auto nextSlots = SessionRegistry::fenceSlotChanges(slotsId, 0, 3, {"chart", "mermaid"}, firstSlots.token);
+    const auto afterWork = SessionRegistry::slotWork(slotsId);
+    CHECK(nextSlots.token != firstSlots.token && nextSlots.changed.empty() && nextSlots.order == firstSlots.order,
+          "later prose sends order and token without re-exporting settled fence bodies");
+    CHECK(afterWork.payloadBuildBytes == beforeWork.payloadBuildBytes &&
+          afterWork.payloadExportBytes == beforeWork.payloadExportBytes && afterWork.reusedPayloads >= 2,
+          "work counters prove the settled payloads were neither copied nor exported");
+    CHECK(SessionRegistry::fenceSlotChanges(slotsId, 0, 3, {"chart", "mermaid"}, secondSlots.token).changed.empty(),
+          "both subscribers independently advance from the same old token");
+    CHECK(SessionRegistry::reset(slotsId, "```chart\nreplacement\n```", 1), "reset the slot generation");
+    CHECK(shows(slotsId, 1, 0, u"replacement"), "publish replacement fence");
+    const auto replacementSlots = SessionRegistry::fenceSlotChanges(slotsId, 1, 0, {"chart"}, subset.token);
+    CHECK(replacementSlots.changed.size() == 1 && replacementSlots.order.size() == 1 &&
+          replacementSlots.changed[0]->code == u"replacement", "reset sends a fresh complete payload and removes old IDs");
+    SessionRegistry::dispose(slotsId);
+    CHECK(SessionRegistry::fenceSlotChanges(slotsId, 1, 0, {"chart"}, replacementSlots.token).token == 0,
+          "disposed sessions discard slot lineage");
+  }
+
+  const std::string unfinishedSlots = "unfinished-slots";
+  CHECK(SessionRegistry::create(unfinishedSlots, ParseMode::IncrementalTail, ignore), "create unfinished fence session");
+  CHECK(SessionRegistry::append(unfinishedSlots, "```mermaid\nopen", 0, 1), "append an unclosed fence");
+  CHECK(shows(unfinishedSlots, 0, 1, u"open"), "publish unfinished fence");
+  const auto openSlots = SessionRegistry::fenceSlotChanges(unfinishedSlots, 0, 1, {"mermaid"}, 0);
+  CHECK(openSlots.changed.size() == 1 && openSlots.changed[0]->incomplete, "open fence is incomplete");
+  CHECK(SessionRegistry::finish(unfinishedSlots, 0, 1), "finish without another input sequence");
+  for (size_t attempt = 0; attempt < 1500 && SessionRegistry::publishedSnapshot(unfinishedSlots, 0, 1).live; ++attempt)
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  const auto finalSlots = SessionRegistry::fenceSlotChanges(unfinishedSlots, 0, 1, {"mermaid"}, openSlots.token);
+  CHECK(finalSlots.token != openSlots.token && finalSlots.changed.size() == 1 && !finalSlots.changed[0]->incomplete,
+        "finish publishes a changed payload at the same input sequence");
+  SessionRegistry::dispose(unfinishedSlots);
+
+  const std::string tagSlotsId = "tag-slot-deltas";
+  CHECK(SessionRegistry::create(tagSlotsId, ParseMode::IncrementalTail, ignore), "create sparse tag session");
+  CHECK(SessionRegistry::setParse(tagSlotsId, ParseOptions(ParseFlags::Default | ParseFlags::InlineHtml,
+      tagPolicyFromStrings({"-1", "chart", "id"}))), "configure custom tag policy");
+  CHECK(SessionRegistry::append(tagSlotsId, "<chart id=\"a\">\n\nlarge body\n\n</chart>\n\ntail", 0, 1), "append closed custom tag");
+  CHECK(shows(tagSlotsId, 0, 1, u"tail"), "publish sparse body snapshot");
+  const auto sparseFirst = SessionRegistry::publishedSnapshot(tagSlotsId, 0, 1, false);
+  CHECK(sparseFirst.document && !sparseFirst.source && sparseFirst.tagBodies && sparseFirst.tagStructure &&
+        sparseFirst.tagBodies->size() == 1 && *(*sparseFirst.tagBodies)[0] == "large body",
+        "native sparse queries preserve exact bodies without flattening canonical source");
+  CHECK(SessionRegistry::append(tagSlotsId, "\n\nmore", 0, 2), "append prose after closed tag");
+  CHECK(shows(tagSlotsId, 0, 2, u"more"), "publish next sparse snapshot");
+  const auto sparseNext = SessionRegistry::publishedSnapshot(tagSlotsId, 0, 2, false);
+  CHECK(sparseNext.tagBodies && (*sparseFirst.tagBodies)[0] == (*sparseNext.tagBodies)[0],
+        "closed source slices share exact immutable storage across snapshots");
+  const auto tags = SessionRegistry::tagSlotChanges(tagSlotsId, 0, 2, {"chart"}, 0);
+  const auto tagWorkBefore = SessionRegistry::slotWork(tagSlotsId);
+  CHECK(tags.changed.size() == 1 && tags.changed[0]->markdown == "large body", "sparse source answers tag payloads");
+  CHECK(SessionRegistry::append(tagSlotsId, "\n\nlast", 0, 3), "append more unrelated tag prose");
+  CHECK(shows(tagSlotsId, 0, 3, u"last"), "publish next tag snapshot");
+  const auto laterTags = SessionRegistry::tagSlotChanges(tagSlotsId, 0, 3, {"chart"}, tags.token);
+  const auto tagWorkAfter = SessionRegistry::slotWork(tagSlotsId);
+  CHECK(laterTags.changed.empty() && laterTags.order == tags.order &&
+        tagWorkAfter.payloadBuildBytes == tagWorkBefore.payloadBuildBytes &&
+        tagWorkAfter.payloadExportBytes == tagWorkBefore.payloadExportBytes,
+        "tag payload work stays constant when only later prose changes");
+  CHECK(tagWorkAfter.tagBodyCopyBytes == tagWorkBefore.tagBodyCopyBytes &&
+        tagWorkAfter.sourceCaptureBytes - tagWorkBefore.sourceCaptureBytes == 6,
+        "source capture copies only appended bytes and reuses the closed tag body");
+  const auto builds = SessionRegistry::slotWork(tagSlotsId).structureBuilds;
+  SessionRegistry::tagSlotChanges(tagSlotsId, 0, 3, {"other", "chart"}, 0);
+  CHECK(SessionRegistry::slotWork(tagSlotsId).structureBuilds == builds,
+        "configuration variants share the snapshot structural plan");
+  CHECK(SessionRegistry::reset(tagSlotsId, "<chart>\n\nreplacement\n\n</chart>\n", 1), "reset sparse tag source");
+  CHECK(shows(tagSlotsId, 1, 0, u"replacement"), "publish replacement custom source");
+  const auto resetTags = SessionRegistry::tagSlotChanges(tagSlotsId, 1, 0, {"chart"}, tags.token);
+  CHECK(resetTags.changed.size() == 1 && resetTags.changed[0]->markdown == "replacement",
+        "replacement lineage cannot reuse a prior canonical body range");
+  CHECK(*(*sparseFirst.tagBodies)[0] == "large body", "old sparse snapshots remain immutable after reset");
+  SessionRegistry::dispose(tagSlotsId);
+
+  const std::string lateTagsId = "late-tag-closure";
+  CHECK(SessionRegistry::create(lateTagsId, ParseMode::IncrementalTail, ignore), "create late tag closure session");
+  CHECK(SessionRegistry::setParse(lateTagsId, ParseOptions(ParseFlags::Default | ParseFlags::InlineHtml,
+      tagPolicyFromStrings({"-1", "chart"}))), "allow late tags");
+  CHECK(SessionRegistry::append(lateTagsId, "<chart>\n\nouter", 0, 1) && shows(lateTagsId, 0, 1, u"outer"), "publish open outer tag");
+  const auto outerSlots = SessionRegistry::tagSlotChanges(lateTagsId, 0, 1, {"chart"}, 0);
+  CHECK(outerSlots.changed.size() == 1 && outerSlots.changed[0]->incomplete, "initial outer tag is hosted provisionally");
+  CHECK(SessionRegistry::append(lateTagsId, "\n\n<chart>\n\ninner\n\n</chart>\n\nafter\n\n</chart>\n", 0, 2) &&
+        shows(lateTagsId, 0, 2, u"after"), "publish nested tag and both closures");
+  const auto nestedSlots = SessionRegistry::tagSlotChanges(lateTagsId, 0, 2, {"chart"}, outerSlots.token);
+  CHECK(nestedSlots.changed.size() == 1 && nestedSlots.order.size() == 1 &&
+        nestedSlots.order[0] != outerSlots.order[0] && nestedSlots.changed[0]->markdown == "inner" &&
+        !nestedSlots.changed[0]->incomplete, "nested hosting removes the partially hostable outer slot and adds the exact inner body");
+  const auto removedPolicy = SessionRegistry::tagSlotChanges(lateTagsId, 0, 2, {"unknown"}, nestedSlots.token);
+  CHECK(removedPolicy.order.empty() && removedPolicy.changed.empty(), "renderer policy removals leave no obsolete hosted slot");
+  SessionRegistry::dispose(lateTagsId);
+
+  SessionSlotCache<FenceSlot> bounded;
+  auto payload = std::make_shared<FenceSlot>();
+  payload->ordinal = 7;
+  payload->code = u"body";
+  const auto buildPayload = [&](const auto &) { return std::vector<std::shared_ptr<const FenceSlot>>{payload}; };
+  const auto oldest = bounded.query(1, 0, true, {"chart"}, 0, buildPayload);
+  for (uint64_t document = 2; document < 20; ++document) bounded.query(document, 0, true, {"chart"}, 0, buildPayload);
+  const auto evicted = bounded.query(20, 0, true, {"chart"}, oldest.token, buildPayload);
+  CHECK(evicted.changed.size() == 1 && evicted.order == oldest.order,
+        "a lagging subscriber whose token was evicted receives a complete recoverable delta");
+  CHECK(bounded.work().retainedBytes <= 8 * 1024 * 1024, "retained metadata and payload bytes obey the cache cap");
+  auto large = std::make_shared<FenceSlot>();
+  large->code.assign(5 * 1024 * 1024, u'x');
+  SessionSlotCache<FenceSlot> oversized;
+  const auto buildLarge = [&](const auto &) { return std::vector<std::shared_ptr<const FenceSlot>>{large}; };
+  const auto largeFirst = oversized.query(1, 0, true, {"chart"}, 0, buildLarge);
+  const auto largeNext = oversized.query(2, 0, true, {"chart"}, largeFirst.token, buildLarge);
+  CHECK(oversized.work().retainedBytes == 0 && largeNext.changed.size() == 1,
+        "an oversized body is delivered without retaining an unbounded cache entry");
+
+  // Preparation keeps both exact measured/mounted widths while every other
+  // geometry input matches, and discards obsolete variants on a policy change.
+  RenderPreparer::install(captureHints);
+  const std::string widthsId = "exact-width-hints";
+  CHECK(SessionRegistry::create(widthsId, ParseMode::IncrementalTail, ignore), "create exact-width session");
+  SessionRegistry::noteLayout(widthsId, LayoutHint{1, 320.2f});
+  SessionRegistry::noteLayout(widthsId, LayoutHint{1, 320.f});
+  CHECK(SessionRegistry::append(widthsId, "width", 0, 1) && shows(widthsId, 0, 1, u"width"), "prepare both exact widths");
+  {
+    std::lock_guard<std::mutex> lock(preparedMutex);
+    CHECK(preparedHints.size() == 2 && preparedHints[0].width == 320.f && preparedHints[1].width == 320.2f,
+          "worker preparation preserves mounted and measured widths exactly");
+  }
+  SessionRegistry::noteLayout(widthsId, LayoutHint{1.5f, 320.f});
+  CHECK(SessionRegistry::append(widthsId, " changed", 0, 2) && shows(widthsId, 0, 2, u"width changed"), "prepare new font policy");
+  {
+    std::lock_guard<std::mutex> lock(preparedMutex);
+    CHECK(preparedHints.size() == 1 && preparedHints[0].fontScale == 1.5f,
+          "geometry changes evict obsolete alternate widths");
+  }
+  auto incrementalHint = LayoutHint{1.5f, 280.f};
+  incrementalHint.incrementalParagraphs = true;
+  SessionRegistry::noteLayout(widthsId, incrementalHint);
+  CHECK(SessionRegistry::append(widthsId, " incremental", 0, 3) &&
+        shows(widthsId, 0, 3, u"width changed incremental"), "prepare incremental paragraph policy");
+  {
+    std::lock_guard<std::mutex> lock(preparedMutex);
+    CHECK(preparedHints.size() == 1 && preparedHints[0].width == 280.f &&
+          preparedHints[0].incrementalParagraphs,
+          "paragraph wrapping policy changes evict obsolete canonical widths");
+  }
+  SessionRegistry::noteLayout(widthsId, LayoutHint{1.5f, 320.f});
+  CHECK(SessionRegistry::append(widthsId, " canonical", 0, 4) &&
+        shows(widthsId, 0, 4, u"width changed incremental canonical"), "restore canonical paragraph policy");
+  {
+    std::lock_guard<std::mutex> lock(preparedMutex);
+    CHECK(preparedHints.size() == 1 && !preparedHints[0].incrementalParagraphs,
+          "canonical policy restoration drops incremental preparation variants");
+  }
+  SessionRegistry::dispose(widthsId);
+  RenderPreparer::install(nullptr);
 
   // Dispose returns while a large parse is in flight and no event follows it.
   const std::string busy = "busy-session";

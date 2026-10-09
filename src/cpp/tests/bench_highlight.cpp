@@ -16,7 +16,7 @@
 
 using namespace downstream;
 
-template <typename Work> void measure(const char *name, Work work) {
+template <typename Work> void measure(const char *name, Work work, const IncrementalCounters *counters = nullptr) {
   std::vector<double> samples;
   size_t count = 0;
   work();
@@ -33,9 +33,27 @@ template <typename Work> void measure(const char *name, Work work) {
     for (size_t index = 0; index < samples.size(); index++) {
       std::printf("%s%.6f", index == 0 ? "" : ",", samples[index]);
     }
-    std::printf("]}\n");
+    std::printf("]");
+    if (counters != nullptr) {
+      std::printf(",\"bytes_lexed\":%llu,\"runs_built\":%llu,\"token_bytes_copied\":%llu,\"text_bytes_copied\":%llu,\"deferred\":%llu",
+                  static_cast<unsigned long long>(counters->highlightBytesLexed),
+                  static_cast<unsigned long long>(counters->highlightRunsBuilt),
+                  static_cast<unsigned long long>(counters->highlightTokenBytesCopied),
+                  static_cast<unsigned long long>(counters->highlightTextBytesCopied),
+                  static_cast<unsigned long long>(counters->highlightCount(HighlightStop::Deferred)));
+    }
+    std::printf("}\n");
   } else {
-    std::printf("%s median_ms=%.3f count=%zu\n", name, median, count);
+    std::printf("%s median_ms=%.3f count=%zu", name, median, count);
+    if (counters != nullptr) {
+      std::printf(" bytes_lexed=%llu runs_built=%llu token_bytes_copied=%llu text_bytes_copied=%llu deferred=%llu",
+                  static_cast<unsigned long long>(counters->highlightBytesLexed),
+                  static_cast<unsigned long long>(counters->highlightRunsBuilt),
+                  static_cast<unsigned long long>(counters->highlightTokenBytesCopied),
+                  static_cast<unsigned long long>(counters->highlightTextBytesCopied),
+                  static_cast<unsigned long long>(counters->highlightCount(HighlightStop::Deferred)));
+    }
+    std::printf("\n");
   }
 }
 
@@ -86,6 +104,23 @@ int main() {
     }
     return parser.parse(false).document->blocks.back().tokens.size();
   });
+  std::string longLine;
+  while (longLine.size() + 22 <= 60 * 1024) longLine += "compute(user.id, 42) + ";
+  for (const bool finish : {false, true}) {
+    IncrementalCounters lastCounters;
+    measure(finish ? "parser_long_line_finish_16" : "parser_long_line_live_16", [&] {
+      IncrementalParser parser(ParseMode::IncrementalTail);
+      parser.append("```ts\n");
+      parser.parse(false);
+      for (size_t at = 0; at < longLine.size(); at += 16) {
+        parser.append(std::string_view(longLine).substr(at, 16));
+        parser.parse(false);
+      }
+      const auto result = parser.parse(finish);
+      lastCounters = parser.counters();
+      return result.document->blocks.back().tokens.size();
+    }, &lastCounters);
+  }
   Document wide;
   Block row;
   row.kind = BlockKind::TableRow;

@@ -18,6 +18,9 @@ namespace downstream::scan {
 /// `MathSpan`'s own operator==.
 bool sameBlock(const Block &a, const Block &b);
 
+/// True when two tags have the same content, attributes and source ownership.
+bool sameTag(const Tag &a, const Tag &b);
+
 /// True when two images would draw identically. The load state is not an image
 /// property: it belongs to a view and lives in `ImageStateLayout`, so two
 /// records that name the same picture are the same record however differently

@@ -11,6 +11,8 @@ function metrics(overrides: Partial<CandidateMetrics> = {}): CandidateMetrics {
   return {
     firstFrameMs: 16,
     totalMs: 100,
+    deliveryMs: 60,
+    drainMs: 40,
     frames: 5,
     longFrames: 0,
     longestFrameMs: 18,
@@ -32,17 +34,17 @@ test('a missing metric never becomes a win', () => {
   expect(firstFrame.faster).toBe('unavailable');
 });
 
-test('a shorter time to the final frame wins', () => {
+test('different completion fences do not produce a native winner', () => {
   const rows = buildRows(metrics({ totalMs: 80 }), metrics({ totalMs: 120 }));
   const total = rows.find((row) => row.id === 'totalMs')!;
   expect(total.delta).toBe(-40);
-  expect(total.faster).toBe('downstream');
+  expect(total.faster).toBe('tie');
 
   const reversed = buildRows(
     metrics({ totalMs: 120 }),
     metrics({ totalMs: 80 })
   ).find((row) => row.id === 'totalMs')!;
-  expect(reversed.faster).toBe('streamdown');
+  expect(reversed.faster).toBe('tie');
 });
 
 test('count rows report values without calling a winner', () => {
@@ -52,12 +54,12 @@ test('count rows report values without calling a winner', () => {
   expect(frames.faster).toBe('tie');
 });
 
-test('equal totals are a tie', () => {
+test('equal totals do not establish presentation timing', () => {
   const comparison = buildComparison(
     metrics({ totalMs: 90 }),
     metrics({ totalMs: 90 })
   );
-  expect(comparison.verdict).toBe('tie');
+  expect(comparison.verdict).toBe('unavailable');
 });
 
 test('long frames are counted past the frame budget', () => {
@@ -94,7 +96,7 @@ test('the comparison carries both timings and text parity', () => {
     metrics({ totalMs: 70, source: '# hi' }),
     metrics({ totalMs: 130, source: '# hello' })
   );
-  expect(comparison.verdict).toBe('downstream');
+  expect(comparison.verdict).toBe('unavailable');
   expect(comparison.parity.match).toBe(false);
   expect(comparison.parity.firstDifference).toBe(3);
 });

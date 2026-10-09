@@ -13,7 +13,7 @@ These files come from [md4c](https://github.com/mity/md4c) at commit
 that the host tests used to compare against; the tests now assert the engine's
 own render model, so the HTML renderer had no remaining caller.
 
-## Unmodified
+## Integrity pins
 
 `pnpm test:native` pins these four files by SHA-256. The digests live in
 `src/cpp/tests/engine.test.mjs` under `vendored md4c`.
@@ -24,9 +24,27 @@ that decision explicit instead of letting it happen quietly.
 
 ## Local patches
 
-Three flags and two helpers, all guarded by a flag that is off by default, so a
-build that sets no flag parses exactly as 0.6.0 did. Every one is marked
-`LOCAL PATCH` in the source.
+Three flags and optional reference bookkeeping extensions. With no flag and
+all extension fields set to null, parsing behaves as 0.6.0 did. Every patch is
+marked `LOCAL PATCH` in the source.
+
+### Reference definition and output callbacks
+
+`MD_PARSER` has three appended optional fields. `reference_definition` reports
+the source byte range of each parser-confirmed link definition, excluding
+footnotes. Incremental parsing can replay those definitions without repeatedly
+parsing already committed prose. Returning a nonzero value aborts the parse.
+
+`reference_output_budget` supplies the remaining canonical reference expansion
+budget for a suffix parse. `reference_output` reports bytes consumed and whether
+the budget was exhausted. Keeping that accounting across committed and unstable
+regions preserves md4c's output limit and its first-definition precedence.
+Without an override, the original `16 * min(input bytes, 65536)` budget applies.
+
+These fields change the local `MD_PARSER` layout. All callers must compile
+against this header and zero-initialize the struct; symbol prefixing below keeps
+it separate from another library's md4c ABI. Incremental parser tests cover
+duplicate definitions, expansion exhaustion and budget growth during append.
 
 ### `MD_FLAG_LATEXMATHBLOCKS` — a `$$` line is a fence
 

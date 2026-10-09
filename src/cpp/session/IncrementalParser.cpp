@@ -28,6 +28,7 @@ using scan::startsWith;
 constexpr size_t kMaxRetainedTailBytes = 64 * 1024;
 constexpr size_t kMaxCommittedBlocks = 8192;
 constexpr size_t kMinAttemptGap = 64;
+constexpr size_t kMaxDefinitionReplayBytes = 8 * 1024;
 // Smaller regions reparse cheaply as tail, so a commit attempt costs more
 // than it saves.
 constexpr size_t kMinCommitBytes = 128;
@@ -98,9 +99,16 @@ bool provesClosed(std::string_view region, const ParseResult &parsed, bool allow
   if (parsed.status != ParseStatus::Ok || parsed.blockSource.size() != parsed.document->blocks.size()) {
     return false;
   }
-  // A reference or footnote definition could resolve a later reference.
-  if (region.find("]:") != kNoOffset) {
-    return false;
+  // Only md4c-confirmed link definitions may leave this region. Literal
+  // markers and footnotes keep the conservative path. A blank line is required
+  // after a definition so a later line cannot extend its destination or title.
+  if (!parsed.referenceDefinitions.empty() && !isBlankLine(lastLine(region))) return false;
+  for (size_t marker = region.find("]:"); marker != kNoOffset; marker = region.find("]:", marker + 2)) {
+    const bool defined = std::any_of(parsed.referenceDefinitions.begin(), parsed.referenceDefinitions.end(),
+                                    [marker](const ByteRange &range) {
+                                      return range.start <= marker && marker + 2 <= range.end;
+                                    });
+    if (!defined) return false;
   }
   const auto &blocks = parsed.document->blocks;
   uint32_t lastContainer = 0;
@@ -165,14 +173,16 @@ bool splitsBefore(const ParseResult &parsed, const ParseResult &probed) {
   return true;
 }
 
-void offsetIds(Block &block, uint32_t containers, uint32_t tables, size_t links, size_t images) {
+void offsetIds(Block &block, uint32_t containers, uint32_t tables, size_t links, size_t images, size_t tags) {
   for (Container &container : block.containers) {
     container.id += containers;
+    if (container.tag >= 0) container.tag += static_cast<int32_t>(tags);
   }
   if (block.table != 0) {
     block.table += tables;
   }
   for (InlineRun &run : block.runs) {
+    if (run.tag >= 0) run.tag += static_cast<int32_t>(tags);
     if (run.link >= 0) {
       run.link += static_cast<int32_t>(links);
     }
@@ -198,11 +208,25 @@ void offsetImage(Image &image, int32_t links, uint32_t utf16) {
   }
 }
 
-void offsetLink(Link &link, uint32_t utf16) {
+void offsetLink(Link &link, uint32_t utf16, size_t tags) {
+  if (link.tag >= 0) link.tag += static_cast<int32_t>(tags);
   // An empty range is unknown in a full parse too; keep it unknown.
   if (link.range.end > link.range.start) {
     link.range.start += utf16;
     link.range.end += utf16;
+  }
+}
+
+void offsetTag(Tag &tag, uint32_t utf16, size_t bytes) {
+  // Anchor metadata has no source range; custom tags always have a known
+  // opener, including a local offset of zero. A zero end is an open sentinel.
+  if (tag.block || tag.name != "a" || tag.range.start != 0 || tag.range.end != 0) {
+    tag.range.start += utf16;
+    if (tag.range.end != 0) tag.range.end += utf16;
+  }
+  if (tag.block) {
+    tag.bodyStart += static_cast<uint32_t>(bytes);
+    if (tag.bodyEnd != 0) tag.bodyEnd += static_cast<uint32_t>(bytes);
   }
 }
 
@@ -257,29 +281,32 @@ void IncrementalParser::invalidateReferencePrefix() {
   committedBlocks_ = checkpoint.blocks;
   committedLinks_ = checkpoint.links;
   committedImages_ = checkpoint.images;
+  committedTags_ = checkpoint.tags;
   committedBytes_ = checkpoint.bytes;
   committedUtf16_ = checkpoint.utf16;
   committedContainers_ = checkpoint.containers;
   committedTables_ = checkpoint.tables;
+  committedDefinitions_ = checkpoint.definitions;
+  committedReferenceOutput_ = checkpoint.referenceOutputUsed;
+  plainParagraph_ = false;
   openFence_ = false;
   highlight_.clear();
   resetScan();
 }
 
 void IncrementalParser::scanReferenceDependencies() {
-  if (!referenceDependentSource_) {
-    // Both definition parsers in md4c require adjacent literal `]:` bytes.
-    // Bracket math can also rewrite earlier source when a late closer arrives,
-    // so keep its opener on the conservative path. Include the previous byte
-    // because any marker may be split across append calls.
-    const size_t from = dependencyScannedBytes_ > 0 ? dependencyScannedBytes_ - 1 : 0;
-    const std::string_view added = std::string_view(source_).substr(from);
-    referenceDependentSource_ = added.find("]:") != kNoOffset ||
-        (parse_.enabled() && parse_.brackets() &&
-         (added.find("\\[") != kNoOffset || added.find("\\(") != kNoOffset));
-  }
+  // Scan only new bytes, including overlap for a split marker. Every newly
+  // arriving definition marker revokes unresolved blocks. Existing confirmed
+  // link definitions do not permanently prevent later prose from being shared.
+  const size_t from = dependencyScannedBytes_ > 0 ? dependencyScannedBytes_ - 1 : 0;
+  const std::string_view added = std::string_view(source_).substr(from);
+  const bool marker = added.find("]:") != kNoOffset;
+  referenceDependentSource_ = referenceDependentSource_ || added.find("[^") != kNoOffset ||
+      (parse_.enabled() && parse_.brackets() &&
+       (added.find("\\[") != kNoOffset || added.find("\\(") != kNoOffset));
   dependencyScannedBytes_ = source_.size();
-  if (referenceDependentSource_ || preview_.enabled()) invalidateReferencePrefix();
+  if (marker || referenceDependentSource_ || preview_.enabled() || previousReferenceLimited_)
+    invalidateReferencePrefix();
 }
 
 void IncrementalParser::clearCommitted() {
@@ -287,10 +314,15 @@ void IncrementalParser::clearCommitted() {
   committedBlocks_.reset();
   committedLinks_.reset();
   committedImages_.reset();
+  committedTags_.reset();
   committedBytes_ = 0;
   committedUtf16_ = 0;
   committedContainers_ = 0;
   committedTables_ = 0;
+  committedDefinitions_.clear();
+  committedReferenceOutput_ = 0;
+  previousReferenceLimited_ = false;
+  plainParagraph_ = false;
   resetScan();
 }
 
@@ -357,6 +389,7 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   if (result.status != ParseStatus::Ok) {
     return result;
   }
+  previousReferenceLimited_ = result.referenceOutputLimited;
   // Color before anything compares blocks. sameBlock reads a block's tokens, and
   // a freshly parsed block has none until the highlighter has seen it, so
   // comparing first would find every block changed and defeat both the identity
@@ -398,28 +431,36 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   const size_t committed = committedCount();
   const size_t committedLinks = committedLinks_ ? committedLinks_->size() : 0;
   const size_t committedImages = committedImages_ ? committedImages_->size() : 0;
+  const size_t committedTags = committedTags_ ? committedTags_->size() : 0;
   const Document &parsed = *result.document;
   bool confirmed = committed > 0 && source.size() >= committedBytes_ && parsed.blocks.size() >= committed &&
-      parsed.links.size() >= committedLinks && parsed.images.size() >= committedImages;
+      parsed.links.size() >= committedLinks && parsed.images.size() >= committedImages &&
+      parsed.tags.size() >= committedTags;
   for (size_t i = 0; confirmed && i < committed; i++) {
     confirmed = sameBlock((*committedBlocks_)[i], parsed.blocks[i]);
   }
   for (size_t i = 0; confirmed && i < committedLinks; i++) {
     const Link &link = (*committedLinks_)[i];
-    confirmed = link.url == parsed.links[i].url && link.range == parsed.links[i].range;
+    confirmed = link.url == parsed.links[i].url && link.range == parsed.links[i].range &&
+        link.tag == parsed.links[i].tag;
   }
   for (size_t i = 0; confirmed && i < committedImages; i++) {
     confirmed = scan::sameImage((*committedImages_)[i], parsed.images[i]);
+  }
+  for (size_t i = 0; confirmed && i < committedTags; i++) {
+    confirmed = scan::sameTag((*committedTags_)[i], parsed.tags[i]);
   }
   if (confirmed) {
     const auto &blocks = parsed.blocks.tail();
     const auto &links = parsed.links.tail();
     const auto &images = parsed.images.tail();
+    const auto &tags = parsed.tags.tail();
     auto shared = std::make_shared<Document>();
     shared->id = parsed.id;
     shared->blocks = SharedList<Block>(committedBlocks_, std::vector<Block>(blocks.begin() + committed, blocks.end()));
     shared->links = SharedList<Link>(committedLinks_, std::vector<Link>(links.begin() + committedLinks, links.end()));
     shared->images = SharedList<Image>(committedImages_, std::vector<Image>(images.begin() + committedImages, images.end()));
+    shared->tags = SharedList<Tag>(committedTags_, std::vector<Tag>(tags.begin() + committedTags, tags.end()));
     shared->settledBlocks = result.document->settledBlocks;
     result.document = shared;
     counters_.cacheHits += committed;
@@ -432,12 +473,17 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   }
   result.document = publish(result.document, settledCount);
   watchOpenFence(source, committedBytes_, committedCount());
+  watchPlainParagraph();
   return result;
 }
 
 void IncrementalParser::noteHighlight(const HighlightStats &stats) {
   counters_.blocksHighlighted += stats.blocks;
   counters_.highlightResumes += stats.resumes;
+  counters_.highlightBytesLexed += stats.bytesLexed;
+  counters_.highlightRunsBuilt += stats.runsBuilt;
+  counters_.highlightTokenBytesCopied += stats.tokenBytesCopied;
+  counters_.highlightTextBytesCopied += stats.textBytesCopied;
   for (size_t index = 0; index < kHighlightStopCount; index++) {
     counters_.highlight[index] += stats.stops[index];
   }
@@ -564,9 +610,22 @@ ParseResult IncrementalParser::parseTail() {
   // rebuilds from scratch. Everything below committedBytes_ lives in storage
   // the repair cannot reach, so no repair can restyle a block a reader has
   // already seen settled.
-  const remend::PreviewResult preview = preview_.apply(tail, committedBytes_, 0, parse_);
-  notePreview(preview);
-  ParseResult result = preview.parsed;
+  ParseResult result;
+  if (committedDefinitions_.empty()) {
+    const remend::PreviewResult preview = preview_.apply(tail, committedBytes_, 0, parse_);
+    notePreview(preview);
+    result = preview.parsed;
+  } else {
+    // Preview and bracket math can rewrite the synthetic prefix. Keep their
+    // full-document proof until they have an explicit definition-context API.
+    if (preview_.enabled() || referenceDependentSource_) {
+      return fullParse(ParseFallback::InitialOrUnprovenBoundary, true, false);
+    }
+    const uint32_t totalBudget = static_cast<uint32_t>(16 * std::min<size_t>(source_.size(), kMaxSourceBytes / 16));
+    result = parseMarkdownWithReferences(tail, committedBytes_, committedDefinitions_, parse_,
+                                         totalBudget - std::min(totalBudget, committedReferenceOutput_));
+    counters_.bytesParsed += tail.size() + committedDefinitions_.size();
+  }
   counters_.tailParses++;
   if (result.status != ParseStatus::Ok) {
     return result;
@@ -575,9 +634,11 @@ ParseResult IncrementalParser::parseTail() {
   const size_t committed = committedCount();
   const size_t committedLinks = committedLinks_ ? committedLinks_->size() : 0;
   const size_t committedImages = committedImages_ ? committedImages_->size() : 0;
+  const size_t committedTags = committedTags_ ? committedTags_->size() : 0;
+  previousReferenceLimited_ = result.referenceOutputLimited;
   std::vector<Block> blocks(result.document->blocks.begin(), result.document->blocks.end());
   for (Block &block : blocks) {
-    offsetIds(block, committedContainers_, committedTables_, committedLinks, committedImages);
+    offsetIds(block, committedContainers_, committedTables_, committedLinks, committedImages, committedTags);
   }
   // The tail parse saw an empty document before its first block.
   if (committed > 0 && !blocks.empty()) {
@@ -585,17 +646,20 @@ ParseResult IncrementalParser::parseTail() {
   }
   std::vector<Link> links(result.document->links.begin(), result.document->links.end());
   for (Link &link : links) {
-    offsetLink(link, committedUtf16_);
+    offsetLink(link, committedUtf16_, committedTags);
   }
   std::vector<Image> images(result.document->images.begin(), result.document->images.end());
   for (Image &image : images) {
     offsetImage(image, static_cast<int32_t>(committedLinks), committedUtf16_);
   }
+  std::vector<Tag> tags(result.document->tags.begin(), result.document->tags.end());
+  for (Tag &tag : tags) offsetTag(tag, committedUtf16_, committedBytes_);
   auto combined = std::make_shared<Document>();
   combined->id = result.document->id;
   combined->blocks = SharedList<Block>(committedBlocks_, std::move(blocks));
   combined->links = SharedList<Link>(committedLinks_, std::move(links));
   combined->images = SharedList<Image>(committedImages_, std::move(images));
+  combined->tags = SharedList<Tag>(committedTags_, std::move(tags));
   // Only the strict prefix is settled. Shared provisional reference blocks
   // remain mutable and are never offered as settled text to controls.
   combined->settledBlocks = static_cast<uint32_t>(std::min<size_t>(settledCount(), UINT32_MAX));
@@ -606,6 +670,7 @@ ParseResult IncrementalParser::parseTail() {
   layoutTail(combined.get());
   result.document = publish(combined, combined->settledBlocks);
   watchOpenFence(source, committedBytes_, committed);
+  watchPlainParagraph();
   return result;
 }
 
@@ -727,9 +792,16 @@ bool IncrementalParser::commitRegion(size_t boundary) {
   const std::string_view region = std::string_view(source_).substr(committedBytes_, boundary - committedBytes_);
   counters_.commitAttempts++;
   counters_.bytesParsed += region.size();
-  const ParseResult parsed = parseMarkdownAt(region, committedBytes_, parse_);
-  const bool allowReferences = !referenceDependentSource_ && !preview_.enabled();
-  bool closed = provesClosed(region, parsed, allowReferences) &&
+  const uint32_t totalBudget = static_cast<uint32_t>(16 * std::min<size_t>(source_.size(), kMaxSourceBytes / 16));
+  const uint32_t availableBudget = totalBudget - std::min(totalBudget, committedReferenceOutput_);
+  const ParseResult parsed = parseMarkdownWithReferences(region, committedBytes_, committedDefinitions_, parse_, availableBudget);
+  counters_.bytesParsed += committedDefinitions_.size();
+  const bool allowReferences = !referenceDependentSource_ && !preview_.enabled() &&
+      !parsed.referenceOutputLimited &&
+      std::string_view(source_).substr(boundary).find("]:") == kNoOffset;
+  bool closed = (!referenceDependentSource_ || parsed.referenceDefinitions.empty()) &&
+      (!preview_.enabled() || parsed.referenceDefinitions.empty()) &&
+      provesClosed(region, parsed, allowReferences) &&
       committedCount() + parsed.document->blocks.size() <= kMaxCommittedBlocks;
   if (closed && !parsed.document->blocks.empty()) {
     const BlockKind kind = parsed.document->blocks.back().kind;
@@ -738,7 +810,26 @@ bool IncrementalParser::commitRegion(size_t boundary) {
       std::string probe(region);
       probe += "x\n";
       counters_.bytesParsed += probe.size();
-      closed = splitsBefore(parsed, parseMarkdownAt(probe, committedBytes_, parse_));
+      closed = splitsBefore(parsed, parseMarkdownWithReferences(probe, committedBytes_, committedDefinitions_, parse_, availableBudget));
+      counters_.bytesParsed += committedDefinitions_.size();
+    }
+  }
+  std::string definitions = committedDefinitions_;
+  if (closed && !parsed.referenceDefinitions.empty()) {
+    for (const ByteRange &range : parsed.referenceDefinitions) {
+      definitions.append(region.substr(range.start, range.end - range.start));
+      definitions += "\n\n";
+    }
+    if (definitions.size() > kMaxDefinitionReplayBytes) {
+      closed = false;
+    } else {
+      // Replaying original ranges is supported only when md4c confirms they
+      // contain definitions alone. Container prefixes and other unsupported
+      // spellings therefore cannot silently change the tail grammar.
+      counters_.bytesParsed += definitions.size();
+      const auto replay = parseMarkdown(definitions, parse_);
+      closed = replay.status == ParseStatus::Ok && replay.document->blocks.empty() &&
+          replay.containerCount == 0 && replay.referenceDefinitions.size() >= parsed.referenceDefinitions.size();
     }
   }
   if (!closed) {
@@ -748,12 +839,13 @@ bool IncrementalParser::commitRegion(size_t boundary) {
 
   const auto &parsedBlocks = parsed.document->blocks;
   if (!referencePrefix_ && std::any_of(parsedBlocks.begin(), parsedBlocks.end(), hasUnresolvedBracket)) {
-    referencePrefix_ = ReferencePrefix{committedBlocks_, committedLinks_, committedImages_, committedBytes_,
-                                       committedUtf16_, committedContainers_, committedTables_};
+    referencePrefix_ = ReferencePrefix{committedBlocks_, committedLinks_, committedImages_, committedTags_, committedBytes_,
+                                       committedUtf16_, committedContainers_, committedTables_, committedDefinitions_, committedReferenceOutput_};
   }
   const size_t committed = committedCount();
   const size_t committedLinks = committedLinks_ ? committedLinks_->size() : 0;
   const size_t committedImages = committedImages_ ? committedImages_->size() : 0;
+  const size_t committedTags = committedTags_ ? committedTags_->size() : 0;
   Utf16OffsetMap offsets(region);
   // Reused across the region's blocks, so consecutive ones of the same
   // language share a configured lexer.
@@ -767,7 +859,7 @@ bool IncrementalParser::commitRegion(size_t boundary) {
     block.identity = referencePrefix_ ? 0 : nextBlockIdentity.fetch_add(1, std::memory_order_relaxed);
     const ByteRange bytes = parsed.blockSource[i];
     block.sourceRange = {committedUtf16_ + offsets.toUtf16(bytes.start), committedUtf16_ + offsets.toUtf16(bytes.end)};
-    offsetIds(block, committedContainers_, committedTables_, committedLinks, committedImages);
+    offsetIds(block, committedContainers_, committedTables_, committedLinks, committedImages, committedTags);
     if (i == 0 && committed > 0) {
       block.spacingBefore = BlockSpacing::Normal;
     }
@@ -795,7 +887,7 @@ bool IncrementalParser::commitRegion(size_t boundary) {
   if (!parsed.document->links.empty()) {
     std::vector<Link> links(parsed.document->links.begin(), parsed.document->links.end());
     for (Link &link : links) {
-      offsetLink(link, committedUtf16_);
+      offsetLink(link, committedUtf16_, committedTags);
     }
     committedLinks_ = SharedList<Link>::Prefix::extend(committedLinks_, std::move(links));
   }
@@ -806,8 +898,15 @@ bool IncrementalParser::commitRegion(size_t boundary) {
     }
     committedImages_ = SharedList<Image>::Prefix::extend(committedImages_, std::move(images));
   }
+  if (!parsed.document->tags.empty()) {
+    std::vector<Tag> tags(parsed.document->tags.begin(), parsed.document->tags.end());
+    for (Tag &tag : tags) offsetTag(tag, committedUtf16_, committedBytes_);
+    committedTags_ = SharedList<Tag>::Prefix::extend(committedTags_, std::move(tags));
+  }
   noteHighlight(stats);
   noteMath(committedMath);
+  committedDefinitions_ = std::move(definitions);
+  committedReferenceOutput_ += parsed.referenceOutputUsed;
   committedBytes_ = boundary;
   committedUtf16_ += offsets.toUtf16(region.size());
   committedContainers_ += parsed.containerCount;
@@ -899,6 +998,7 @@ void IncrementalParser::watchOpenFence(std::string_view source, size_t from, siz
   }
   openFence_ = true;
   fencePendingNewline_ = pendingNewline;
+  fenceLineStart_ = lineStart;
 }
 
 bool IncrementalParser::appendOpenFence() {
@@ -912,11 +1012,12 @@ bool IncrementalParser::appendOpenFence() {
   }
   // Every line the new bytes touch, including the one they extend, must be
   // unable to close a fence of either kind.
-  const size_t previousNewline = source.substr(0, parsedBytes_).rfind('\n');
-  size_t lineStart = previousNewline == kNoOffset ? 0 : previousNewline + 1;
+  size_t lineStart = fenceLineStart_;
+  size_t searchStart = parsedBytes_;
   for (;;) {
-    const size_t newline = source.find('\n', lineStart);
+    const size_t newline = source.find('\n', searchStart);
     const size_t lineEnd = newline == kNoOffset ? source.size() : newline;
+    counters_.fenceAppendScanBytes += lineEnd - searchStart + (newline == kNoOffset ? 0 : 1);
     const std::string_view line = source.substr(lineStart, lineEnd - lineStart);
     if (startsWith(line, '`') || startsWith(line, '~')) {
       return false;
@@ -924,13 +1025,14 @@ bool IncrementalParser::appendOpenFence() {
     // A `$$` line closes a math fence, so the fast path must decline whenever
     // the new bytes could be one. Otherwise a formula would keep growing past
     // the line that ended it.
-    if (parse_.enabled() && (isMathFenceLine(line) || startsWith(line, '$'))) {
+    if (parse_.enabled() && startsWith(line, '$')) {
       return false;
     }
     if (newline == kNoOffset) {
       break;
     }
     lineStart = newline + 1;
+    searchStart = lineStart;
   }
 
   // Copies only the active tail; committed blocks stay shared.
@@ -938,24 +1040,31 @@ bool IncrementalParser::appendOpenFence() {
   next->id = allocateDocumentId();
   next->settledBlocks = static_cast<uint32_t>(std::min<size_t>(settledCount(), UINT32_MAX));
   next->streaming = !finished_;
-  std::u16string &text = next->blocks.tail().back().text;
+  std::u16string delta;
   if (fencePendingNewline_) {
-    text.push_back(u'\n');
+    delta.push_back(u'\n');
   }
-  appendUtf8(text, added);
+  appendUtf8(delta, added);
   // md4c drops the final line break of code text.
-  fencePendingNewline_ = !text.empty() && text.back() == u'\n';
+  fencePendingNewline_ = !delta.empty() && delta.back() == u'\n';
   if (fencePendingNewline_) {
-    text.pop_back();
+    delta.pop_back();
   }
   Block &block = next->blocks.tail().back();
+  fenceLineStart_ = lineStart;
+  counters_.fenceSnapshotStorageBytesCopied += block.text.appendSnapshot(delta);
   if (block.kind == BlockKind::CodeBlock && !block.language.empty()) {
     HighlightStats stats;
-    lexillaHighlighter().tokenizeAppend(block.language, block.text, &highlight_, &block.tokens,
-                                       kHighlightBudgetMs, document_->id, document_->blocks.back().text.size(), next->id);
-    block.highlightComplete = highlight_.lastStop != HighlightStop::Budget;
+    lexillaHighlighter().tokenizeAppend(block.language, block.text, delta, &highlight_, &block.tokens,
+                                       kHighlightBudgetMs, document_->id, document_->blocks.back().text.size(), next->id, !finished_, fencePendingNewline_);
+    block.highlightComplete = highlight_.lastStop != HighlightStop::Budget &&
+        highlight_.lastStop != HighlightStop::Deferred;
     stats.blocks = 1;
     stats.resumes = highlight_.resumed ? 1 : 0;
+    stats.bytesLexed = highlight_.bytesLexed;
+    stats.runsBuilt = highlight_.runsBuilt;
+    stats.tokenBytesCopied = highlight_.tokenBytesCopied;
+    stats.textBytesCopied = highlight_.textBytesCopied;
     stats.stops[static_cast<size_t>(highlight_.lastStop)] = 1;
     noteHighlight(stats);
   } else {
@@ -964,6 +1073,74 @@ bool IncrementalParser::appendOpenFence() {
   layoutTail(next.get());
   publish(next, next->settledBlocks);
   counters_.openFenceFastUpdates++;
+  return true;
+}
+
+namespace {
+bool isPlainProse(std::string_view text) {
+  return std::all_of(text.begin(), text.end(), [](unsigned char byte) {
+    return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+        (byte >= '0' && byte <= '9') || byte == ' ' || byte == '.';
+  });
+}
+bool hasWwwAutolinkCandidate(std::string_view text) {
+  for (size_t i = 0; i + 3 < text.size(); i++) {
+    if ((text[i] == 'w' || text[i] == 'W') && (text[i + 1] == 'w' || text[i + 1] == 'W') &&
+        (text[i + 2] == 'w' || text[i + 2] == 'W') && text[i + 3] == '.') return true;
+  }
+  return false;
+}
+} // namespace
+
+void IncrementalParser::watchPlainParagraph() {
+  plainParagraph_ = false;
+  if (!document_ || preview_.enabled() || document_->blocks.tail().size() != 1 ||
+      source_.size() <= committedBytes_) return;
+  const Block &block = document_->blocks.tail().back();
+  if (block.kind != BlockKind::Paragraph || !block.containers.empty() ||
+      !block.math.empty() || !block.images.empty() || block.runs.size() > 1) return;
+  if (!block.runs.empty()) {
+    const InlineRun &run = block.runs.front();
+    if (run.styles != 0 || run.link >= 0 || run.tag >= 0 || run.start != 0 || run.end != block.text.size()) return;
+  }
+  const std::string_view raw = std::string_view(source_).substr(committedBytes_);
+  // Only letters, digits, spaces and literal periods are admitted. Markdown
+  // delimiters, entity/HTML openers, URL schemes and mail addresses need other
+  // punctuation. WWW links are the remaining exception and are rejected even
+  // before they resolve. An alphabetic opener rules out a growing list marker.
+  // A newline always reparses for setext/table promotion and hard breaks.
+  const bool alphabetic = (raw.front() >= 'a' && raw.front() <= 'z') ||
+      (raw.front() >= 'A' && raw.front() <= 'Z');
+  if (!alphabetic || !isPlainProse(raw) || hasWwwAutolinkCandidate(raw)) return;
+  size_t end = raw.size();
+  while (end > 0 && raw[end - 1] == ' ') end--;
+  if (block.text != utf8ToUtf16(raw.substr(0, end))) return;
+  plainParagraphStart_ = committedBytes_;
+  paragraphPendingSpaces_ = raw.size() - end;
+  plainParagraph_ = true;
+}
+
+bool IncrementalParser::appendPlainParagraph() {
+  if (!plainParagraph_ || preview_.enabled() || plainParagraphStart_ != committedBytes_ ||
+      document_->blocks.tail().size() != 1) return false;
+  const std::string_view added = std::string_view(source_).substr(parsedBytes_);
+  const size_t checkStart = std::max(plainParagraphStart_, parsedBytes_ > 3 ? parsedBytes_ - 3 : 0);
+  if (!isPlainProse(added) || hasWwwAutolinkCandidate(std::string_view(source_).substr(checkStart))) {
+    plainParagraph_ = false;
+    return false;
+  }
+  auto next = std::make_shared<Document>(*document_);
+  next->id = allocateDocumentId();
+  Block &block = next->blocks.tail().back();
+  block.text.append(paragraphPendingSpaces_, u' ');
+  block.text.append(added.begin(), added.end());
+  size_t end = block.text.size();
+  while (end > 0 && block.text[end - 1] == u' ') end--;
+  paragraphPendingSpaces_ = block.text.size() - end;
+  block.text.resize(end);
+  if (!block.runs.empty()) block.runs.front().end = static_cast<uint32_t>(end);
+  publish(next, static_cast<uint32_t>(settledCount()));
+  counters_.plainParagraphFastUpdates++;
   return true;
 }
 
@@ -990,13 +1167,13 @@ ParseResult IncrementalParser::parse(bool finished) {
   // so it skips the "nothing new arrived" shortcut below and reparses the tail.
   const bool repaint = previewDirty_;
   previewDirty_ = false;
-  if (!repaint && document_ && (source_.size() == parsedBytes_ || appendOpenFence())) {
+  if (!repaint && document_ && (source_.size() == parsedBytes_ || appendOpenFence() || appendPlainParagraph())) {
     current.document = document_;
     return current;
   }
 
   tryCommit();
-  if (source_.size() - committedBytes_ > kMaxRetainedTailBytes) {
+  if (committedBytes_ == 0 && source_.size() > kMaxRetainedTailBytes) {
     return fullParse(ParseFallback::TailLimit, true, false);
   }
   if (committedBytes_ == 0) {

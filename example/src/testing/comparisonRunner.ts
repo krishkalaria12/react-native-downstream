@@ -26,7 +26,7 @@ import {
   type ComparisonCandidate,
 } from './comparison';
 
-/** Streamdown runs first so Downstream never inherits a warm renderer. */
+/** Stable pane order; execution order alternates on successive runs. */
 export const CANDIDATES: readonly ComparisonCandidate[] = [
   'streamdown',
   'downstream',
@@ -78,6 +78,8 @@ export interface ComparisonView {
 const EMPTY_METRICS: CandidateMetrics = {
   firstFrameMs: null,
   totalMs: 0,
+  deliveryMs: 0,
+  drainMs: 0,
   frames: 0,
   longFrames: 0,
   longestFrameMs: 0,
@@ -118,6 +120,8 @@ interface ActiveCandidate {
   batchIndex: number;
   source: string;
   startedAt: number;
+  firstArrivalAt: number | null;
+  deliveryEndedAt: number | null;
   firstFrameMs: number | null;
   lastFrameAt: number | null;
   frames: number;
@@ -131,14 +135,17 @@ interface ActiveCandidate {
 }
 
 /**
- * Replays one deterministic schedule through Streamdown RN and then Downstream,
- * so the second run is a control for the first. Only the renderer changes
- * between the two runs; the source, chunk boundaries, and due times do not.
+ * Replays one deterministic schedule through both candidates, alternating
+ * execution order. Pane indices stay fixed regardless of which runs first.
+ * Callback timings describe JS responsiveness, not native presentation.
  */
 export class ComparisonRunner {
   private active: ActiveCandidate | null = null;
   private readonly controllers = new Set<MarkdownStreamController>();
   private parseMode: ParseMode = 'full';
+  private runCount = 0;
+  private order = [0, 1];
+  private orderIndex = 0;
   private view: ComparisonView = IDLE_VIEW;
   private notify: (() => void) | null = null;
 
@@ -154,17 +161,19 @@ export class ComparisonRunner {
     this.cancelActive();
     this.disposeControllers();
     this.parseMode = config.parseMode;
+    this.order = this.runCount++ % 2 === 0 ? [0, 1] : [1, 0];
+    this.orderIndex = 0;
     this.view = {
       status: 'running',
       runs: [null, null],
       liveSource: '',
       liveStream: null,
-      active: 0,
+      active: this.order[0]!,
       error: null,
     };
     this.publish();
     this.startCandidate(
-      0,
+      this.order[0]!,
       createSchedule(
         config.schedule,
         config.seed,
@@ -207,6 +216,8 @@ export class ComparisonRunner {
       batchIndex: 0,
       source: '',
       startedAt: nowMs(),
+      firstArrivalAt: null,
+      deliveryEndedAt: null,
       firstFrameMs: null,
       lastFrameAt: null,
       frames: 0,
@@ -222,6 +233,7 @@ export class ComparisonRunner {
     this.view = {
       ...this.view,
       status: 'running',
+      liveSource: '',
       liveStream: controller,
       active: index,
     };
@@ -281,6 +293,7 @@ export class ComparisonRunner {
 
   private receive(active: ActiveCandidate, end: number, dueMs: number): void {
     if (active.cursor >= end) return;
+    active.firstArrivalAt ??= nowMs();
     const lateness = nowMs() - active.startedAt - dueMs;
     if (lateness > active.maxLatenessMs) active.maxLatenessMs = lateness;
     const start = active.cursor;
@@ -305,7 +318,7 @@ export class ComparisonRunner {
     if (this.active !== active) return;
     const at = nowMs();
     if (active.lastFrameAt === null) {
-      active.firstFrameMs = at - active.startedAt;
+      active.firstFrameMs = at - (active.firstArrivalAt ?? at);
     } else {
       const gap = at - active.lastFrameAt;
       active.frames += 1;
@@ -318,6 +331,7 @@ export class ComparisonRunner {
 
   private requestCompletion(active: ActiveCandidate): void {
     if (active.completionRequested) return;
+    active.deliveryEndedAt = nowMs();
     active.controller?.finish();
     active.completionRequested = true;
     this.maybeFinish(active);
@@ -346,16 +360,16 @@ export class ComparisonRunner {
     active.unsubscribe?.();
     active.unsubscribe = null;
     this.active = null;
-    const next = active.index + 1;
+    const next = this.order[++this.orderIndex];
     this.view = {
       ...this.view,
       runs: this.recordRun(active, null),
       liveStream: null,
       liveSource: active.source,
-      active: next,
+      active: -1,
     };
     this.publish();
-    if (next < CANDIDATES.length) this.startCandidate(next, active.schedule);
+    if (next !== undefined) this.startCandidate(next, active.schedule);
     else this.view = { ...this.view, status: 'complete', active: -1 };
     this.publish();
   }
@@ -382,6 +396,7 @@ export class ComparisonRunner {
     active: ActiveCandidate,
     error: string | null
   ): (ComparisonRun | null)[] {
+    const completedAt = nowMs();
     const runs: (ComparisonRun | null)[] = [...this.view.runs];
     runs[active.index] = {
       candidate: active.candidate,
@@ -389,7 +404,12 @@ export class ComparisonRunner {
       metrics: {
         ...EMPTY_METRICS,
         firstFrameMs: active.firstFrameMs,
-        totalMs: nowMs() - active.startedAt,
+        totalMs: completedAt - active.startedAt,
+        deliveryMs: (active.deliveryEndedAt ?? completedAt) - active.startedAt,
+        drainMs:
+          active.deliveryEndedAt === null
+            ? 0
+            : completedAt - active.deliveryEndedAt,
         frames: active.frames,
         longFrames: active.longFrames,
         longestFrameMs: active.longestFrameMs,

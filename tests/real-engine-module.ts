@@ -157,6 +157,17 @@ function controlledSlots(
   };
 }
 
+type FenceHistory = {
+  token: number;
+  sessionId: string;
+  generation: number;
+  model: RenderModel | undefined;
+  policy: string;
+  slots: readonly FenceSlot[];
+};
+const fenceHistory: FenceHistory[] = [];
+let nextSlotToken = 1;
+
 export const realEngineModule = {
   __esModule: true,
   default: {
@@ -267,6 +278,76 @@ export const realEngineModule = {
       );
     },
 
+    sessionFenceSlotChanges(
+      sessionId: string,
+      generation: number,
+      sequence: number,
+      languages: readonly string[],
+      baseToken: number
+    ) {
+      const session = sessions.get(sessionId);
+      if (
+        !session ||
+        session.generation !== generation ||
+        session.sequence !== sequence
+      ) {
+        return { token: 0, order: [], changed: [] };
+      }
+      const policy = [
+        ...new Set(languages.map((language) => language.toLowerCase())),
+      ]
+        .sort()
+        .join('\0');
+      const base = fenceHistory.find(
+        (entry) =>
+          entry.token === baseToken &&
+          entry.sessionId === sessionId &&
+          entry.generation === generation &&
+          entry.policy === policy
+      );
+      let current = fenceHistory.find(
+        (entry) =>
+          entry.sessionId === sessionId &&
+          entry.generation === generation &&
+          entry.model === session.model &&
+          entry.policy === policy
+      );
+      if (current === undefined) {
+        current = {
+          token: nextSlotToken++,
+          sessionId,
+          generation,
+          model: session.model,
+          policy,
+          slots: replaySessionSlots(
+            session.mode,
+            session.steps,
+            session.parseFlags,
+            languages
+          ),
+        };
+        fenceHistory.push(current);
+        if (fenceHistory.length > 16) fenceHistory.shift();
+      }
+      slotWork.queries += 1;
+      return {
+        token: current.token,
+        order: current.slots.map((slot) => slot.ordinal),
+        changed: current.slots.filter(
+          (slot) =>
+            !base?.slots.some(
+              (old) =>
+                old.ordinal === slot.ordinal &&
+                old.code === slot.code &&
+                old.language === slot.language &&
+                old.meta === slot.meta &&
+                old.incomplete === slot.incomplete &&
+                old.identity === slot.identity
+            )
+        ),
+      };
+    },
+
     setPreview(sessionId: string, features: number) {
       const session = sessions.get(sessionId);
       if (!session) return;
@@ -306,6 +387,8 @@ export function resetEngine(): void {
   nativeWork.parses = 0;
   slotWork.queries = 0;
   slotWork.async = 0;
+  fenceHistory.length = 0;
+  nextSlotToken = 1;
 }
 
 export const mockTurboModule = vi.fn(() => realEngineModule.default);

@@ -1,3 +1,0 @@
-ios_host_measurement fences=512 iterations=5000 size_hit_us=0.180 measure_hit_us=1.484 measure_alternating_us=26.588 checksum=481100000
-native TextKit checks passed
-com.downstream.NativeTextKitHarness: 9191

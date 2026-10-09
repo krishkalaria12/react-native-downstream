@@ -3,6 +3,7 @@
 #include "Document.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -56,5 +57,10 @@ std::vector<FenceSlot> fenceSlots(const Document &document, const std::vector<st
 /// Controlled bare parses use this to treat every block as settled.
 std::vector<FenceSlot> fenceSlots(const Document &document, const std::vector<std::string> &languages,
                                   bool live, uint32_t settledBlocks);
+
+/// Reuses immutable payloads by proven identity, or exact current text for provisional blocks.
+std::vector<std::shared_ptr<const FenceSlot>> sharedFenceSlots(
+    const Document &document, const std::vector<std::string> &languages, bool live,
+    const std::vector<std::shared_ptr<const FenceSlot>> &previous);
 
 } // namespace downstream

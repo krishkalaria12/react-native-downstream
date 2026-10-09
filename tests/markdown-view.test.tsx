@@ -318,6 +318,59 @@ describe('DownstreamMarkdown props', () => {
     expect(nativeView.last()?.syntaxHighlighting).toBe(true);
   });
 
+  it('keeps Android paragraph layout canonical by default and forwards toggles', () => {
+    mount(<DownstreamMarkdown markdown="plain paragraph" />);
+    expect(nativeView.last()?.incrementalParagraphs).toBe(false);
+    rerender(
+      <DownstreamMarkdown
+        markdown="plain paragraph"
+        androidParagraphLayout="incremental"
+      />
+    );
+    expect(nativeView.last()?.incrementalParagraphs).toBe(true);
+    rerender(
+      <DownstreamMarkdown
+        markdown="plain paragraph"
+        androidParagraphLayout="canonical"
+      />
+    );
+    expect(nativeView.last()?.incrementalParagraphs).toBe(false);
+  });
+
+  it('forwards Android paragraph layout across stream finish and reset', () => {
+    const source = stream();
+    mount(
+      <DownstreamMarkdown
+        stream={source}
+        androidParagraphLayout="incremental"
+      />
+    );
+    expect(nativeView.last()?.incrementalParagraphs).toBe(true);
+    act(() => source.append('unfinished paragraph'));
+    getStreamState(source).flush();
+    runFrames();
+    const sequence = nativeView.last()?.sessionSequence;
+    act(() => source.finish());
+    runFrames();
+    expect(nativeView.last()?.sessionSequence).toBe(sequence);
+    expect(nativeView.last()?.incrementalParagraphs).toBe(true);
+    act(() => source.reset());
+    runFrames();
+    expect(nativeView.last()?.incrementalParagraphs).toBe(true);
+    rerender(<DownstreamMarkdown stream={source} />);
+    expect(nativeView.last()?.incrementalParagraphs).toBe(false);
+  });
+
+  it('rejects an unknown Android paragraph policy before native mounting', () => {
+    expect(() =>
+      DownstreamMarkdown({
+        markdown: 'x',
+        androidParagraphLayout: 'unknown',
+      } as unknown as MarkdownViewProps)
+    ).toThrow('androidParagraphLayout must be canonical or incremental.');
+    expect(nativeView.last()).toBeUndefined();
+  });
+
   it('passes syntaxHighlighting through to the native view', () => {
     mount(<DownstreamMarkdown markdown="x" syntaxHighlighting={false} />);
     expect(nativeView.last()?.syntaxHighlighting).toBe(false);

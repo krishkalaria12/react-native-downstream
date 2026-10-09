@@ -31,7 +31,7 @@ bool sameBlock(const Block &a, const Block &b) {
   for (size_t i = 0; i < a.runs.size(); i++) {
     const InlineRun &x = a.runs[i];
     const InlineRun &y = b.runs[i];
-    if (x.start != y.start || x.end != y.end || x.styles != y.styles || x.link != y.link) {
+    if (x.start != y.start || x.end != y.end || x.styles != y.styles || x.link != y.link || x.tag != y.tag) {
       return false;
     }
   }
@@ -53,7 +53,7 @@ bool sameBlock(const Block &a, const Block &b) {
     const Container &x = a.containers[i];
     const Container &y = b.containers[i];
     if (x.kind != y.kind || x.id != y.id || x.showsMarker != y.showsMarker || x.task != y.task ||
-        x.marker != y.marker) {
+        x.marker != y.marker || x.open != y.open || x.tag != y.tag) {
       return false;
     }
   }
@@ -70,13 +70,18 @@ bool sameBlock(const Block &a, const Block &b) {
   return true;
 }
 
+bool sameTag(const Tag &a, const Tag &b) {
+  return a.name == b.name && a.attributes == b.attributes && a.range == b.range &&
+      a.block == b.block && a.bodyStart == b.bodyStart && a.bodyEnd == b.bodyEnd;
+}
+
 bool sameImage(const Image &a, const Image &b) {
   return a.url == b.url && a.alt == b.alt && a.title == b.title && a.loadable == b.loadable &&
       a.link == b.link && (a.range == b.range);
 }
 
 bool sameDocument(const Document &a, const Document &b) {
-  if (a.blocks.size() != b.blocks.size() || a.links.size() != b.links.size() || a.images.size() != b.images.size()) {
+  if (a.blocks.size() != b.blocks.size() || a.links.size() != b.links.size() || a.images.size() != b.images.size() || a.tags.size() != b.tags.size()) {
     return false;
   }
   for (size_t i = 0; i < a.blocks.size(); i++) {
@@ -85,7 +90,7 @@ bool sameDocument(const Document &a, const Document &b) {
     }
   }
   for (size_t i = 0; i < a.links.size(); i++) {
-    if (a.links[i].url != b.links[i].url || !(a.links[i].range == b.links[i].range)) {
+    if (a.links[i].url != b.links[i].url || !(a.links[i].range == b.links[i].range) || a.links[i].tag != b.links[i].tag) {
       return false;
     }
   }
@@ -93,6 +98,9 @@ bool sameDocument(const Document &a, const Document &b) {
     if (!sameImage(a.images[i], b.images[i])) {
       return false;
     }
+  }
+  for (size_t i = 0; i < a.tags.size(); i++) {
+    if (!sameTag(a.tags[i], b.tags[i])) return false;
   }
   return true;
 }

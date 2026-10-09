@@ -32,6 +32,7 @@ struct IncrementalCounters {
   uint64_t fullParses{0};
   uint64_t tailParses{0};
   uint64_t openFenceFastUpdates{0};
+  uint64_t plainParagraphFastUpdates{0};
   uint64_t commitAttempts{0};
   uint64_t rejectedCommits{0};
   uint64_t committedBlocks{0};
@@ -40,6 +41,13 @@ struct IncrementalCounters {
   /// continued the previous one instead of starting the block over.
   uint64_t blocksHighlighted{0};
   uint64_t highlightResumes{0};
+  uint64_t highlightBytesLexed{0};
+  uint64_t highlightRunsBuilt{0};
+  uint64_t highlightTokenBytesCopied{0};
+  uint64_t highlightTextBytesCopied{0};
+  /// Immutable active-fence pages and persistent index nodes copied by append.
+  uint64_t fenceSnapshotStorageBytesCopied{0};
+  uint64_t fenceAppendScanBytes{0};
   uint64_t highlight[kHighlightStopCount]{};
 
   uint64_t highlightCount(HighlightStop reason) const {
@@ -77,10 +85,11 @@ struct IncrementalCounters {
 /// only its tail. Their identities are unique across all parsers and never
 /// reused, so an identity always names the same block content.
 ///
-/// Closed blocks with unresolved references may also be shared provisionally
-/// while the source has no definition markers or bracket-math openers. They
-/// have no identities and are not settled. A dependency marker revokes that
-/// provisional prefix before the next parse, leaving the strict prefix intact.
+/// Closed blocks with unresolved references may also be shared provisionally.
+/// They have no identities and are not settled. New definition markers revoke
+/// that provisional prefix before the next parse, leaving the strict prefix
+/// intact. Confirmed link definitions are replayed in source order for tails;
+/// footnotes, bracket math and preview keep the canonical full-parse proof.
 class IncrementalParser {
 public:
   explicit IncrementalParser(ParseMode mode = ParseMode::FullParse,
@@ -121,8 +130,8 @@ public:
   DocumentHandle document() const { return document_; }
   IncrementalCounters counters() const { return counters_; }
   size_t committedBytes() const { return referencePrefix_ ? referencePrefix_->bytes : committedBytes_; }
-  /// Source prefix reused while no reference definition or bracket-math opener
-  /// has arrived. Unlike committedBytes(), this prefix can be revoked.
+  /// Source prefix reused provisionally until a new reference dependency arrives.
+  /// Unlike committedBytes(), this prefix can be revoked.
   size_t reusedBytes() const { return committedBytes_; }
 
   /// Opts the unstable tail into provisional styling. Off by default, which is
@@ -178,6 +187,8 @@ private:
   void tryCommit();
   bool commitRegion(size_t boundary);
   bool appendOpenFence();
+  bool appendPlainParagraph();
+  void watchPlainParagraph();
   void watchOpenFence(std::string_view source, size_t from, size_t blocksBefore);
   size_t committedCount() const;
   size_t settledCount() const;
@@ -200,26 +211,38 @@ private:
   // Images are committed with the blocks that name them, so a spliced parse
   // reads the same index either way.
   std::shared_ptr<const SharedList<Image>::Prefix> committedImages_;
+  std::shared_ptr<const SharedList<Tag>::Prefix> committedTags_;
   size_t committedBytes_{0};
   uint32_t committedUtf16_{0};
   uint32_t committedContainers_{0};
   uint32_t committedTables_{0};
 
-  // A closed, definition-free region with unresolved references can be reused
-  // provisionally. Its blocks have no identities and never count as settled.
-  // A definition marker revokes everything after this strict-prefix checkpoint.
+  // A closed region with unresolved references can be reused provisionally.
+  // Its blocks have no identities and never count as settled. A new definition
+  // marker or budget-limited expansion revokes this strict-prefix checkpoint.
   struct ReferencePrefix {
     std::shared_ptr<const SharedList<Block>::Prefix> blocks;
     std::shared_ptr<const SharedList<Link>::Prefix> links;
     std::shared_ptr<const SharedList<Image>::Prefix> images;
+    std::shared_ptr<const SharedList<Tag>::Prefix> tags;
     size_t bytes;
     uint32_t utf16;
     uint32_t containers;
     uint32_t tables;
+    std::string definitions;
+    uint32_t referenceOutputUsed;
   };
   std::optional<ReferencePrefix> referencePrefix_;
   size_t dependencyScannedBytes_{0};
   bool referenceDependentSource_{false};
+  // md4c-confirmed definition-only replay. Bounded and source-order preserving.
+  std::string committedDefinitions_;
+  uint32_t committedReferenceOutput_{0};
+  bool previousReferenceLimited_{false};
+  // A parser-confirmed unfinished top-level paragraph with restricted syntax.
+  bool plainParagraph_{false};
+  size_t plainParagraphStart_{0};
+  size_t paragraphPendingSpaces_{0};
 
   // Complete lines are scanned once for commit candidates. A rejected
   // candidate backs off in proportion to the uncommitted region.
@@ -232,6 +255,7 @@ private:
   // A trailing open fence accepts plain content without reparsing.
   bool openFence_{false};
   bool fencePendingNewline_{false};
+  size_t fenceLineStart_{0};
 
   // The tail code block's highlighting resume state, released on commit, on a
   // full parse, and whenever the tail is no longer code.

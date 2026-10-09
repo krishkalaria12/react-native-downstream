@@ -38,6 +38,40 @@ const event = (type, batch, details = {}) => ({
   ...details,
 });
 
+test('preparation, Android spans, shaping and assignment have separate native samples', () => {
+  const native = (name, time, sequence = 1) => ({
+    sessionId: 'android',
+    generation: 0,
+    sequence,
+    event: name,
+    clockDomain: 'native-monotonic',
+    timeNs: String(time * 1e6),
+  });
+  const summary = summarizeRun(
+    run({
+      streamEvents: [
+        native('prepare_start', 1),
+        native('prepare_end', 9),
+        native('android_text_spans_start', 2),
+        native('android_text_spans_end', 3),
+        native('android_text_spans_start', 3),
+        native('android_text_spans_end', 5),
+        native('android_text_shape_start', 5),
+        native('android_text_shape_end', 8),
+        native('android_text_assign_start', 11),
+        native('android_text_assign_end', 15),
+        native('android_text_shape_start', 20, 2),
+      ],
+    })
+  );
+  assert.equal(summary.preparationMs.p50, 8);
+  assert.equal(summary.androidSpanBuildMs.samples, 2);
+  assert.equal(summary.androidSpanBuildMs.p50, 1.5);
+  assert.equal(summary.androidShapingMs.samples, 1);
+  assert.equal(summary.androidShapingMs.p50, 3);
+  assert.equal(summary.androidTextAssignmentMs.p50, 4);
+});
+
 test('superseded batches are counted outside latency samples', () => {
   const summary = summarizeRun(
     run({

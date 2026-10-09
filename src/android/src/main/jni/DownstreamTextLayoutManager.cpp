@@ -37,7 +37,8 @@ folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontSc
                               const downstream::Theme::Handle &theme = nullptr,
                               const downstream::HostLayout &hosts = {},
                               facebook::react::Float width = 0,
-                              const downstream::TableLayoutProps &tables = {}) {
+                              const downstream::TableLayoutProps &tables = {},
+                              bool incrementalParagraphs = false) {
   // One array of five numbers per image rather than five parallel arrays: a
   // measurement copies this map, and parallel arrays make "which array is one
   // longer" a question the Kotlin side has to answer defensively. State codes
@@ -76,7 +77,8 @@ folly::dynamic codeLayoutData(uint64_t documentId, facebook::react::Float fontSc
       "imagesEnabled", images.state.enabled ? 1.0 : 0.0)("imageEntries", imageEntries)(
       "allowedImagePrefixes", prefixes)(
       // By id, as the document is: no slot value is copied on every measurement.
-      "themeId", static_cast<double>(theme ? theme->id() : 0));
+      "themeId", static_cast<double>(theme ? theme->id() : 0))(
+      "incrementalParagraphs", incrementalParagraphs ? 1.0 : 0.0);
   // An absent key is the empty HostLayout on Kotlin's side. Ordinary markdown
   // needs no host array allocation or JNI map entry.
   if (!hosts.empty()) {
@@ -355,7 +357,8 @@ DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
     const downstream::DocumentHandle &document, Float fontSizeMultiplier, Float maximumWidth, SurfaceId surfaceId,
     uint32_t chrome, const downstream::CodeLayoutProps &code, const downstream::ReaderChoices &choices,
     const downstream::PlacedCaret &caret, const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
-    const downstream::Theme::Handle &theme, const downstream::TableLayoutProps &tables) const {
+    const downstream::Theme::Handle &theme, const downstream::TableLayoutProps &tables,
+    bool incrementalParagraphs) const {
   // Java resolves the theme through the registry by id, the way it resolves the
   // document, so no slot value is copied across JNI on a measurement. Zero is
   // the default theme's own id.
@@ -378,7 +381,7 @@ DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
   // `measure`, so all three resolve one layout rather than three.
   auto localDataMap = ReadableNativeMap::newObjectCxxArgs(
       codeLayoutData(document->id, fontSizeMultiplier, chrome, code, choices, caret, images, theme, hosts, 0,
-                     tables));
+                     tables, incrementalParagraphs));
 
   auto propsMap = ReadableNativeMap::newObjectCxxArgs(folly::dynamic::object());
   auto componentName = make_jstring("DownstreamMarkdownView");
@@ -462,7 +465,7 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
       auto map = ReadableNativeMap::newObjectCxxArgs(codeLayoutData(document->id, hint.fontScale, hint.chrome,
                                                                      hint.code, hint.choices, hint.caret, hint.images,
                                                                      hint.theme, downstream::HostLayout{}, hint.width,
-                                                                     hint.tables));
+                                                                     hint.tables, hint.incrementalParagraphs));
       env->CallStaticVoidMethod(nativeClass, prepareMethod, static_cast<jlong>(document->id),
                                 reinterpret_cast<ReadableMap::javaobject>(map.get()));
       if (env->ExceptionCheck()) {

@@ -132,7 +132,8 @@ public:
                               const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
                               const downstream::Theme::Handle &theme,
                               const downstream::TableLayoutProps &tables = {},
-                              const downstream::ReaderChoices &choices = {}) const;
+                              const downstream::ReaderChoices &choices = {},
+                              bool incrementalParagraphs = false) const;
 
 private:
   DocumentMeasurement measurePlatform(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
@@ -141,7 +142,8 @@ private:
                                       const downstream::ReaderChoices &choices, const downstream::PlacedCaret &caret,
                                       const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
                                       const downstream::Theme::Handle &theme,
-                                      const downstream::TableLayoutProps &tables = {}) const;
+                                      const downstream::TableLayoutProps &tables = {},
+                                      bool incrementalParagraphs = false) const;
 
   /// The theme's id, or 0 for the default theme, which is its id too.
   static uint64_t themeKey(const downstream::Theme::Handle &theme);
@@ -168,6 +170,7 @@ private:
     downstream::ReaderChoices choices;
     /// The theme's layout key, which is 0 for the default theme.
     uint64_t themeLayoutKey;
+    bool incrementalParagraphs;
     DocumentMeasurement measurement;
   };
 

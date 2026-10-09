@@ -1074,6 +1074,13 @@ function useInheritedTableProps(
  * native code; no parse tree crosses into JavaScript.
  */
 export function DownstreamMarkdown(props: DownstreamMarkdownProps) {
+  if (
+    props.androidParagraphLayout !== undefined &&
+    props.androidParagraphLayout !== 'canonical' &&
+    props.androidParagraphLayout !== 'incremental'
+  ) {
+    throw new Error('androidParagraphLayout must be canonical or incremental.');
+  }
   if (props.stream !== undefined)
     return <StreamMarkdown {...props} stream={props.stream} />;
   if (typeof props.markdown === 'string')
@@ -1088,6 +1095,7 @@ function ControlledMarkdown({
   style,
   selectable = true,
   syntaxHighlighting = true,
+  androidParagraphLayout = 'canonical',
   codeBlockWrap = false,
   lineNumbers = true,
   codeBlockMaxHeight,
@@ -1293,6 +1301,7 @@ function ControlledMarkdown({
         generation={generation}
         selectable={selectable}
         syntaxHighlighting={syntaxHighlighting}
+        incrementalParagraphs={androidParagraphLayout === 'incremental'}
         codeBlockWrap={codeBlockWrap}
         lineNumbers={lineNumbers}
         codeBlockMaxHeight={resolveMaxHeight(codeBlockMaxHeight)}
@@ -1347,6 +1356,7 @@ function StreamMarkdown({
   style,
   selectable = true,
   syntaxHighlighting = true,
+  androidParagraphLayout = 'canonical',
   codeBlockWrap = false,
   lineNumbers = true,
   codeBlockMaxHeight,
@@ -1570,6 +1580,7 @@ function StreamMarkdown({
         sessionRevision={revision}
         selectable={selectable}
         syntaxHighlighting={syntaxHighlighting}
+        incrementalParagraphs={androidParagraphLayout === 'incremental'}
         codeBlockWrap={codeBlockWrap}
         lineNumbers={lineNumbers}
         codeBlockMaxHeight={resolveMaxHeight(codeBlockMaxHeight)}

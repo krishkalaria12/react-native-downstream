@@ -119,6 +119,31 @@ describe('the source a stream accumulates', () => {
     expect(await session.getSource()).toBe('hello **world**');
   });
 
+  it('materializes small chunks before and after reads, flushes, and reset', async () => {
+    const session = stream();
+    const chunks = Array.from({ length: 1000 }, (_, index) =>
+      index % 3 === 0 ? '😀' : index % 3 === 1 ? 'e\u0301' : 'a'
+    );
+    for (const chunk of chunks) session.append(chunk);
+    const expected = chunks.join('');
+    expect(await session.getSource()).toBe(expected);
+    expect(await session.getSource()).toBe(expected);
+    getStreamState(session).flush();
+    const id = getStreamState(session).binding().sessionId;
+    expect(sourceForSession(id)).toBe(expected);
+    session.append(' after read');
+    expect(await session.getSource()).toBe(expected + ' after read');
+    session.reset('replacement');
+    session.append(' tail');
+    expect(await session.getSource()).toBe('replacement tail');
+    session.finish();
+    expect(sourceForSession(id)).toBe('replacement tail');
+    session.dispose();
+    await expect(session.getSource()).rejects.toMatchObject({
+      code: 'invalid_state',
+    });
+  });
+
   it('reaches the engine as one document after a flush', () => {
     const session = stream();
     session.append('**bo');

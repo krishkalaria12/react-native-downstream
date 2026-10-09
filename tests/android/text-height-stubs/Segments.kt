@@ -24,3 +24,13 @@ internal object RenderedDocument {
     }
   }
 }
+
+/** Host fixture for TextSegment routing; the backend itself runs on real Android. */
+internal class StreamingParagraphLayout(private val heightAtWidth: (Int) -> Int?) {
+  var calls = 0
+  fun frame(width: Int): StreamingParagraphFrame? {
+    calls++
+    return heightAtWidth(width)?.let { StreamingParagraphFrame(it) }
+  }
+}
+internal class StreamingParagraphFrame(val height: Int)

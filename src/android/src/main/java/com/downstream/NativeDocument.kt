@@ -69,6 +69,18 @@ internal class NativeDocument(
   val runCount: Int get() = runs.size / RUN_STRIDE
   val tokenCount: Int get() = tokens.size / TOKEN_STRIDE
 
+  /** Parsed output is the proof; closing markdown may restyle earlier text. */
+  fun isPlainParagraph(): Boolean {
+    if (blockCount != 1 || blockKind(0) != KIND_PARAGRAPH ||
+      containerCount(0) != 0 || blockStart(0) != 0 || blockEnd(0) != text.length ||
+      isCodeElement(0) || isAdmonitionTitle(0) || tokenCount != 0 || formulaTable.isNotEmpty()
+    ) return false
+    for (run in 0 until runCount) {
+      if (runStyles(run) != 0 || runLink(run) >= 0 || runTag(run) >= 0) return false
+    }
+    return true
+  }
+
   /** The preceding block's resolved bottom margin, in points before scaling. */
   val previousBottomMargin: Float
     get() = layouts.getOrElse(blockCount * BLOCK_LAYOUT_STRIDE) { 0.0 }.toFloat()
@@ -595,6 +607,7 @@ internal object DownstreamNative {
         documentId,
         layout.numberAt("fontScale", 1.0).toFloat(),
         themeId = layout.numberAt("themeId", 0.0).toLong(),
+        incrementalParagraphs = layout.numberAt("incrementalParagraphs", 0.0) != 0.0,
         caret = caret,
       ) ?: return
       val width = layout.numberAt("width", 0.0).toFloat()
@@ -645,6 +658,7 @@ internal object DownstreamNative {
         documentId,
         layout.numberAt("fontScale", 1.0).toFloat(),
         themeId = layout.numberAt("themeId", 0.0).toLong(),
+        incrementalParagraphs = layout.numberAt("incrementalParagraphs", 0.0) != 0.0,
       ) ?: return FloatArray(0)
       val hosts = layout.toHostLayout()
       if (hosts.tags.isEmpty()) {
@@ -678,6 +692,7 @@ internal object DownstreamNative {
         documentId,
         layout.numberAt("fontScale", 1.0).toFloat(),
         themeId = layout.numberAt("themeId", 0.0).toLong(),
+        incrementalParagraphs = layout.numberAt("incrementalParagraphs", 0.0) != 0.0,
       ) ?: return FloatArray(0)
       val hosts = layout.toHostLayout()
       if (hosts.isEmpty()) {

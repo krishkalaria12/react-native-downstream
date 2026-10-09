@@ -160,6 +160,10 @@ class DownstreamMarkdownViewManager :
     }
   }
 
+  override fun setIncrementalParagraphs(view: DownstreamMarkdownView, value: Boolean) {
+    view.setIncrementalParagraphs(value)
+  }
+
   override fun setSelectable(view: DownstreamMarkdownView, value: Boolean) {
     view.setSelectable(value)
   }
@@ -399,6 +403,7 @@ class DownstreamMarkdownViewManager :
         state.numberAt("caretPlace", 0.0).toInt(),
       ),
       TableLayoutProps(PixelUtil.toPixelFromDIP(state.numberAt("tableMaxHeight", 300.0)).toFloat()),
+      state.numberAt("incrementalParagraphs", 0.0) != 0.0,
     )
     return null
   }
@@ -451,7 +456,8 @@ class DownstreamMarkdownViewManager :
       localData?.getDouble("caretKind")?.toInt() ?: 0,
       localData?.getDouble("caretPlace")?.toInt() ?: 0,
     )
-    val rendered = RenderedDocument.obtain(context, documentId, fontScale, themeId = themeId, caret = caret)
+    val rendered = RenderedDocument.obtain(context, documentId, fontScale, themeId = themeId, caret = caret,
+      incrementalParagraphs = (localData?.numberAt("incrementalParagraphs", 0.0) ?: 0.0) != 0.0)
       ?: return YogaMeasureOutput.make(0f, 0f)
     val layoutWidth = if (widthMode == YogaMeasureMode.UNDEFINED || !width.isFinite()) {
       rendered.desiredWidth(code, images)

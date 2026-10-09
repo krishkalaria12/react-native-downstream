@@ -5890,6 +5890,13 @@ md_consume_link_reference_definitions(MD_CTX* ctx)
             n_consumed = md_is_link_reference_definition(ctx, lines + n, n_lines - n);
             if(n_consumed < 0)
                 return -1;
+            /* LOCAL PATCH: report confirmed definitions for incremental replay. */
+            if(n_consumed > 0 && ctx->parser.reference_definition != NULL) {
+                int callback_ret = ctx->parser.reference_definition(
+                    lines[n].beg, lines[n + n_consumed - 1].end, ctx->userdata);
+                if(callback_ret != 0)
+                    return callback_ret;
+            }
         }
 
         if(n_consumed == 0)
@@ -7411,6 +7418,7 @@ md_parse(const MD_CHAR* text, MD_SIZE size, const MD_PARSER* parser, void* userd
     MD_CTX ctx;
     int i;
     int ret;
+    SZ reference_output_initial;
 
     if(parser->abi_version != 0) {
         if(parser->debug_log != NULL)
@@ -7428,7 +7436,10 @@ md_parse(const MD_CHAR* text, MD_SIZE size, const MD_PARSER* parser, void* userd
     md_build_mark_char_map(&ctx);
     ctx.doc_ends_with_newline = (size > 0  &&  ISNEWLINE_(text[size-1]));
     ctx.ref_def_hashtable.def_size = sizeof(MD_REF_DEF);
-    ctx.max_ref_def_output = 16 * MIN(size, (MD_SIZE)(1024 * 1024 / 16));
+    /* LOCAL PATCH: preserve the canonical reference budget across splices. */
+    ctx.max_ref_def_output = parser->reference_output_budget != NULL
+        ? *parser->reference_output_budget : 16 * MIN(size, (MD_SIZE)(1024 * 1024 / 16));
+    reference_output_initial = ctx.max_ref_def_output;
     ctx.footnote_hashtable.def_size = sizeof(MD_FOOTNOTE_DEF);
 
     /* Reset all mark stacks and lists. */
@@ -7442,6 +7453,10 @@ md_parse(const MD_CHAR* text, MD_SIZE size, const MD_PARSER* parser, void* userd
 
     /* All the work. */
     ret = md_process_doc(&ctx);
+    /* LOCAL PATCH: report consumption and budget exhaustion to the caller. */
+    if(ret == 0 && parser->reference_output != NULL)
+        parser->reference_output(reference_output_initial - ctx.max_ref_def_output,
+            ctx.max_ref_def_output == 0, userdata);
 
     /* Clean-up. */
     md_free_ref_defs(&ctx);

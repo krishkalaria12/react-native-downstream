@@ -23,7 +23,7 @@ std::string lowerAscii(std::string text) {
 /// Leading and trailing blank lines are what separate a body from its tags, not
 /// content: the renderer wants the body's own first and last lines. Only
 /// whitespace-only lines go; indented content stays exactly as written.
-std::string trimBlankEdgeLines(const std::string &source, size_t start, size_t end) {
+std::string trimBlankEdgeLines(std::string_view source, size_t start, size_t end) {
   while (start < end) {
     const size_t lineEnd = std::min(source.find('\n', start), end);
     size_t content = start;
@@ -57,34 +57,17 @@ std::string trimBlankEdgeLines(const std::string &source, size_t start, size_t e
       end--;
     }
   }
-  return end > start ? source.substr(start, end - start) : std::string();
+  return end > start ? std::string(source.substr(start, end - start)) : std::string();
 }
 
 } // namespace
 
-std::vector<TagSlot> tagSlots(const Document &document, const std::string &source,
-                              const std::vector<std::string> &names, bool live) {
-  return tagSlots(document, source, names, live, document.settledBlocks);
+std::string tagSourceBody(std::string_view source, size_t start, size_t end) {
+  return end > start && end <= source.size() ? trimBlankEdgeLines(source, start, end) : std::string{};
 }
 
-std::vector<TagSlot> tagSlots(const Document &document, const std::string &source,
-                              const std::vector<std::string> &names, bool live, uint32_t settledBlocks) {
-  if (names.empty()) {
-    return {};
-  }
-  std::unordered_set<std::string> wanted;
-  wanted.reserve(names.size());
-  for (const auto &name : names) {
-    wanted.insert(lowerAscii(name));
-  }
-
-  // A hosted view replaces one complete custom segment. Count every frame,
-  // including outer containers around nested tags, so none is hosted partially.
-  struct ContainerRange {
-    size_t from;
-    size_t to;
-    size_t count;
-  };
+std::vector<TagSlotRange> planTagSlots(const Document &document) {
+  struct ContainerRange { size_t from; size_t to; size_t count; };
   std::unordered_map<int32_t, ContainerRange> ranges;
   for (size_t index = 0; index < document.blocks.size(); ++index) {
     for (const Container &frame : document.blocks[index].containers) {
@@ -100,71 +83,112 @@ std::vector<TagSlot> tagSlots(const Document &document, const std::string &sourc
     if (!segment.isCustom()) continue;
     const auto found = ranges.find(segment.customContainer);
     if (found != ranges.end() && found->second.from == segment.from && found->second.to == segment.to &&
-        found->second.count == segment.to - segment.from) {
-      hostable.insert(segment.customContainer);
-    }
+        found->second.count == segment.to - segment.from) hostable.insert(segment.customContainer);
   }
-
-  std::vector<TagSlot> slots;
-  // One pass over the blocks, tracking the open custom container: a container
-  // is reported once, at its first block, with the whole range it holds.
+  std::vector<TagSlotRange> result;
   int32_t openContainer = -1;
   size_t rangeStart = 0;
-  for (size_t index = 0; index <= document.blocks.size(); index++) {
+  for (size_t index = 0; index <= document.blocks.size(); ++index) {
     int32_t innermost = -1;
     if (index < document.blocks.size()) {
-      const Block &block = document.blocks[index];
-      for (auto frame = block.containers.rbegin(); frame != block.containers.rend(); ++frame) {
-        if (frame->kind == ContainerKind::Custom) {
-          innermost = static_cast<int32_t>(frame->id);
-          break;
-        }
+      for (auto frame = document.blocks[index].containers.rbegin();
+           frame != document.blocks[index].containers.rend(); ++frame) {
+        if (frame->kind == ContainerKind::Custom) { innermost = static_cast<int32_t>(frame->id); break; }
       }
     }
-    if (innermost == openContainer) {
-      continue;
-    }
-    if (openContainer >= 0 && hostable.count(openContainer) != 0) {
-      // The container just ended: report it if its tag is wanted. The tag
-      // index comes from the range's own first block, so a nested container
-      // names its own tag rather than its parent's.
+    if (innermost == openContainer) continue;
+    if (openContainer >= 0 && hostable.count(openContainer)) {
       const Block &first = document.blocks[rangeStart];
-      int32_t firstTag = -1;
       for (auto frame = first.containers.rbegin(); frame != first.containers.rend(); ++frame) {
-        if (frame->kind == ContainerKind::Custom && static_cast<int32_t>(frame->id) == openContainer) {
-          firstTag = frame->tag;
-          break;
+        if (frame->kind != ContainerKind::Custom || static_cast<int32_t>(frame->id) != openContainer) continue;
+        if (frame->tag >= 0 && static_cast<size_t>(frame->tag) < document.tags.size()) {
+          result.push_back({static_cast<uint32_t>(openContainer), frame->tag, rangeStart, index - rangeStart});
         }
-      }
-      if (firstTag >= 0 && static_cast<size_t>(firstTag) < document.tags.size()) {
-        const Tag &tag = document.tags[static_cast<size_t>(firstTag)];
-        if (wanted.find(tag.name) != wanted.end()) {
-          TagSlot slot;
-          slot.container = static_cast<uint32_t>(openContainer);
-          slot.tag = firstTag;
-          slot.name = tag.name;
-          slot.attributes = tag.attributes;
-          slot.blockIndex = rangeStart;
-          slot.blockCount = index - rangeStart;
-          // The body's source, exactly as written: the tag record carries the
-          // byte range between the opening and closing lines, so no
-          // re-serialization stands between the writer and the renderer.
-          if (tag.bodyEnd > tag.bodyStart && tag.bodyEnd <= source.size()) {
-            slot.markdown = trimBlankEdgeLines(source, tag.bodyStart, tag.bodyEnd);
-          }
-          // A recorded body end means the closer arrived, even when this is
-          // the live stream's final container. A finished stream also settles
-          // an unclosed container.
-          const bool closed = tag.bodyEnd >= tag.bodyStart && tag.bodyEnd != 0;
-          const bool settled = index <= settledBlocks;
-          slot.incomplete = !closed && (!settled || live);
-          slots.push_back(std::move(slot));
-        }
+        break;
       }
     }
     openContainer = innermost;
     rangeStart = index;
   }
+  return result;
+}
+
+namespace {
+template <typename Emit, typename Retain>
+void visitTagSlots(const Document &document, const std::string &source, const std::vector<std::string> &names,
+                   bool live, uint32_t settledBlocks, const std::vector<std::shared_ptr<const TagSlot>> &previous,
+                   const std::vector<TagSlotRange> *structure, const TagSourceBodies *bodies,
+                   Emit emit, Retain retain) {
+  if (names.empty()) return;
+  std::unordered_set<std::string> wanted;
+  for (const auto &name : names) wanted.insert(lowerAscii(name));
+  const auto planned = structure ? std::vector<TagSlotRange>{} : planTagSlots(document);
+  const auto &ranges = structure ? *structure : planned;
+  std::unordered_map<uint32_t, std::shared_ptr<const TagSlot>> reused;
+  for (const auto &slot : previous) reused.emplace(slot->container, slot);
+  for (const auto &range : ranges) {
+    const Tag &tag = document.tags[range.tag];
+    if (!wanted.count(tag.name)) continue;
+    const bool closed = tag.bodyEnd >= tag.bodyStart && tag.bodyEnd != 0;
+    const bool incomplete = !closed && (range.blockIndex + range.blockCount > settledBlocks || live);
+    std::vector<uint64_t> identities;
+    bool stable = closed;
+    for (size_t at = range.blockIndex; at < range.blockIndex + range.blockCount; ++at) {
+      identities.push_back(document.blocks[at].identity);
+      stable = stable && document.blocks[at].identity != 0;
+    }
+    const auto sourceBody = bodies && static_cast<size_t>(range.tag) < bodies->size() ? (*bodies)[range.tag] : nullptr;
+    const auto old = reused.find(range.container);
+    if (old != reused.end() &&
+        ((stable && old->second->blockIdentities == identities) ||
+         (sourceBody && sourceBody == old->second->sourceBody)) &&
+        old->second->bodyStart == tag.bodyStart && old->second->bodyEnd == tag.bodyEnd &&
+        old->second->name == tag.name && old->second->tag == range.tag &&
+        old->second->attributes == tag.attributes && old->second->blockIndex == range.blockIndex &&
+        old->second->blockCount == range.blockCount && old->second->incomplete == incomplete) {
+      retain(old->second);
+      continue;
+    }
+    TagSlot slot;
+    slot.blockIdentities = std::move(identities);
+    slot.bodyStart = tag.bodyStart;
+    slot.bodyEnd = tag.bodyEnd;
+    slot.sourceBody = sourceBody;
+    slot.container = range.container;
+    slot.tag = range.tag;
+    slot.name = tag.name;
+    slot.attributes = tag.attributes;
+    slot.blockIndex = range.blockIndex;
+    slot.blockCount = range.blockCount;
+    slot.markdown = sourceBody ? *sourceBody : tagSourceBody(source, tag.bodyStart, tag.bodyEnd);
+    slot.incomplete = incomplete;
+    emit(std::move(slot));
+  }
+}
+
+} // namespace
+
+std::vector<TagSlot> tagSlots(const Document &document, const std::string &source,
+                              const std::vector<std::string> &names, bool live) {
+  return tagSlots(document, source, names, live, document.settledBlocks);
+}
+
+std::vector<TagSlot> tagSlots(const Document &document, const std::string &source,
+                              const std::vector<std::string> &names, bool live, uint32_t settledBlocks) {
+  std::vector<TagSlot> slots;
+  visitTagSlots(document, source, names, live, settledBlocks, {}, nullptr, nullptr,
+      [&](TagSlot slot) { slots.push_back(std::move(slot)); }, [](const auto &) {});
+  return slots;
+}
+
+std::vector<std::shared_ptr<const TagSlot>> sharedTagSlots(
+    const Document &document, const std::string &source, const std::vector<std::string> &names, bool live,
+    const std::vector<std::shared_ptr<const TagSlot>> &previous, const std::vector<TagSlotRange> *structure,
+    const TagSourceBodies *bodies) {
+  std::vector<std::shared_ptr<const TagSlot>> slots;
+  visitTagSlots(document, source, names, live, document.settledBlocks, previous, structure, bodies,
+      [&](TagSlot slot) { slots.push_back(std::make_shared<const TagSlot>(std::move(slot))); },
+      [&](const auto &slot) { slots.push_back(slot); });
   return slots;
 }
 

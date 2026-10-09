@@ -102,6 +102,78 @@ test('both candidates run in order over the same source', () => {
   runner.dispose();
 });
 
+test('execution order alternates while pane identities and input stay fixed', () => {
+  const runner = new ComparisonRunner();
+  const config = {
+    fixture,
+    workloadSize: 'fixture' as const,
+    workloadShape: 'repeat' as const,
+    schedule: 'manifest' as const,
+    seed: 7,
+    parseMode: 'incremental' as const,
+  };
+  runner.run(config);
+  expect(runner.getView().active).toBe(0);
+  expect(drain(runner).status).toBe('complete');
+  runner.reset();
+  runner.run(config);
+  expect(runner.getView().active).toBe(1);
+  const view = drain(runner);
+  expect(view.status).toBe('complete');
+  expect(view.runs.map((run) => run?.candidate)).toEqual([
+    'streamdown',
+    'downstream',
+  ]);
+  expect(view.runs.map((run) => run?.metrics.source)).toEqual([source, source]);
+  for (const run of view.runs) {
+    expect(run!.metrics.deliveryMs + run!.metrics.drainMs).toBeCloseTo(
+      run!.metrics.totalMs,
+      1
+    );
+  }
+  runner.dispose();
+});
+
+test('candidate transitions publish empty input before scheduled delivery in both orders', () => {
+  const runner = new ComparisonRunner();
+  const published: ComparisonView[] = [];
+  runner.subscribe(() => published.push(runner.getView()));
+  const config = {
+    fixture,
+    workloadSize: 'fixture' as const,
+    workloadShape: 'repeat' as const,
+    schedule: 'manifest' as const,
+    seed: 7,
+    parseMode: 'incremental' as const,
+  };
+
+  for (const order of [
+    [0, 1],
+    [1, 0],
+  ]) {
+    published.length = 0;
+    runner.run(config);
+    expect(drain(runner).status).toBe('complete');
+
+    const starts = published.filter(
+      (view, index) =>
+        view.active >= 0 && view.active !== published[index - 1]?.active
+    );
+    expect(starts.map((view) => view.active)).toEqual(order);
+    expect(starts.map((view) => view.liveSource)).toEqual(['', '']);
+    for (const index of order) {
+      const candidateViews = published.filter((view) => view.active === index);
+      const firstInput = candidateViews.find((view) => view.liveSource !== '');
+      expect(firstInput?.liveSource).toBe(fixture.chunks[0]);
+    }
+    expect(runner.getView().runs.map((run) => run?.metrics.source)).toEqual([
+      source,
+      source,
+    ]);
+  }
+  runner.dispose();
+});
+
 test('the Downstream candidate hands the source to one native session', () => {
   const runner = new ComparisonRunner();
   runner.run({

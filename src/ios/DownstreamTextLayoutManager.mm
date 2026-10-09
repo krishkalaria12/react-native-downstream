@@ -97,7 +97,8 @@ DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
     SurfaceId /*surfaceId*/, uint32_t chrome, const downstream::CodeLayoutProps &code,
     const downstream::ReaderChoices &choices, const downstream::PlacedCaret &caret,
     const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
-    const downstream::Theme::Handle &theme, const downstream::TableLayoutProps &tables) const {
+    const downstream::Theme::Handle &theme, const downstream::TableLayoutProps &tables,
+    bool /*incrementalParagraphs*/) const {
   @autoreleasepool {
     // The view's own theme, so a themed measure and a themed draw are the same
     // numbers. Colors do not change metrics, so this is valid whether or not the

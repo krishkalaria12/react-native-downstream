@@ -312,6 +312,26 @@ internal class RevealTargets {
 
   fun indexAt(index: Int): Int = indices[index]
 
+  /** Call after invalidating the previous targets, so completed roots get their opaque draw. */
+  fun retainActive(frame: RevealFrame?, segmentEnds: IntArray) {
+    val current = frame
+    if (current == null) {
+      size = 0
+      return
+    }
+    var retained = 0
+    for (index in 0 until size) {
+      val segment = indices[index]
+      if (segment >= segmentEnds.size) continue
+      val from = if (segment == 0) 0 else segmentEnds[segment - 1]
+      val unit = current.firstUnitForBlock(from)
+      if (unit < current.size && current.unitAt(unit).block < segmentEnds[segment]) {
+        indices[retained++] = segment
+      }
+    }
+    size = retained
+  }
+
   fun build(ranges: LongArray, segmentEnds: IntArray) {
     size = 0
     val count = ranges.size / 3

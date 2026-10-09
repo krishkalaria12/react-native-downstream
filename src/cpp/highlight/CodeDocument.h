@@ -25,6 +25,9 @@ class CodeDocument {
 public:
   /// Replaces the text, discarding every cached style and line state.
   void reset(std::string_view utf8);
+  /// Takes the conversion buffer directly when the caller owns it, avoiding
+  /// another full-text copy on a rebuilt fence.
+  void resetOwned(std::string utf8);
   /// Appends to the text, keeping every style and line state below the old
   /// end. New bytes carry no style, which is what a lexer expects for text it
   /// has not reached.

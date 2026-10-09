@@ -1,4 +1,5 @@
 #import "DSSegmentViews.h"
+#import "DSSegmentViewport.h"
 
 #import "DSRenderedDocument.h"
 
@@ -297,12 +298,27 @@ NSString *symbolForExpand(BOOL expanded) {
   /// owned by a view this one owns and a fade that outlived its provider would
   /// draw into nothing.
   __weak id<DSRevealProvider> _revealProvider;
+  NSMutableArray<DSTextSegmentView *> *_recycledTextViews;
+  NSMapTable<DSTextSegment *, NSNumber *> *_segmentEligibility;
+  CGRect _segmentViewport;
+  BOOL _segmentViewportKnown;
+  BOOL _segmentAccessibilityExpanded;
+  BOOL _segmentAccessibilityActive;
+  BOOL _segmentLayoutSync;
+  BOOL _hasDeferrableText;
+  DSRenderedDocument *_virtualizedDocument;
+  NSArray<NSValue *> *_virtualizedFrames;
+  NSRange _virtualizedInterval;
+  NSIndexSet *_viewportOnlyIndices;
+  BOOL _virtualizedFramesOrdered;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
   if (self = [super initWithFrame:frame]) {
     self.backgroundColor = UIColor.clearColor;
     _segmentViews = [NSMutableArray new];
+    _recycledTextViews = [NSMutableArray new];
+    _segmentEligibility = [NSMapTable weakToStrongObjectsMapTable];
   }
   return self;
 }
@@ -378,6 +394,7 @@ static Class segmentViewClassFor(id segment) {
 }
 
 - (void)applyStateToSegmentView:(UIView<DSSegmentView> *)view atIndex:(NSUInteger)index {
+  if ([view isKindOfClass:DSDeferredTextView.class]) return;
   if ([view isKindOfClass:DSTextSegmentView.class]) {
     DSTextSegmentView *text = (DSTextSegmentView *)view;
     text.selectable = _selectable && [self isSegmentSettledAtIndex:index];
@@ -467,25 +484,61 @@ static Class segmentViewClassFor(id segment) {
   if (rendered == _rendered) {
     return;
   }
+  DSRenderedDocument *previous = _rendered;
   _rendered = rendered;
+  [self updateDeferrableText];
+  [self updateSegmentViewportClock];
+  [self reconcileSegmentViews:previous];
+}
+
+- (void)updateDeferrableText {
+  _hasDeferrableText = NO;
+  if (_selectable) return;
+  for (id segment in _rendered.segments) {
+    if ([segment isKindOfClass:DSTextSegment.class] && [self canDeferTextSegment:segment]) {
+      _hasDeferrableText = YES; break;
+    }
+  }
+}
+
+- (void)reconcileSegmentViews:(DSRenderedDocument *)previous {
+  DSRenderedDocument *rendered = _rendered;
   NSArray *segments = rendered.segments ?: @[];
+  NSArray<NSValue *> *frames = _hasDeferrableText && segments.count > 8 && !_selectable && !_segmentAccessibilityExpanded && !_segmentAccessibilityActive &&
+      _segmentViewportKnown && self.bounds.size.width > 0
+      ? [rendered segmentFramesForWidth:self.bounds.size.width chrome:_chrome code:_codeLayout images:_imageState
+                                 hosts:_hostLayout tables:_tableLayout] : nil;
+  const CGFloat overscan = std::max(CGFloat(64), _segmentViewport.size.height / 2);
   // Ordinals first: a code card's wrap state is looked up by ordinal, and the
   // view loop below is where the cards are created.
-  NSMutableArray<NSNumber *> *ordinals = [NSMutableArray arrayWithCapacity:segments.count];
-  for (id segment in segments) {
-    [ordinals addObject:[segment isKindOfClass:DSCodeSegment.class]
-                            ? @(((DSCodeSegment *)segment).codeOrdinal)
-                            : @(-1)];
+  if (_viewportOnlyIndices == nil) {
+    NSMutableArray<NSNumber *> *ordinals = [NSMutableArray arrayWithCapacity:segments.count];
+    for (id segment in segments) {
+      [ordinals addObject:[segment isKindOfClass:DSCodeSegment.class] ? @(((DSCodeSegment *)segment).codeOrdinal) : @(-1)];
+    }
+    _codeOrdinals = ordinals;
   }
-  _codeOrdinals = ordinals;
-  for (NSUInteger index = 0; index < segments.count; index++) {
+  for (NSUInteger index = _viewportOnlyIndices != nil ? _viewportOnlyIndices.firstIndex : 0; index < segments.count;
+       index = _viewportOnlyIndices != nil ? [_viewportOnlyIndices indexGreaterThanIndex:index] : index + 1) {
     id segment = segments[index];
     UIView<DSSegmentView> *view = index < _segmentViews.count ? _segmentViews[index] : nil;
+    const CGRect frame = index < frames.count ? frames[index].CGRectValue : CGRectZero;
+    if (frames != nil && [segment isKindOfClass:DSTextSegment.class] && [self canDeferTextSegment:segment] &&
+        (CGRectIsEmpty(_segmentViewport) || CGRectGetMinY(frame) > CGRectGetMaxY(_segmentViewport) + overscan ||
+         CGRectGetMaxY(frame) < CGRectGetMinY(_segmentViewport) - overscan)) {
+      if (![view isKindOfClass:DSDeferredTextView.class]) {
+        [self recycleTextView:view pool:YES];
+        view = [DSDeferredTextView new];
+        if (index < _segmentViews.count) _segmentViews[index] = view; else [_segmentViews addObject:view];
+      }
+      continue;
+    }
     const BOOL reusable = view != nil && [view isKindOfClass:segmentViewClassFor(segment)];
     if (!reusable) {
-      [view removeFromSuperview];
+      [self recycleTextView:view pool:NO];
       if ([segment isKindOfClass:DSTextSegment.class]) {
-        DSTextSegmentView *textView = [DSTextSegmentView new];
+        DSTextSegmentView *textView = _recycledTextViews.lastObject ?: [DSTextSegmentView new];
+        [_recycledTextViews removeObjectIdenticalTo:textView];
         textView.linkDelegate = _linkDelegate;
         view = textView;
       } else if ([segment isKindOfClass:DSCodeSegment.class]) {
@@ -521,9 +574,21 @@ static Class segmentViewClassFor(id segment) {
       }
       [self addSubview:view];
     }
+    // Shared committed segments retain their view state and selection. Only a
+    // settlement transition needs state reapplied; other setters propagate
+    // changed choices, chrome and hosting independently.
+    const BOOL unchanged = reusable && index < previous.segments.count && previous.segments[index] == segment &&
+        index < previous.segmentBlockIndexes.count && index < rendered.segmentBlockIndexes.count &&
+        [previous.segmentBlockIndexes[index] isEqual:rendered.segmentBlockIndexes[index]] &&
+        (([previous.segmentBlockIndexes[index] unsignedIntegerValue] + 1 <= previous.settledBlocks) ==
+         ([rendered.segmentBlockIndexes[index] unsignedIntegerValue] + 1 <= rendered.settledBlocks));
+    if (unchanged) {
+      continue;
+    }
     if ([segment isKindOfClass:DSTextSegment.class]) {
       [(DSTextSegmentView *)view setSegment:segment];
     } else if ([segment isKindOfClass:DSCodeSegment.class]) {
+      ((DSCodeSegmentView *)view).hosted = [self hostsCodeOrdinalAtIndex:index];
       [(DSCodeSegmentView *)view setSegment:segment];
     } else if ([segment isKindOfClass:DSMathSegment.class]) {
       [(DSMathSegmentView *)view setSegment:segment];
@@ -569,13 +634,76 @@ static Class segmentViewClassFor(id segment) {
     [self applyStateToSegmentView:view atIndex:index];
   }
   while (_segmentViews.count > segments.count) {
-    [_segmentViews.lastObject removeFromSuperview];
+    [self recycleTextView:_segmentViews.lastObject pool:NO];
     [_segmentViews removeLastObject];
   }
   while (_codeOrdinals.count > segments.count) {
     [_codeOrdinals removeLastObject];
   }
-  [self setNeedsLayout];
+  _virtualizedDocument = frames != nil ? rendered : nil;
+  if (frames != _virtualizedFrames) _virtualizedFramesOrdered = frames != nil && DSSegmentFramesAreOrdered(frames);
+  _virtualizedFrames = frames;
+  _virtualizedInterval = frames != nil && _virtualizedFramesOrdered ? DSSegmentVisibleRange(frames, _segmentViewport) : NSMakeRange(0, 0);
+  if (!_segmentLayoutSync) [self setNeedsLayout];
+}
+
+- (void)recycleTextView:(UIView *)view pool:(BOOL)pool {
+  [view removeFromSuperview];
+  if (pool && [view isKindOfClass:DSTextSegmentView.class] && _recycledTextViews.count < 8) {
+    [_recycledTextViews addObject:(DSTextSegmentView *)view];
+  }
+}
+
+- (BOOL)canDeferTextSegment:(DSTextSegment *)segment {
+  NSNumber *cached = [_segmentEligibility objectForKey:segment];
+  if (cached != nil) return cached.boolValue;
+  const BOOL eligible = DSCanDeferTextSegment(segment);
+  [_segmentEligibility setObject:@(eligible) forKey:segment];
+  return eligible;
+}
+
+- (void)refreshSegmentViewport {
+  const BOOL known = self.window != nil && self.bounds.size.width > 0 && self.bounds.size.height > 0;
+  const CGRect visible = known ? DSSegmentVisibleRect(self) : self.bounds;
+  const BOOL accessible = UIAccessibilityIsVoiceOverRunning() || UIAccessibilityIsSwitchControlRunning();
+  if (known == _segmentViewportKnown && CGRectEqualToRect(visible, _segmentViewport) &&
+      accessible == _segmentAccessibilityActive) return;
+  _segmentViewportKnown = known; _segmentViewport = visible; _segmentAccessibilityActive = accessible;
+  NSArray<NSValue *> *frames = !_selectable && !accessible && !_segmentAccessibilityExpanded && known
+      ? [_rendered segmentFramesForWidth:self.bounds.size.width chrome:_chrome code:_codeLayout images:_imageState
+                                    hosts:_hostLayout tables:_tableLayout] : nil;
+  if (_rendered == _virtualizedDocument && frames != nil && frames == _virtualizedFrames && _virtualizedFramesOrdered) {
+    NSMutableIndexSet *changed = [NSMutableIndexSet indexSetWithIndexesInRange:_virtualizedInterval];
+    [changed addIndexesInRange:DSSegmentVisibleRange(frames, visible)];
+    _viewportOnlyIndices = changed;
+  }
+  @try {
+    [self reconcileSegmentViews:_rendered];
+    [self layoutIfNeeded];
+  } @finally { _viewportOnlyIndices = nil; }
+}
+
+- (void)didMoveToWindow {
+  [super didMoveToWindow];
+  [self updateSegmentViewportClock];
+  [self refreshSegmentViewport];
+}
+
+- (void)updateSegmentViewportClock {
+  DSObserveSegmentViewport(self, self.window != nil && !_selectable &&
+      !_segmentAccessibilityExpanded && _hasDeferrableText && _rendered.segments.count > 8);
+}
+
+- (NSArray *)accessibilityElements {
+  // Explicit enumeration must retain the entire document's reading order even
+  // before VoiceOver's status notification arrives.
+  if (!_segmentAccessibilityExpanded) {
+    _segmentAccessibilityExpanded = YES;
+    [self updateSegmentViewportClock];
+    [self reconcileSegmentViews:_rendered];
+    [self layoutIfNeeded];
+  }
+  return [super accessibilityElements];
 }
 
 /// Segment starts are in document order. Find the one segment owning the block
@@ -656,6 +784,9 @@ static Class segmentViewClassFor(id segment) {
 /// TextKit draws its own selection, so a themed `colors.selection` has to reach
 /// the text views rather than the segments: there is no other place to set it.
 - (void)setSelectionColor:(UIColor *)selectionColor {
+  if (_selectionColor == selectionColor || [_selectionColor isEqual:selectionColor]) {
+    return;
+  }
   _selectionColor = selectionColor;
   for (UIView<DSSegmentView> *view in _segmentViews) {
     if ([view isKindOfClass:DSTextSegmentView.class]) {
@@ -668,11 +799,20 @@ static Class segmentViewClassFor(id segment) {
 }
 
 - (void)setSelectable:(BOOL)selectable {
+  if (_selectable == selectable) {
+    return;
+  }
   _selectable = selectable;
+  [self updateDeferrableText];
+  [self updateSegmentViewportClock];
+  [self reconcileSegmentViews:_rendered];
   [self reapplyState];
 }
 
 - (void)setControls:(uint32_t)controls {
+  if (_controls == controls) {
+    return;
+  }
   _controls = controls;
   [self reapplyState];
 }
@@ -837,7 +977,7 @@ static Class segmentViewClassFor(id segment) {
 - (void)setLinkDelegate:(id<DSLinkDelegate>)linkDelegate {
   _linkDelegate = linkDelegate;
   for (UIView *view in _segmentViews) {
-    [(id)view setLinkDelegate:linkDelegate];
+    if ([view respondsToSelector:@selector(setLinkDelegate:)]) [(id)view setLinkDelegate:linkDelegate];
   }
 }
 
@@ -845,6 +985,11 @@ static Class segmentViewClassFor(id segment) {
   [super layoutSubviews];
   if (_rendered == nil) {
     return;
+  }
+  if (!_selectable && _segmentViewportKnown && !_segmentAccessibilityExpanded && !_segmentAccessibilityActive) {
+    _segmentLayoutSync = YES;
+    [self reconcileSegmentViews:_rendered];
+    _segmentLayoutSync = NO;
   }
   // The frames are measured under the same wrap choices the code cards are
   // drawn with, so a block's frame and its drawn layout are one decision. The
@@ -857,14 +1002,22 @@ static Class segmentViewClassFor(id segment) {
                                                            images:_imageState
                                                               hosts:_hostLayout
                                                              tables:_tableLayout];
-  for (NSUInteger index = 0; index < _segmentViews.count && index < frames.count; index++) {
+  for (NSUInteger index = _viewportOnlyIndices != nil ? _viewportOnlyIndices.firstIndex : 0;
+       index < _segmentViews.count && index < frames.count;
+       index = _viewportOnlyIndices != nil ? [_viewportOnlyIndices indexGreaterThanIndex:index] : index + 1) {
     UIView *view = _segmentViews[index];
+    if ([view isKindOfClass:DSDeferredTextView.class]) continue;
     const CGRect frame = frames[index].CGRectValue;
     id segment = _rendered.segments[index];
     const BOOL hostedTag = [segment isKindOfClass:DSTextSegment.class] &&
         _hostLayout.hostsTag(((DSTextSegment *)segment).customContainer);
-    view.hidden = frame.size.height == 0 || hostedTag;
-    view.frame = frame;
+    const BOOL hidden = frame.size.height == 0 || hostedTag;
+    if (view.hidden != hidden) {
+      view.hidden = hidden;
+    }
+    if (!CGRectEqualToRect(view.frame, frame)) {
+      view.frame = frame;
+    }
   }
 }
 

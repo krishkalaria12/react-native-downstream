@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.downstream.paragraphruntime">
+  <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="36" />
+  <application android:label="Downstream paragraph checks" android:hasCode="true" android:debuggable="true" />
+  <instrumentation android:name="com.downstream.ParagraphInstrumentation" android:targetPackage="com.downstream.paragraphruntime" android:label="Paragraph runtime checks" />
+</manifest>

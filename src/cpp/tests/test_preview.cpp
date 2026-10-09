@@ -1192,8 +1192,8 @@ bool sessionIntegration() {
     CHECK(visible(*parser.document()) == "**bold word", "and a finished reset source does not");
   }
 
-  // So does a tail too long to keep, which falls back to a full parse over the
-  // committed prefix. The committed blocks come through untouched.
+  // A long tail keeps the proven prefix while parsing and previewing only the
+  // unstable suffix. Its result must still match a full previewed parse.
   {
     IncrementalParser parser{ParseMode::IncrementalTail, kNoMath};
     parser.setPreview(PreviewOptions::all());
@@ -1205,14 +1205,26 @@ bool sessionIntegration() {
     parser.parse(false);
     const DocumentHandle settled = parser.document();
     CHECK(parser.committedBytes() > 0, "the prefix commits before the long tail");
+    const uint64_t fullParses = parser.counters().fullParses;
+    const uint64_t tailParses = parser.counters().tailParses;
     parser.append(std::string(70 * 1024, 'x') + " **bold wor");
     parser.parse(false);
-    CHECK(parser.counters().fallbackCount(ParseFallback::TailLimit) == 1, "the long tail takes the fallback");
+    CHECK(parser.counters().fallbackCount(ParseFallback::TailLimit) == 0,
+          "a proven prefix avoids the long-tail full fallback");
+    CHECK(parser.counters().fullParses == fullParses && parser.counters().tailParses == tailParses + 1,
+          "only the unstable long tail is parsed");
     const Block &last = parser.document()->blocks.back();
     CHECK(last.text.size() > 4 && last.text.substr(last.text.size() - 9) == u" bold wor",
           "a tail past the limit still previews");
     CHECK(settled->blocks[0].identity == parser.document()->blocks[0].identity,
-          "the committed block keeps its identity through the fallback");
+          "the committed block keeps its identity through the long-tail parse");
+    const PreviewResult direct = kPreview.apply(parser.source(), 0, 0, kNoMath);
+    CHECK(scan::sameDocument(*direct.parsed.document, *parser.document()),
+          "the long-tail preview matches a full previewed parse");
+    parser.parse(true);
+    const ParseResult finished = parseMarkdown(parser.source(), kNoMath);
+    CHECK(scan::sameDocument(*finished.document, *parser.document()),
+          "the long-tail preview finishes to the canonical full parse");
   }
 
   // A block a reader has seen settle is never the one a repair lands on.

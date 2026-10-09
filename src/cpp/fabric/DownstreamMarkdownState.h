@@ -58,6 +58,7 @@ public:
 
   downstream::DocumentHandle document;
   Float fontSizeMultiplier{1.0};
+  bool incrementalParagraphs{false};
   /// See `chromeForProps`. The resolved value travels with the state so the view
   /// lays out at the height the node measured.
   uint32_t chrome{downstream::kChromeNone};
@@ -234,6 +235,9 @@ public:
     if (auto value = data.get_ptr("chrome")) {
       chrome = static_cast<uint32_t>(value->asDouble());
     }
+    if (auto value = data.get_ptr("incrementalParagraphs")) {
+      incrementalParagraphs = value->asDouble() != 0;
+    }
     if (auto value = data.get_ptr("codeBlockWrap")) {
       code.wrap = value->asDouble() != 0;
     }
@@ -294,6 +298,7 @@ public:
         "fontScale", static_cast<double>(fontSizeMultiplier))("chrome", static_cast<double>(chrome))(
         // The booleans travel as numbers, so the whole state crosses JNI as one
         // type.
+        "incrementalParagraphs", incrementalParagraphs ? 1.0 : 0.0)(
         "codeBlockWrap", code.wrap ? 1.0 : 0.0)("lineNumbers", code.lineNumbers ? 1.0 : 0.0)(
         "codeBlockMaxHeight", static_cast<double>(code.maxHeight))(
         "wrapToggles", writeOrdinals(choices.wrapToggles))("expanded", writeOrdinals(choices.codeExpanded))(

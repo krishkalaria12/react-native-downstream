@@ -90,6 +90,8 @@ struct LayoutHint {
    * the wrong direction prepared a height the view never draws.
    */
   BlockDirection direction{BlockDirection::Inherit};
+  /// Android-only greedy incremental wrapping for eligible unfinished paragraphs.
+  bool incrementalParagraphs{false};
 
   /// The code bundle for `code` and `choices`, which is what a caller that has
   /// a hint rather than a layout resolves against.
@@ -123,7 +125,8 @@ struct LayoutHint {
   bool operator==(const LayoutHint &other) const {
     return fontScale == other.fontScale && width == other.width && chrome == other.chrome &&
            code == other.code && tables == other.tables && choices == other.choices && caret == other.caret &&
-           images == other.images && direction == other.direction && themeId() == other.themeId();
+           images == other.images && direction == other.direction &&
+           incrementalParagraphs == other.incrementalParagraphs && themeId() == other.themeId();
   }
 
   /// The theme's id, or 0 for the default one, which is its id too.

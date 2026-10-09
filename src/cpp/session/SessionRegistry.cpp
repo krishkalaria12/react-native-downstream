@@ -7,10 +7,12 @@
 #include "WorkerPool.h"
 
 #include <algorithm>
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -69,6 +71,15 @@ public:
     SessionTrace::record(id_, generation, 0, "reset_received");
     snapshot_.reset();
     snapshotSource_.reset();
+    snapshotTagBodies_.reset();
+    snapshotTagStructure_.reset();
+    {
+      std::lock_guard<std::mutex> slots(slotMutex_);
+      fenceCache_.clear();
+      tagCache_.clear();
+      tagStructure_.clear();
+      tagStructureDocument_ = 0;
+    }
     // The new source has shown nothing, so a view that binds to it fades from
     // its first word rather than starting from the previous one's tail.
     shown_.reset();
@@ -90,12 +101,26 @@ public:
     return true;
   }
 
-  PublishedSessionSnapshot publishedSnapshot(uint64_t generation, uint64_t sequence) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (generation != readyGeneration_ || sequence != readySequence_ || generation != generation_) {
-      return {};
+  PublishedSessionSnapshot publishedSnapshot(uint64_t generation, uint64_t sequence, bool includeSource = true) const {
+    PublishedSessionSnapshot result;
+    std::shared_ptr<const SharedList<std::string>::Prefix> source;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (generation != readyGeneration_ || sequence != readySequence_ || generation != generation_) return {};
+      result = {snapshot_, nullptr, snapshotLive_, snapshotTagBodies_, snapshotTagStructure_};
+      if (includeSource) source = snapshotSource_;
     }
-    return {snapshot_, snapshotSource_, snapshotLive_};
+    // Compatibility consumers request canonical source explicitly. Native slot
+    // queries read shared body slices and never flatten the response.
+    if (source) {
+      std::string joined;
+      size_t bytes = 0;
+      for (size_t i = 0; i < source->size(); ++i) bytes += (*source)[i].size();
+      joined.reserve(bytes);
+      for (size_t i = 0; i < source->size(); ++i) joined.append((*source)[i]);
+      result.source = std::make_shared<const std::string>(std::move(joined));
+    }
+    return result;
   }
 
   DocumentHandle snapshot(uint64_t generation, uint64_t sequence) const {
@@ -103,6 +128,44 @@ public:
     return generation == readyGeneration_ && sequence == readySequence_ && generation == generation_
                ? snapshot_
                : nullptr;
+  }
+
+  SlotChanges<FenceSlot> fenceSlotChanges(uint64_t generation, uint64_t sequence,
+                                         const std::vector<std::string> &languages, uint64_t baseToken) {
+    const auto published = publishedSnapshot(generation, sequence, false);
+    if (!published.document) return {};
+    std::lock_guard<std::mutex> lock(slotMutex_);
+    return fenceCache_.query(published.document->id, generation, published.live, languages, baseToken,
+        [&](const auto &previous) { return sharedFenceSlots(*published.document, languages, published.live, previous); });
+  }
+
+  SlotChanges<TagSlot> tagSlotChanges(uint64_t generation, uint64_t sequence,
+                                     const std::vector<std::string> &names, uint64_t baseToken) {
+    const auto published = publishedSnapshot(generation, sequence, false);
+    if (!published.document || !published.tagBodies) return {};
+    std::lock_guard<std::mutex> lock(slotMutex_);
+    if (tagStructureDocument_ != published.document->id) {
+      tagStructure_ = published.tagStructure ? *published.tagStructure : std::vector<TagSlotRange>{};
+      tagStructureDocument_ = published.document->id;
+      ++tagStructureBuilds_;
+    }
+    return tagCache_.query(published.document->id, generation, published.live, names, baseToken,
+        [&](const auto &previous) { return sharedTagSlots(*published.document, {}, names, published.live, previous, &tagStructure_, published.tagBodies.get()); });
+  }
+
+  SlotQueryWork slotWork() const {
+    std::lock_guard<std::mutex> lock(slotMutex_);
+    SlotQueryWork result = fenceCache_.work();
+    const auto &tags = tagCache_.work();
+    result.payloadBuildBytes += tags.payloadBuildBytes;
+    result.payloadExportBytes += tags.payloadExportBytes;
+    result.reusedPayloads += tags.reusedPayloads;
+    result.snapshotBuilds += tags.snapshotBuilds;
+    result.retainedBytes += tags.retainedBytes + tagStructure_.size() * sizeof(TagSlotRange);
+    result.structureBuilds = tagStructureBuilds_;
+    result.sourceCaptureBytes = sourceCaptureBytes_.load(std::memory_order_relaxed);
+    result.tagBodyCopyBytes = tagBodyCopyBytes_.load(std::memory_order_relaxed);
+    return result;
   }
 
   /// Whether the writer closed the stream at this generation. The fence-slot
@@ -167,7 +230,13 @@ public:
 
   void noteLayout(LayoutHint hint) {
     std::lock_guard<std::mutex> lock(mutex_);
-    layout_ = hint;
+    layoutHints_.erase(std::remove_if(layoutHints_.begin(), layoutHints_.end(), [&](auto old) {
+      const bool sameWidth = old.width == hint.width;
+      old.width = hint.width;
+      return sameWidth || !(old == hint);
+    }), layoutHints_.end());
+    layoutHints_.insert(layoutHints_.begin(), std::move(hint));
+    if (layoutHints_.size() > 2) layoutHints_.resize(2);
   }
 
   void noteShown(const DocumentHandle &document) {
@@ -224,9 +293,7 @@ private:
       sequence = sequence_;
       finished = finished_;
       dirty_ = false;
-      if (layout_) {
-        hints.push_back(*layout_);
-      }
+      hints = layoutHints_;
     }
 
     if (preview) {
@@ -238,17 +305,59 @@ private:
     SessionTrace::record(id_, generation, sequence, "parse_start");
     if (replacement) {
       parser_.replace(*replacement);
+      tagSource_.reset();
+      tagBodyRanges_.clear();
+    }
+    if (tagSource_ && !pending.empty()) {
+      std::vector<std::string> chunk;
+      chunk.push_back(pending);
+      tagSource_ = SharedList<std::string>::Prefix::extend(tagSource_, std::move(chunk));
+      sourceCaptureBytes_.fetch_add(pending.size(), std::memory_order_relaxed);
     }
     parser_.append(pending);
     auto result = parser_.parse(finished);
     SessionTrace::record(id_, generation, sequence, "parse_end");
     const bool parsed = result.status == ParseStatus::Ok && result.document;
-    // Only custom-tag queries need canonical bytes. Copy on the worker before
-    // publication, without holding up appends or ordinary Markdown streams.
-    std::shared_ptr<const std::string> source;
+    std::shared_ptr<const SharedList<std::string>::Prefix> source;
+    std::shared_ptr<const TagSourceBodies> tagBodies;
+    std::shared_ptr<const std::vector<TagSlotRange>> tagStructure;
     if (parsed && std::any_of(result.document->tags.begin(), result.document->tags.end(),
                               [](const Tag &tag) { return tag.block; })) {
-      source = std::make_shared<const std::string>(parser_.source());
+      // Capture the prefix once when custom tags first appear. Later snapshots
+      // share every old chunk and only store bytes accepted by this pass.
+      if (!tagSource_) {
+        std::vector<std::string> chunk;
+        chunk.emplace_back(parser_.source());
+        tagSource_ = SharedList<std::string>::Prefix::extend(nullptr, std::move(chunk));
+        sourceCaptureBytes_.fetch_add(parser_.source().size(), std::memory_order_relaxed);
+      }
+      source = tagSource_;
+      tagStructure = std::make_shared<const std::vector<TagSlotRange>>(planTagSlots(*result.document));
+      std::unordered_set<int32_t> needed;
+      for (const auto &range : *tagStructure) needed.insert(range.tag);
+      TagSourceBodies bodies;
+      std::unordered_map<uint64_t, std::shared_ptr<const std::string>> nextRanges;
+      bodies.reserve(result.document->tags.size());
+      size_t tagIndex = 0;
+      for (const Tag &tag : result.document->tags) {
+        if (!needed.count(static_cast<int32_t>(tagIndex++))) {
+          static const auto empty = std::make_shared<const std::string>();
+          bodies.push_back(empty);
+          continue;
+        }
+        const uint64_t range = (static_cast<uint64_t>(tag.bodyStart) << 32) | tag.bodyEnd;
+        const auto old = tagBodyRanges_.find(range);
+        auto body = old != tagBodyRanges_.end() ? old->second :
+            std::make_shared<const std::string>(tag.block ? tagSourceBody(parser_.source(), tag.bodyStart, tag.bodyEnd)
+                                                        : std::string{});
+        if (old == tagBodyRanges_.end()) tagBodyCopyBytes_.fetch_add(body->size(), std::memory_order_relaxed);
+        bodies.push_back(body);
+        if (tag.block && tag.bodyEnd > tag.bodyStart && tag.bodyEnd <= parser_.source().size()) {
+          nextRanges.emplace(range, std::move(body));
+        }
+      }
+      tagBodyRanges_ = std::move(nextRanges);
+      tagBodies = std::make_shared<const TagSourceBodies>(std::move(bodies));
     }
 
     if (parsed && isCurrentGeneration(generation)) {
@@ -271,6 +380,8 @@ private:
       if (parsed) {
         snapshot_ = std::move(result.document);
         snapshotSource_ = std::move(source);
+        snapshotTagBodies_ = std::move(tagBodies);
+        snapshotTagStructure_ = std::move(tagStructure);
         snapshotLive_ = !finished;
         SessionTrace::bindDocument(snapshot_, id_, generation, sequence);
         SessionTrace::record(id_, generation, sequence, "snapshot_ready");
@@ -291,6 +402,14 @@ private:
     return !stopped_ && generation == generation_;
   }
 
+  mutable std::mutex slotMutex_;
+  SessionSlotCache<FenceSlot> fenceCache_;
+  SessionSlotCache<TagSlot> tagCache_;
+  uint64_t tagStructureDocument_{0};
+  uint64_t tagStructureBuilds_{0};
+  std::atomic<uint64_t> sourceCaptureBytes_{0};
+  std::atomic<uint64_t> tagBodyCopyBytes_{0};
+  std::vector<TagSlotRange> tagStructure_;
   const std::string id_;
   // Used only by the job in progress; jobs for one session never overlap.
   IncrementalParser parser_;
@@ -304,12 +423,17 @@ private:
   uint64_t readyGeneration_{0};
   uint64_t readySequence_{0};
   DocumentHandle snapshot_;
-  std::shared_ptr<const std::string> snapshotSource_;
+  std::shared_ptr<const SharedList<std::string>::Prefix> snapshotSource_;
+  std::shared_ptr<const TagSourceBodies> snapshotTagBodies_;
+  std::shared_ptr<const std::vector<TagSlotRange>> snapshotTagStructure_;
+  // Worker-only append lineage. A replacement starts a new immutable prefix.
+  std::shared_ptr<const SharedList<std::string>::Prefix> tagSource_;
+  std::unordered_map<uint64_t, std::shared_ptr<const std::string>> tagBodyRanges_;
   bool snapshotLive_{false};
   // The last document a view showed for this session. Not the snapshot: a view
   // may be showing a snapshot that has since been superseded.
   DocumentHandle shown_;
-  std::optional<LayoutHint> layout_;
+  std::vector<LayoutHint> layoutHints_;
   std::optional<remend::PreviewOptions> preview_;
   // Retain the configured options after the worker consumes an update, so
   // changing tags alone cannot reset the flags to their defaults.
@@ -382,9 +506,26 @@ DocumentHandle SessionRegistry::snapshot(const std::string &id, uint64_t generat
 }
 
 PublishedSessionSnapshot SessionRegistry::publishedSnapshot(const std::string &id, uint64_t generation,
-                                                            uint64_t sequence) {
+                                                            uint64_t sequence, bool includeSource) {
   const auto session = findSession(id);
-  return session ? session->publishedSnapshot(generation, sequence) : PublishedSessionSnapshot{};
+  return session ? session->publishedSnapshot(generation, sequence, includeSource) : PublishedSessionSnapshot{};
+}
+
+SlotChanges<FenceSlot> SessionRegistry::fenceSlotChanges(const std::string &id, uint64_t generation,
+    uint64_t sequence, const std::vector<std::string> &languages, uint64_t baseToken) {
+  const auto session = findSession(id);
+  return session ? session->fenceSlotChanges(generation, sequence, languages, baseToken) : SlotChanges<FenceSlot>{};
+}
+
+SlotChanges<TagSlot> SessionRegistry::tagSlotChanges(const std::string &id, uint64_t generation,
+    uint64_t sequence, const std::vector<std::string> &names, uint64_t baseToken) {
+  const auto session = findSession(id);
+  return session ? session->tagSlotChanges(generation, sequence, names, baseToken) : SlotChanges<TagSlot>{};
+}
+
+SlotQueryWork SessionRegistry::slotWork(const std::string &id) {
+  const auto session = findSession(id);
+  return session ? session->slotWork() : SlotQueryWork{};
 }
 
 bool SessionRegistry::isFinished(const std::string &id) {

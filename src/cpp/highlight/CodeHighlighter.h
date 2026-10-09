@@ -27,6 +27,9 @@ enum class HighlightStop : uint8_t {
   /// The pass spent its budget, so the rest of the block stays plain until the
   /// next one resumes it.
   Budget,
+  /// A long unfinished line kept its provisional tokens until the next live
+  /// refresh. Newlines and settled/checked calls always refresh it.
+  Deferred,
   Count,
 };
 
@@ -83,6 +86,20 @@ struct HighlightState {
   /// rather than starting the block over.
   HighlightStop lastStop{HighlightStop::Skipped};
   bool resumed{false};
+  /// Work requested by the last pass. bytesLexed counts Lex() input windows,
+  /// not any additional backward reads performed inside a lexer.
+  uint64_t bytesLexed{0};
+  uint64_t runsBuilt{0};
+  uint64_t tokenBytesCopied{0};
+  uint64_t textBytesCopied{0};
+
+  /// Only used by the parser's live append policy. This does not make any
+  /// tokens on the unfinished line immutable.
+  size_t nextLiveLineRefresh{0};
+  size_t liveLineStart{0};
+  /// A verified append cannot bring an oversized UTF-8 block back below the
+  /// byte limit, even when its UTF-16 length is still below that limit.
+  bool overByteLimit{false};
 
 private:
   friend class CodeHighlighter;
@@ -118,15 +135,27 @@ public:
 
 private:
   friend class IncrementalParser;
-  /// The parser copied the previous snapshot's tokens and appended its text.
+  /// The parser retained the previous snapshot's immutable tokens and appended
+  /// its text pages. delta contains only the appended UTF-16 code units.
   /// Exact snapshot lineage permits skipping the whole-prefix comparison.
-  /// Other callers use tokenize.
-  void tokenizeAppend(std::string_view info, std::u16string_view text, HighlightState *state,
-                      std::vector<TokenRun> *runs, double budgetMs, uint64_t previousDocumentId,
-                      size_t previousLength, uint64_t nextDocumentId);
+  /// Live calls can defer a long unfinished line's provisional styling until
+  /// its length doubles. terminalLineComplete accounts for md4c stripping a
+  /// source newline; it forces a refresh. Other callers use tokenize.
+  void tokenizeAppend(std::string_view info, const SnapshotText &text, std::u16string_view delta, HighlightState *state,
+                      SnapshotVector<TokenRun> *runs, double budgetMs, uint64_t previousDocumentId,
+                      size_t previousLength, uint64_t nextDocumentId, bool live = true,
+                      bool terminalLineComplete = false);
   virtual void tokenizeTrustedAppend(std::string_view info, std::u16string_view text, HighlightState *state,
-                                     std::vector<TokenRun> *runs, double budgetMs) {
+                                     std::vector<TokenRun> *runs, double budgetMs, bool, bool) {
     tokenize(info, text, state, runs, budgetMs);
+  }
+  virtual void tokenizeTrustedDelta(std::string_view info, const SnapshotText &text,
+                                    std::u16string_view, HighlightState *state,
+                                    SnapshotVector<TokenRun> *runs, double budgetMs, bool live,
+                                    bool terminalLineComplete) {
+    std::vector<TokenRun> next;
+    tokenizeTrustedAppend(info, text, state, &next, budgetMs, live, terminalLineComplete);
+    *runs = std::move(next);
   }
 
 protected:

@@ -155,6 +155,11 @@ public:
   jsi::Array sessionTagSlots(jsi::Runtime &rt, std::string sessionId, double generation, double sequence,
                              std::vector<std::string> names);
 
+  jsi::Object sessionFenceSlotChanges(jsi::Runtime &rt, std::string sessionId, double generation,
+                                     double sequence, std::vector<std::string> languages, double baseToken);
+  jsi::Object sessionTagSlotChanges(jsi::Runtime &rt, std::string sessionId, double generation,
+                                   double sequence, std::vector<std::string> names, double baseToken);
+
 private:
   /// Lets session workers reach the module only while it is alive.
   struct Events;

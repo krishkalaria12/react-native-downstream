@@ -60,6 +60,11 @@ constexpr int kStyleMask = 0x3f;
 /// line or two, large enough that a window costs less than a clock read.
 constexpr size_t kWindowLines = 32;
 
+// Relexing an unfinished 60 KiB line for every 16-byte append is quadratic.
+// Beyond this length, live parser snapshots refresh at geometric growth
+// points. A single lexer call can still exceed its time budget.
+constexpr size_t kLiveLineRefreshThreshold = 4096;
+
 /// Lexers created since the process started. A document with no code block
 /// leaves it at zero, which is what the isolation test checks.
 std::atomic<uint64_t> gLexersCreated{0};
@@ -242,24 +247,36 @@ public:
   void tokenize(std::string_view info, std::u16string_view text, HighlightState *state, std::vector<TokenRun> *runs,
                 double budgetMs) override {
     invalidateLineage(state);
-    tokenizeImpl(info, text, state, runs, budgetMs, false);
+    tokenizeImpl(info, text, state, runs, budgetMs, false, false, false);
   }
 
   uint64_t lexersCreated() const override { return gLexersCreated.load(std::memory_order_relaxed); }
 
 private:
   void tokenizeTrustedAppend(std::string_view info, std::u16string_view text, HighlightState *state,
-                             std::vector<TokenRun> *runs, double budgetMs) override {
-    tokenizeImpl(info, text, state, runs, budgetMs, true);
+                             std::vector<TokenRun> *runs, double budgetMs, bool live,
+                             bool terminalLineComplete) override {
+    tokenizeImpl(info, text, state, runs, budgetMs, true, live, terminalLineComplete);
+  }
+  void tokenizeTrustedDelta(std::string_view info, const SnapshotText &, std::u16string_view delta,
+                            HighlightState *state, SnapshotVector<TokenRun> *runs, double budgetMs,
+                            bool live, bool terminalLineComplete) override {
+    std::vector<TokenRun> next;
+    tokenizeImpl(info, state->text, state, &next, budgetMs, true, live, terminalLineComplete, &delta);
+    if (state->lastStop != HighlightStop::Deferred) *runs = std::move(next);
   }
 
   void tokenizeImpl(std::string_view info, std::u16string_view text, HighlightState *state,
-                    std::vector<TokenRun> *runs, double budgetMs, bool trustedAppend) {
+                    std::vector<TokenRun> *runs, double budgetMs, bool trustedAppend, bool live,
+                    bool terminalLineComplete, const std::u16string_view *delta = nullptr) {
     state->resumed = false;
+    state->bytesLexed = state->runsBuilt = state->tokenBytesCopied = state->textBytesCopied = 0;
+    const HighlightStop previousStop = state->lastStop;
     const LanguageTable *language = LanguageRegistry::find(info);
     // UTF-8 is never shorter than UTF-16, so an over-long text is over the
     // limit before any of it is converted.
-    if (language == nullptr || text.empty() || text.size() > kMaxHighlightBytes) {
+    const size_t textLength = text.size() + (delta ? delta->size() : 0);
+    if (language == nullptr || textLength == 0 || textLength > kMaxHighlightBytes) {
       state->clear();
       runs->clear();
       state->lastStop = HighlightStop::Skipped;
@@ -270,25 +287,37 @@ private:
     // last line and nothing else.
     size_t from = 0;
     uint32_t baseUtf16 = 0;
-    const bool joinsSurrogate = !state->text.empty() && state->text.size() < text.size() &&
+    const bool joinsSurrogate = !state->text.empty() && state->text.size() < textLength &&
         state->text.back() >= 0xd800 && state->text.back() <= 0xdbff &&
-        text[state->text.size()] >= 0xdc00 && text[state->text.size()] <= 0xdfff;
+        (delta ? delta->front() : text[state->text.size()]) >= 0xdc00 &&
+        (delta ? delta->front() : text[state->text.size()]) <= 0xdfff;
     const bool appendApplies = trustedAppend && state->engine != nullptr &&
-        state->language == language->alias && state->text.size() <= text.size() && !joinsSurrogate;
-    if (appendApplies || state->applies(language->alias, text)) {
+        state->language == language->alias && state->text.size() <= textLength && !joinsSurrogate;
+    if (appendApplies || (!delta && state->applies(language->alias, text))) {
       state->resumed = true;
       from = state->finalEnd;
       baseUtf16 = state->finalUtf16;
       // Only the bytes the block gained are converted, so a pass over a long
       // streaming block costs its new tail rather than the whole thing.
-      const std::u16string_view added = text.substr(state->text.size());
-      state->document.append(utf16ToUtf8(added));
+      const std::u16string_view added = delta ? *delta : text.substr(state->text.size());
+      const std::string bytes = utf16ToUtf8(added);
+      state->document.append(bytes);
       state->text.append(added);
+      state->textBytesCopied = added.size() * sizeof(char16_t) + bytes.size();
     } else {
+      // A surrogate seam or language change requires a checked rebuild. Copy
+      // the old state before clear(), since delta calls view that very state.
+      std::u16string rebuilt;
+      if (delta) {
+        rebuilt.assign(text);
+        rebuilt.append(*delta);
+        text = rebuilt;
+      }
       state->clear();
       state->language = language->alias;
       state->text.assign(text);
-      state->document.reset(utf16ToUtf8(text));
+      state->document.resetOwned(utf16ToUtf8(text));
+      state->textBytesCopied = text.size() * sizeof(char16_t);
       state->engine = createEngine(*language);
       if (state->engine == nullptr) {
         runs->clear();
@@ -298,6 +327,7 @@ private:
     }
     if (state->document.length() > kMaxHighlightBytes) {
       state->clear();
+      state->overByteLimit = true;
       runs->clear();
       state->lastStop = HighlightStop::Skipped;
       return;
@@ -305,7 +335,20 @@ private:
 
     const std::string_view utf8 = state->document.text();
     const size_t end = utf8.size();
-    const size_t styledEnd = lex(state->engine->lexer, &state->document, from, end, budgetMs);
+    const size_t lineStart = state->document.unstableStart();
+    const size_t lineLength = end - lineStart;
+    const bool sameUnfinishedLine = state->resumed && lineStart == state->liveLineStart;
+    if (trustedAppend && live && !terminalLineComplete && sameUnfinishedLine &&
+        previousStop != HighlightStop::Budget && lineLength > kLiveLineRefreshThreshold &&
+        lineLength < state->nextLiveLineRefresh) {
+      // tokenizeAppend's lineage guarantees that runs already contains the
+      // previous snapshot's tokens. Keep those provisional tokens without
+      // copying them again. The newly appended text remains plain; publication
+      // keeps the preceding immutable vector when this pass is deferred.
+      state->lastStop = HighlightStop::Deferred;
+      return;
+    }
+    const size_t styledEnd = lex(state->engine->lexer, &state->document, from, end, budgetMs, &state->bytesLexed);
     // Everything before the last line, or before wherever the budget stopped,
     // is complete: no later chunk can change a token there.
     const size_t stable = std::min(state->document.unstableStart(), styledEnd);
@@ -315,12 +358,16 @@ private:
     dropRunsFrom(&state->runs, baseUtf16);
     buildRuns(utf8, state->document, *language, state->engine->classes, from, styledEnd, baseUtf16, &scratch());
     appendRuns(&state->runs, scratch());
+    state->runsBuilt = scratch().size();
     state->finalEnd = stable;
     state->finalUtf16 = baseUtf16 + utf16Length(utf8.substr(from, stable - from));
     // A block whose last line has no newline yet is fully colored but not yet
     // final; only bytes the pass never reached mean it ran out of budget.
     state->lastStop = styledEnd < end ? HighlightStop::Budget : HighlightStop::Complete;
     *runs = state->runs;
+    state->tokenBytesCopied = state->runs.size() * sizeof(TokenRun);
+    state->liveLineStart = lineStart;
+    state->nextLiveLineRefresh = std::max(kLiveLineRefreshThreshold, lineLength * 2);
   }
   /// Per thread, because one highlighter serves the whole worker pool and a
   /// pass builds its runs into this rather than allocating for a few entries.
@@ -331,7 +378,8 @@ private:
 
   /// Lexes `[from, end)` in windows so a budget can be enforced between them,
   /// and returns how far it got.
-  static size_t lex(ILexer5 *lexer, CodeDocument *document, size_t from, size_t end, double budgetMs) {
+  static size_t lex(ILexer5 *lexer, CodeDocument *document, size_t from, size_t end, double budgetMs,
+                    uint64_t *bytesLexed) {
     auto view = codeDocumentView(*document);
     const auto started = std::chrono::steady_clock::now();
     size_t position = from;
@@ -347,6 +395,7 @@ private:
       const int initial = position > 0 ? static_cast<unsigned char>(document->styleAt(position - 1)) : 0;
       lexer->Lex(static_cast<Sci_PositionU>(position), static_cast<Sci_Position>(window - position), initial,
                  view.get());
+      *bytesLexed += window - position;
       position = window;
       const double spent =
           std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
@@ -400,21 +449,39 @@ void HighlightState::clear() {
   text.clear();
   finalEnd = 0;
   finalUtf16 = 0;
+  bytesLexed = runsBuilt = tokenBytesCopied = textBytesCopied = 0;
+  nextLiveLineRefresh = liveLineStart = 0;
+  overByteLimit = false;
   runs.clear();
   engine.reset();
   document.reset({});
 }
 
-void CodeHighlighter::tokenizeAppend(std::string_view info, std::u16string_view text, HighlightState *state,
-                                    std::vector<TokenRun> *runs, double budgetMs, uint64_t previousDocumentId,
-                                    size_t previousLength, uint64_t nextDocumentId) {
+void CodeHighlighter::tokenizeAppend(std::string_view info, const SnapshotText &text, std::u16string_view delta,
+                                    HighlightState *state,
+                                    SnapshotVector<TokenRun> *runs, double budgetMs, uint64_t previousDocumentId,
+                                    size_t previousLength, uint64_t nextDocumentId, bool live,
+                                    bool terminalLineComplete) {
+  // Skipped blocks do not retain a lexer/text state. Recognize them before a
+  // checked string-view conversion would flatten every growing snapshot.
+  const bool retainedOversize = state->overByteLimit && previousDocumentId != 0 &&
+      state->sourceDocumentId_ == previousDocumentId && previousLength + delta.size() == text.size();
+  if (retainedOversize || LanguageRegistry::find(info) == nullptr || text.empty() || text.size() > kMaxHighlightBytes) {
+    state->clear();
+    state->overByteLimit = retainedOversize;
+    runs->clear();
+    state->sourceDocumentId_ = nextDocumentId;
+    return;
+  }
   const bool lineage = previousDocumentId != 0 && state->sourceDocumentId_ == previousDocumentId &&
-      state->text.size() == previousLength && previousLength <= text.size();
+      state->text.size() == previousLength && previousLength + delta.size() == text.size();
   invalidateLineage(state);
   if (lineage) {
-    tokenizeTrustedAppend(info, text, state, runs, budgetMs);
+    tokenizeTrustedDelta(info, text, delta, state, runs, budgetMs, live, terminalLineComplete);
   } else {
-    tokenize(info, text, state, runs, budgetMs);
+    std::vector<TokenRun> next;
+    tokenize(info, text, state, &next, budgetMs);
+    *runs = std::move(next);
   }
   state->sourceDocumentId_ = nextDocumentId;
 }

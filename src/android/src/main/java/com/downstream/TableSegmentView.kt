@@ -12,6 +12,7 @@ import android.text.Spanned
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewTreeObserver
 import android.view.accessibility.AccessibilityNodeProvider
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
@@ -72,6 +73,12 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
   private var controlHost: ControlHost? = null
   /** The toolbar row the measurement reserved, from the document's style. */
   private var chromeRowHeight = 0
+  private var clipObserver: ViewTreeObserver? = null
+  private val visibleClipListener = ViewTreeObserver.OnPreDrawListener {
+    grid.refreshVisibleClip()
+    headerGrid.refreshVisibleClip()
+    true
+  }
 
   /** True while the table's rows are still arriving, which is what pins it. */
   var isStreaming = false
@@ -101,7 +108,15 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     headerScroll.addView(headerGrid, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
     // One scroller reads the other's offset, so the strip cannot lag a frame
     // behind the row it covers.
-    headerScroll.setOnScrollChangeListener { _, _, scrollX, _, _ -> scroll.scrollTo(scrollX, 0) }
+    headerScroll.setOnScrollChangeListener { _, scrollX, _, _, _ ->
+      if (scroll.scrollX != scrollX) scroll.scrollTo(scrollX, 0)
+      updateGridClips()
+    }
+    scroll.setOnScrollChangeListener { _, scrollX, _, _, _ ->
+      if (headerScroll.scrollX != scrollX) headerScroll.scrollTo(scrollX, 0)
+      updateGridClips()
+    }
+    viewport.setOnScrollChangeListener { _, _, _, _, _ -> updateGridClips() }
     addView(toolbar)
     addView(viewport)
     addView(headerScroll)
@@ -258,7 +273,18 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     requestLayout()
   }
 
+  override fun onAttachedToWindow() {
+    super.onAttachedToWindow()
+    val observer = viewTreeObserver
+    observer.addOnPreDrawListener(visibleClipListener)
+    clipObserver = observer
+  }
+
   override fun onDetachedFromWindow() {
+    clipObserver?.let { if (it.isAlive) it.removeOnPreDrawListener(visibleClipListener) }
+    clipObserver = null
+    grid.resetAncestorClip()
+    headerGrid.resetAncestorClip()
     viewport.streaming = false
     super.onDetachedFromWindow()
   }
@@ -348,6 +374,17 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
       // content has its new height, which the layout above has now given it.
       viewport.followNewestLine()
     }
+    updateGridClips()
+  }
+
+  /** Internal scroll clips also bound hardware display-list recording. */
+  private fun updateGridClips() {
+    val segment = segment ?: return
+    val headerHeight = if (segment.hasHeader) segment.rowHeights.firstOrNull() ?: 0 else 0
+    grid.setDrawViewport(scroll.scrollX, headerHeight + viewport.scrollY,
+      scroll.scrollX + scroll.width, headerHeight + viewport.scrollY + viewport.height)
+    headerGrid.setDrawViewport(headerScroll.scrollX, 0,
+      headerScroll.scrollX + headerScroll.width, headerHeight)
   }
 
   override fun onDraw(canvas: Canvas) {
@@ -404,13 +441,50 @@ private class TableGridView(context: Context) : View(context) {
     return parent as? DownstreamMarkdownView
   }
 
-  /** The alpha of one row, or 1 when the fade is off. */
-  private fun rowAlpha(block: Int): Float = host()?.blockAlpha(block) ?: 1f
   private var readingParts = emptyList<TableReadingPart>()
   private val accessibility = MarkdownAccessibility(this, { readingParts.size }) { accessiblePart(it) }
   private var segment: TableSegment? = null
   private val paint = Paint()
   private var pressedLink = -1
+  private val drawClip = Rect()
+  private val drawWindow = TableDrawWindow()
+  private val internalViewport = Rect()
+  private val drawViewport = Rect()
+  private val nextDrawViewport = Rect()
+  private val ancestorClip = Rect()
+  private var hasDrawViewport = false
+
+  fun setDrawViewport(left: Int, top: Int, right: Int, bottom: Int) {
+    internalViewport.set(left, top, right, bottom)
+    hasDrawViewport = true
+    refreshVisibleClip()
+  }
+
+  /** Pre-draw catches ancestor scrolling and translations before display-list recording. */
+  fun refreshVisibleClip() {
+    if (!hasDrawViewport) return
+    nextDrawViewport.set(internalViewport)
+    // Before attachment/layout, a visible-rect query cannot describe this grid.
+    // Preserve full internal drawing until there is reliable ancestor geometry.
+    if (isAttachedToWindow && isLaidOut && width > 0 && height > 0) {
+      if (!getLocalVisibleRect(ancestorClip) || !nextDrawViewport.intersect(ancestorClip)) {
+        nextDrawViewport.setEmpty()
+      }
+    }
+    applyDrawViewport()
+  }
+
+  fun resetAncestorClip() {
+    if (!hasDrawViewport) return
+    nextDrawViewport.set(internalViewport)
+    applyDrawViewport()
+  }
+
+  private fun applyDrawViewport() {
+    if (drawViewport == nextDrawViewport) return
+    drawViewport.set(nextDrawViewport)
+    invalidate()
+  }
 
   fun updateSegment(segment: TableSegment, resetFocus: Boolean) {
     this.segment = segment
@@ -501,16 +575,24 @@ private class TableGridView(context: Context) : View(context) {
     val hairline = segment.borderWidth.coerceAtLeast(1)
     val width = segment.tableWidth.toFloat() - hairline
     val rows = if (headerOnly) minOf(1, segment.cells.size) else segment.cells.size
-    if (segment.hasHeader && segment.rowHeights.isNotEmpty()) {
-      // The header row's own fill, which a theme can set apart from the body.
+    if (!canvas.getClipBounds(drawClip)) return
+    if (hasDrawViewport && !drawClip.intersect(drawViewport)) return
+    drawWindow.build(
+      segment.rowTops, segment.columnLefts, segment.columnWidths,
+      rows, segment.rtl, segment.tableWidth, hairline,
+      kotlin.math.ceil(segment.markerPaint.textSize).toInt(),
+      drawClip.left, drawClip.top, drawClip.right, drawClip.bottom,
+    )
+    if (segment.hasHeader && drawWindow.firstRow == 0 && drawWindow.endRow > 0) {
       paint.color = segment.colors.tableHeaderBackground
       canvas.drawRect(0f, 0f, width, segment.rowHeights[0].toFloat(), paint)
     }
-    segment.cells.take(rows).forEachIndexed { row, cells ->
-      // A new row fades as one unit, so the fill, the cells and the cell text all
-      // share one alpha. The layer is bounded to the row's own height, so a table
-      // with fifty rows does not allocate fifty screen-sized layers.
-      val alpha = rowAlpha(segment.blockIndex + row)
+    // The same Canvas clip selects body rows and the separate pinned header.
+    // Accessibility still contains every row and link, independently of drawing.
+    val revealHost = host()
+    for (row in drawWindow.firstRow until drawWindow.endRow) {
+      val cells = segment.cells[row]
+      val alpha = revealHost?.blockAlpha(segment.blockIndex + row) ?: 1f
       val top = segment.rowTops[row].toFloat()
       val bottom = segment.rowTops[row + 1].toFloat()
       val checkpoint = if (alpha < 1f) {
@@ -518,8 +600,6 @@ private class TableGridView(context: Context) : View(context) {
       } else {
         -1
       }
-      // The zebra fill is drawn under the cells, per row rather than per cell,
-      // so an empty trailing cell in a short row still gets the row's fill.
       if (row >= if (segment.hasHeader) 1 else 0) {
         val stripe = segment.colors.rowStripe(row - if (segment.hasHeader) 1 else 0)
         if (stripe != null) {
@@ -527,31 +607,27 @@ private class TableGridView(context: Context) : View(context) {
           canvas.drawRect(0f, top, width, bottom, paint)
         }
       }
-      cells.forEachIndexed { column, cell ->
-        val (x, y) = cellOrigin(segment, row, column)
+      for (column in drawWindow.firstColumn until minOf(drawWindow.endColumn, cells.size)) {
+        val x = segment.columnLefts[column] + segment.paddingHorizontal
+        val y = segment.rowTops[row] + segment.paddingVertical
         canvas.save()
         canvas.translate(x.toFloat(), y.toFloat())
-        cell.draw(canvas)
+        cells[column].draw(canvas)
         canvas.restore()
       }
-      if (checkpoint >= 0) {
-        canvas.restoreToCount(checkpoint)
-      }
+      if (checkpoint >= 0) canvas.restoreToCount(checkpoint)
     }
     paint.color = segment.colors.separator
-    var y = 0f
-    canvas.drawRect(0f, 0f, width, hairline.toFloat(), paint)
-    // A strip draws only the line under its own row, or the header would appear to
-    // have grid lines running through it.
-    for (index in 0 until if (headerOnly) minOf(2, segment.rowHeights.size) else segment.rowHeights.size) {
-      y += segment.rowHeights[index]
-      canvas.drawRect(0f, y - hairline, width, y, paint)
+    for (index in drawWindow.firstRowBorder until drawWindow.endRowBorder) {
+      val y = segment.rowTops[index].toFloat()
+      if (index == 0) canvas.drawRect(0f, 0f, width, hairline.toFloat(), paint)
+      else canvas.drawRect(0f, y - hairline, width, y, paint)
     }
-    var x = if (segment.rtl) width else 0f
-    canvas.drawRect(x, 0f, x + hairline, y, paint)
-    for (columnWidth in segment.columnWidths) {
-      x += if (segment.rtl) -columnWidth else columnWidth
-      canvas.drawRect(x, 0f, x + hairline, y, paint)
+    val bottom = segment.rowTops[rows].toFloat()
+    for (index in drawWindow.firstColumnBorder until drawWindow.endColumnBorder) {
+      val x = drawWindow.columnBorder(index, segment.columnLefts, segment.columnWidths,
+        segment.rtl, segment.tableWidth, hairline).toFloat()
+      canvas.drawRect(x, 0f, x + hairline, bottom, paint)
     }
   }
 

@@ -1365,7 +1365,6 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
 @property (nonatomic) UIFont *headerFont;
 @property (nonatomic, nullable) UIColor *headerButtonColor;
 @property (nonatomic, nullable) UIColor *headerBorderColor;
-@property (nonatomic) CGFloat lineHeight;
 /// The code font at this scale, which the gutter draws its numbers in so a
 /// number's digits line up with the code's own monospaced columns.
 @property (nonatomic) UIFont *codeFont;
@@ -1440,11 +1439,6 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
     // One digit's advance, which is what makes the gutter exactly as wide as its
     // widest number needs and no wider.
     segment.digitAdvance = [@"0" sizeWithAttributes:@{NSFontAttributeName : face}].width;
-    // The body's own line height rather than the font's, because TextKit adds
-    // the leading the body actually drew with. Read from the measurement this
-    // segment caches anyway, so it costs no extra layout pass.
-    const CGFloat lines = std::max<uint32_t>(segment.lineCount, 1);
-    segment.lineHeight = [segment.text heightForWidth:CGFLOAT_MAX] / lines;
   }
   segment.blockIndex = static_cast<NSInteger>(index);
   segment.theme = segment.text.theme;
@@ -1470,6 +1464,12 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   const size_t newline = block.text.find(u'\n');
   segment.firstLine = toNSString(block.text.substr(0, newline == std::u16string::npos ? block.text.size() : newline));
   return segment;
+}
+
+// Hosted code never needs fallback TextKit metrics. The text segment's bounded
+// exact-width cache supplies this value when native code becomes visible.
+- (CGFloat)lineHeight {
+  return [self.text heightForWidth:CGFLOAT_MAX] / std::max<uint32_t>(self.lineCount, 1);
 }
 
 - (CGFloat)headerHeight {
@@ -1519,10 +1519,56 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
 
 @interface DSTableCell ()
 @property (nonatomic) NSAttributedString *text;
+- (CGSize)measuredSizeForWidth:(CGFloat)width;
 @end
 
-@implementation DSTableCell
+@implementation DSTableCell {
+  NSLock *_measurementLock;
+  std::vector<std::pair<CGFloat, CGSize>> _measurements;
+}
+
+- (instancetype)init {
+  if ((self = [super init])) {
+    _measurementLock = [NSLock new];
+  }
+  return self;
+}
+
+- (CGSize)measuredSizeForWidth:(CGFloat)width {
+  [_measurementLock lock];
+  for (auto measurement = _measurements.begin(); measurement != _measurements.end(); ++measurement) {
+    if (measurement->first == width) {
+      const auto cached = *measurement;
+      _measurements.erase(measurement);
+      _measurements.push_back(cached);
+      [_measurementLock unlock];
+      return cached.second;
+    }
+  }
+  // Cell text is immutable and has no attachments on the shared plain-cell path.
+  // Keep both intrinsic and wrapped widths, plus one changing column width.
+  const CGSize size = [self.text boundingRectWithSize:CGSizeMake(width, CGFLOAT_MAX)
+                                            options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                            context:nil].size;
+  if (_measurements.size() == 3) {
+    _measurements.erase(_measurements.begin());
+  }
+  _measurements.emplace_back(width, size);
+  [_measurementLock unlock];
+  return size;
+}
 @end
+
+static NSCache<NSArray *, DSTableCell *> *plainTableCells() {
+  static NSCache *cache;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    cache = [NSCache new];
+    cache.countLimit = 2048;
+    cache.totalCostLimit = 2 * 1024 * 1024;
+  });
+  return cache;
+}
 
 @interface DSTableSegment ()
 @property (nonatomic) NSArray<NSArray<DSTableCell *> *> *rows;
@@ -1608,6 +1654,19 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
     const bool headerRow = segment.hasHeader && index == from;
     NSMutableArray<DSTableCell *> *row = [NSMutableArray arrayWithCapacity:block.cells.size()];
     for (const TableCell &cell : block.cells) {
+      NSString *string = toNSString(block.text.substr(cell.start, cell.end - cell.start));
+      // Link/tag indexes and attachment objects belong to one document. Share
+      // only cells with no inline runs, using full value equality for paint,
+      // typography and alignment rather than a hash-only style identifier.
+      NSArray *key = inlineRunsInRange(block.runs, cell.start, cell.end).empty() && block.math.empty()
+          ? @[string, headerRow ? headerFace : bodyFace, headerRow ? headerColor : color,
+              @(static_cast<int>(cell.align))]
+          : nil;
+      DSTableCell *tableCell = key != nil ? [plainTableCells() objectForKey:key] : nil;
+      if (tableCell != nil) {
+        [row addObject:tableCell];
+        continue;
+      }
       NSMutableParagraphStyle *style = [NSMutableParagraphStyle new];
       style.lineBreakMode = NSLineBreakByWordWrapping;
       style.baseWritingDirection = NSWritingDirectionNatural;
@@ -1623,7 +1682,7 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
           break;
       }
       NSMutableAttributedString *text = [[NSMutableAttributedString alloc]
-          initWithString:toNSString(block.text.substr(cell.start, cell.end - cell.start))
+          initWithString:string
               attributes:@{
                 NSFontAttributeName : headerRow ? headerFace : bodyFace,
                 NSForegroundColorAttributeName : headerRow ? headerColor : color,
@@ -1631,8 +1690,11 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
               }];
       applyRuns(text, block, headerRow ? headerFont : font, theme, segment.theme, 0, size, false, cell.start,
                 cell.end, document, variants, tagStyles);
-      DSTableCell *tableCell = [DSTableCell new];
-      tableCell.text = text;
+      tableCell = [DSTableCell new];
+      tableCell.text = [text copy];
+      if (key != nil) {
+        [plainTableCells() setObject:tableCell forKey:key cost:256 + string.length * 16];
+      }
       [row addObject:tableCell];
     }
     columns = std::max(columns, block.cells.size());
@@ -1643,15 +1705,12 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   // Each column is as wide as its widest cell, clamped, so every view width
   // produces the same table and wide tables scroll.
   const UIEdgeInsets padding = segment.cellPadding;
-  const NSStringDrawingOptions options = NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading;
   const CGFloat maxWidth = tableMaxColumnWidth(theme) * scale;
   std::vector<CGFloat> widths(columns, tableMinColumnWidth(theme) * scale);
   for (NSArray<DSTableCell *> *row in rows) {
     for (NSUInteger column = 0; column < row.count; column++) {
-      const CGRect bounds = [row[column].text boundingRectWithSize:CGSizeMake(maxWidth, CGFLOAT_MAX)
-                                                           options:options
-                                                           context:nil];
-      widths[column] = std::max(widths[column], std::min(std::ceil(bounds.size.width), maxWidth));
+      const CGSize size = [row[column] measuredSizeForWidth:maxWidth];
+      widths[column] = std::max(widths[column], std::min(std::ceil(size.width), maxWidth));
     }
   }
   NSMutableArray<NSNumber *> *columnWidths = [NSMutableArray arrayWithCapacity:columns];
@@ -1667,10 +1726,8 @@ static void buildBoxContainers(const Block &block, UIFont *markerFont, DSThemeCo
   for (NSArray<DSTableCell *> *row in rows) {
     CGFloat height = 0;
     for (NSUInteger column = 0; column < row.count; column++) {
-      const CGRect bounds = [row[column].text boundingRectWithSize:CGSizeMake(widths[column], CGFLOAT_MAX)
-                                                           options:options
-                                                           context:nil];
-      height = std::max(height, std::ceil(bounds.size.height));
+      const CGSize size = [row[column] measuredSizeForWidth:widths[column]];
+      height = std::max(height, std::ceil(size.height));
     }
     height += padding.top + padding.bottom;
     [rowHeights addObject:@(height)];
@@ -1796,37 +1853,26 @@ static NSUInteger addingRenderingCost(NSUInteger cost, size_t characters, NSUInt
   PlacedCaret _caret;
   std::vector<CGFloat> _gaps;
   NSLock *_lock;
-  CGFloat _cachedWidth;
-  uint32_t _cachedChrome;
-  /// The code layout the cached frames were measured under, so a measurement is
-  /// only reused for the layout it was made with.
-  downstream::CodeLayout _cachedCode;
-  /// The image answers the cached frames were stacked with. Part of the key
-  /// because a load changes a picture's height, so a frame cached for a
-  /// placeholder is wrong for a loaded image.
-  downstream::ImageStateLayout _cachedImages;
-  /// The hosted children's heights the cached frames were stacked with. Part of
-  /// the key for the reason the image answers are: a chart is as tall as the
-  /// component that draws it, so a frame cached for one component's height is
-  /// wrong for another's.
-  downstream::HostLayout _cachedHosts;
-  /// The table layout the cached frames were built at, for the same reason
-  /// `_cachedCode` is: a capped table and an expanded one are different heights.
-  downstream::TableLayout _cachedTables;
-  /// The reader's own choices, which the cache is keyed on for the same reason
-  /// the code layout is: a closed and an open body are different heights, so they
-  /// are different measurements.
-  downstream::ReaderChoices _cachedChoices;
+  struct StackCacheEntry {
+    CGFloat width;
+    uint32_t chrome;
+    downstream::CodeLayout code;
+    downstream::ImageStateLayout images;
+    downstream::HostLayout hosts;
+    downstream::TableLayout tables;
+    downstream::ReaderChoices choices;
+    DSStackedLayout layout;
+    NSArray<NSValue *> *__strong boxedFrames = nil;
+  };
+  // Yoga's constraint and mounted frame can have different exact widths.
+  // Two entries keep both prepared layouts without accepting nearby widths.
+  std::vector<StackCacheEntry> _stackCache;
   /// Per-URL link styles, which the text builder reads when it colors a link run.
   DSLinkVariants *_variants;
   /// Styles for app-allowed inline tags, read when a run names one. Beside
   /// `_variants` because the two answer different questions about the same
   /// runs.
   DSTagStyles *_tagStyles;
-  bool _hasCachedFrames;
-  /// Cache native geometry. Measurement needs no NSValue boxing, and each
-  /// caller copies only the frames it consumes while holding the cache lock.
-  DSStackedLayout _cachedLayout;
   NSUInteger _cacheCost;
 }
 
@@ -1960,21 +2006,16 @@ static NSString *committedVariantsKey(DSLinkVariants *variants) {
 
 /// A cache key for the variants, or empty when there are none to key on.
 ///
-/// The variants change link colors but no heights, so the key only has to tell
-/// two variant sets apart — not to be readable. A hash of the arrays is what
-/// does that without putting every prefix in the key.
+/// Keep every variant input in the key, including grouping and underlining.
+/// Exact serialized values avoid collisions and missed paint invalidations.
 static NSString *variantsKey(DSLinkVariants *variants) {
   if (variants == nil || variants.isEmpty) {
     return @"";
   }
-  NSUInteger hash = variants.prefixes.count;
-  for (NSString *prefix in variants.prefixes) {
-    hash = hash * 31 + prefix.hash;
-  }
-  for (NSNumber *color in variants.colors) {
-    hash = hash * 31 + color.unsignedIntegerValue;
-  }
-  return [NSString stringWithFormat:@"%lu", (unsigned long)hash];
+  NSData *data = [NSJSONSerialization dataWithJSONObject:@[variants.prefixes ?: @[], variants.counts ?: @[],
+                                                           variants.colors ?: @[], variants.underlines ?: @[]]
+                                                  options:0 error:nil];
+  return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
 }
 
 + (instancetype)renderedDocumentFor:(const DocumentHandle &)document
@@ -1995,14 +2036,10 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
   if (styles == nil || styles.isEmpty) {
     return @"";
   }
-  NSUInteger hash = styles.names.count;
-  for (NSString *name in styles.names) {
-    hash = hash * 31 + name.hash;
-  }
-  for (NSNumber *color in styles.colors) {
-    hash = hash * 31 + color.unsignedIntegerValue;
-  }
-  return [NSString stringWithFormat:@"%lu", (unsigned long)hash];
+  NSData *data = [NSJSONSerialization dataWithJSONObject:@[styles.names ?: @[], styles.colors ?: @[],
+                                                           styles.flags ?: @[]]
+                                                  options:0 error:nil];
+  return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
 }
 
 + (instancetype)renderedDocumentFor:(const DocumentHandle &)document
@@ -2055,6 +2092,7 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
 + (void)invalidateCaches {
   [self.cache removeAllObjects];
   [self.committedSegmentCache removeAllObjects];
+  [plainTableCells() removeAllObjects];
 }
 
 - (instancetype)initWithDocument:(const DocumentHandle &)documentHandle
@@ -2068,7 +2106,6 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
     return nil;
   }
   _lock = [NSLock new];
-  _cachedWidth = -1;
   _caret = caret;
   const Theme &theme = *themeHandle;
   // A theme can cap the platform's font scale but not raise it, so the cap is
@@ -2351,13 +2388,37 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
                                       images:(const downstream::ImageStateLayout &)images
                                        hosts:(const downstream::HostLayout &)hosts
                                       tables:(const downstream::TableLayout &)tables {
-  NSMutableArray<NSValue *> *frames = [NSMutableArray arrayWithCapacity:_segments.count];
-  for (const CGRect frame : [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts
-                                    tables:tables choices:code.choices includeFrames:YES
-                                   includeHosts:NO].frames) {
-    [frames addObject:[NSValue valueWithCGRect:frame]];
+  const auto matches = [&](const StackCacheEntry &entry) {
+    return entry.width == width && entry.chrome == chrome && entry.code == code && entry.images == images &&
+           entry.hosts == hosts && entry.tables == tables && entry.choices == code.choices;
+  };
+  const auto box = [](const std::vector<CGRect> &source) -> NSArray<NSValue *> * {
+    NSMutableArray<NSValue *> *frames = [NSMutableArray arrayWithCapacity:source.size()];
+    for (const CGRect frame : source) [frames addObject:[NSValue valueWithCGRect:frame]];
+    return [frames copy];
+  };
+  [_lock lock];
+  for (auto &entry : _stackCache) {
+    if (!matches(entry)) continue;
+    if (entry.boxedFrames == nil) entry.boxedFrames = box(entry.layout.frames);
+    NSArray<NSValue *> *frames = entry.boxedFrames;
+    [_lock unlock];
+    return frames;
   }
-  return frames;
+  [_lock unlock];
+  const DSStackedLayout stacked = [self stackForWidth:width chrome:chrome code:code images:images hosts:hosts
+      tables:tables choices:code.choices includeFrames:YES includeHosts:NO];
+  [_lock lock];
+  for (auto &entry : _stackCache) {
+    if (!matches(entry)) continue;
+    if (entry.boxedFrames == nil) entry.boxedFrames = box(entry.layout.frames);
+    NSArray<NSValue *> *frames = entry.boxedFrames;
+    [_lock unlock];
+    return frames;
+  }
+  [_lock unlock];
+  // Another width may evict this entry while its geometry is being computed.
+  return box(stacked.frames);
 }
 
 - (CGSize)sizeForWidth:(CGFloat)width
@@ -2405,18 +2466,21 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
                    includeFrames:(BOOL)includeFrames
                     includeHosts:(BOOL)includeHosts {
   [_lock lock];
-  if (_hasCachedFrames && _cachedWidth == width && _cachedChrome == chrome && _cachedCode == code &&
-      _cachedImages == images && _cachedHosts == hosts && _cachedTables == tables &&
-      _cachedChoices == choices) {
+  for (const auto &entry : _stackCache) {
+    if (entry.width != width || entry.chrome != chrome || !(entry.code == code) ||
+        !(entry.images == images) || !(entry.hosts == hosts) || !(entry.tables == tables) ||
+        !(entry.choices == choices)) {
+      continue;
+    }
     DSStackedLayout cached;
     if (includeFrames) {
-      cached.frames = _cachedLayout.frames;
+      cached.frames = entry.layout.frames;
     }
     if (includeHosts) {
-      cached.hosts = _cachedLayout.hosts;
-      cached.tagHosts = _cachedLayout.tagHosts;
+      cached.hosts = entry.layout.hosts;
+      cached.tagHosts = entry.layout.tagHosts;
     }
-    cached.size = _cachedLayout.size;
+    cached.size = entry.layout.size;
     [_lock unlock];
     return cached;
   }
@@ -2500,15 +2564,17 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
   }
 
   [_lock lock];
-  _cachedWidth = width;
-  _cachedChrome = chrome;
-  _cachedCode = code;
-  _cachedImages = images;
-  _cachedHosts = hosts;
-  _cachedTables = tables;
-  _cachedChoices = choices;
-  _hasCachedFrames = YES;
-  _cachedLayout = stacked;
+  // Concurrent callers may have filled this same entry while we stacked.
+  const auto matches = [&](const StackCacheEntry &entry) {
+    return entry.width == width && entry.chrome == chrome && entry.code == code && entry.images == images &&
+           entry.hosts == hosts && entry.tables == tables && entry.choices == choices;
+  };
+  if (std::none_of(_stackCache.begin(), _stackCache.end(), matches)) {
+    if (_stackCache.size() == 2) {
+      _stackCache.erase(_stackCache.begin());
+    }
+    _stackCache.push_back({width, chrome, code, images, hosts, tables, choices, stacked});
+  }
   [_lock unlock];
 
   if (!includeFrames) {

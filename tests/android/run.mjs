@@ -97,6 +97,7 @@ const suites = [
     sources: [
       ...kotlin(
         'Segments.kt',
+        'PlainParagraphKey.kt',
         'CodeLayout.kt',
         'ContainerDecoration.kt',
         'DetailsLayout.kt'
@@ -206,6 +207,18 @@ try {
     stdio: 'inherit',
   });
   execFileSync(process.execPath, [join(here, 'table-streaming.mjs')], {
+    stdio: 'inherit',
+  });
+  execFileSync(process.execPath, [join(here, 'table-draw.mjs')], {
+    stdio: 'inherit',
+  });
+  execFileSync(process.execPath, [join(here, 'segment-traversal.mjs')], {
+    stdio: 'inherit',
+  });
+  execFileSync(process.execPath, [join(here, 'segment-viewport.mjs')], {
+    stdio: 'inherit',
+  });
+  execFileSync(process.execPath, [join(here, 'text-streaming.mjs')], {
     stdio: 'inherit',
   });
 } finally {

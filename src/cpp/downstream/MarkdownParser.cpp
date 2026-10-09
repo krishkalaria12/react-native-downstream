@@ -124,6 +124,20 @@ public:
     }
   }
 
+  void referenceOutput(uint32_t spent, bool limited) {
+    referenceOutputUsed_ = spent;
+    referenceOutputLimited_ = limited;
+  }
+  uint32_t referenceOutputUsed() const { return referenceOutputUsed_; }
+  bool referenceOutputLimited() const { return referenceOutputLimited_; }
+
+  int referenceDefinition(uint32_t begin, uint32_t end) {
+    referenceDefinitions_.push_back({begin, end});
+    return 0;
+  }
+
+  std::vector<ByteRange> takeReferenceDefinitions() { return std::move(referenceDefinitions_); }
+
   int enterBlock(MD_BLOCKTYPE type, void *detail) {
     // A literal tag's scope is its own block: an unclosed `<user>` does not
     // reach into the next paragraph, because the policy promises the raw
@@ -1319,6 +1333,7 @@ private:
       block.containers.insert(block.containers.begin(), prefix.begin(), prefix.end());
       for (size_t depth = prefix.size(); depth < block.containers.size(); depth++) {
         block.containers[depth].id += containerBase;
+        if (block.containers[depth].tag >= 0) block.containers[depth].tag += static_cast<int32_t>(tagBase);
       }
       if (block.table != 0) {
         block.table += tableBase;
@@ -1361,8 +1376,14 @@ private:
     }
     for (const Tag &source : sub.document->tags) {
       Tag tag = source;
-      tag.range.start += utf16Base;
-      tag.range.end += utf16Base;
+      if (tag.block || tag.name != "a" || tag.range.start != 0 || tag.range.end != 0) {
+        tag.range.start += utf16Base;
+        if (tag.range.end != 0) tag.range.end += utf16Base;
+      }
+      if (tag.block) {
+        tag.bodyStart += static_cast<uint32_t>(bodyStart);
+        if (tag.bodyEnd != 0) tag.bodyEnd += static_cast<uint32_t>(bodyStart);
+      }
       document_->tags.push_back(std::move(tag));
     }
     containerCount_ += sub.containerCount;
@@ -2857,6 +2878,9 @@ private:
   /// direction: the content was going to be dropped anyway.
   unsigned dropDepth_{0};
   /// The dropped element's name, so a nested `</div>` cannot end it.
+  uint32_t referenceOutputUsed_{0};
+  bool referenceOutputLimited_{false};
+  std::vector<ByteRange> referenceDefinitions_;
   std::string_view dropName_;
   /// How deep inside an app-allowed tag the block is: 0 outside one.
   ///
@@ -2900,10 +2924,11 @@ uint64_t allocateDocumentId() {
   return nextDocumentId.fetch_add(1, std::memory_order_relaxed);
 }
 
-ParseResult parseMarkdown(std::string_view source, ParseOptions options) {
+static ParseResult parseMarkdownImpl(std::string_view source, ParseOptions options,
+                                     uint32_t referenceBudget = UINT32_MAX, size_t sourceLimit = kMaxSourceBytes) {
   ParseResult result;
   result.parse = options;
-  if (source.size() > kMaxSourceBytes) {
+  if (source.size() > sourceLimit) {
     result.status = ParseStatus::InputLimit;
     result.message = "Markdown source exceeds 1 MiB of UTF-8.";
     return result;
@@ -2972,6 +2997,14 @@ DocumentBuilder builder(source, options);
     return static_cast<DocumentBuilder *>(userdata)->text(type, text, size);
   };
 
+  parser.reference_output_budget = referenceBudget == UINT32_MAX ? nullptr : &referenceBudget;
+  parser.reference_output = [](MD_SIZE spent, int limited, void *userdata) {
+    static_cast<DocumentBuilder *>(userdata)->referenceOutput(spent, limited != 0);
+  };
+  parser.reference_definition = [](MD_OFFSET begin, MD_OFFSET end, void *userdata) {
+    return static_cast<DocumentBuilder *>(userdata)->referenceDefinition(begin, end);
+  };
+
   if (md_parse(parsed.data(), static_cast<MD_SIZE>(parsed.size()), &parser, &builder) != 0) {
     result.status = ParseStatus::ParseFailed;
     result.message = "The Markdown parser could not complete.";
@@ -2981,7 +3014,14 @@ DocumentBuilder builder(source, options);
   result.containerCount = builder.containerCount();
   result.tableCount = builder.tableCount();
   result.blockSource = builder.takeBlockSource();
+  result.referenceDefinitions = builder.takeReferenceDefinitions();
+  result.referenceOutputUsed = builder.referenceOutputUsed();
+  result.referenceOutputLimited = builder.referenceOutputLimited();
   return result;
+}
+
+ParseResult parseMarkdown(std::string_view source, ParseOptions options) {
+  return parseMarkdownImpl(source, options);
 }
 
 ParseResult parseMarkdownAt(std::string_view region, size_t origin, ParseOptions options) {
@@ -2999,10 +3039,14 @@ ParseResult parseMarkdownAt(std::string_view region, size_t origin, ParseOptions
     range.start = range.start > pad ? range.start - pad : 0;
     range.end = range.end > pad ? range.end - pad : 0;
   }
+  for (ByteRange &range : result.referenceDefinitions) {
+    range.start -= pad;
+    range.end -= pad;
+  }
   // The pad shifts source offsets, and a link's and an image's range are both
   // source offsets, so both lists move together. A range that was empty stays
   // empty: it names no source, and subtracting from zero would invent one.
-  if (!result.document->links.empty() || !result.document->images.empty()) {
+  if (!result.document->links.empty() || !result.document->images.empty() || !result.document->tags.empty()) {
     auto shifted = std::make_shared<Document>(*result.document);
     for (Link &link : shifted->links.tail()) {
       if (link.range.end > link.range.start) {
@@ -3016,8 +3060,73 @@ ParseResult parseMarkdownAt(std::string_view region, size_t origin, ParseOptions
         image.range.end -= pad;
       }
     }
+    for (Tag &tag : shifted->tags.tail()) {
+      if (tag.block || tag.name != "a" || tag.range.start != 0 || tag.range.end != 0) {
+        tag.range.start -= pad;
+        if (tag.range.end != 0) tag.range.end -= pad;
+      }
+      if (tag.block) {
+        tag.bodyStart -= pad;
+        if (tag.bodyEnd != 0) tag.bodyEnd -= pad;
+      }
+    }
     result.document = shifted;
   }
+  return result;
+}
+
+ParseResult parseMarkdownWithReferences(std::string_view region, size_t origin,
+                                       std::string_view definitions, ParseOptions options, uint32_t referenceBudget) {
+  if (definitions.empty() && referenceBudget == UINT32_MAX) return parseMarkdownAt(region, origin, options);
+  if (origin > kMaxSourceBytes || region.size() > kMaxSourceBytes - origin) {
+    ParseResult rejected;
+    rejected.status = ParseStatus::InputLimit;
+    rejected.message = "Markdown source exceeds 1 MiB of UTF-8.";
+    return rejected;
+  }
+  // Every replay ends in a blank line. Additional blank padding keeps md4c's
+  // line-record offsets congruent to the canonical tail, without visible text.
+  std::string replay(definitions);
+  const size_t padding = (origin + 256 - replay.size() % 256) % 256;
+  replay.append(padding, '\n');
+  const uint32_t bytes = static_cast<uint32_t>(replay.size());
+  const uint32_t units = static_cast<uint32_t>(utf8ToUtf16(replay).size());
+  replay.append(region);
+  ParseResult result = parseMarkdownImpl(replay, options, referenceBudget, replay.size());
+  if (result.status != ParseStatus::Ok) return result;
+  for (ByteRange &range : result.blockSource) {
+    range.start = range.start > bytes ? range.start - bytes : 0;
+    range.end = range.end > bytes ? range.end - bytes : 0;
+  }
+  std::vector<ByteRange> definitionsInTail;
+  for (const ByteRange &range : result.referenceDefinitions) {
+    if (range.start >= bytes) definitionsInTail.push_back({range.start - bytes, range.end - bytes});
+  }
+  result.referenceDefinitions = std::move(definitionsInTail);
+  auto shifted = std::make_shared<Document>(*result.document);
+  for (Link &link : shifted->links.tail()) {
+    if (link.range.end > link.range.start) {
+      link.range.start -= units;
+      link.range.end -= units;
+    }
+  }
+  for (Image &image : shifted->images.tail()) {
+    if (image.range.end > image.range.start) {
+      image.range.start -= units;
+      image.range.end -= units;
+    }
+  }
+  for (Tag &tag : shifted->tags.tail()) {
+    if (tag.block || tag.name != "a" || tag.range.start != 0 || tag.range.end != 0) {
+      tag.range.start -= units;
+      if (tag.range.end != 0) tag.range.end -= units;
+    }
+    if (tag.block) {
+      tag.bodyStart -= bytes;
+      if (tag.bodyEnd != 0) tag.bodyEnd -= bytes;
+    }
+  }
+  result.document = std::move(shifted);
   return result;
 }
 

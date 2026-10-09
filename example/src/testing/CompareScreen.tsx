@@ -103,7 +103,10 @@ const VERDICT: Record<Comparison['verdict'], { title: string; tone: Tone }> = {
     tone: 'neutral',
   },
   tie: { title: 'Both reached the final frame together', tone: 'neutral' },
-  unavailable: { title: 'The run did not finish', tone: 'danger' },
+  unavailable: {
+    title: 'JS timings collected; native presentation is unmeasured',
+    tone: 'neutral',
+  },
 };
 
 function Pane({
@@ -147,6 +150,7 @@ function Pane({
         <StreamdownMarkdown markdown={source} streamingAnimation={animated} />
       ) : stream ? (
         <DownstreamMarkdown
+          androidParagraphLayout="incremental"
           stream={stream}
           syntaxHighlighting={syntaxHighlighting}
           animated={animated}
@@ -237,7 +241,7 @@ export function CompareScreen() {
   const [workloadShape, setWorkloadShape] = useState<WorkloadShape>('repeat');
   const [workloadSize, setWorkloadSize] = useState<WorkloadSize>('fixture');
   const [schedule, setSchedule] = useState<ScheduleKind>('manifest');
-  const [parseMode, setParseMode] = useState<ParseMode>('full');
+  const [parseMode, setParseMode] = useState<ParseMode>('incremental');
   const [highlighting, setHighlighting] = useState<'on' | 'off'>('on');
   const [animation, setAnimation] = useState<'on' | 'off'>('on');
   const scroll = useScreenScroll();
@@ -285,7 +289,7 @@ export function CompareScreen() {
       >
         <Hero
           title="Streamdown vs Downstream"
-          summary="One source, one seeded chunk schedule, two renderers. Streamdown runs first, so the second run is a control for whatever the first left on screen."
+          summary="Replay the same source and schedule through both renderers. Run order alternates. Timings report JavaScript responsiveness and schedule delivery."
           meta={<Text style={[t.s.meta, styles.seed]}>Seed {SEED}</Text>}
         />
 
@@ -451,7 +455,7 @@ export function CompareScreen() {
                 style={styles.notice}
               >
                 {comparison.parity.match
-                  ? 'Both renderers received the same source.'
+                  ? 'Both renderers received the same source. This checks input equality; native rendering parity and frame timing need device profiling.'
                   : `Sources differ${
                       comparison.parity.firstDifference === null
                         ? ''

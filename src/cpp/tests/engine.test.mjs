@@ -116,6 +116,9 @@ before(async () => {
       ],
     ],
     ['test_highlight', engine],
+    ['test_highlight_streaming', [incremental, ...engine]],
+    ['test_shared_list', []],
+    ['test_snapshot_text', []],
     ['dump_tokens', [downstream('Unicode.cpp')]],
     ['test_theme', theme],
     ['test_images', [downstream('ImageLayout.cpp')]],
@@ -228,15 +231,17 @@ describe('vendored md4c', () => {
   // security or bugfix patch, which must be recorded here on purpose, or an
   // accident. The revision and version live in src/cpp/md4c/README.md.
   const PINS = {
-    // md4c.c and md4c.h carry three local patches, all recorded in
-    // src/cpp/md4c/README.md and all behind a flag that is off by default:
+    // md4c.c and md4c.h carry the local patches recorded in
+    // src/cpp/md4c/README.md. The three flags are off by default:
     // MD_FLAG_LATEXMATHBLOCKS makes a `$$` line a fence,
     // MD_FLAG_LATEXMATHNOSINGLE makes a single `$` never math, and
     // MD_FLAG_CJKFRIENDLY implements the markdown-cjk-friendly amendment.
+    // Optional reference definition/output bookkeeping preserves the canonical
+    // expansion budget when the incremental parser replays definitions.
     'md4c.c':
-      'b11148c99518cbdd56d58295fa073e189303e0c2acba3f2367949a15e3ec41b8',
+      '795655dd2ca56a9cddcb680c6bd16b6a471ae2526db7b30eff71095ede85f574',
     'md4c.h':
-      'bc8b02b24e3e045b8c844db7e1593eccdd54122cf03caba12424a81290f7adca',
+      '5b7b93354edafb53dc62336a96838c11cd7469e4bd3ba4e0a98ba62d7ac8a1c4',
     'entity.c':
       '7ea50d695d9210958e01b12b3e4d1db78d783d03d95b040fd7d2d9cfe1f1d39c',
     'entity.h':
@@ -244,7 +249,7 @@ describe('vendored md4c', () => {
   };
 
   for (const [name, digest] of Object.entries(PINS)) {
-    test(`${name} is unmodified`, () => {
+    test(`${name} matches its recorded vendor pin`, () => {
       assert.equal(
         createHash('sha256')
           .update(readFileSync(join(MD4C, name)))
@@ -691,12 +696,32 @@ describe('links', () => {
   });
 });
 
+test('shared snapshot block index retains immutable prefixes', () => {
+  execFileSync(binary('test_shared_list'), {
+    timeout: 30_000,
+    stdio: 'inherit',
+  });
+});
+
 describe('syntax highlighting', () => {
+  test('snapshot text pages and immutable token publication', () => {
+    execFileSync(binary('test_snapshot_text'), {
+      timeout: 30_000,
+      stdio: 'inherit',
+    });
+  });
   // The engine's own tests: the language table, the offsets, the limits, the
   // budget, and the streaming equivalence that a finished block's tokens equal
   // a one-shot pass's.
   test('engine invariants', () => {
     execFileSync(binary('test_highlight'), {
+      timeout: 30_000,
+      stdio: 'inherit',
+    });
+  });
+
+  test('long live lines refresh and finish correctly', () => {
+    execFileSync(binary('test_highlight_streaming'), {
       timeout: 30_000,
       stdio: 'inherit',
     });

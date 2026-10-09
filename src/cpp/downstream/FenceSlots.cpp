@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <unordered_set>
+#include <unordered_map>
 
 namespace downstream {
 
@@ -54,15 +55,13 @@ std::string normalizeFenceLanguage(std::string_view info) {
   return lowered;
 }
 
-std::vector<FenceSlot> fenceSlots(const Document &document, const std::vector<std::string> &languages,
-                                  bool live) {
-  return fenceSlots(document, languages, live, document.settledBlocks);
-}
-
-std::vector<FenceSlot> fenceSlots(const Document &document, const std::vector<std::string> &languages,
-                                  bool live, uint32_t settledBlocks) {
+namespace {
+template <typename Emit, typename Retain>
+void visitFenceSlots(const Document &document, const std::vector<std::string> &languages, bool live,
+                     uint32_t settledBlocks, const std::vector<std::shared_ptr<const FenceSlot>> &previous,
+                     Emit emit, Retain retain) {
   if (languages.empty()) {
-    return {};
+    return;
   }
   std::unordered_set<std::string> wanted;
   wanted.reserve(languages.size());
@@ -70,7 +69,8 @@ std::vector<FenceSlot> fenceSlots(const Document &document, const std::vector<st
     wanted.insert(normalizeFenceLanguage(language));
   }
 
-  std::vector<FenceSlot> slots;
+  std::unordered_map<uint32_t, std::shared_ptr<const FenceSlot>> reused;
+  for (const auto &slot : previous) reused.emplace(slot->ordinal, slot);
   uint32_t ordinal = 0;
   for (size_t index = 0; index < document.blocks.size(); index++) {
     const Block &block = document.blocks[index];
@@ -88,6 +88,16 @@ std::vector<FenceSlot> fenceSlots(const Document &document, const std::vector<st
       continue;
     }
 
+    const bool incomplete = index >= settledBlocks ||
+        (index + 1 == document.blocks.size() && !block.fenceClosed && live);
+    const auto old = reused.find(thisOrdinal);
+    if (old != reused.end() && old->second->identity == block.identity &&
+        old->second->blockIndex == index && old->second->incomplete == incomplete &&
+        old->second->language == firstInfoWord(block.info) && old->second->meta == rawMeta(block.info) &&
+        (block.identity != 0 || old->second->code == block.text)) {
+      retain(old->second);
+      continue;
+    }
     FenceSlot slot;
     slot.ordinal = thisOrdinal;
     slot.blockIndex = index;
@@ -98,13 +108,34 @@ std::vector<FenceSlot> fenceSlots(const Document &document, const std::vector<st
     slot.language = std::string(firstInfoWord(block.info));
     slot.meta = rawMeta(block.info);
     slot.code = exportCodeText(document, index);
-    const bool settled = index < settledBlocks;
-    const bool last = index + 1 == document.blocks.size();
-    slot.incomplete = !settled || (last && !block.fenceClosed && live);
+    slot.incomplete = incomplete;
     slot.identity = block.identity;
-    slots.push_back(std::move(slot));
+    emit(std::move(slot));
   }
 
+}
+
+} // namespace
+
+std::vector<FenceSlot> fenceSlots(const Document &document, const std::vector<std::string> &languages, bool live) {
+  return fenceSlots(document, languages, live, document.settledBlocks);
+}
+
+std::vector<FenceSlot> fenceSlots(const Document &document, const std::vector<std::string> &languages,
+                                  bool live, uint32_t settledBlocks) {
+  std::vector<FenceSlot> slots;
+  visitFenceSlots(document, languages, live, settledBlocks, {},
+      [&](FenceSlot slot) { slots.push_back(std::move(slot)); }, [](const auto &) {});
+  return slots;
+}
+
+std::vector<std::shared_ptr<const FenceSlot>> sharedFenceSlots(
+    const Document &document, const std::vector<std::string> &languages, bool live,
+    const std::vector<std::shared_ptr<const FenceSlot>> &previous) {
+  std::vector<std::shared_ptr<const FenceSlot>> slots;
+  visitFenceSlots(document, languages, live, document.settledBlocks, previous,
+      [&](FenceSlot slot) { slots.push_back(std::make_shared<const FenceSlot>(std::move(slot))); },
+      [&](const auto &slot) { slots.push_back(slot); });
   return slots;
 }
 

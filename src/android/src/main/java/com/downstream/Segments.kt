@@ -141,6 +141,8 @@ internal class TextSegment(
   val caretOffset: Int,
   /** The caret's shape, or 0 for none. */
   val caretKind: Int,
+  /** Opt-in live plain-paragraph layout; complete text uses canonical shaping. */
+  val streamingParagraph: StreamingParagraphLayout? = null,
 ) : Segment(gapBefore) {
   private var heightWidth = -1
   private var fullHeight = 0
@@ -163,6 +165,7 @@ internal class TextSegment(
    */
   @Synchronized
   fun height(width: Int, paint: TextPaint, choices: ReaderChoices = ReaderChoices()): Int {
+    streamingParagraph?.frame(width)?.let { return it.height }
     val layoutWidth = width.coerceAtLeast(1)
     val widthChanged = layoutWidth != heightWidth
     if (widthChanged) {
@@ -245,7 +248,7 @@ internal class DetailsBlock(
  * Code is always laid out left to right, as in Streamdown.
  */
 internal class CodeSegment(
-  val text: Spanned,
+  text: Spanned,
   val accessibleBlocks: List<AccessibleBlock>,
   /** The fence language as written, or empty for an indented block. */
   val language: String,
@@ -322,7 +325,11 @@ internal class CodeSegment(
    * ordinal counts tables and does not.
    */
   val ordinal: Int = -1,
+  /** Deferred measurement is unnecessary while a React child hosts the fence. */
+  prepareText: (() -> Spanned)? = null,
 ) : Segment(gapBefore) {
+  val textLength = text.length
+  val text: Spanned by lazy { prepareText?.invoke() ?: text }
   private val digitAdvance: Float
   private val codeLineHeight: Int
   private var wrappedWidth = -1

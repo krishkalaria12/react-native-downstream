@@ -2,6 +2,7 @@
 
 #include "IncrementalParser.h"
 #include "RenderPreparer.h"
+#include "SessionSlotCache.h"
 
 #include <cstdint>
 #include <functional>
@@ -25,6 +26,8 @@ struct PublishedSessionSnapshot {
   DocumentHandle document;
   std::shared_ptr<const std::string> source;
   bool live{false};
+  std::shared_ptr<const TagSourceBodies> tagBodies;
+  std::shared_ptr<const std::vector<TagSlotRange>> tagStructure;
 };
 
 /// Called on a worker pool thread, one event at a time per session.
@@ -44,9 +47,14 @@ public:
   /// further events.
   static void dispose(const std::string &id);
   static DocumentHandle snapshot(const std::string &id, uint64_t generation, uint64_t sequence);
-  static PublishedSessionSnapshot publishedSnapshot(const std::string &id, uint64_t generation, uint64_t sequence);
+  static PublishedSessionSnapshot publishedSnapshot(const std::string &id, uint64_t generation, uint64_t sequence, bool includeSource = true);
   /// Whether the writer finished the stream. A finished stream settles every
   /// block, so a fence it never closed is final rather than still arriving.
+  static SlotChanges<FenceSlot> fenceSlotChanges(const std::string &id, uint64_t generation, uint64_t sequence,
+                                                const std::vector<std::string> &languages, uint64_t baseToken);
+  static SlotChanges<TagSlot> tagSlotChanges(const std::string &id, uint64_t generation, uint64_t sequence,
+                                            const std::vector<std::string> &names, uint64_t baseToken);
+  static SlotQueryWork slotWork(const std::string &id);
   static bool isFinished(const std::string &id);
   /// Records the width and font scale the session's view was measured at, so
   /// later snapshots are prepared for that layout.

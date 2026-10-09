@@ -234,7 +234,7 @@ bool fastPathAndFallbacks() {
   source = std::string(70 * 1024, 'x');
   if (replaceWith(parser, source).status != ParseStatus::Ok) return false;
   if (feed(parser, source + "x", false).status != ParseStatus::Ok ||
-      parser.counters().fallbackCount(ParseFallback::TailLimit) != 1) return false;
+      parser.counters().plainParagraphFastUpdates == 0) return false;
   return true;
 }
 
@@ -267,12 +267,14 @@ bool tailLimitPreservesIdentity() {
   source += std::string(70 * 1024, 'x');
   const auto fallback = feed(parser, source, false);
   if (fallback.status != ParseStatus::Ok || fallback.document->blocks[0].identity != identity ||
-      parser.counters().fallbackCount(ParseFallback::TailLimit) != 1) return false;
+      parser.counters().fallbackCount(ParseFallback::TailLimit) != 0 ||
+      parser.counters().tailParses == 0) return false;
   source += "y";
   const auto repeated = feed(parser, source, false);
   return repeated.status == ParseStatus::Ok && repeated.document->blocks[0].identity == identity &&
       repeated.document->blocks[0].sourceRange == range &&
-      parser.counters().fallbackCount(ParseFallback::TailLimit) == 2 &&
+      parser.counters().fallbackCount(ParseFallback::TailLimit) == 0 &&
+      parser.counters().plainParagraphFastUpdates > 0 &&
       equal(*repeated.document, *parseMarkdown(source).document);
 }
 
@@ -844,6 +846,177 @@ bool referenceSafeReuse() {
   return scan::sameDocument(*previewed.document, *fullPreview.document) && parser.reusedBytes() == 0;
 }
 
+// Previously confirmed definitions are replayed without reparsing ordinary
+// committed prose. All comparisons include images, tags, and source positions.
+bool definitionContextReuse() {
+  const std::string padding = "\n\n" + std::string(160, 'p') + "\n\n";
+  const std::vector<std::string> cases = {
+      "[ref]: https://example.test\n" + padding + "[ref] [label][ref] [ref][] ![alt][ref] ![ref]\n\nnext",
+      "[Ref]: /first\n[REF]: /second\n" + padding + "[ref] [REF][] [label][rEf]\n\n[ref]: /third\n\n[ref]",
+      "[two\n words]:\n /target\n \"multiline title\"\n" + padding + "[two words] ![two words]\n\nnext",
+      "[a\\*b]: /escaped\n" + padding + "[a\\*b] [a*b]\n\nnext",
+      "[Café]: https://example.test\n" + padding + "[CAFÉ] [label][café] ![Café]\n\nnext",
+      "[ref]: <https://example.test/image.png> 'title'\n" + padding + "[![alt][ref]][ref]\n\nnext",
+      "[ref]: /target\n" + padding + "[missing]\n\n[ref]\n\n[missing]: /late\n\n[missing]",
+      "[ref]: /target\n" + padding + "[^note]\n\n[^note]: footnote content\n    continuation\n",
+      "[ref]: /target\n" + padding + "[ref]\n\n```\n[ref]: /code\n```\n\n[ref]",
+      "[ref]: /target\n" + padding + "literal ]: text\n\n[ref]",
+      "[ref]: /target\n" + padding + "\\[\n" + std::string(160, 'm') + "\n\n\\]\n",
+      "[ref]: /target\n" + padding + "<div>\n[ref]: /html\n</div>\n\n[ref]",
+      "[ref]: /target\n" + padding + "> [other]: /quoted\n> [other]\n\n[ref] [other]",
+  };
+  for (const auto &text : cases) {
+    IncrementalParser parser(ParseMode::IncrementalTail);
+    std::map<uint64_t, std::pair<size_t, Block>> identities;
+    DocumentHandle retained;
+    Document copy;
+    std::string source;
+    for (char byte : text) {
+      source.push_back(byte);
+      const auto result = feed(parser, source, false);
+      const auto expectedParse = parseMarkdown(source);
+      if (result.status != expectedParse.status) return false;
+      if (result.status != ParseStatus::Ok) continue;
+      const auto expected = colored(expectedParse);
+      if (!scan::sameDocument(*result.document, *expected) ||
+          !stableIdentities(*result.document, identities)) {
+        std::cerr << "Definition context mismatch at " << source.size() << " bytes in " << text << "\n";
+        return false;
+      }
+      if (!retained && parser.committedBytes() != 0 && !result.document->blocks.empty()) {
+        retained = result.document;
+        copy = *retained;
+      }
+    }
+    if (retained && !scan::sameDocument(*retained, copy)) return false;
+    const auto done = parser.parse(true);
+    if (!scan::sameDocument(*done.document, *colored(parseMarkdown(source)))) return false;
+  }
+
+  IncrementalParser parser(ParseMode::IncrementalTail);
+  std::string source = "[ref]: https://example.test\n\n";
+  const std::string paragraph = "Ordinary paragraph with **strong** words.\n\n";
+  for (size_t i = 0; i < 2300; i++) {
+    source += paragraph;
+    const auto result = feed(parser, source, false);
+    if (result.status != ParseStatus::Ok) return false;
+  }
+  const auto counts = parser.counters();
+  if (parser.committedBytes() < 90 * 1024 || counts.tailParses == 0 || counts.fullParses > 4 ||
+      counts.bytesParsed > source.size() * 10 ||
+      !scan::sameDocument(*parser.document(), *parseMarkdown(source).document)) return false;
+  // New definitions resolve old provisional text; reset/replacement never
+  // inherit replayed definitions from the previous canonical source.
+  source += "[ref] [new]";
+  feed(parser, source, false);
+  source += "\n\n[new]: /resolved\n\n";
+  if (!scan::sameDocument(*feed(parser, source, false).document, *parseMarkdown(source).document)) return false;
+  parser.replace("[ref]" + padding + "tail");
+  if (!scan::sameDocument(*parser.parse(false).document, *parseMarkdown(parser.source()).document)) return false;
+  parser.reset();
+  if (!scan::sameDocument(*feed(parser, "[ref]" + padding + "tail", false).document,
+                          *parseMarkdown(parser.source()).document)) return false;
+
+  // Preview still uses its canonical full-document proof with definitions.
+  IncrementalParser preview(ParseMode::IncrementalTail), full(ParseMode::FullParse);
+  source = "[ref]: /target\n" + padding + "[ref] **unfinished";
+  feed(preview, source, false);
+  preview.setPreview(remend::PreviewOptions::all());
+  full.setPreview(remend::PreviewOptions::all());
+  full.append(source);
+  return scan::sameDocument(*preview.parse(false).document, *full.parse(false).document);
+}
+
+bool referenceExpansionBudgets() {
+  const auto compare = [](IncrementalParser &parser, std::string &source, std::string_view added) {
+    source.append(added);
+    const auto result = feed(parser, source, false);
+    return result.status == ParseStatus::Ok &&
+        scan::sameDocument(*result.document, *parseMarkdown(source, parser.options()).document);
+  };
+  IncrementalParser parser(ParseMode::IncrementalTail, ParseOptions{ParseFlags::LinkRelative});
+  std::string source;
+  if (!compare(parser, source, std::string(4096, 'p') + "\n\n") ||
+      !compare(parser, source, "[r]: /" + std::string(1000, 'a') + "\n\n")) return false;
+  for (int i = 0; i < 100; i++) if (!compare(parser, source, "[r] ")) return false;
+  // Cumulative committed references consume the same global budget as a full
+  // parse. A tail must not receive a fresh cap on each small paragraph.
+  for (int i = 0; i < 160; i++) if (!compare(parser, source, "\n\n[r]\n\n")) return false;
+  const size_t linksBefore = parser.document()->links.size();
+  if (!compare(parser, source, std::string(16384, 'p') + "\n\n") ||
+      parser.document()->links.size() <= linksBefore) return false;
+  return scan::sameDocument(*parser.parse(true).document, *parseMarkdown(source, parser.options()).document);
+}
+
+bool plainParagraphAppendAndFallback() {
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"plain words", " more words   after spaces"},
+      {"Normal paragraph", " with sentences. More words.  "},
+      {"www", ".example.test"}, {"plain w", "ww.example.test"}, {"plain WW", "W.example.test"}, {"https", "://example.test"}, {"1", ". list item"},
+      {"plain", "\n---\n"}, {"table", " | cell\n--- | ---\n"},
+      {"plain", " *styled* [ref]\n\n[ref]: /target\n"},
+      {"plain", " &amp; &#0; \\*escaped\\*"}, {"plain", "  \nnext line"},
+      {"plain", "\r\nnext\tline"}, {"plain", " $$x$$ \\(y\\)"},
+  };
+  for (const auto &[before, after] : cases) {
+    IncrementalParser parser(ParseMode::IncrementalTail);
+    std::string source;
+    for (char byte : before + after) {
+      source.push_back(byte);
+      const auto result = feed(parser, source, false);
+      if (!scan::sameDocument(*result.document, *colored(parseMarkdown(source)))) return false;
+    }
+    if ((before.size() > 1 && parser.counters().plainParagraphFastUpdates == 0) ||
+        !scan::sameDocument(*parser.parse(true).document, *colored(parseMarkdown(source)))) return false;
+  }
+  IncrementalParser parser(ParseMode::IncrementalTail);
+  const std::string chunk(128, 'p');
+  std::string source;
+  DocumentHandle held;
+  for (size_t i = 0; i < 768; i++) {
+    source += chunk;
+    const auto result = feed(parser, source, false);
+    if (i == 0) held = result.document;
+  }
+  const auto counts = parser.counters();
+  return counts.plainParagraphFastUpdates == 767 && counts.bytesParsed == 128 &&
+      held->blocks.front().text.size() == 128 && parser.document()->blocks.front().text.size() == source.size() &&
+      scan::sameDocument(*parser.parse(true).document, *parseMarkdown(source).document);
+}
+
+bool tagMetadataSurvivesSplicing() {
+  ParseOptions options{ParseFlags::InlineHtml};
+  options.tags.tags = {{"user", {"id"}}};
+  const std::string prefix = "café " + std::string(160, 'p') + "\n\n";
+  for (const std::string &definitions : {std::string(), std::string("[r]: /target\n\n")}) {
+    const std::vector<std::string> cases = {
+        "<user id='a'>one</user>\n\n<user id='b'>two</user>\n\n[ref](https://example.test)",
+        "<user>\n", "<user>\n</user>\n", "<user>\nbody\n</user>\n\nnext",
+        "<user>\n<user>\nnested\n</user>\n</user>\n\nnext",
+        "<a href='https://example.test'>link</a>\n\n<user>\nbody\n</user>\n",
+    };
+    for (const auto &tail : cases) {
+      IncrementalParser parser(ParseMode::IncrementalTail, options);
+      std::string source = definitions + prefix;
+      if (feed(parser, source, false).status != ParseStatus::Ok) return false;
+      for (char byte : tail) {
+        source.push_back(byte);
+        const auto actual = feed(parser, source, false);
+        const auto expected = parseMarkdown(source, options);
+        if (actual.status != expected.status || !scan::sameDocument(*actual.document, *expected.document)) {
+          std::cerr << "Tag metadata mismatch at " << source.size() << " bytes in " << source << "\n";
+          return false;
+        }
+      }
+      const auto retained = parser.document();
+      const Document copy = *retained;
+      if (!scan::sameDocument(*parser.parse(true).document, *parseMarkdown(source, options).document) ||
+          !scan::sameDocument(*retained, copy)) return false;
+    }
+  }
+  return true;
+}
+
 // What a pass returns is what a session hands every view, so it has to be the
 // snapshot the parser recorded, carrying both of its flags: a stream still
 // arriving, and how many leading blocks have settled. Each path is fed in turn:
@@ -880,6 +1053,9 @@ int main(int argc, char **argv) {
   if (argc > 1 && std::string(argv[1]) == "--references") {
     CHECK(inlineCodeBracketsAndReferences(), "inline code brackets preserve commitment and streamed reference resolution");
     CHECK(referenceSafeReuse(), "reference-aware provisional reuse stays equivalent and bounded");
+    CHECK(definitionContextReuse(), "confirmed definition replay preserves prefix parity and bounded work");
+    CHECK(referenceExpansionBudgets(), "reference expansion retains canonical global budgets");
+    CHECK(tagMetadataSurvivesSplicing(), "tag indices and source ranges survive tail splicing");
     return ds_check_result();
   }
   if (argc > 1 && std::string(argv[1]) == "--batch") {
@@ -917,6 +1093,10 @@ int main(int argc, char **argv) {
   CHECK(snapshotsCarryTheirFlags(ParseMode::FullParse), "a pass returns the snapshot it flagged (full)");
   CHECK(referenceSafeReuse(), "reference-aware provisional reuse stays equivalent and bounded");
   CHECK(inlineCodeBracketsAndReferences(), "inline code brackets preserve commitment and streamed reference resolution");
+  CHECK(definitionContextReuse(), "confirmed definition replay preserves prefix parity and bounded work");
+  CHECK(referenceExpansionBudgets(), "reference expansion retains canonical global budgets");
+  CHECK(plainParagraphAppendAndFallback(), "plain paragraph append bounds work and falls back for grammar mutations");
+  CHECK(tagMetadataSurvivesSplicing(), "tag indices and source ranges survive tail splicing");
   CHECK(fullParseOracleSettles(), "the full-parse oracle settles code with a zero highlight budget");
   return ds_check_result();
 }

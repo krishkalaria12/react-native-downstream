@@ -43,6 +43,7 @@ internal class RenderedDocument(
   val paint: TextPaint,
   /** Paints and sizes for one font scale and appearance, shared by the frames. */
   val style: Style,
+  val tracing: Boolean = false,
 ) {
   private var cachedWidth = -1
   private var cachedChrome = -1
@@ -369,7 +370,7 @@ internal class RenderedDocument(
     private fun segmentCost(value: Segment): Long = when (value) {
       // Precomputed text also keeps a width per character.
       is TextSegment -> value.text.length * 24L + 256
-      is CodeSegment -> value.text.length * 24L + 512
+      is CodeSegment -> value.textLength * 24L + 512
       is TableSegment -> value.accessibilityText.length * 32L + 1024
       // Picture bitmaps belong to the image pipeline's cache.
       is ImageSegment -> 512L
@@ -385,6 +386,13 @@ internal class RenderedDocument(
       override fun sizeOf(key: String, value: Segment) =
         segmentCost(value).coerceAtMost(16L * 1024 * 1024 + 1).toInt()
     }
+
+    private val plainParagraphs = RenderingCache<PlainParagraphKey, TextSegment>(128, 2L * 1024 * 1024) {
+      segmentCost(it)
+    }
+
+    // Compatible append branches coexist for independently streaming messages.
+    private val streamingParagraphs = StreamingParagraphSeeds<StreamingParagraphLayout>(16, 2L * 1024 * 1024)
 
     private data class PreparedTableCell(val text: Spanned, val desiredWidth: Float)
     private data class TableCellLayoutKey(val content: TableCellKey, val width: Int)
@@ -424,8 +432,8 @@ internal class RenderedDocument(
      * Returns a cached rendering, or null when the document is gone.
      *
      * `syntaxHighlighting` decides whether code blocks carry token colors.
-     * Tokens are always computed by the engine, so this only chooses the
-     * rendering and it is part of both cache keys. Measurement passes true:
+     * Tokens come from the engine, so this only chooses the rendering. Both
+     * cache keys normalize the flag where there is no code. Measurement passes true:
      * colors do not change metrics, so a measurement is valid either way.
      *
      * `themeId` is the interned theme the caller draws with. It is in both keys
@@ -446,17 +454,30 @@ internal class RenderedDocument(
       themeId: Long = 0L,
       caret: PlacedCaret = PlacedCaret.NONE,
       linkVariants: LinkVariants = LinkVariants(),
+      incrementalParagraphs: Boolean = false,
     ): RenderedDocument? {
       val night = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
         Configuration.UI_MODE_NIGHT_YES
       // Link colors are baked into a segment's text, so two variant sets are two
       // different renderings even when everything else is the same.
-      val key =
-        "$documentId:$fontScale:$night:$syntaxHighlighting:$themeId:${caret.kind}:${caret.place}:${linkVariants.hashCode()}"
+      var key =
+        "$documentId:$fontScale:$night:$syntaxHighlighting:$themeId:${caret.kind}:${caret.place}:${linkVariants.hashCode()}:$incrementalParagraphs"
       cache.get(key)?.let { return it }
+      if (syntaxHighlighting) {
+        val plainKey = "$documentId:$fontScale:$night:false:$themeId:${caret.kind}:${caret.place}:${linkVariants.hashCode()}:$incrementalParagraphs"
+        cache.get(plainKey)?.let { existing ->
+          if (existing.plan.none { it.kind == SEGMENT_CODE }) return existing
+        }
+      }
       // Inline formulas draw from text spans, which have no context of their own.
       MathFonts.attach(context)
       val plan = DownstreamNative.readSegmentPlan(documentId) ?: return null
+      // A code-free snapshot has identical pixels and metrics for both flags.
+      // Normalize after reading the plan, and retain the requested-key lookup
+      // above so repeated code snapshots still avoid the JNI plan read.
+      val highlights = syntaxHighlighting && plan.any { it.kind == SEGMENT_CODE }
+      key = "$documentId:$fontScale:$night:$highlights:$themeId:${caret.kind}:${caret.place}:${linkVariants.hashCode()}:$incrementalParagraphs"
+      cache.get(key)?.let { return it }
       // The document's pictures, read once. An image segment needs its destination,
       // alt text and policy answer, and reading those one field at a time over JNI
       // would be one crossing per field per picture; this is one for the document.
@@ -479,6 +500,7 @@ internal class RenderedDocument(
       // measurement reads; a segment builds its own for the per-block work that
       // needs the document.
       val style = Style(scaled, Palette(theme, night), theme, themeId)
+      val traceId = if (DownstreamNative.isTracingDocument(documentId)) documentId else 0L
       val segments = ArrayList<Segment>(plan.size)
       // Each code segment's ordinal is a property of the plan, so a measurement
       // and the view that draws it read the same number: the ordinal is not
@@ -495,19 +517,22 @@ internal class RenderedDocument(
         // varies there and every earlier segment keeps being shared between
         // snapshots.
         val caretKey = if (isLast) "${caret.kind}:${caret.place}" else "0:0"
+        val segmentParagraphs = incrementalParagraphs && planned.kind == SEGMENT_TEXT &&
+          !planned.isCommitted && planned.from >= planned.settledBlocks
         val segmentKey =
           "${planned.identity}:${planned.to - planned.from}:$ordinal:$scaled:$night:" +
-            "$syntaxHighlighting:$themeId:$caretKey:${linkVariants.hashCode()}"
+            "${highlights && planned.kind == SEGMENT_CODE}:$themeId:$caretKey:${linkVariants.hashCode()}:$segmentParagraphs"
         val segment = (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
           // The theme id goes with the read, because each block's typography is
           // resolved against it in C++; without it every block reads the default.
           ?: DownstreamNative.readDocument(documentId, planned.from, planned.to, themeId)
             ?.let {
               buildSegment(
-                it, images, style, planned, ordinal, planned.tableOrdinal, syntaxHighlighting,
+                it, images, style, planned, ordinal, planned.tableOrdinal, highlights,
                 style.px(it.previousBottomMargin),
                 if (isLast) caret else PlacedCaret.NONE,
                 linkVariants, linkUrls,
+                traceId, segmentParagraphs,
               ).also { segment ->
                 segment.detailsContainers = (0 until it.containerCount(0)).mapNotNull { depth ->
                   if (it.containerKind(0, depth) != NativeDocument.CONTAINER_DETAILS) null
@@ -521,7 +546,7 @@ internal class RenderedDocument(
           ?: return null
         segments.add(segment)
       }
-      return RenderedDocument(documentId, segments, plan, style.paint, style).also { cache.put(key, it) }
+      return RenderedDocument(documentId, segments, plan, style.paint, style, traceId != 0L).also { cache.put(key, it) }
     }
 
   /**
@@ -713,6 +738,8 @@ internal class RenderedDocument(
       caret: PlacedCaret = PlacedCaret.NONE,
       linkVariants: LinkVariants = LinkVariants(),
       linkUrls: List<String> = emptyList(),
+      traceId: Long = 0L,
+      incrementalParagraphs: Boolean = false,
     ): Segment {
       val from = planned.from
       val isCode = planned.kind == SEGMENT_CODE
@@ -740,6 +767,16 @@ internal class RenderedDocument(
           ?.let { return it }
       }
 
+      // Reuse unchanged active paragraphs as well as committed segments. This
+      // matters when a revision only resolves a different block or reference.
+      // Large changing tails do not accumulate in this separate bounded cache.
+      val plainKey = plainParagraphKey(document, style, planned, caret, previousBottom,
+        "$incrementalParagraphs:${planned.from >= planned.settledBlocks}")
+      plainKey?.let { plainParagraphs.get(it)?.let { segment ->
+        if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_paragraph_reuse")
+        return segment
+      } }
+      if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_text_spans_start")
       val text = SpannableStringBuilder(document.text)
       val textLanguage = document.blockLanguage(0)
       val accessibleBlocks = ArrayList<AccessibleBlock>(document.blockCount)
@@ -934,6 +971,10 @@ internal class RenderedDocument(
         val styles = document.runStyles(run)
         val link = document.runLink(run)
         val tag = document.runTag(run)
+        // Plain runs inherit the block spans above. Avoid walking their font,
+        // theme, and block metadata again on every growing-prose revision.
+        // Table cells have no block spans and still need the run's face.
+        if (!isTable && styles == 0 && link < 0 && tag < 0) continue
         val start = document.runStart(run)
         val end = document.runEnd(run)
         val bold = styles and NativeDocument.STYLE_STRONG != 0
@@ -1223,6 +1264,7 @@ internal class RenderedDocument(
       // A table's caret is not in its text, so nothing is appended before this
       // returns. The grid view draws the shape from the kind it carries.
       if (isTable) {
+        if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_text_spans_end")
         // The block above the segment is not in this slice, so the caller passes
         // its bottom margin in; zero at the very top of the document.
         return buildTable(
@@ -1236,8 +1278,30 @@ internal class RenderedDocument(
       // The block above the segment is not in this slice, so the caller passes
       // its bottom margin in; zero at the very top of the document.
       val gapBefore = style.gapAbove(document, 0, previousBottom).toInt()
-      val displayText = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-        PrecomputedTexts.create(text, paint)
+      if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_text_spans_end")
+      val streamingParagraph = if (streamingParagraphEligible(document, style, planned, caret,
+        incrementalParagraphs)) {
+        val streamingPaint = TextPaint(paint).apply {
+          textSize = px(document.blockFontSize(0)).toInt().toFloat()
+          color = theme.color(document.blockColorSlot(0), colors.night) ?: colors.text
+        }
+        val seedKey = listOf(style.themeId, style.scale, style.density, colors.night,
+          planned.from, streamingPaint.textLocales.toLanguageTags()).joinToString(":")
+        val previous = streamingParagraphs.matching(seedKey, document.text)
+        StreamingParagraphLayout(document.text, streamingPaint, previous,
+          px(document.blockLineHeight(0)).toInt()).also {
+          streamingParagraphs.put(seedKey, document.text, it)
+        }
+      } else null
+      val displayText = if (streamingParagraph != null) {
+        SpannedString(text)
+      } else if (isCode) {
+        // This builder stays private inside CodeSegment's lazy initializer.
+        // The initializer publishes an immutable copy when fallback is needed.
+        // Hosted snapshots avoid both that copy and glyph measurement.
+        text
+      } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        PrecomputedTexts.create(text, paint, traceId)
       } else {
         text
       }
@@ -1270,6 +1334,7 @@ internal class RenderedDocument(
           ),
           caretOffset,
           caret.kind,
+          traceId,
         )
       }
       // The plan grouped this segment for one custom container, if it did: the
@@ -1285,7 +1350,45 @@ internal class RenderedDocument(
         displayText, accessibleBlocks, detailsBlocks, taskBlocks, custom,
         contentLeading = contentLeading(containersOf(0, -1).first).toInt(),
         gapBefore = gapBefore, caretOffset = caretOffset, caretKind = caret.kind,
-      )
+        streamingParagraph = streamingParagraph,
+      ).also { segment -> plainKey?.let { plainParagraphs.put(it, segment) } }
+    }
+
+    /** Parser output and resolved typography define the supported live subset. */
+    private fun streamingParagraphEligible(
+      document: NativeDocument,
+      style: Style,
+      planned: PlannedSegment,
+      caret: PlacedCaret,
+      enabled: Boolean,
+    ): Boolean {
+      return enabled && planned.kind == SEGMENT_TEXT && !planned.isCommitted &&
+        planned.to == planned.from + 1 && planned.from >= planned.settledBlocks &&
+        caret.kind == 0 && document.isPlainParagraph() && !document.blockIsRtl(0) &&
+        document.text.isNotEmpty() && document.text.all { it in ' '..'~' } &&
+        document.blockFontWeight(0) == 400f && !document.blockItalic(0) &&
+        style.theme.familyAt(document.blockFontFamily(0)).isEmpty() &&
+        style.bodyFamily.isEmpty() && style.bodyWeight == 400f && !style.bodyItalic
+    }
+
+    private fun plainParagraphKey(
+      document: NativeDocument,
+      style: Style,
+      planned: PlannedSegment,
+      caret: PlacedCaret,
+      previousBottom: Float,
+      layoutPolicy: String = "canonical",
+    ): PlainParagraphKey? {
+      if (planned.kind != SEGMENT_TEXT || caret.kind != 0 ||
+        document.text.length > 32 * 1024 || !document.isPlainParagraph()
+      ) return null
+      return PlainParagraphKey(document.text, listOf(
+        style.themeId, style.scale, style.density, style.colors.night,
+        document.blockFontSize(0), document.blockFontWeight(0), document.blockItalic(0),
+        document.blockFontFamily(0), document.blockLineHeight(0), document.blockColorSlot(0),
+        document.blockDirection(0), style.gapAbove(document, 0, previousBottom).toInt(),
+        style.paint.textLocales.toLanguageTags(), layoutPolicy,
+      ))
     }
 
     /**
@@ -1418,6 +1521,7 @@ internal class RenderedDocument(
       codeFace: Typeface,
       caretOffset: Int = -1,
       caretKind: Int = 0,
+      traceId: Long = 0L,
     ): CodeSegment {
       val newline = text.indexOfFirst { it == '\n' }
       val firstLine = text.substring(0, if (newline < 0) text.length else newline).toString()
@@ -1459,6 +1563,11 @@ internal class RenderedDocument(
         caretOffset = caretOffset,
         caretKind = caretKind,
         gapBefore = gapBefore,
+        prepareText = {
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            PrecomputedTexts.create(displayText, style.paint, traceId)
+          } else SpannedString(displayText)
+        },
       )
     }
 
@@ -1594,14 +1703,21 @@ internal class RenderedDocument(
  */
 @RequiresApi(Build.VERSION_CODES.P)
 internal object PrecomputedTexts {
-  fun create(text: Spanned, paint: TextPaint): Spanned = PrecomputedText.create(
-    text,
-    PrecomputedText.Params.Builder(paint)
-      .setBreakStrategy(Layout.BREAK_STRATEGY_HIGH_QUALITY)
-      .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
-      .setTextDirection(TextDirectionHeuristics.FIRSTSTRONG_LTR)
-      .build(),
-  )
+  fun create(text: Spanned, paint: TextPaint, traceId: Long = 0L): Spanned {
+    if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_text_shape_start")
+    return try {
+      PrecomputedText.create(
+        text,
+        PrecomputedText.Params.Builder(paint)
+          .setBreakStrategy(Layout.BREAK_STRATEGY_HIGH_QUALITY)
+          .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
+          .setTextDirection(TextDirectionHeuristics.FIRSTSTRONG_LTR)
+          .build(),
+      )
+    } finally {
+      if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_text_shape_end")
+    }
+  }
 
   /**
    * Shows precomputed text in a TextView that is not selectable. Returns

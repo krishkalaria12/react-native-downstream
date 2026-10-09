@@ -106,6 +106,15 @@ void testRegistry() {
 }
 
 void testDocumentAppends() {
+  CodeDocument owned;
+  owned.resetOwned(std::string("first\nsecond"));
+  CHECK(owned.text() == "first\nsecond" && owned.lineCount() == 2,
+        "owned conversion buffers rebuild text and line starts");
+  owned.fillStyles(0, owned.length(), 7);
+  owned.setLineState(0, 123);
+  owned.resetOwned(std::string("replacement\n"));
+  CHECK(owned.styleAt(0) == 0 && owned.lineState(0) == 0 && owned.lineCount() == 2,
+        "owned reset clears old styles and lexer state");
   CodeDocument document;
   document.append("first\r");
   CHECK(document.lineCount() == 1, "an initial append indexes the first line");
@@ -525,6 +534,35 @@ void testConcurrentPasses() {
   }
 }
 
+void testWorkCounters() {
+  HighlightState state;
+  Block block;
+  block.kind = BlockKind::CodeBlock;
+  block.language = "ts";
+  block.text = u"const first = 1;\n";
+  HighlightStats stats;
+  highlightCodeBlock(lexillaHighlighter(), &block, &state, 1e9, &stats);
+  CHECK(stats.bytesLexed == state.document.length() && stats.runsBuilt == block.tokens.size(),
+        "work counters record requested lexer input and fresh runs");
+  CHECK(stats.tokenBytesCopied == block.tokens.size() * sizeof(TokenRun) &&
+        stats.textBytesCopied == block.text.size() * sizeof(char16_t),
+        "owned initial conversion avoids another UTF-8 text copy");
+  block.text.append(u"const second = 2;\n");
+  const auto before = stats;
+  highlightCodeBlock(lexillaHighlighter(), &block, &state, 1e9, &stats);
+  CHECK(stats.bytesLexed - before.bytesLexed == 18 && stats.textBytesCopied - before.textBytesCopied == 54,
+        "append counters include new text without the settled prefix");
+
+  Block longBlock;
+  longBlock.kind = BlockKind::CodeBlock;
+  longBlock.language = "ts";
+  for (int i = 0; i < 128; i++) longBlock.text.append(u"const next = 1;\n");
+  HighlightState settled;
+  HighlightStats settledStats;
+  highlightSettledCodeBlock(lexillaHighlighter(), &longBlock, &settled, 0.0, &settledStats);
+  CHECK(settledStats.bytesLexed == settled.document.length(), "settling includes work from the first pass and retries");
+}
+
 } // namespace
 
 int main() {
@@ -539,5 +577,6 @@ int main() {
   testDocuments();
   testHighlightCache();
   testConcurrentPasses();
+  testWorkCounters();
   return ds_check_result();
 }

@@ -1,6 +1,0 @@
-Final regression run overlapped the full Xcode build. Timings are not isolated samples.
-ios_hidden_reveal_draw_ms=1.079 glyph_conversions=0 units=8192 frames=5
-ios_reveal_segment_lookup_ms=7.443 protocol_checks=20000 segments=128 queries=20000
-ios_reveal_block_invalidations=1 units=4096 table_rows=3
-Foreground/background settled interior gaps and suffixes, caret frontier-only query, table later rows, following code block, stale/range bounds, empty block placeholder finishing invalidation, negative/past-end lookup checks passed.
-native reveal checks passed

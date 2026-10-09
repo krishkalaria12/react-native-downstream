@@ -164,6 +164,11 @@ struct ParseResult {
   /// Source text that produced each block's visible text, parallel to
   /// document->blocks. A block without source text has an empty range.
   std::vector<ByteRange> blockSource;
+  /// Original source ranges recognized by md4c as link definitions, in order.
+  /// Footnotes are excluded because they produce document-global output.
+  std::vector<ByteRange> referenceDefinitions;
+  uint32_t referenceOutputUsed{0};
+  bool referenceOutputLimited{false};
   /// The options this parse ran under. Parse options are part of a source's
   /// identity, so a caller caching parses keys on it as well.
   ParseOptions parse;
@@ -184,6 +189,13 @@ ParseResult parseMarkdown(std::string_view source, ParseOptions options = ParseO
 /// last line record as a block record and so depends on each line's byte offset
 /// modulo 256. Returns ranges relative to the region, not the document.
 ParseResult parseMarkdownAt(std::string_view region, size_t origin, ParseOptions options = ParseOptions());
+
+/// Parses a tail with previously confirmed definition-only source replayed.
+/// References retain md4c normalization and first-definition precedence; output
+/// ranges are relative to the tail, as with parseMarkdownAt.
+ParseResult parseMarkdownWithReferences(std::string_view region, size_t origin,
+                                       std::string_view definitions, ParseOptions options = ParseOptions(),
+                                       uint32_t referenceBudget = UINT32_MAX);
 
 /// Allocates an ID for a derived immutable snapshot without reparsing it.
 uint64_t allocateDocumentId();

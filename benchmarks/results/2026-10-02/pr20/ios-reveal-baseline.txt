@@ -1,4 +1,0 @@
-HEAD 6d2aa70; iOS simulator, -O2, standalone native reveal harness
-ios_hidden_reveal_draw_ms=81.590 glyph_conversions=81920 units=8192 frames=5
-ios_reveal_segment_lookup_ms=286.974 protocol_checks=2560000 segments=128 queries=20000
-native reveal checks passed
