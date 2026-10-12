@@ -92,6 +92,8 @@ struct LayoutHint {
   BlockDirection direction{BlockDirection::Inherit};
   /// Android-only greedy incremental wrapping for eligible unfinished paragraphs.
   bool incrementalParagraphs{false};
+  /// Prepare the same code token colors the view requests.
+  bool syntaxHighlighting{true};
 
   /// The code bundle for `code` and `choices`, which is what a caller that has
   /// a hint rather than a layout resolves against.
@@ -126,7 +128,8 @@ struct LayoutHint {
     return fontScale == other.fontScale && width == other.width && chrome == other.chrome &&
            code == other.code && tables == other.tables && choices == other.choices && caret == other.caret &&
            images == other.images && direction == other.direction &&
-           incrementalParagraphs == other.incrementalParagraphs && themeId() == other.themeId();
+           incrementalParagraphs == other.incrementalParagraphs &&
+           syntaxHighlighting == other.syntaxHighlighting && themeId() == other.themeId();
   }
 
   /// The theme's id, or 0 for the default one, which is its id too.

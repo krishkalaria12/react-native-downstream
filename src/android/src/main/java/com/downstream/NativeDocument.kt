@@ -615,6 +615,7 @@ internal object DownstreamNative {
         context,
         documentId,
         layout.numberAt("fontScale", 1.0).toFloat(),
+        syntaxHighlighting = layout.numberAt("syntaxHighlighting", 1.0) != 0.0,
         themeId = layout.numberAt("themeId", 0.0).toLong(),
         incrementalParagraphs = layout.numberAt("incrementalParagraphs", 0.0) != 0.0,
         caret = caret,

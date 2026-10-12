@@ -91,6 +91,17 @@ void recordPrepare(const DocumentHandle &document, const std::vector<LayoutHint>
   }
 }
 
+bool layoutHintsDistinguishSyntaxHighlighting() {
+  const LayoutHint highlighted{1, 320};
+  auto plain = highlighted;
+  plain.syntaxHighlighting = false;
+  if (!highlighted.syntaxHighlighting || plain == highlighted) {
+    return fail("Layout hints did not distinguish syntax highlighting");
+  }
+  plain.syntaxHighlighting = true;
+  return plain == highlighted || fail("Restoring syntax highlighting changed other layout inputs");
+}
+
 bool preparedDocumentsAreSharedAndPrepared() {
   RenderPreparer::install(&recordPrepare);
   RenderPreparer::noteLayout({1, 320});
@@ -147,7 +158,8 @@ bool preparedDocumentsUseTheirOwnHints() {
   RenderPreparer::noteLayout({2, 280, kChromeCodeWrap, wrappedWithToggle(9), togglesAt(9), unrelated});
   RenderPreparer::noteLayout({1.5f, 320, kChromeTableToolbar, wrappedWithToggle(7), togglesAt(7), unrelated});
 
-  const LayoutHint owned{1, 0, kChromeCodeHeader, CodeLayoutProps{true, true, 400}, togglesAt({1, 3}), requested};
+  LayoutHint owned{1, 0, kChromeCodeHeader, CodeLayoutProps{true, true, 400}, togglesAt({1, 3}), requested};
+  owned.syntaxHighlighting = false;
   const auto prepared = PreparedDocument::request("Owned theme and code controls.", owned);
   prepared->runOrWait();
   bool valid = true;
@@ -158,7 +170,7 @@ bool preparedDocumentsUseTheirOwnHints() {
       if (id != prepared->result().document->id) continue;
       calls++;
       valid &= hint.themeId() == owned.themeId() && hint.chrome == owned.chrome &&
-          hint.code == owned.code;
+          hint.code == owned.code && hint.syntaxHighlighting == owned.syntaxHighlighting;
       valid &= (hint.width == 320 && hint.fontScale == 1.5f) || (hint.width == 280 && hint.fontScale == 2);
     }
   }
@@ -280,6 +292,7 @@ int main() {
   // regression rather than only the first.
   CHECK(poolRunsJobsInParallel(), "the pool runs jobs in parallel");
   CHECK(waiterRunsQueuedTask(), "a waiter runs its queued task");
+  CHECK(layoutHintsDistinguishSyntaxHighlighting(), "layout hints retain the syntax highlighting policy");
   CHECK(preparedDocumentsAreSharedAndPrepared(),
         "prepared documents are shared and prepared");
   CHECK(preparedDocumentsUseTheirOwnHints(), "prepared documents use only their own themes and controls");

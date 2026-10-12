@@ -89,7 +89,8 @@ DownstreamMarkdownShadowNode::DownstreamMarkdownShadowNode(const ShadowNode &sou
   // Later changes use the normal on-demand platform rendering cache.
   if (controlled_ && controlled_->prepared &&
       (!sameTheme || previous.controls != props.controls || previous.codeBlockWrap != props.codeBlockWrap ||
-       previous.incrementalParagraphs != props.incrementalParagraphs)) {
+       previous.incrementalParagraphs != props.incrementalParagraphs ||
+       previous.syntaxHighlighting != props.syntaxHighlighting)) {
     controlled_->prepared->noteHint(layoutHint(1, 0, document_));
   }
 }
@@ -167,6 +168,7 @@ downstream::LayoutHint DownstreamMarkdownShadowNode::layoutHint(Float fontScale,
   hint.tables = tableProps(state);
   hint.direction = directionFor(getConcreteProps().dir);
   hint.incrementalParagraphs = usesIncrementalParagraphs();
+  hint.syntaxHighlighting = getConcreteProps().syntaxHighlighting;
   return hint;
 }
 

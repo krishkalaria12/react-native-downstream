@@ -464,10 +464,12 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
       // The whole code layout, the caret, and the whole image layout come with
       // the hint, because a prepared height is only the height of the layout the
       // reader actually has.
-      auto map = ReadableNativeMap::newObjectCxxArgs(codeLayoutData(document->id, hint.fontScale, hint.chrome,
-                                                                     hint.code, hint.choices, hint.caret, hint.images,
-                                                                     hint.theme, downstream::HostLayout{}, hint.width,
-                                                                     hint.tables, hint.incrementalParagraphs));
+      auto layout = codeLayoutData(document->id, hint.fontScale, hint.chrome,
+                                   hint.code, hint.choices, hint.caret, hint.images,
+                                   hint.theme, downstream::HostLayout{}, hint.width,
+                                   hint.tables, hint.incrementalParagraphs);
+      layout["syntaxHighlighting"] = hint.syntaxHighlighting ? 1.0 : 0.0;
+      auto map = ReadableNativeMap::newObjectCxxArgs(std::move(layout));
       env->CallStaticVoidMethod(nativeClass, prepareMethod, static_cast<jlong>(document->id),
                                 reinterpret_cast<ReadableMap::javaobject>(map.get()));
       if (env->ExceptionCheck()) {

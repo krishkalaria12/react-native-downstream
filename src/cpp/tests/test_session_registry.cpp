@@ -449,6 +449,27 @@ int main() {
     CHECK(preparedHints.size() == 1 && !preparedHints[0].incrementalParagraphs,
           "canonical policy restoration drops incremental preparation variants");
   }
+  auto plainHint = LayoutHint{1.5f, 280.f};
+  plainHint.syntaxHighlighting = false;
+  SessionRegistry::noteLayout(widthsId, plainHint);
+  CHECK(SessionRegistry::append(widthsId, " plain", 0, 5) &&
+        shows(widthsId, 0, 5, u"width changed incremental canonical plain"), "prepare unhighlighted code policy");
+  {
+    std::lock_guard<std::mutex> lock(preparedMutex);
+    CHECK(preparedHints.size() == 1 && preparedHints[0].width == 280.f &&
+          !preparedHints[0].syntaxHighlighting,
+          "disabling syntax highlighting drops obsolete highlighted preparation widths");
+  }
+  SessionRegistry::noteLayout(widthsId, LayoutHint{1.5f, 320.f});
+  CHECK(SessionRegistry::append(widthsId, " highlighted", 0, 6) &&
+        shows(widthsId, 0, 6, u"width changed incremental canonical plain highlighted"),
+        "restore highlighted code policy");
+  {
+    std::lock_guard<std::mutex> lock(preparedMutex);
+    CHECK(preparedHints.size() == 1 && preparedHints[0].width == 320.f &&
+          preparedHints[0].syntaxHighlighting,
+          "restoring syntax highlighting drops obsolete unhighlighted preparation widths");
+  }
   SessionRegistry::dispose(widthsId);
   RenderPreparer::install(nullptr);
 
