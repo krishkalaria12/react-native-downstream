@@ -1,8 +1,8 @@
 import { registerRootComponent } from 'expo';
 
-import App from './src/App';
+// A dedicated phone benchmark entry avoids mounting the example's app screens.
+const App = process.env.EXPO_PUBLIC_PHONE_BENCHMARK === '1'
+  ? require('./src/bench/PhoneBenchmark').default
+  : require('./src/App').default;
 
-// registerRootComponent calls AppRegistry.registerComponent('main', () => App);
-// It also ensures that whether you load the app in Expo Go or in a native build,
-// the environment is set up appropriately
 registerRootComponent(App);

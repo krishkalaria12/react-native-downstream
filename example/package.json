@@ -26,19 +26,35 @@
     "react-native": "0.83.2",
     "react-native-downstream": "workspace:*",
     "react-native-downstream-math": "workspace:*",
-    "react-native-enriched-markdown": "0.6.0",
+    "react-native-enriched-markdown": "1.1.1",
+    "react-native-markdown-display": "7.0.2",
+    "react-native-markdown-renderer": "4.1.1",
+    "react-native-marked": "8.3.2",
     "react-native-safe-area-context": "~5.6.0",
-    "react-native-streamdown": "0.2.0",
+    "react-native-streamdown": "0.3.0",
+    "react-native-svg": "15.15.5",
     "react-native-web": "~0.21.0",
     "react-native-webview": "^14.0.1",
-    "react-native-worklets": "0.8.3",
+    "react-native-worklets": "0.10.0",
     "remend": "1.3.0"
   },
   "private": true,
   "devDependencies": {
     "@babel/preset-typescript": "7.28.5",
     "@react-native/metro-config": "0.83.8",
+    "@streamdown/code": "2.0.0",
     "babel-preset-expo": "55.0.25",
-    "react-native-builder-bob": "^0.40.18"
+    "react-native-builder-bob": "^0.40.18",
+    "streamdown": "2.7.0"
+  },
+  "enriched-markdown": {
+    "enableCodeHighlight": true,
+    "enableMath": false,
+    "codeHighlightLanguages": [
+      "javascript",
+      "typescript",
+      "python",
+      "json"
+    ]
   }
 }

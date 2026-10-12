@@ -15,7 +15,7 @@ module.exports = function (api) {
           'react-native-worklets/plugin',
           {
             bundleMode: true,
-            workletizableModules: ['remend'],
+            importForwarding: { moduleNames: ['remend'] },
           },
         ],
       ],
