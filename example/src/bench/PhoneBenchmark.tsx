@@ -7,17 +7,20 @@ import {
   useState,
 } from 'react';
 import type { ReactNode } from 'react';
+import { ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import {
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import { createMarkdownStream, DownstreamMarkdown } from 'react-native-downstream';
+  createMarkdownStream,
+  DownstreamMarkdown,
+} from 'react-native-downstream';
 import type { MarkdownStreamController } from 'react-native-downstream';
-import { createMarkdownStreamWithMode, getStreamState } from '../../../src/createMarkdownStream';
-import { setStreamTracing, subscribeStreamTrace } from '../../../src/streamTrace';
+import {
+  createMarkdownStreamWithMode,
+  getStreamState,
+} from '../../../src/createMarkdownStream';
+import {
+  setStreamTracing,
+  subscribeStreamTrace,
+} from '../../../src/streamTrace';
 import type { StreamTraceEvent } from '../../../src/streamTrace';
 import { StreamdownText } from 'react-native-streamdown';
 import { EnrichedMarkdownText } from 'react-native-enriched-markdown';
@@ -32,7 +35,16 @@ import {
 } from './phoneWorkloads';
 import type { PhoneChunk, PhoneWorkload } from './phoneWorkloads';
 
-const downstreamTheme = { colors: { foreground: '#111111', mutedForeground: '#555555', primary: '#1565c0', muted: '#f4f4f4', border: '#aaaaaa' }, maxFontSizeMultiplier: 1 };
+const downstreamTheme = {
+  colors: {
+    foreground: '#111111',
+    mutedForeground: '#555555',
+    primary: '#1565c0',
+    muted: '#f4f4f4',
+    border: '#aaaaaa',
+  },
+  maxFontSizeMultiplier: 1,
+};
 const HOST = 'http://127.0.0.1:8765';
 const SETTLE_MS = 2000;
 const TRACE_EVENT_LIMIT = 40000;
@@ -78,7 +90,14 @@ const jsMarkdownStyle = {
   code_block: { ...textStyle, backgroundColor: '#f4f4f4' },
   fence: { ...textStyle, backgroundColor: '#f4f4f4' },
 };
-const markedTheme = { colors: { text: '#111111', code: '#f4f4f4', link: '#1565c0', border: '#aaaaaa' } };
+const markedTheme = {
+  colors: {
+    text: '#111111',
+    code: '#f4f4f4',
+    link: '#1565c0',
+    border: '#aaaaaa',
+  },
+};
 const markedStyle = {
   text: textStyle,
   li: textStyle,
@@ -91,7 +110,11 @@ const rendererStyle = {
   text: textStyle,
   paragraph: { marginTop: 0, marginBottom: 12 },
   codeInline: { ...textStyle, fontFamily: 'monospace' },
-  codeBlock: { ...textStyle, fontFamily: 'monospace', backgroundColor: '#f4f4f4' },
+  codeBlock: {
+    ...textStyle,
+    fontFamily: 'monospace',
+    backgroundColor: '#f4f4f4',
+  },
 };
 
 export type PhoneCandidate =
@@ -126,7 +149,13 @@ interface Snapshot {
   capture?: boolean;
 }
 interface RunSamples {
-  deliveries: { revision: number; dueMs: number; actualMs: number; latenessMs: number; codepoints: number }[];
+  deliveries: {
+    revision: number;
+    dueMs: number;
+    actualMs: number;
+    latenessMs: number;
+    codepoints: number;
+  }[];
   rafSamples: { atMs: number; gapMs: number }[];
   commits: { revision: number; atMs: number }[];
   webCommits: Record<string, unknown>[];
@@ -142,7 +171,9 @@ interface TraceSamples {
   intervalComplete: boolean;
   events: StreamTraceEvent[];
 }
-const now = () => (globalThis as { performance?: { now: () => number } }).performance?.now() ?? Date.now();
+const now = () =>
+  (globalThis as { performance?: { now: () => number } }).performance?.now() ??
+  Date.now();
 
 async function post(endpoint: string, path: string, value: unknown) {
   const response = await fetch(`${endpoint}${path}`, {
@@ -177,26 +208,46 @@ async function getWorkload(config: RunConfig): Promise<PhoneWorkload> {
   }
   let previousDue = -1;
   for (const chunk of workload.chunks) {
-    if (!Number.isFinite(chunk.dueMs) || chunk.dueMs < 0 || chunk.dueMs < previousDue) {
-      throw new Error('Chunk due times must be finite, nonnegative and monotonic');
+    if (
+      !Number.isFinite(chunk.dueMs) ||
+      chunk.dueMs < 0 ||
+      chunk.dueMs < previousDue
+    ) {
+      throw new Error(
+        'Chunk due times must be finite, nonnegative and monotonic'
+      );
     }
     previousDue = chunk.dueMs;
   }
   if (config.mode !== 'stream') {
-    return { source: workload.source, chunks: [{ text: workload.source, dueMs: 0 }] };
+    return {
+      source: workload.source,
+      chunks: [{ text: workload.source, dueMs: 0 }],
+    };
   }
   return workload;
 }
 
-class RendererBoundary extends Component<{
-  children: ReactNode;
-  onError: (error: string) => void;
-}, { failed: boolean }> {
+class RendererBoundary extends Component<
+  {
+    children: ReactNode;
+    onError: (error: string) => void;
+  },
+  { failed: boolean }
+> {
   state = { failed: false };
-  static getDerivedStateFromError() { return { failed: true }; }
-  componentDidCatch(error: Error) { this.props.onError(String(error)); }
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(error: Error) {
+    this.props.onError(String(error));
+  }
   render() {
-    return this.state.failed ? <Text accessibilityLabel="renderer-error">Renderer failed</Text> : this.props.children;
+    return this.state.failed ? (
+      <Text accessibilityLabel="renderer-error">Renderer failed</Text>
+    ) : (
+      this.props.children
+    );
   }
 }
 
@@ -218,10 +269,16 @@ function Candidate({
   const web = useRef<WebView<object>>(null);
   const webReady = useRef(false);
   const syntaxHighlighting = config.syntaxHighlighting ?? false;
-  const markdownStyle = syntaxHighlighting ? coloredNativeMarkdownStyle : nativeMarkdownStyle;
+  const markdownStyle = syntaxHighlighting
+    ? coloredNativeMarkdownStyle
+    : nativeMarkdownStyle;
   useEffect(() => {
     if (config.candidate === 'web-streamdown' && webReady.current) {
-      web.current?.injectJavaScript(snapshot.capture ? 'window.phoneCapture();true;' : `window.phoneUpdate(${JSON.stringify({ ...snapshot, syntaxHighlighting })});true;`);
+      web.current?.injectJavaScript(
+        snapshot.capture
+          ? 'window.phoneCapture();true;'
+          : `window.phoneUpdate(${JSON.stringify({ ...snapshot, syntaxHighlighting })});true;`
+      );
     }
   }, [config.candidate, syntaxHighlighting, snapshot]);
 
@@ -232,11 +289,18 @@ function Candidate({
         testID="phone-benchmark-web-document"
         source={{ uri: `${config.endpoint ?? HOST}/web/index.html` }}
         style={styles.web}
-        onError={(event) => onError(`WebView: ${event.nativeEvent.description}`)}
-        onHttpError={(event) => onError(`WebView HTTP ${event.nativeEvent.statusCode}`)}
+        onError={(event) =>
+          onError(`WebView: ${event.nativeEvent.description}`)
+        }
+        onHttpError={(event) =>
+          onError(`WebView HTTP ${event.nativeEvent.statusCode}`)
+        }
         onMessage={(event) => {
           try {
-            const message = JSON.parse(event.nativeEvent.data) as Record<string, unknown>;
+            const message = JSON.parse(event.nativeEvent.data) as Record<
+              string,
+              unknown
+            >;
             if (message.type === 'ready') {
               webReady.current = true;
               onWebReady();
@@ -245,7 +309,9 @@ function Candidate({
             } else {
               onWebMessage(message);
             }
-          } catch (error) { onError(`WebView protocol: ${String(error)}`); }
+          } catch (error) {
+            onError(`WebView protocol: ${String(error)}`);
+          }
         }}
         javaScriptEnabled
         domStorageEnabled={false}
@@ -277,7 +343,11 @@ function Candidate({
       document = controller ? (
         <DownstreamMarkdown
           stream={controller}
-          androidParagraphLayout={config.candidate === 'downstream-incremental' ? 'incremental' : 'canonical'}
+          androidParagraphLayout={
+            config.candidate === 'downstream-incremental'
+              ? 'incremental'
+              : 'canonical'
+          }
           markdownStyle={markdownStyle}
           theme={downstreamTheme}
           animated={false}
@@ -292,36 +362,87 @@ function Candidate({
       ) : null;
       break;
     case 'streamdown':
-      document = <StreamdownText markdown={snapshot.source} flavor="github" markdownStyle={markdownStyle} streamingAnimation={false} selectable={false} allowFontScaling={false} md4cFlags={{ latexMath: false }} />;
+      document = (
+        <StreamdownText
+          markdown={snapshot.source}
+          flavor="github"
+          markdownStyle={markdownStyle}
+          streamingAnimation={false}
+          selectable={false}
+          allowFontScaling={false}
+          md4cFlags={{ latexMath: false }}
+        />
+      );
       break;
     case 'enriched':
-      document = <EnrichedMarkdownText markdown={snapshot.source} flavor="github" markdownStyle={markdownStyle} streamingAnimation={false} selectable={false} allowFontScaling={false} md4cFlags={{ latexMath: false }} />;
+      document = (
+        <EnrichedMarkdownText
+          markdown={snapshot.source}
+          flavor="github"
+          markdownStyle={markdownStyle}
+          streamingAnimation={false}
+          selectable={false}
+          allowFontScaling={false}
+          md4cFlags={{ latexMath: false }}
+        />
+      );
       break;
     case 'markdown-display':
-      document = <MarkdownDisplay style={jsMarkdownStyle}>{snapshot.source}</MarkdownDisplay>;
+      document = (
+        <MarkdownDisplay style={jsMarkdownStyle}>
+          {snapshot.source}
+        </MarkdownDisplay>
+      );
       break;
     case 'markdown-renderer':
-      document = <MarkdownRenderer style={rendererStyle} maxTopLevelChildren={null}>{snapshot.source}</MarkdownRenderer>;
+      document = (
+        <MarkdownRenderer style={rendererStyle} maxTopLevelChildren={null}>
+          {snapshot.source}
+        </MarkdownRenderer>
+      );
       break;
     default:
       throw new Error(`Unsupported candidate: ${String(config.candidate)}`);
   }
-  return <ScrollView testID="phone-benchmark-document" style={styles.viewport} contentContainerStyle={styles.document}>{document}</ScrollView>;
+  return (
+    <ScrollView
+      testID="phone-benchmark-document"
+      style={styles.viewport}
+      contentContainerStyle={styles.document}
+    >
+      {document}
+    </ScrollView>
+  );
 }
 
 /** One process launch runs one sample; final output stays mounted for native capture. */
 export default function PhoneBenchmark() {
   const [config, setConfig] = useState<RunConfig | null>(null);
-  const [snapshot, setSnapshot] = useState<Snapshot>({ source: '', revision: 0, finished: false });
+  const [snapshot, setSnapshot] = useState<Snapshot>({
+    source: '',
+    revision: 0,
+    finished: false,
+  });
   const [status, setStatus] = useState('Waiting for benchmark configuration');
   const controller = useRef<MarkdownStreamController | null>(null);
-  const samples = useRef<RunSamples>({ deliveries: [], rafSamples: [], commits: [], webCommits: [], errors: [], startAt: 0, deliveryDurationMs: 0 });
+  const samples = useRef<RunSamples>({
+    deliveries: [],
+    rafSamples: [],
+    commits: [],
+    webCommits: [],
+    errors: [],
+    startAt: 0,
+    deliveryDurationMs: 0,
+  });
   const webResolve = useRef<(() => void) | null>(null);
   const stopTraceOnError = useRef<(() => void) | null>(null);
 
   useLayoutEffect(() => {
     if (snapshot.revision > 0 && samples.current.startAt > 0) {
-      samples.current.commits.push({ revision: snapshot.revision, atMs: now() - samples.current.startAt });
+      samples.current.commits.push({
+        revision: snapshot.revision,
+        atMs: now() - samples.current.startAt,
+      });
     }
   }, [snapshot]);
 
@@ -330,10 +451,14 @@ export default function PhoneBenchmark() {
     let measuring = false;
     let frame = 0;
     const timers = new Set<ReturnType<typeof setTimeout>>();
-    const delay = (ms: number) => new Promise<void>((resolve) => {
-      const timer = setTimeout(() => { timers.delete(timer); resolve(); }, ms);
-      timers.add(timer);
-    });
+    const delay = (ms: number) =>
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          timers.delete(timer);
+          resolve();
+        }, ms);
+        timers.add(timer);
+      });
     let activeConfig: RunConfig | null = null;
     let trace: TraceSamples | undefined;
     let unsubscribeTrace: (() => void) | undefined;
@@ -361,8 +486,13 @@ export default function PhoneBenchmark() {
           const response = await fetch(`${HOST}/config`);
           if (!response.ok) throw new Error(`Config: HTTP ${response.status}`);
           const next = (await response.json()) as RunConfig | null;
-          if (next?.runId) { activeConfig = next; break; }
-        } catch (error) { setStatus(`Waiting: ${String(error)}`); }
+          if (next?.runId) {
+            activeConfig = next;
+            break;
+          }
+        } catch (error) {
+          setStatus(`Waiting: ${String(error)}`);
+        }
         await delay(500);
       }
       if (disposed || !activeConfig) return;
@@ -373,36 +503,62 @@ export default function PhoneBenchmark() {
       if (run.trace && !run.candidate.startsWith('downstream-')) {
         throw new Error('Diagnostic tracing requires a Downstream candidate');
       }
-      const webReady = new Promise<void>((resolve) => { webResolve.current = resolve; });
+      const webReady = new Promise<void>((resolve) => {
+        webResolve.current = resolve;
+      });
       if (run.candidate.startsWith('downstream-')) {
-        const options = { math: false, onError: (error: unknown) => reportError(JSON.stringify(error)) };
-        controller.current = run.candidate === 'downstream-default'
-          ? createMarkdownStream(options)
-          : createMarkdownStreamWithMode(options, run.candidate === 'downstream-full' ? 'full' : 'incremental');
+        const options = {
+          math: false,
+          onError: (error: unknown) => reportError(JSON.stringify(error)),
+        };
+        controller.current =
+          run.candidate === 'downstream-default'
+            ? createMarkdownStream(options)
+            : createMarkdownStreamWithMode(
+                options,
+                run.candidate === 'downstream-full' ? 'full' : 'incremental'
+              );
         if (run.trace) {
           const sessionId = getStreamState(controller.current).sessionId;
           const collection: TraceSamples = {
-            enabled: true, sessionId, eventLimit: TRACE_EVENT_LIMIT,
-            droppedEvents: 0, intervalComplete: false, events: [],
+            enabled: true,
+            sessionId,
+            eventLimit: TRACE_EVENT_LIMIT,
+            droppedEvents: 0,
+            intervalComplete: false,
+            events: [],
           };
           trace = collection;
           // Trace delivery stays in memory; one result POST occurs after the interval.
           unsubscribeTrace = subscribeStreamTrace((entry) => {
             if (entry.sessionId !== sessionId) return;
-            if (collection.events.length < collection.eventLimit) collection.events.push(entry);
+            if (collection.events.length < collection.eventLimit)
+              collection.events.push(entry);
             else collection.droppedEvents += 1;
           });
           setStreamTracing(controller.current, true);
         }
       }
       setConfig(run);
-      const event = (type: string, extra = {}) => post(endpoint, '/event', {
-        runId: run.runId, candidate: run.candidate, workload: run.workload, mode: run.mode,
-        type, appTimeMs: now(), wallTimeMs: Date.now(), ...extra,
-      });
+      const event = (type: string, extra = {}) =>
+        post(endpoint, '/event', {
+          runId: run.runId,
+          candidate: run.candidate,
+          workload: run.workload,
+          mode: run.mode,
+          type,
+          appTimeMs: now(),
+          wallTimeMs: Date.now(),
+          ...extra,
+        });
       await event('mounted');
       if (run.candidate === 'web-streamdown') {
-        await Promise.race([webReady, delay(30000).then(() => { throw new Error('Web renderer did not become ready'); })]);
+        await Promise.race([
+          webReady,
+          delay(30000).then(() => {
+            throw new Error('Web renderer did not become ready');
+          }),
+        ]);
       }
       // Common empty-renderer mount settling. Startup is outside the measured run.
       await delay(1000);
@@ -415,7 +571,10 @@ export default function PhoneBenchmark() {
       const observeFrame = () => {
         if (!measuring || disposed) return;
         const at = now();
-        data.rafSamples.push({ atMs: at - data.startAt, gapMs: at - previousFrame });
+        data.rafSamples.push({
+          atMs: at - data.startAt,
+          gapMs: at - previousFrame,
+        });
         previousFrame = at;
         frame = requestAnimationFrame(observeFrame);
       };
@@ -430,12 +589,21 @@ export default function PhoneBenchmark() {
         source += chunk.text;
         const revision = index + 1;
         const finished = revision === workload.chunks.length;
-        data.deliveries.push({ revision, dueMs: chunk.dueMs, actualMs, latenessMs: actualMs - chunk.dueMs, codepoints: Array.from(chunk.text).length });
+        data.deliveries.push({
+          revision,
+          dueMs: chunk.dueMs,
+          actualMs,
+          latenessMs: actualMs - chunk.dueMs,
+          codepoints: Array.from(chunk.text).length,
+        });
         controller.current?.append(chunk.text);
         if (finished) controller.current?.finish();
         setSnapshot({ source, revision, finished });
       }
-      if (workload.chunks.length === 0) { controller.current?.finish(); setSnapshot({ source, revision: 0, finished: true }); }
+      if (workload.chunks.length === 0) {
+        controller.current?.finish();
+        setSnapshot({ source, revision: 0, finished: true });
+      }
       data.deliveryDurationMs = now() - data.startAt;
       // All renderers get the same settle budget; native readiness is not a speed metric.
       void event('delivery-end').catch(reportError);
@@ -459,7 +627,8 @@ export default function PhoneBenchmark() {
         source,
         sourceInfo: phoneSourceInfo(source),
         sourceEqualsFixture: source === workload.source,
-        renderedOutputEquality: 'requires native accessibility and screenshot inspection; source equality alone is insufficient',
+        renderedOutputEquality:
+          'requires native accessibility and screenshot inspection; source equality alone is insufficient',
         revisionCount: workload.chunks.length,
         expectedDurationMs: workload.chunks.at(-1)?.dueMs ?? 0,
         deliveryDurationMs: data.deliveryDurationMs,
@@ -470,8 +639,20 @@ export default function PhoneBenchmark() {
         commits: data.commits,
         webCommits: data.webCommits,
         errors: data.errors,
-        pipeline: run.candidate === 'downstream-default' ? 'public createMarkdownStream default incremental parse / canonical Android paragraph layout' : run.candidate === 'downstream-full' ? 'internal full-parse comparison stream / canonical Android paragraph layout' : run.candidate === 'downstream-incremental' ? 'native stream incremental parse / incremental Android paragraph layout' : run.candidate === 'marked' ? 'shipping Markdown component with default FlatList virtualization' : run.candidate === 'web-streamdown' ? 'Streamdown React DOM inside Android WebView; separate platform category' : 'shipping renderer with cumulative markdown prop',
-        measurementNotes: 'rAF gaps and React commits measure JS responsiveness; neither proves native presentation latency',
+        pipeline:
+          run.candidate === 'downstream-default'
+            ? 'public createMarkdownStream default incremental parse / canonical Android paragraph layout'
+            : run.candidate === 'downstream-full'
+              ? 'internal full-parse comparison stream / canonical Android paragraph layout'
+              : run.candidate === 'downstream-incremental'
+                ? 'native stream incremental parse / incremental Android paragraph layout'
+                : run.candidate === 'marked'
+                  ? 'shipping Markdown component with default FlatList virtualization'
+                  : run.candidate === 'web-streamdown'
+                    ? 'Streamdown React DOM inside Android WebView; separate platform category'
+                    : 'shipping renderer with cumulative markdown prop',
+        measurementNotes:
+          'rAF gaps and React commits measure JS responsiveness; neither proves native presentation latency',
       });
     }
     void execute().catch(async (error) => {
@@ -483,10 +664,15 @@ export default function PhoneBenchmark() {
       if (activeConfig) {
         try {
           await post(activeConfig.endpoint ?? HOST, '/result', {
-            ...activeConfig, diagnostic: Boolean(activeConfig.trace || activeConfig.diagnostic),
-            ...(trace && { trace }), failed: true, errors: samples.current.errors,
+            ...activeConfig,
+            diagnostic: Boolean(activeConfig.trace || activeConfig.diagnostic),
+            ...(trace && { trace }),
+            failed: true,
+            errors: samples.current.errors,
           });
-        } catch { /* Host logs and the visible failure retain the error. */ }
+        } catch {
+          /* Host logs and the visible failure retain the error. */
+        }
       }
     });
     return () => {
@@ -505,13 +691,36 @@ export default function PhoneBenchmark() {
     <View style={styles.root} testID="phone-benchmark-root">
       <StatusBar hidden />
       {config ? (
-        <RendererBoundary onError={(error) => { samples.current.errors.push(error); stopTraceOnError.current?.(); }}>
-          <Candidate config={config} snapshot={snapshot} controller={controller.current}
+        <RendererBoundary
+          onError={(error) => {
+            samples.current.errors.push(error);
+            stopTraceOnError.current?.();
+          }}
+        >
+          <Candidate
+            config={config}
+            snapshot={snapshot}
+            controller={controller.current}
             onWebReady={() => webResolve.current?.()}
-            onWebMessage={(message) => samples.current.webCommits.push({ ...message, receivedAtMs: samples.current.startAt ? now() - samples.current.startAt : null })}
-            onError={(error) => { samples.current.errors.push(error); stopTraceOnError.current?.(); }} />
+            onWebMessage={(message) =>
+              samples.current.webCommits.push({
+                ...message,
+                receivedAtMs: samples.current.startAt
+                  ? now() - samples.current.startAt
+                  : null,
+              })
+            }
+            onError={(error) => {
+              samples.current.errors.push(error);
+              stopTraceOnError.current?.();
+            }}
+          />
         </RendererBoundary>
-      ) : <Fragment><Text style={textStyle}>{status}</Text></Fragment>}
+      ) : (
+        <Fragment>
+          <Text style={textStyle}>{status}</Text>
+        </Fragment>
+      )}
     </View>
   );
 }
