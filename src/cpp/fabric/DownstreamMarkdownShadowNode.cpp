@@ -662,7 +662,7 @@ Size DownstreamMarkdownShadowNode::measureContent(const LayoutContext &layoutCon
       ->measure(document, layoutContext.fontSizeMultiplier, layoutConstraints, getSurfaceId(), chrome,
                 codeProps(state), caretFor(document), imageLayout(document), measuredHosts_, theme_,
                 tableProps(state), state.choices,
-                usesIncrementalParagraphs())
+                usesIncrementalParagraphs(), getConcreteProps().syntaxHighlighting)
       .size;
 }
 
@@ -686,7 +686,7 @@ void DownstreamMarkdownShadowNode::layoutSlots(LayoutContext layoutContext) {
       layoutManager_->measure(document, layoutContext.fontSizeMultiplier, frame, getSurfaceId(), chromeFor(state),
                               codeProps(state), caretFor(document), imageLayout(document), measuredHosts_, theme_,
                               tableProps(state), state.choices,
-                usesIncrementalParagraphs());
+                usesIncrementalParagraphs(), getConcreteProps().syntaxHighlighting);
   if (measurement.slots.empty() && measurement.tagSlots.empty()) {
     return;
   }

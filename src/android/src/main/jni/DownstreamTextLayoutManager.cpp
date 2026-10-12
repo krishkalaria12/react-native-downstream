@@ -358,7 +358,7 @@ DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
     uint32_t chrome, const downstream::CodeLayoutProps &code, const downstream::ReaderChoices &choices,
     const downstream::PlacedCaret &caret, const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
     const downstream::Theme::Handle &theme, const downstream::TableLayoutProps &tables,
-    bool incrementalParagraphs) const {
+    bool incrementalParagraphs, bool syntaxHighlighting) const {
   // Java resolves the theme through the registry by id, the way it resolves the
   // document, so no slot value is copied across JNI on a measurement. Zero is
   // the default theme's own id.
@@ -383,7 +383,9 @@ DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
       codeLayoutData(document->id, fontSizeMultiplier, chrome, code, choices, caret, images, theme, hosts, 0,
                      tables, incrementalParagraphs));
 
-  auto propsMap = ReadableNativeMap::newObjectCxxArgs(folly::dynamic::object());
+  // The view's color choice, so the view manager prepares the variant the view
+  // mounts rather than leaving the UI thread to build it.
+  auto propsMap = ReadableNativeMap::newObjectCxxArgs(folly::dynamic::object("syntaxHighlighting", syntaxHighlighting));
   auto componentName = make_jstring("DownstreamMarkdownView");
 
   const jlong packed = measure(fabricUIManager, surfaceId, componentName.get(),

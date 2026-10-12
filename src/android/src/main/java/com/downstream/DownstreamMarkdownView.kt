@@ -463,11 +463,14 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     val tracing = updateReveal && documentId != 0L && DownstreamNative.isTracingDocument(documentId)
     if (tracing) DownstreamNative.traceDocument(documentId, "apply_start")
     if (refreshRendering) {
+      val previous = rendered?.documentId ?: 0L
       rendered = if (documentId != 0L) {
         RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, caret, linkVariants(), incrementalParagraphs = incrementalParagraphs && direction != View.TEXT_DIRECTION_RTL)
       } else {
         null
       }
+      // This view moved on, so the snapshot it showed is not mounted again.
+      if (previous != 0L && previous != documentId) RenderedDocument.retire(previous)
     }
     syncSegmentViews()
     // The fade is decided after the rendering exists, because the tracker aligns

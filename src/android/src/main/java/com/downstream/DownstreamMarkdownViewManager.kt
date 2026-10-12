@@ -456,8 +456,13 @@ class DownstreamMarkdownViewManager :
       localData?.getDouble("caretKind")?.toInt() ?: 0,
       localData?.getDouble("caretPlace")?.toInt() ?: 0,
     )
-    val rendered = RenderedDocument.obtain(context, documentId, fontScale, themeId = themeId, caret = caret,
-      incrementalParagraphs = (localData?.numberAt("incrementalParagraphs", 0.0) ?: 0.0) != 0.0)
+    // The variant the view draws, so a view with colors off finds its rendering
+    // here instead of building it on the UI thread at mount. Colors do not change
+    // metrics, so either variant measures the same height.
+    val syntaxHighlighting = props?.takeIf { it.hasKey("syntaxHighlighting") && !it.isNull("syntaxHighlighting") }
+      ?.getBoolean("syntaxHighlighting") ?: true
+    val rendered = RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId = themeId,
+      caret = caret, incrementalParagraphs = (localData?.numberAt("incrementalParagraphs", 0.0) ?: 0.0) != 0.0)
       ?: return YogaMeasureOutput.make(0f, 0f)
     val layoutWidth = if (widthMode == YogaMeasureMode.UNDEFINED || !width.isFinite()) {
       rendered.desiredWidth(code, images)

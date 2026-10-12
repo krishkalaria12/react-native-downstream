@@ -14,8 +14,11 @@ internal object DownstreamNative {
 }
 internal class LinkVariants
 internal class RenderedDocument(val id: Long, val scale: Float, val theme: Long, val caret: PlacedCaret, val incrementalParagraphs: Boolean = false) {
+  val documentId get() = id
   companion object {
     val obtains = mutableListOf<RenderedDocument>()
+    val retired = mutableListOf<Long>()
+    fun retire(id: Long) { retired.add(id) }
     fun obtain(context: Any, id: Long, scale: Float, syntax: Boolean, theme: Long, caret: PlacedCaret,
                linkVariants: LinkVariants? = null, incrementalParagraphs: Boolean = false): RenderedDocument =
       RenderedDocument(id, scale, theme, caret, incrementalParagraphs).also { obtains.add(it) }
@@ -67,6 +70,7 @@ internal class StateHost {
     mounted.clear()
     revealed.clear()
     RenderedDocument.obtains.clear()
+    RenderedDocument.retired.clear()
     DownstreamNative.traces.clear()
     layoutRequests = 0
     hostLayoutRequests = 0
@@ -121,6 +125,8 @@ fun main() {
   check(atomic.hostLayoutRequests == 1 && atomic.layoutRequests == 1)
   check(DownstreamNative.traces == listOf(1L to "frame_unavailable", 2L to "apply_start", 2L to "apply_end"))
   check(atomic.frameRequests == 1)
+  // Moving to a newer snapshot retires the one this view showed, once.
+  check(RenderedDocument.retired == listOf(1L))
   println("ok Fabric state work: sync $oldSyncs -> ${atomic.mounted.size}, obtain $oldObtains -> ${RenderedDocument.obtains.size}")
 
   // Policy switches at one document/sequence rebuild once, then become a hit.
@@ -145,6 +151,7 @@ fun main() {
   atomic.applyState(rebound, 2, 1.5f, 6, code, images, hosts, 3, caret, TableLayoutProps())
   check(atomic.stateWrapper === rebound)
   check(atomic.mounted.isEmpty() && RenderedDocument.obtains.isEmpty() && atomic.revealed.isEmpty())
+  check(RenderedDocument.retired.isEmpty())
 
   // Each option independently invalidates a same-document mount.
   val optionCases = listOf(
@@ -192,6 +199,8 @@ fun main() {
   atomic.applyState(wrapper, 2, 1.5f, 6, CodeLayout(), ImageLayout(), HostLayout(), 0, PlacedCaret.NONE, TableLayoutProps())
   check(RenderedDocument.obtains.single().let { it.id == 2L && it.caret == PlacedCaret.NONE })
   check(atomic.mounted.size == 1 && atomic.revealed.isEmpty())
+  // A rebuild of the same document is not a newer snapshot.
+  check(RenderedDocument.retired.isEmpty())
 
   // Theme fallback and empty/recycled mounts still take the document path.
   atomic.clearCounts()
@@ -201,9 +210,12 @@ fun main() {
   atomic.clearCounts()
   atomic.applyState(wrapper, 0, 1f, 0, CodeLayout(), ImageLayout(), HostLayout(), 0, PlacedCaret.NONE, TableLayoutProps())
   check(RenderedDocument.obtains.isEmpty() && atomic.mounted.single().id == 0L)
+  check(RenderedDocument.retired == listOf(2L))
   atomic.recycle()
   atomic.clearCounts()
   atomic.applyState(wrapper, 2, 1.5f, 6, code, images, hosts, 3, caret, TableLayoutProps())
   check(atomic.mounted == listOf(expected) && RenderedDocument.obtains.single().id == 2L)
+  // A recycled view showed no document, so it retires nothing.
+  check(RenderedDocument.retired.isEmpty())
   println("ok Fabric state same-document changes, no-op, tracing, theme fallback and remount")
 }

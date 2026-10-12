@@ -857,9 +857,9 @@ Java_com_downstream_DownstreamNative_nativeReadImages(JNIEnv *env, jclass /*claz
   return result;
 }
 
-/// The document's segments as [from, to, flags, identity, settled, codeOrdinal]
-/// per segment, where flags bit 0 is a table, bit 1 is committed, and bit 2 is
-/// code. The settled count is the document's, repeated on every segment because
+/// The document's segments as [from, to, flags, identity, settled, codeOrdinal,
+/// kind, imageOrdinal, tableOrdinal, lastIdentity] per segment, where flags bit 0
+/// is a table, bit 1 is committed, and bit 2 is code. The settled count is the document's, repeated on every segment because
 /// there is one per document, and the ordinal is the code block's own, or -1.
 /// Layout must match NativeDocument.kt.
 extern "C" JNIEXPORT jlongArray JNICALL
@@ -890,6 +890,11 @@ Java_com_downstream_DownstreamNative_nativeSegmentPlan(JNIEnv *env, jclass /*cla
                                     // reader's expand choice is keyed by it: a block index
                                     // counts rows and moves as a table streams.
                                     static_cast<jlong>(segment.tableOrdinal),
+                                    // The last block's identity. A provisional block
+                                    // can be replaced under an unchanged first block,
+                                    // and identities form a prefix, so replacing any
+                                    // block in a segment replaces its last one too.
+                                    static_cast<jlong>(document->blocks[segment.to - 1].identity),
                                 });
   }
   jlongArray array = env->NewLongArray(static_cast<jsize>(values.size()));

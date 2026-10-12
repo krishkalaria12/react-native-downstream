@@ -86,9 +86,9 @@ struct IncrementalCounters {
 /// reused, so an identity always names the same block content.
 ///
 /// Closed blocks with unresolved references may also be shared provisionally.
-/// They have no identities and are not settled. New definition markers revoke
-/// that provisional prefix before the next parse, leaving the strict prefix
-/// intact. Confirmed link definitions are replayed in source order for tails;
+/// They have identities, so renderers reuse their layout, but are not settled.
+/// New definition markers revoke that provisional prefix before the next parse,
+/// leaving the strict prefix intact; reparsed blocks take fresh identities. Confirmed link definitions are replayed in source order for tails;
 /// footnotes, bracket math and preview keep the canonical full-parse proof.
 class IncrementalParser {
 public:
@@ -218,7 +218,7 @@ private:
   uint32_t committedTables_{0};
 
   // A closed region with unresolved references can be reused provisionally.
-  // Its blocks have no identities and never count as settled. A new definition
+  // Its blocks have identities but never count as settled. A new definition
   // marker or budget-limited expansion revokes this strict-prefix checkpoint.
   struct ReferencePrefix {
     std::shared_ptr<const SharedList<Block>::Prefix> blocks;

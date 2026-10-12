@@ -133,7 +133,7 @@ public:
                               const downstream::Theme::Handle &theme,
                               const downstream::TableLayoutProps &tables = {},
                               const downstream::ReaderChoices &choices = {},
-                              bool incrementalParagraphs = false) const;
+                              bool incrementalParagraphs = false, bool syntaxHighlighting = true) const;
 
 private:
   DocumentMeasurement measurePlatform(const downstream::DocumentHandle &document, Float fontSizeMultiplier,
@@ -143,7 +143,7 @@ private:
                                       const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
                                       const downstream::Theme::Handle &theme,
                                       const downstream::TableLayoutProps &tables = {},
-                                      bool incrementalParagraphs = false) const;
+                                      bool incrementalParagraphs = false, bool syntaxHighlighting = true) const;
 
   /// The theme's id, or 0 for the default theme, which is its id too.
   static uint64_t themeKey(const downstream::Theme::Handle &theme);

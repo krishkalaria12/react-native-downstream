@@ -3,14 +3,15 @@ package com.downstream
 internal const val SEGMENT_TEXT = 0
 internal const val SEGMENT_CODE = 2
 internal const val CONTAINER_DETAILS = 6
-internal object Configuration {
-  const val UI_MODE_NIGHT_MASK = 48
-  const val UI_MODE_NIGHT_YES = 32
-  val uiMode = 0
+internal class Configuration(var uiMode: Int = 0) {
+  companion object {
+    const val UI_MODE_NIGHT_MASK = 48
+    const val UI_MODE_NIGHT_YES = 32
+  }
 }
-internal class Resources { val configuration = Configuration }
+internal class Resources { val configuration = Configuration() }
 internal class Context { val resources = Resources() }
-internal class LinkVariants { fun isEmpty() = true; override fun hashCode() = 0 }
+internal class LinkVariants(val value: Int = 0) { fun isEmpty() = value == 0; override fun hashCode() = value }
 internal data class PlacedCaret(val kind: Int = 0, val place: Int = 0) {
   companion object { val NONE = PlacedCaret() }
 }
@@ -22,15 +23,36 @@ internal class NativeTheme {
   fun color(slot: Int, night: Boolean): Int? = null
   companion object { fun of(id: Long) = NativeTheme() }
 }
-internal class Palette(theme: NativeTheme, val night: Boolean) { val text = 42 }
+internal class Palette(theme: NativeTheme, val night: Boolean) {
+  val text = 42
+  fun token(tokenClass: Int) = 100 + tokenClass
+}
 internal class ContainerDecoration(a: Float, b: Float, c: Any?, d: Boolean, e: Any?, f: Float,
                                    g: Float, val kind: Int, val id: Int, val open: Boolean, val summary: Boolean)
 internal data class PlannedSegment(val from: Int, val to: Int, val kind: Int,
-                                   val identity: Long, val isCommitted: Boolean = true, val settledBlocks: Int = 1) {
-  val codeOrdinal = if (kind == SEGMENT_CODE) 0 else -1
-  val tableOrdinal = -1
-}
+                                   val identity: Long, val isCommitted: Boolean = true, val settledBlocks: Int = 1,
+                                   val isTable: Boolean = false, val isCode: Boolean = kind == SEGMENT_CODE,
+                                   val codeOrdinal: Int = if (kind == SEGMENT_CODE) 0 else -1,
+                                   val imageOrdinal: Int = -1, val tableOrdinal: Int = -1,
+                                   val lastIdentity: Long = identity)
 internal open class Segment { var detailsContainers: List<ContainerDecoration> = emptyList() }
+internal class CodeSegment(val highlighted: Boolean, val tokenSpans: List<TokenSpan>) : Segment()
+internal data class TokenSpan(val color: Int, val start: Int, val end: Int, val flags: Int)
+internal class ForegroundColorSpan(val color: Int)
+internal class TokenText {
+  val spans = mutableListOf<TokenSpan>()
+  fun setSpan(span: ForegroundColorSpan, start: Int, end: Int, flags: Int) {
+    spans.add(TokenSpan(span.color, start, end, flags))
+  }
+}
+private fun codeTokenSpans(syntaxHighlighting: Boolean): List<TokenSpan> {
+  val document = NativeDocument(tokenCount = 2)
+  val colors = Palette(NativeTheme(), false)
+  val text = TokenText()
+  val flags = 33
+  /* PRODUCTION_TOKEN_COLORS */
+  return text.spans
+}
 internal object DownstreamNative {
   fun isTracingDocument(id: Long) = false
   fun traceDocument(id: Long, event: String) {}
@@ -38,7 +60,7 @@ internal object DownstreamNative {
   var reads = 0
   var planReads = 0
   fun readSegmentPlan(id: Long): List<PlannedSegment>? { planReads++; return plans[id] }
-  fun readDocument(id: Long, from: Int, to: Int, theme: Long): NativeDocument { reads++; return NativeDocument() }
+  fun readDocument(id: Long, from: Int, to: Int, theme: Long): NativeDocument { reads++; return NativeDocument(text = "$id:$from:$to") }
   fun readImages(id: Long) = NativeImages.EMPTY
   fun readLinkUrls(id: Long) = emptyList<String>()
   fun fontScaleCap(theme: Long, scale: Float) = scale
@@ -75,12 +97,15 @@ internal class NativeDocument(
   fun runStyles(run: Int) = runValues[run][0]
   fun runLink(run: Int) = runValues[run][1]
   fun runTag(run: Int) = runValues[run][2]
+  fun tokenClass(token: Int) = token
+  fun tokenStart(token: Int) = token
+  fun tokenEnd(token: Int) = token + 1
   fun containerCount(block: Int) = contained
   fun containerKind(block: Int, depth: Int) = 0
   fun containerId(block: Int, depth: Int) = 0
   fun containerOpen(block: Int, depth: Int) = false
   fun showsMarker(block: Int, depth: Int) = false
-  companion object { const val KIND_PARAGRAPH = 0; const val CONTAINER_DETAILS = 6 }
+  companion object { const val KIND_PARAGRAPH = 0; const val CONTAINER_DETAILS = 6; const val TOKEN_PLAIN = 0 }
   /* PRODUCTION_ELIGIBILITY */
 }
 
@@ -137,12 +162,16 @@ internal class RenderedDocument(val id: Long, val segments: List<Segment>, val p
     private val committedSegments = RenderingCache<String, Segment>(128, 1024) { 1 }
     private fun buildSegment(document: NativeDocument, images: NativeImages, style: Style, planned: PlannedSegment,
       ordinal: Int, tableOrdinal: Int, highlights: Boolean, bottom: Float, caret: PlacedCaret,
-      variants: LinkVariants, urls: List<String>, traceId: Long, incrementalParagraphs: Boolean = false): Segment { builds++; return Segment() }
+      variants: LinkVariants, urls: List<String>, traceId: Long, incrementalParagraphs: Boolean = false): Segment {
+      builds++
+      return if (planned.kind == SEGMENT_CODE) CodeSegment(highlights, codeTokenSpans(highlights)) else TextSegment(document.text)
+    }
     /* PRODUCTION_OBTAIN */
     private val plainParagraphs = RenderingCache<PlainParagraphKey, TextSegment>(128, 2L * 1024 * 1024) {
       it.text.length * 24L + 256
     }
     var paragraphBuilds = 0
+    /* PRODUCTION_PARAGRAPH_LANES */
     /* PRODUCTION_PARAGRAPH_KEY */
     /* PRODUCTION_STREAM_ELIGIBILITY */
     private val streamingParagraphs = StreamingParagraphSeeds<StreamingParagraphLayout>(16, 2L * 1024 * 1024)
@@ -164,7 +193,7 @@ internal class RenderedDocument(val id: Long, val segments: List<Segment>, val p
       val traceId = 0L
       /* PRODUCTION_PARAGRAPH_LOOKUP */
       paragraphBuilds++
-      return TextSegment(document.text).also { segment -> plainKey?.let { plainParagraphs.put(it, segment) } }
+      return TextSegment(document.text).also { segment -> plainKey?.let { cachePlainParagraph(it, planned.from, segment) } }
     }
   }
 }
@@ -230,6 +259,100 @@ fun main() {
   check(RenderedDocument.obtain(context, 1, 1.5f, true) !== prepared)
   check(RenderedDocument.obtain(context, 1, 1f, true, themeId = 7) !== prepared)
   check(RenderedDocument.obtain(context, 1, 1f, true, caret = PlacedCaret(1, 1)) !== prepared)
+  // A revoked provisional block is replaced under an unchanged first block, so a
+  // committed chunk with the same start and length but a new last block rebuilds.
+  DownstreamNative.plans[3] = listOf(PlannedSegment(0, 2, 0, 31, lastIdentity = 32))
+  val provisional = RenderedDocument.obtain(context, 3, 1f, true)!!
+  DownstreamNative.plans[4] = listOf(PlannedSegment(0, 2, 0, 31, lastIdentity = 33))
+  check(RenderedDocument.obtain(context, 4, 1f, true)!!.segments[0] !== provisional.segments[0])
+  DownstreamNative.plans[5] = listOf(PlannedSegment(0, 2, 0, 31, lastIdentity = 32))
+  check(RenderedDocument.obtain(context, 5, 1f, true)!!.segments[0] === provisional.segments[0])
+  val mixedLivePlan = listOf(
+    PlannedSegment(0, 1, SEGMENT_TEXT, 0, false, 0),
+    PlannedSegment(1, 2, SEGMENT_CODE, 0, false, 0),
+    PlannedSegment(2, 3, SEGMENT_TEXT, 0, false, 0),
+  )
+  val heldRenderings = mutableListOf<RenderedDocument>()
+  for ((index, firstHighlight) in listOf(true, false).withIndex()) {
+    val id = 100L + index
+    DownstreamNative.plans[id] = mixedLivePlan
+    val startReads = DownstreamNative.reads
+    val startBuilds = RenderedDocument.builds
+    val first = RenderedDocument.obtain(context, id, 1f, firstHighlight)!!
+    val second = RenderedDocument.obtain(context, id, 1f, !firstHighlight)!!
+    check(first !== second)
+    check(first.segments[0] === second.segments[0])
+    check(first.segments[2] === second.segments[2])
+    check(first.segments[1] !== second.segments[1])
+    check((first.segments[1] as CodeSegment).highlighted == firstHighlight)
+    check((second.segments[1] as CodeSegment).highlighted == !firstHighlight)
+    check((first.segments[1] as CodeSegment).tokenSpans ==
+      if (firstHighlight) listOf(TokenSpan(101, 1, 2, 33)) else emptyList<TokenSpan>())
+    check((second.segments[1] as CodeSegment).tokenSpans ==
+      if (!firstHighlight) listOf(TokenSpan(101, 1, 2, 33)) else emptyList<TokenSpan>())
+    check(DownstreamNative.reads - startReads == 4)
+    check(RenderedDocument.builds - startBuilds == 4)
+    check(RenderedDocument.obtain(context, id, 1f, firstHighlight) === first)
+    heldRenderings.add(first)
+  }
+  println("production mixed live cache: both highlight request orders share provisional prose; 4 JNI reads/builds for 6 segments, separate code color variants")
+  val changedSettings: List<(Context, Long, Boolean) -> RenderedDocument?> = listOf(
+    { ctx, id, highlight -> RenderedDocument.obtain(ctx, id, 1.5f, highlight) },
+    { _, id, highlight ->
+      val dark = Context().apply { resources.configuration.uiMode = Configuration.UI_MODE_NIGHT_YES }
+      RenderedDocument.obtain(dark, id, 1f, highlight)
+    },
+    { ctx, id, highlight -> RenderedDocument.obtain(ctx, id, 1f, highlight, themeId = 7) },
+    { ctx, id, highlight -> RenderedDocument.obtain(ctx, id, 1f, highlight, caret = PlacedCaret(1, 1)) },
+    { ctx, id, highlight -> RenderedDocument.obtain(ctx, id, 1f, highlight, caret = PlacedCaret(0, 1)) },
+    { ctx, id, highlight -> RenderedDocument.obtain(ctx, id, 1f, highlight, linkVariants = LinkVariants(7)) },
+    { ctx, id, highlight -> RenderedDocument.obtain(ctx, id, 1f, highlight, incrementalParagraphs = true) },
+  )
+  for ((order, firstHighlight) in listOf(true, false).withIndex()) {
+    for ((index, changed) in changedSettings.withIndex()) {
+      val id = 200L + order * 100 + index
+      DownstreamNative.plans[id] = mixedLivePlan
+      val startReads = DownstreamNative.reads
+      val first = RenderedDocument.obtain(context, id, 1f, firstHighlight)!!
+      val second = changed(context, id, !firstHighlight)!!
+      check(first.segments.indices.all { first.segments[it] !== second.segments[it] })
+      check(DownstreamNative.reads - startReads == 6)
+    }
+  }
+  val changedPlans = listOf(
+    mixedLivePlan[0].copy(from = 1), mixedLivePlan[0].copy(to = 4),
+    mixedLivePlan[0].copy(isTable = true), mixedLivePlan[0].copy(isCommitted = true),
+    mixedLivePlan[0].copy(isCode = true), mixedLivePlan[0].copy(identity = 900),
+    mixedLivePlan[0].copy(settledBlocks = 1), mixedLivePlan[0].copy(codeOrdinal = 3),
+    mixedLivePlan[0].copy(kind = 4), mixedLivePlan[0].copy(imageOrdinal = 3),
+    mixedLivePlan[0].copy(tableOrdinal = 3),
+  ).map { listOf(it) + mixedLivePlan.drop(1) } + listOf(mixedLivePlan.take(2))
+  for ((index, changedPlan) in changedPlans.withIndex()) {
+    val id = 400L + index
+    DownstreamNative.plans[id] = mixedLivePlan
+    val first = RenderedDocument.obtain(context, id, 1f, true)!!
+    // A native snapshot is immutable. Simulate a contradictory JNI plan to
+    // prove the reuse path rejects it rather than trusting identity alone.
+    DownstreamNative.plans[id] = changedPlan
+    val second = RenderedDocument.obtain(context, id, 1f, false)!!
+    check(first.segments[0] !== second.segments[0])
+  }
+  DownstreamNative.plans[500] = mixedLivePlan
+  val otherSnapshot = RenderedDocument.obtain(context, 500, 1f, false)!!
+  check(heldRenderings[0].segments[0] !== otherSnapshot.segments[0])
+  repeat(130) { index ->
+    val id = 600L + index
+    DownstreamNative.plans[id] = listOf(mixedLivePlan[0])
+    RenderedDocument.obtain(context, id, 1f, false)!!
+  }
+  for (held in heldRenderings) {
+    check((held.segments[0] as TextSegment).text == "${held.id}:0:1")
+    check((held.segments[2] as TextSegment).text == "${held.id}:2:3")
+    val highlight = (held.segments[1] as CodeSegment).highlighted
+    check(RenderedDocument.obtain(context, held.id, 1f, highlight) !== held)
+    check((held.segments[1] as CodeSegment).highlighted == highlight)
+  }
+  println("production mixed live isolation: font scale, appearance, theme, caret kind/place, links, paragraph policy, snapshot id and every plan field reject sharing; held segments survive eviction")
   val prosePlan = PlannedSegment(0, 1, 0, 0, false)
   val proseStyle = RenderedDocument.Style(1f, Palette(NativeTheme(), false), NativeTheme(), 0L)
   val prose = NativeDocument()
@@ -248,7 +371,23 @@ fun main() {
   check(RenderedDocument.paragraph(prose, proseStyle, prosePlan, previousBottom = 20f) !== immutableParagraph)
   proseStyle.paint.textLocales.language = "ar"
   check(RenderedDocument.paragraph(prose, proseStyle, prosePlan) !== immutableParagraph)
-  println("production plain cache: 101 identical active paragraphs, 1 span/preparation build; growth/styles/metrics/caret/locale/gap invalidate")
+  // A growing paragraph evicts its own prefix; another lane, or a paragraph that
+  // is not an extension, keeps its entry.
+  proseStyle.paint.textLocales.language = "en"
+  val lanePlan = PlannedSegment(7, 8, 0, 0, false)
+  val otherLane = PlannedSegment(9, 10, 0, 0, false)
+  val short = RenderedDocument.paragraph(NativeDocument("grow"), proseStyle, lanePlan)
+  val elsewhere = RenderedDocument.paragraph(NativeDocument("grower"), proseStyle, otherLane)
+  val longer = RenderedDocument.paragraph(NativeDocument("grow more"), proseStyle, lanePlan)
+  check(RenderedDocument.paragraph(NativeDocument("grow more"), proseStyle, lanePlan) === longer)
+  check(RenderedDocument.paragraph(NativeDocument("grower"), proseStyle, otherLane) === elsewhere)
+  val builds = RenderedDocument.paragraphBuilds
+  check(RenderedDocument.paragraph(NativeDocument("grow"), proseStyle, lanePlan) !== short)
+  check(RenderedDocument.paragraphBuilds == builds + 1 && short.text == "grow")
+  val sibling = RenderedDocument.paragraph(NativeDocument("unrelated"), proseStyle, lanePlan)
+  check(RenderedDocument.paragraph(NativeDocument("grow"), proseStyle, lanePlan).text == "grow")
+  check(RenderedDocument.paragraph(NativeDocument("unrelated"), proseStyle, lanePlan) === sibling)
+  println("production plain cache: 101 identical active paragraphs, 1 span/preparation build; growth/styles/metrics/caret/locale/gap invalidate; growing prefixes evicted per lane")
   println("production obtain: 201 prose requests, 1 JNI block read/build; mixed code flags share prose and rebuild code")
 
   val card = HostedCode(prepared)

@@ -24,6 +24,34 @@ internal class RenderingCache<K, V>(
   fun get(key: K): V? =
     if (latestOversized != null && latestOversizedKey == key) latestOversized else entries[key]?.value
 
+  /** Drops [key]'s value. A view still holding it keeps a valid value. */
+  @Synchronized
+  fun remove(key: K) {
+    if (latestOversized != null && latestOversizedKey == key) {
+      latestOversizedKey = null
+      latestOversized = null
+    }
+    entries.remove(key)?.let { cost -= it.cost }
+  }
+
+  /** Drops every value whose key matches [predicate]. */
+  @Synchronized
+  fun removeAll(predicate: (K) -> Boolean) {
+    val oversized = latestOversizedKey
+    if (latestOversized != null && oversized != null && predicate(oversized)) {
+      latestOversizedKey = null
+      latestOversized = null
+    }
+    val iterator = entries.entries.iterator()
+    while (iterator.hasNext()) {
+      val entry = iterator.next()
+      if (predicate(entry.key)) {
+        cost -= entry.value.cost
+        iterator.remove()
+      }
+    }
+  }
+
   @Synchronized
   fun put(key: K, value: V) {
     val valueCost = costOf(value)

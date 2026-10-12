@@ -391,6 +391,35 @@ internal class RenderedDocument(
       segmentCost(it)
     }
 
+    // The paragraph each lane (first block and appearance) last cached. A
+    // growing paragraph's earlier prefixes are never asked for again, so an
+    // extension evicts its prefix rather than keeping every version.
+    private val plainParagraphLanes = object : LinkedHashMap<Any, PlainParagraphKey>(16, 0.75f, true) {
+      override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Any, PlainParagraphKey>) = size > 128
+    }
+
+    private fun cachePlainParagraph(key: PlainParagraphKey, block: Int, segment: TextSegment) {
+      val superseded = synchronized(plainParagraphLanes) {
+        plainParagraphLanes.put(Pair(block, key.appearance), key)
+      }
+      if (superseded != null && superseded != key && key.content.startsWith(superseded.content)) {
+        plainParagraphs.remove(superseded)
+      }
+      plainParagraphs.put(key, segment)
+    }
+
+    /**
+     * Drops the renderings of a snapshot a view replaced with a newer one.
+     *
+     * A stream never mounts an earlier snapshot again, and each one's changing
+     * tail is the largest thing this cache holds. A view still drawing it keeps
+     * its rendering; a later request rebuilds it.
+     */
+    fun retire(documentId: Long) {
+      val prefix = "$documentId:"
+      cache.removeAll { it.startsWith(prefix) }
+    }
+
     // Compatible append branches coexist for independently streaming messages.
     private val streamingParagraphs = StreamingParagraphSeeds<StreamingParagraphLayout>(16, 2L * 1024 * 1024)
 
@@ -478,6 +507,24 @@ internal class RenderedDocument(
       val highlights = syntaxHighlighting && plan.any { it.kind == SEGMENT_CODE }
       key = "$documentId:$fontScale:$night:$highlights:$themeId:${caret.kind}:${caret.place}:${linkVariants.hashCode()}:$incrementalParagraphs"
       cache.get(key)?.let { return it }
+      // Measurement prepares highlighted code even when the view hides colors.
+      // Both variants can share this snapshot's provisional non-code segments,
+      // which the committed-segment cache cannot reuse. Every other rendering
+      // setting and every plan field must match; code still builds its own spans.
+      val oppositeKey = "$documentId:$fontScale:$night:${!highlights}:$themeId:${caret.kind}:${caret.place}:${linkVariants.hashCode()}:$incrementalParagraphs"
+      val opposite = cache.get(oppositeKey)?.takeIf { existing ->
+        existing.plan.size == plan.size && existing.plan.indices.all { index ->
+          val previous = existing.plan[index]
+          val current = plan[index]
+          previous.from == current.from && previous.to == current.to &&
+            previous.isTable == current.isTable && previous.isCommitted == current.isCommitted &&
+            previous.isCode == current.isCode && previous.identity == current.identity &&
+            previous.lastIdentity == current.lastIdentity &&
+            previous.settledBlocks == current.settledBlocks && previous.codeOrdinal == current.codeOrdinal &&
+            previous.kind == current.kind && previous.imageOrdinal == current.imageOrdinal &&
+            previous.tableOrdinal == current.tableOrdinal
+        }
+      }
       // The document's pictures, read once. An image segment needs its destination,
       // alt text and policy answer, and reading those one field at a time over JNI
       // would be one crossing per field per picture; this is one for the document.
@@ -505,7 +552,7 @@ internal class RenderedDocument(
       // Each code segment's ordinal is a property of the plan, so a measurement
       // and the view that draws it read the same number: the ordinal is not
       // something the view has to count for itself.
-      for (planned in plan) {
+      for ((index, planned) in plan.withIndex()) {
         // The plan counted the code blocks, so the ordinal comes from there
         // rather than from a second walk of the plan.
         val ordinal = planned.codeOrdinal
@@ -520,9 +567,10 @@ internal class RenderedDocument(
         val segmentParagraphs = incrementalParagraphs && planned.kind == SEGMENT_TEXT &&
           !planned.isCommitted && planned.from >= planned.settledBlocks
         val segmentKey =
-          "${planned.identity}:${planned.to - planned.from}:$ordinal:$scaled:$night:" +
+          "${planned.identity}:${planned.lastIdentity}:${planned.to - planned.from}:$ordinal:$scaled:$night:" +
             "${highlights && planned.kind == SEGMENT_CODE}:$themeId:$caretKey:${linkVariants.hashCode()}:$segmentParagraphs"
-        val segment = (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
+        val segment = (if (!planned.isCommitted && planned.kind != SEGMENT_CODE) opposite?.segments?.getOrNull(index) else null)
+          ?: (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
           // The theme id goes with the read, because each block's typography is
           // resolved against it in C++; without it every block reads the default.
           ?: DownstreamNative.readDocument(documentId, planned.from, planned.to, themeId)
@@ -1353,7 +1401,7 @@ internal class RenderedDocument(
         contentLeading = contentLeading(containersOf(0, -1).first).toInt(),
         gapBefore = gapBefore, caretOffset = caretOffset, caretKind = caret.kind,
         streamingParagraph = streamingParagraph,
-      ).also { segment -> plainKey?.let { plainParagraphs.put(it, segment) } }
+      ).also { segment -> plainKey?.let { cachePlainParagraph(it, planned.from, segment) } }
     }
 
     /** Parser output and resolved typography define the supported live subset. */

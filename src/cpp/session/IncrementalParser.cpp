@@ -856,7 +856,12 @@ bool IncrementalParser::commitRegion(size_t boundary) {
   blocks.reserve(parsedBlocks.size());
   for (size_t i = 0; i < parsedBlocks.size(); i++) {
     Block block = parsedBlocks[i];
-    block.identity = referencePrefix_ ? 0 : nextBlockIdentity.fetch_add(1, std::memory_order_relaxed);
+    // A provisional block gets an identity too. Renderers reuse layout by
+    // identity, so without one every block after an unresolved reference is
+    // rebuilt on every snapshot. Revoking drops these blocks, and their
+    // replacements take fresh identities, so an identity still names one
+    // content; settledBlocks alone says which blocks can no longer change.
+    block.identity = nextBlockIdentity.fetch_add(1, std::memory_order_relaxed);
     const ByteRange bytes = parsed.blockSource[i];
     block.sourceRange = {committedUtf16_ + offsets.toUtf16(bytes.start), committedUtf16_ + offsets.toUtf16(bytes.end)};
     offsetIds(block, committedContainers_, committedTables_, committedLinks, committedImages, committedTags);

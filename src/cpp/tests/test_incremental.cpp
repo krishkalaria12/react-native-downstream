@@ -78,19 +78,32 @@ bool equal(const Document &a, const Document &b) {
   return true;
 }
 
+/// Where an identity was first seen, what it named, and whether any snapshot
+/// showing it had settled that block.
+struct SeenIdentity {
+  size_t index;
+  Block block;
+  bool settled;
+};
+using SeenIdentities = std::map<uint64_t, SeenIdentity>;
+
 /// An identity must always name the same block content, source range, and
 /// position, since renderers reuse layout by identity alone.
-bool stableIdentities(const Document &document, std::map<uint64_t, std::pair<size_t, Block>> &seen) {
-  // A committed block stays committed in every later snapshot.
+bool stableIdentities(const Document &document, SeenIdentities &seen) {
+  // A settled block keeps its identity in every later snapshot. A provisional
+  // one can be revoked, but its identity is never given to other content.
   for (const auto &[identity, entry] : seen) {
-    if (entry.first >= document.blocks.size() || document.blocks[entry.first].identity != identity) return false;
+    if (entry.settled && (entry.index >= document.blocks.size() || document.blocks[entry.index].identity != identity)) {
+      return false;
+    }
   }
   for (size_t i = 0; i < document.blocks.size(); i++) {
     const Block &block = document.blocks[i];
     if (block.identity == 0) continue;
-    const auto [entry, added] = seen.try_emplace(block.identity, i, block);
-    if (!added && (entry->second.first != i || !equalBlock(entry->second.second, block) ||
-                   !(entry->second.second.sourceRange == block.sourceRange))) return false;
+    const auto [entry, added] = seen.try_emplace(block.identity, SeenIdentity{i, block, false});
+    if (!added && (entry->second.index != i || !equalBlock(entry->second.block, block) ||
+                   !(entry->second.block.sourceRange == block.sourceRange))) return false;
+    entry->second.settled = entry->second.settled || i < document.settledBlocks;
   }
   return true;
 }
@@ -99,7 +112,7 @@ bool stableIdentities(const Document &document, std::map<uint64_t, std::pair<siz
 /// later changes loses its identity, but an identity still names one content,
 /// source range, and position, and identified blocks form a prefix that ends
 /// after a top-level block outside a continuing table.
-bool carriedIdentities(const Document &document, std::map<uint64_t, std::pair<size_t, Block>> &seen) {
+bool carriedIdentities(const Document &document, SeenIdentities &seen) {
   size_t prefix = 0;
   while (prefix < document.blocks.size() && document.blocks[prefix].identity != 0) prefix++;
   for (size_t i = prefix; i < document.blocks.size(); i++) {
@@ -113,9 +126,9 @@ bool carriedIdentities(const Document &document, std::map<uint64_t, std::pair<si
   }
   for (size_t i = 0; i < prefix; i++) {
     const Block &block = document.blocks[i];
-    const auto [entry, added] = seen.try_emplace(block.identity, i, block);
-    if (!added && (entry->second.first != i || !equalBlock(entry->second.second, block) ||
-                   !(entry->second.second.sourceRange == block.sourceRange))) return false;
+    const auto [entry, added] = seen.try_emplace(block.identity, SeenIdentity{i, block, false});
+    if (!added && (entry->second.index != i || !equalBlock(entry->second.block, block) ||
+                   !(entry->second.block.sourceRange == block.sourceRange))) return false;
   }
   return true;
 }
@@ -165,8 +178,8 @@ bool check(const std::vector<std::string> &chunks, const char *label, ParseOptio
   IncrementalParser incremental(ParseMode::IncrementalTail, parse);
   IncrementalParser full(ParseMode::FullParse, parse);
   std::string source;
-  std::map<uint64_t, std::pair<size_t, Block>> identities;
-  std::map<uint64_t, std::pair<size_t, Block>> fullIdentities;
+  SeenIdentities identities;
+  SeenIdentities fullIdentities;
   for (const auto &chunk : chunks) {
     source += chunk;
     const ParseResult actual = feed(incremental, source, false);
@@ -685,7 +698,9 @@ bool inlineCodeBracketsAndReferences() {
       if (heldBlock.identity == 0 || held->settledBlocks != 1 || parser.committedBytes() != source.size()) {
         return false;
       }
-    } else if (heldBlock.identity != 0 || held->settledBlocks != 0 || parser.committedBytes() != 0) {
+    } else if (heldBlock.identity == 0 || held->settledBlocks != 0 || parser.committedBytes() != 0 ||
+               parser.reusedBytes() != source.size()) {
+      // Provisionally shared: identified for layout reuse, but never settled.
       return false;
     }
     bool combinedCodeStyle = false;
@@ -700,7 +715,7 @@ bool inlineCodeBracketsAndReferences() {
     }
     if (!combinedCodeStyle) return false;
 
-    std::map<uint64_t, std::pair<size_t, Block>> identities;
+    SeenIdentities identities;
     if (!stableIdentities(*first.document, identities)) return false;
     // Stream the definition byte by byte so a split "]:" must still revoke
     // provisional text, while code brackets keep their literal contents.
@@ -722,7 +737,8 @@ bool inlineCodeBracketsAndReferences() {
 }
 
 // A definition-free reference-bearing prefix is reusable, but stays mutable:
-// no provisional block gets an identity or becomes available as settled text.
+// a provisional block is identified so renderers keep its layout, yet never
+// becomes available as settled text, and revoking it never reuses an identity.
 bool referenceSafeReuse() {
   const std::string padding = "\n\n" + std::string(160, 'p') + "\n\n";
   const std::vector<std::string> cases = {
@@ -745,7 +761,7 @@ bool referenceSafeReuse() {
   };
   for (const auto &text : cases) {
     IncrementalParser parser(ParseMode::IncrementalTail);
-    std::map<uint64_t, std::pair<size_t, Block>> identities;
+    SeenIdentities identities;
     std::vector<std::pair<DocumentHandle, Document>> snapshots;
     std::string source;
     // Every byte exercises split brackets, colons, titles, and definitions.
@@ -780,15 +796,29 @@ bool referenceSafeReuse() {
   const auto strictIdentity = strict.document->blocks.front().identity;
   const size_t strictBytes = parser.committedBytes();
   source += "[ref]\n\n";
+  SeenIdentities provisional;
+  uint64_t referenceIdentity = 0;
   while (source.size() < 96 * 1024) {
     source += "Normal paragraph text with **strong** wording.\n\n";
     const auto next = feed(parser, source, false);
     if (!scan::sameDocument(*next.document, *parseMarkdown(source).document) ||
-        next.document->settledBlocks != 1 || next.document->blocks.front().identity != strictIdentity) return false;
-    for (size_t i = 1; i < next.document->blocks.size(); i++) {
+        next.document->settledBlocks != 1 || next.document->blocks.front().identity != strictIdentity ||
+        !stableIdentities(*next.document, provisional)) return false;
+    // Identified blocks form a prefix, and only the last few paragraphs, which
+    // no commit attempt has reached yet, are rebuilt by a renderer.
+    size_t identified = 0;
+    while (identified < next.document->blocks.size() && next.document->blocks[identified].identity != 0) identified++;
+    for (size_t i = identified; i < next.document->blocks.size(); i++) {
       if (next.document->blocks[i].identity != 0) return false;
     }
+    if (identified + 4 < next.document->blocks.size()) return false;
+    // The reference paragraph keeps one identity while it is provisional.
+    if (identified > 1) {
+      if (referenceIdentity == 0) referenceIdentity = next.document->blocks[1].identity;
+      if (next.document->blocks[1].identity != referenceIdentity) return false;
+    }
   }
+  if (referenceIdentity == 0) return false;
   const auto counts = parser.counters();
   if (strictIdentity == 0 || parser.committedBytes() != strictBytes || parser.reusedBytes() < 90 * 1024 ||
       counts.fullParses != 0 || counts.fallbackCount(ParseFallback::TailLimit) != 0 ||
@@ -801,7 +831,9 @@ bool referenceSafeReuse() {
   const auto resolved = feed(parser, source, false);
   if (!scan::sameDocument(*resolved.document, *parseMarkdown(source).document) ||
       resolved.document->blocks.front().identity != strictIdentity || parser.reusedBytes() != strictBytes ||
-      held->blocks.size() != heldSize || held->blocks[1].text != u"[ref]") return false;
+      held->blocks.size() != heldSize || held->blocks[1].text != u"[ref]" ||
+      held->blocks[1].identity != referenceIdentity || resolved.document->blocks[1].identity == referenceIdentity ||
+      !stableIdentities(*resolved.document, provisional)) return false;
 
   // Replacement/reset must release dependencies and old provisional storage.
   parser.replace("[new]" + padding + "tail");
@@ -867,7 +899,7 @@ bool definitionContextReuse() {
   };
   for (const auto &text : cases) {
     IncrementalParser parser(ParseMode::IncrementalTail);
-    std::map<uint64_t, std::pair<size_t, Block>> identities;
+    SeenIdentities identities;
     DocumentHandle retained;
     Document copy;
     std::string source;

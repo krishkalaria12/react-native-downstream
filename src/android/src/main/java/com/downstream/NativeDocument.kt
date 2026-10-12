@@ -472,6 +472,14 @@ internal class PlannedSegment(
    * before any view has walked the segments.
    */
   val tableOrdinal: Int,
+  /**
+   * The identity of the segment's last block.
+   *
+   * A committed segment is reused by its first and last identities together: a
+   * provisional block can be revoked and replaced while the block that starts its
+   * chunk stays, and a replacement always reaches the end of the chunk.
+   */
+  val lastIdentity: Long = identity,
 )
 
 /**
@@ -759,6 +767,7 @@ internal object DownstreamNative {
         SEGMENT_KINDS.getOrElse(values[it + 6].toInt()) { SEGMENT_TEXT },
         values[it + 7].toInt(),
         values[it + 8].toInt(),
+        values[it + 9],
       )
     }
   }
@@ -961,7 +970,7 @@ internal object DownstreamNative {
     }
   }
 
-  private const val PLAN_STRIDE = 9
+  private const val PLAN_STRIDE = 10
 
   // Implemented in DownstreamJni.cpp, which links into libappmodules.so.
   @JvmStatic

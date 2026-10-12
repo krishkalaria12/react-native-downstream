@@ -28,7 +28,8 @@ DocumentMeasurement DownstreamTextLayoutManager::measure(const downstream::Docum
                                                          const downstream::Theme::Handle &theme,
                                                          const downstream::TableLayoutProps &tables,
                                                          const downstream::ReaderChoices &choices,
-                                                         bool incrementalParagraphs) const {
+                                                         bool incrementalParagraphs,
+                                                         bool syntaxHighlighting) const {
   const Float maximumWidth = layoutConstraints.maximumSize.width;
   // The theme can cap the platform's font scale, and the cap is applied before
   // the scale reaches either the cache key or the platform, so a measurement and
@@ -59,7 +60,7 @@ DocumentMeasurement DownstreamTextLayoutManager::measure(const downstream::Docum
 
     if (!cached) {
       measurement = measurePlatform(document, scale, maximumWidth, surfaceId, chrome, code, choices, caret, images,
-                                    hosts, theme, tables, incrementalParagraphs);
+                                    hosts, theme, tables, incrementalParagraphs, syntaxHighlighting);
       std::lock_guard<std::mutex> lock(cacheMutex_);
       if (cache_.size() >= kMeasurementCacheCapacity) {
         cache_.erase(cache_.begin());

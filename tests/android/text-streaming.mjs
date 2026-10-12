@@ -41,6 +41,11 @@ const lookup = readFileSync(join(sources, 'RenderedDocument.kt'), 'utf8').match(
 )?.[0];
 if (!lookup) throw new Error('Missing production paragraph cache lookup');
 fixture = fixture.replace('/* PRODUCTION_PARAGRAPH_LOOKUP */', lookup);
+const lanes = readFileSync(join(sources, 'RenderedDocument.kt'), 'utf8').match(
+  /^    private val plainParagraphLanes[\s\S]*?^    private fun cachePlainParagraph\([\s\S]*?^    }/m
+)?.[0];
+if (!lanes) throw new Error('Missing production paragraph lanes');
+fixture = fixture.replace('/* PRODUCTION_PARAGRAPH_LANES */', lanes);
 const streamPreparation = readFileSync(
   join(sources, 'RenderedDocument.kt'),
   'utf8'
@@ -58,6 +63,14 @@ const inlineGate = readFileSync(
 )?.[0];
 if (!inlineGate) throw new Error('Missing production inline run gate');
 fixture = fixture.replace('/* PRODUCTION_INLINE_GATE */', inlineGate);
+const tokenColors = readFileSync(
+  join(sources, 'RenderedDocument.kt'),
+  'utf8'
+).match(
+  /^      if \(syntaxHighlighting\) \{\n        for \(token[\s\S]*?(?=\n\n      \/\/ Each laid-out inline formula)/m
+)?.[0];
+if (!tokenColors) throw new Error('Missing production token color application');
+fixture = fixture.replace('/* PRODUCTION_TOKEN_COLORS */', tokenColors);
 const output = mkdtempSync(join(tmpdir(), 'downstream-text-'));
 try {
   const check = join(output, 'TextStreamingCheck.kt');
