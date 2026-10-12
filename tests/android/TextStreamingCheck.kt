@@ -54,13 +54,19 @@ private fun codeTokenSpans(syntaxHighlighting: Boolean): List<TokenSpan> {
   return text.spans
 }
 internal object DownstreamNative {
-  fun isTracingDocument(id: Long) = false
-  fun traceDocument(id: Long, event: String) {}
+  var tracedId = 0L
+  var failedReadId = 0L
+  val traceEvents = mutableListOf<String>()
+  fun isTracingDocument(id: Long) = id == tracedId
+  fun traceDocument(id: Long, event: String) { traceEvents.add(event) }
   val plans = mutableMapOf<Long, List<PlannedSegment>>()
   var reads = 0
   var planReads = 0
   fun readSegmentPlan(id: Long): List<PlannedSegment>? { planReads++; return plans[id] }
-  fun readDocument(id: Long, from: Int, to: Int, theme: Long): NativeDocument { reads++; return NativeDocument(text = "$id:$from:$to") }
+  fun readDocument(id: Long, from: Int, to: Int, theme: Long): NativeDocument? {
+    reads++
+    return if (id == failedReadId) null else NativeDocument(text = "$id:$from:$to")
+  }
   fun readImages(id: Long) = NativeImages.EMPTY
   fun readLinkUrls(id: Long) = emptyList<String>()
   fun fontScaleCap(theme: Long, scale: Float) = scale
@@ -146,7 +152,7 @@ internal object PrecomputedTexts {
 internal class Locales { var language = "en-US"; fun toLanguageTags() = language }
 internal class TextSegment(val text: String) : Segment()
 internal class RenderedDocument(val id: Long, val segments: List<Segment>, val plan: List<PlannedSegment>,
-                                paint: Any, style: Style, tracing: Boolean = false) {
+                                paint: Any, style: Style, val tracing: Boolean = false) {
   internal class Style(val scale: Float, val colors: Palette, val theme: NativeTheme, val themeId: Long) {
     val paint = TextPaint()
     val density = 1f
@@ -488,5 +494,36 @@ fun main() {
   tiny.put("key", "x".repeat(8192), "oversized")
   check(tiny.matching("key", "x".repeat(8193)) == null)
   println("production paragraph branches: 2 interleaved 33 KiB streams retain independent append seeds; metric mismatch, count eviction and oversized rejection passed")
+
+  check(DownstreamNative.traceEvents.isEmpty()) { "disabled tracing must emit no events" }
+  DownstreamNative.tracedId = 9100
+  DownstreamNative.plans[9100] = listOf(PlannedSegment(0, 1, 0, 9100))
+  val traced = RenderedDocument.obtain(context, 9100, 1f)!!
+  check(DownstreamNative.traceEvents == listOf(
+    "android_render_build_start", "android_segment_build", "android_render_build_end",
+  )) { "a rendering miss must report a balanced build and segment count" }
+  DownstreamNative.traceEvents.clear()
+  check(RenderedDocument.obtain(context, 9100, 1f) === traced)
+  check(RenderedDocument.obtain(context, 9100, 1f, false) === traced)
+  check(DownstreamNative.traceEvents == List(2) { "android_render_cache_hit" }) {
+    "normalized code-free cache hits must not look like rebuilding"
+  }
+  DownstreamNative.traceEvents.clear()
+  DownstreamNative.tracedId = 9101
+  DownstreamNative.plans[9101] = listOf(PlannedSegment(0, 1, 0, 9100))
+  RenderedDocument.obtain(context, 9101, 1f)!!
+  check(DownstreamNative.traceEvents == listOf(
+    "android_render_build_start", "android_segment_reuse", "android_render_build_end",
+  )) { "a committed segment hit must report reuse" }
+  DownstreamNative.traceEvents.clear()
+  DownstreamNative.tracedId = 9102
+  DownstreamNative.failedReadId = 9102
+  DownstreamNative.plans[9102] = listOf(PlannedSegment(0, 1, 0, 9102))
+  check(RenderedDocument.obtain(context, 9102, 1f) == null)
+  check(DownstreamNative.traceEvents.first() == "android_render_build_start" &&
+    DownstreamNative.traceEvents.last() == "android_render_build_end") {
+    "an unavailable document must not leave an unmatched build duration"
+  }
+  println("production tracing: disabled path silent, cache hits and segment reuse counted, failed builds balanced")
 
 }

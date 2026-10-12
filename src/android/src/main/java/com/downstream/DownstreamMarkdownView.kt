@@ -1594,6 +1594,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   // selection and scroll position across updates.
   private fun syncSegmentViews() {
     val document = rendered
+    val traceId = if (document?.tracing == true) document.documentId else 0L
     val segments = document?.segments.orEmpty()
     val column = width - paddingLeft - paddingRight
     val frames = if (!selectable && !segmentAccessibilityEnabled && segmentViewportKnown && column > 0) {
@@ -1636,7 +1637,14 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
         view = when (segment) {
           is TextSegment -> if (recycledTextViews.isEmpty()) TextSegmentView(context) else recycledTextViews.removeLast()
           is CodeSegment -> CodeSegmentView(context).apply { setControlHost(this@DownstreamMarkdownView) }
-          is TableSegment -> TableSegmentView(context).apply { setControlHost(this@DownstreamMarkdownView) }
+          is TableSegment -> {
+            if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_table_create_start")
+            try {
+              TableSegmentView(context).apply { setControlHost(this@DownstreamMarkdownView) }
+            } finally {
+              if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_table_create_end")
+            }
+          }
           is ImageSegment -> ImageSegmentView(context).also { new ->
             // A picture's answer is the engine's, so a load that finishes is reported
             // upward and not applied here: the view rebuilds from the state rather
@@ -1660,7 +1668,14 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
           setHosted(hostLayout.hosts(segment.codeOrdinal))
           setSegment(segment, document!!, document!!.plan[index].from)
         }
-        is TableSegment -> (view as TableSegmentView).setSegment(segment, sourceEpoch, document!!.style.chromeRowHeight)
+        is TableSegment -> {
+          if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_table_bind_start")
+          try {
+            (view as TableSegmentView).setSegment(segment, sourceEpoch, document!!.style.chromeRowHeight)
+          } finally {
+            if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_table_bind_end")
+          }
+        }
         // Read once into the local rather than off `rendered` per field: it is a
         // mutable property, so the compiler will not smart-cast it, and five reads
         // of a field another thread can replace is five chances to mix one

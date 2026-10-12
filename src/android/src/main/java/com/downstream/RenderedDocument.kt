@@ -178,8 +178,10 @@ internal class RenderedDocument(
       images == cachedImages && hosts == cachedHosts && tables == cachedTables &&
       choices == cachedChoices
     ) {
+      if (tracing) DownstreamNative.traceDocument(documentId, "android_frames_cache_hit")
       return cachedFrames
     }
+    if (tracing) DownstreamNative.traceDocument(documentId, "android_frames_start")
     val frames = IntArray(segments.size * 2)
     var y = 0
     segments.forEachIndexed { index, segment ->
@@ -197,6 +199,7 @@ internal class RenderedDocument(
     cachedTables = tables
     cachedChoices = choices
     cachedFrames = frames
+    if (tracing) DownstreamNative.traceDocument(documentId, "android_frames_end")
     return frames
   }
 
@@ -491,11 +494,17 @@ internal class RenderedDocument(
       // different renderings even when everything else is the same.
       var key =
         "$documentId:$fontScale:$night:$syntaxHighlighting:$themeId:${caret.kind}:${caret.place}:${linkVariants.hashCode()}:$incrementalParagraphs"
-      cache.get(key)?.let { return it }
+      cache.get(key)?.let {
+        if (it.tracing) DownstreamNative.traceDocument(documentId, "android_render_cache_hit")
+        return it
+      }
       if (syntaxHighlighting) {
         val plainKey = "$documentId:$fontScale:$night:false:$themeId:${caret.kind}:${caret.place}:${linkVariants.hashCode()}:$incrementalParagraphs"
         cache.get(plainKey)?.let { existing ->
-          if (existing.plan.none { it.kind == SEGMENT_CODE }) return existing
+          if (existing.plan.none { it.kind == SEGMENT_CODE }) {
+            if (existing.tracing) DownstreamNative.traceDocument(documentId, "android_render_cache_hit")
+            return existing
+          }
         }
       }
       // Inline formulas draw from text spans, which have no context of their own.
@@ -506,7 +515,10 @@ internal class RenderedDocument(
       // above so repeated code snapshots still avoid the JNI plan read.
       val highlights = syntaxHighlighting && plan.any { it.kind == SEGMENT_CODE }
       key = "$documentId:$fontScale:$night:$highlights:$themeId:${caret.kind}:${caret.place}:${linkVariants.hashCode()}:$incrementalParagraphs"
-      cache.get(key)?.let { return it }
+      cache.get(key)?.let {
+        if (it.tracing) DownstreamNative.traceDocument(documentId, "android_render_cache_hit")
+        return it
+      }
       // Measurement prepares highlighted code even when the view hides colors.
       // Both variants can share this snapshot's provisional non-code segments,
       // which the committed-segment cache cannot reuse. Every other rendering
@@ -542,59 +554,67 @@ internal class RenderedDocument(
       // cap is applied once here so every measurement below works with the
       // result. Resolved in C++ so both platforms read one rule.
       val scaled = DownstreamNative.fontScaleCap(themeId, fontScale)
-      val theme = NativeTheme.of(themeId)
-      // One style for the shared scale and the paints, which is what a
-      // measurement reads; a segment builds its own for the per-block work that
-      // needs the document.
-      val style = Style(scaled, Palette(theme, night), theme, themeId)
       val traceId = if (DownstreamNative.isTracingDocument(documentId)) documentId else 0L
-      val segments = ArrayList<Segment>(plan.size)
-      // Each code segment's ordinal is a property of the plan, so a measurement
-      // and the view that draws it read the same number: the ordinal is not
-      // something the view has to count for itself.
-      for ((index, planned) in plan.withIndex()) {
-        // The plan counted the code blocks, so the ordinal comes from there
-        // rather than from a second walk of the plan.
-        val ordinal = planned.codeOrdinal
-        // Only the uncommitted tail and newly committed chunks cross JNI. The
-        // ordinal is in the key because a cached segment is reused only where it
-        // would be built identically.
-        val isLast = planned.to == plan.last().to
-        // Only the document's own last segment carries the caret, so the key only
-        // varies there and every earlier segment keeps being shared between
-        // snapshots.
-        val caretKey = if (isLast) "${caret.kind}:${caret.place}" else "0:0"
-        val segmentParagraphs = incrementalParagraphs && planned.kind == SEGMENT_TEXT &&
-          !planned.isCommitted && planned.from >= planned.settledBlocks
-        val segmentKey =
-          "${planned.identity}:${planned.lastIdentity}:${planned.to - planned.from}:$ordinal:$scaled:$night:" +
-            "${highlights && planned.kind == SEGMENT_CODE}:$themeId:$caretKey:${linkVariants.hashCode()}:$segmentParagraphs"
-        val segment = (if (!planned.isCommitted && planned.kind != SEGMENT_CODE) opposite?.segments?.getOrNull(index) else null)
-          ?: (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
-          // The theme id goes with the read, because each block's typography is
-          // resolved against it in C++; without it every block reads the default.
-          ?: DownstreamNative.readDocument(documentId, planned.from, planned.to, themeId)
-            ?.let {
-              buildSegment(
-                it, images, style, planned, ordinal, planned.tableOrdinal, highlights,
-                style.px(it.previousBottomMargin),
-                if (isLast) caret else PlacedCaret.NONE,
-                linkVariants, linkUrls,
-                traceId, segmentParagraphs,
-              ).also { segment ->
-                segment.detailsContainers = (0 until it.containerCount(0)).mapNotNull { depth ->
-                  if (it.containerKind(0, depth) != NativeDocument.CONTAINER_DETAILS) null
-                  else ContainerDecoration(0f, 0f, null, false, null, 0f, 0f,
-                    kind = CONTAINER_DETAILS, id = it.containerId(0, depth),
-                    open = it.containerOpen(0, depth), summary = it.showsMarker(0, depth))
+      if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_render_build_start")
+      try {
+        val theme = NativeTheme.of(themeId)
+        // One style for the shared scale and the paints, which is what a
+        // measurement reads; a segment builds its own for the per-block work that
+        // needs the document.
+        val style = Style(scaled, Palette(theme, night), theme, themeId)
+        val segments = ArrayList<Segment>(plan.size)
+        // Each code segment's ordinal is a property of the plan, so a measurement
+        // and the view that draws it read the same number: the ordinal is not
+        // something the view has to count for itself.
+        for ((index, planned) in plan.withIndex()) {
+          // The plan counted the code blocks, so the ordinal comes from there
+          // rather than from a second walk of the plan.
+          val ordinal = planned.codeOrdinal
+          // Only the uncommitted tail and newly committed chunks cross JNI. The
+          // ordinal is in the key because a cached segment is reused only where it
+          // would be built identically.
+          val isLast = planned.to == plan.last().to
+          // Only the document's own last segment carries the caret, so the key only
+          // varies there and every earlier segment keeps being shared between
+          // snapshots.
+          val caretKey = if (isLast) "${caret.kind}:${caret.place}" else "0:0"
+          val segmentParagraphs = incrementalParagraphs && planned.kind == SEGMENT_TEXT &&
+            !planned.isCommitted && planned.from >= planned.settledBlocks
+          val segmentKey =
+            "${planned.identity}:${planned.lastIdentity}:${planned.to - planned.from}:$ordinal:$scaled:$night:" +
+              "${highlights && planned.kind == SEGMENT_CODE}:$themeId:$caretKey:${linkVariants.hashCode()}:$segmentParagraphs"
+          val reused = (if (!planned.isCommitted && planned.kind != SEGMENT_CODE) opposite?.segments?.getOrNull(index) else null)
+            ?: (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
+          if (traceId != 0L) DownstreamNative.traceDocument(traceId,
+            if (reused != null) "android_segment_reuse" else "android_segment_build")
+          val segment = reused
+            // The theme id goes with the read, because each block's typography is
+            // resolved against it in C++; without it every block reads the default.
+            ?: DownstreamNative.readDocument(documentId, planned.from, planned.to, themeId)
+              ?.let {
+                buildSegment(
+                  it, images, style, planned, ordinal, planned.tableOrdinal, highlights,
+                  style.px(it.previousBottomMargin),
+                  if (isLast) caret else PlacedCaret.NONE,
+                  linkVariants, linkUrls,
+                  traceId, segmentParagraphs,
+                ).also { segment ->
+                  segment.detailsContainers = (0 until it.containerCount(0)).mapNotNull { depth ->
+                    if (it.containerKind(0, depth) != NativeDocument.CONTAINER_DETAILS) null
+                    else ContainerDecoration(0f, 0f, null, false, null, 0f, 0f,
+                      kind = CONTAINER_DETAILS, id = it.containerId(0, depth),
+                      open = it.containerOpen(0, depth), summary = it.showsMarker(0, depth))
+                  }
                 }
               }
-            }
-            ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
-          ?: return null
-        segments.add(segment)
+              ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
+            ?: return null
+          segments.add(segment)
+        }
+        return RenderedDocument(documentId, segments, plan, style.paint, style, traceId != 0L).also { cache.put(key, it) }
+      } finally {
+        if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_render_build_end")
       }
-      return RenderedDocument(documentId, segments, plan, style.paint, style, traceId != 0L).also { cache.put(key, it) }
     }
 
   /**

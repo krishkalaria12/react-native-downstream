@@ -65,7 +65,7 @@ private class ImageSegment: Segment()
 private class MathSegment: Segment()
 private class Plan(val from: Int, val to: Int)
 private class Style { val chromeRowHeight=20; val imageMetrics=0; val imageAltColor=0; val mathFontSize=0; val mathColor=0; val mathBackground=0; val mathErrorColor=0; val mathPadding=0; val mathRadius=0 }
-private class RenderedDocument(input: List<Segment>, val positions: IntArray) {
+private class RenderedDocument(input: List<Segment>, val positions: IntArray, val tracing: Boolean = false, val documentId: Long = 42L) {
   var segmentReads=0
   val segments: List<Segment> = object : AbstractList<Segment>() {
     override val size get()=input.size
@@ -73,6 +73,10 @@ private class RenderedDocument(input: List<Segment>, val positions: IntArray) {
   }
   val plan=segments.indices.map { Plan(it,it+1) }; val style=Style()
   fun frames(width: Int, chrome: Int, code: Int, images: Int, hosts: Hosts, tables: Int, choices: Int)=positions
+}
+private object DownstreamNative {
+  val events = mutableListOf<Pair<Long, String>>()
+  fun traceDocument(documentId: Long, event: String) { events.add(documentId to event) }
 }
 private class TextSegmentView(context: Context): View(context) {
   var shown: TextSegment?=null
@@ -164,9 +168,19 @@ fun main() {
     TextSegment(Text("spoiler",listOf(SpoilerSpan()))),TextSegment(Text("math",listOf(MathInlineSpan()))),TextSegment(Text("caret"),caretOffset=0),
     TextSegment(Text("host"),customContainer=3),TextSegment(Text("details"),detailsBlocks=listOf(1)),
     TextSegment(Text("task"),taskBlocks=listOf(1)),CodeSegment(),TableSegment(),ImageSegment(),MathSegment())
-  val protectedHost=MountedDocument(Context(),RenderedDocument(protected,IntArray(protected.size*2) { if(it%2==0) 10000+it*20 else 20 }))
+  check(DownstreamNative.events.isEmpty()) { "disabled diagnostics emitted table events" }
+  val protectedHost=MountedDocument(Context(),RenderedDocument(protected,IntArray(protected.size*2) { if(it%2==0) 10000+it*20 else 20 }, tracing = true))
   protectedHost.attach()
   check(protectedHost.segmentLayer.children.size==protected.size) { "stateful or hosted segments must not be deferred" }
+  check(DownstreamNative.events == listOf(
+    42L to "android_table_create_start", 42L to "android_table_create_end",
+    42L to "android_table_bind_start", 42L to "android_table_bind_end",
+  )) { "table diagnostics lost document identity or balanced stages" }
+  DownstreamNative.events.clear()
+  protectedHost.drive()
+  check(DownstreamNative.events == listOf(42L to "android_table_bind_start", 42L to "android_table_bind_end")) {
+    "reused table repeated creation diagnostics"
+  }
   val paddedHost=MountedDocument(Context(),RenderedDocument(segments,positions))
   paddedHost.paddingTop=100; paddedHost.segmentLayer.top=100
   paddedHost.actualVisible=Rect(0,200,200,300); paddedHost.attach()

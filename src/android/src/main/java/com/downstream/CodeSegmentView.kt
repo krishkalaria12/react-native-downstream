@@ -666,90 +666,107 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     return if (header.visibility == View.VISIBLE) rendered.style.chromeRowHeight else 0
   }
 
+  override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    val rendered = this.rendered
+    val traceId = if (rendered?.tracing == true) rendered.documentId else 0L
+    if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_code_measure_start")
+    try {
+      super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    } finally {
+      if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_code_measure_end")
+    }
+  }
+
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
     val segment = this.segment ?: return
     val rendered = this.rendered ?: return
     val layout = this.layout ?: return
-    // Children are placed in this view's own coordinates, so the frame the parent
-    // gave (left, top) only supplies the size.
-    val width = right - left
-    val height = bottom - top
-    val headerHeight = headerHeight()
-    val padding = segment.padding
-    val leading = segment.contentLeading
-    val cardWidth = (width - leading).coerceAtLeast(0)
-    val gutterWidth = segment.gutterWidth(layout)
-    gutter.visibility = if (gutterWidth > 0) View.VISIBLE else View.GONE
-    // The gutter narrows the width a wrapped body wraps at, which is the only way
-    // numbers change a block's height. An unwrapped body is laid out at its own
-    // length either way, so it never lays code out again on a rotation.
-    val bodyWidth = segment.bodyWidth(rendered.paint, cardWidth, layout.wraps, gutterWidth)
-    val bodyHeight = segment.bodyHeight(rendered.paint, cardWidth, layout.wraps, gutterWidth)
-    // The viewport scrolls only while the block is past its cap, which is the whole
-    // difference between a capped card and an uncapped one. It is decided before
-    // the header is laid out, because the expand button depends on it.
-    val capped = layout.maxHeight > 0f && bodyHeight + 2 * padding > layout.maxHeight
-    if (capped != this.capped) {
-      this.capped = capped
-      updateButtons()
+    val traceId = if (rendered.tracing) rendered.documentId else 0L
+    if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_code_layout_start")
+    try {
+      // Children are placed in this view's own coordinates, so the frame the parent
+      // gave (left, top) only supplies the size.
+      val width = right - left
+      val height = bottom - top
+      val headerHeight = headerHeight()
+      val padding = segment.padding
+      val leading = segment.contentLeading
+      val cardWidth = (width - leading).coerceAtLeast(0)
+      val gutterWidth = segment.gutterWidth(layout)
+      gutter.visibility = if (gutterWidth > 0) View.VISIBLE else View.GONE
+      // The gutter narrows the width a wrapped body wraps at, which is the only way
+      // numbers change a block's height. An unwrapped body is laid out at its own
+      // length either way, so it never lays code out again on a rotation.
+      val bodyWidth = segment.bodyWidth(rendered.paint, cardWidth, layout.wraps, gutterWidth)
+      val bodyHeight = segment.bodyHeight(rendered.paint, cardWidth, layout.wraps, gutterWidth)
+      // The viewport scrolls only while the block is past its cap, which is the whole
+      // difference between a capped card and an uncapped one. It is decided before
+      // the header is laid out, because the expand button depends on it.
+      val capped = layout.maxHeight > 0f && bodyHeight + 2 * padding > layout.maxHeight
+      if (capped != this.capped) {
+        this.capped = capped
+        updateButtons()
+      }
+      header.measure(
+        MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+        MeasureSpec.makeMeasureSpec(headerHeight, MeasureSpec.EXACTLY),
+      )
+      header.layout(0, 0, width, headerHeight)
+      val viewportLeft = leading + padding
+      val viewportTop = headerHeight + padding
+      val viewportRight = (width - padding).coerceAtLeast(viewportLeft)
+      val viewportBottom = (height - padding).coerceAtLeast(viewportTop)
+      viewport.measure(
+        MeasureSpec.makeMeasureSpec(viewportRight - viewportLeft, MeasureSpec.EXACTLY),
+        MeasureSpec.makeMeasureSpec(viewportBottom - viewportTop, MeasureSpec.EXACTLY),
+      )
+      viewport.layout(viewportLeft, viewportTop, viewportRight, viewportBottom)
+      // The row is as tall as the code, so a line's y in the gutter is its y in the
+      // body's layout and the numbers beside the visible lines are the visible ones.
+      row.measure(
+        MeasureSpec.makeMeasureSpec(viewport.width, MeasureSpec.AT_MOST),
+        MeasureSpec.makeMeasureSpec(bodyHeight, MeasureSpec.EXACTLY),
+      )
+      row.layout(0, 0, row.measuredWidth, bodyHeight)
+      gutter.measure(
+        MeasureSpec.makeMeasureSpec(gutterWidth, MeasureSpec.EXACTLY),
+        MeasureSpec.makeMeasureSpec(bodyHeight, MeasureSpec.EXACTLY),
+      )
+      gutter.layout(0, 0, gutterWidth, bodyHeight)
+      scroll.measure(
+        MeasureSpec.makeMeasureSpec(bodyWidth.coerceAtLeast(0), MeasureSpec.EXACTLY),
+        MeasureSpec.makeMeasureSpec(bodyHeight, MeasureSpec.EXACTLY),
+      )
+      scroll.layout(gutterWidth, 0, gutterWidth + bodyWidth, bodyHeight)
+      body.measure(
+        MeasureSpec.makeMeasureSpec(bodyWidth, MeasureSpec.EXACTLY),
+        MeasureSpec.makeMeasureSpec(bodyHeight, MeasureSpec.EXACTLY),
+      )
+      body.layout(0, 0, bodyWidth, bodyHeight)
+      gutter.update(
+        segment, body, layout, segment.codeTextSize, segment.codeFace,
+        lineNumberColor(segment.colors),
+      )
+      viewport.isVerticalScrollBarEnabled = capped
+      viewport.streaming = streaming
+      if (restoreScroll) {
+        val maximum = (bodyWidth - scroll.width).coerceAtLeast(0)
+        scroll.scrollTo(savedOffset.coerceIn(0, maximum), 0)
+        val verticalMaximum = (bodyHeight - viewport.height).coerceAtLeast(0)
+        viewport.scrollTo(0, savedVerticalOffset.coerceIn(0, verticalMaximum))
+        restoreScroll = false
+      }
+      // Follow the newest line, which is Streamdown's pinned scroll: a card the
+      // reader has scrolled away from is not pinned and does not move. Not an
+      // alternative to the restore above: an open fence is rebuilt on every
+      // snapshot, so the restore runs every time, and the pin has to land on top.
+      if (capped && streaming) {
+        viewport.followNewestLine()
+      }
+      invalidate()
+    } finally {
+      if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_code_layout_end")
     }
-    header.measure(
-      MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
-      MeasureSpec.makeMeasureSpec(headerHeight, MeasureSpec.EXACTLY),
-    )
-    header.layout(0, 0, width, headerHeight)
-    val viewportLeft = leading + padding
-    val viewportTop = headerHeight + padding
-    val viewportRight = (width - padding).coerceAtLeast(viewportLeft)
-    val viewportBottom = (height - padding).coerceAtLeast(viewportTop)
-    viewport.measure(
-      MeasureSpec.makeMeasureSpec(viewportRight - viewportLeft, MeasureSpec.EXACTLY),
-      MeasureSpec.makeMeasureSpec(viewportBottom - viewportTop, MeasureSpec.EXACTLY),
-    )
-    viewport.layout(viewportLeft, viewportTop, viewportRight, viewportBottom)
-    // The row is as tall as the code, so a line's y in the gutter is its y in the
-    // body's layout and the numbers beside the visible lines are the visible ones.
-    row.measure(
-      MeasureSpec.makeMeasureSpec(viewport.width, MeasureSpec.AT_MOST),
-      MeasureSpec.makeMeasureSpec(bodyHeight, MeasureSpec.EXACTLY),
-    )
-    row.layout(0, 0, row.measuredWidth, bodyHeight)
-    gutter.measure(
-      MeasureSpec.makeMeasureSpec(gutterWidth, MeasureSpec.EXACTLY),
-      MeasureSpec.makeMeasureSpec(bodyHeight, MeasureSpec.EXACTLY),
-    )
-    gutter.layout(0, 0, gutterWidth, bodyHeight)
-    scroll.measure(
-      MeasureSpec.makeMeasureSpec(bodyWidth.coerceAtLeast(0), MeasureSpec.EXACTLY),
-      MeasureSpec.makeMeasureSpec(bodyHeight, MeasureSpec.EXACTLY),
-    )
-    scroll.layout(gutterWidth, 0, gutterWidth + bodyWidth, bodyHeight)
-    body.measure(
-      MeasureSpec.makeMeasureSpec(bodyWidth, MeasureSpec.EXACTLY),
-      MeasureSpec.makeMeasureSpec(bodyHeight, MeasureSpec.EXACTLY),
-    )
-    body.layout(0, 0, bodyWidth, bodyHeight)
-    gutter.update(
-      segment, body, layout, segment.codeTextSize, segment.codeFace,
-      lineNumberColor(segment.colors),
-    )
-    viewport.isVerticalScrollBarEnabled = capped
-    viewport.streaming = streaming
-    if (restoreScroll) {
-      val maximum = (bodyWidth - scroll.width).coerceAtLeast(0)
-      scroll.scrollTo(savedOffset.coerceIn(0, maximum), 0)
-      val verticalMaximum = (bodyHeight - viewport.height).coerceAtLeast(0)
-      viewport.scrollTo(0, savedVerticalOffset.coerceIn(0, verticalMaximum))
-      restoreScroll = false
-    }
-    // Follow the newest line, which is Streamdown's pinned scroll: a card the
-    // reader has scrolled away from is not pinned and does not move. Not an
-    // alternative to the restore above: an open fence is rebuilt on every
-    // snapshot, so the restore runs every time, and the pin has to land on top.
-    if (capped && streaming) {
-      viewport.followNewestLine()
-    }
-    invalidate()
   }
 
   /**
