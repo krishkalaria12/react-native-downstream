@@ -97,6 +97,8 @@ try {
     ...[
       'Unicode.cpp',
       'MarkdownParser.cpp',
+      'Direction.cpp',
+      'BidiTable.cpp',
       'LinkPolicy.cpp',
       'Scan.cpp',
       'Compare.cpp',
