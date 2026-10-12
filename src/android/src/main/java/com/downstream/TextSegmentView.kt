@@ -291,9 +291,9 @@ private class TaskPress(val id: Int, val checked: Boolean)
       if (text.isNotEmpty()) text = ""
       requestLayout()
     } else {
-      setContent(segment.text, segment.accessibleBlocks, rendered)
+      assignContent(segment.text, segment.accessibleBlocks, rendered)
     }
-    // setContent also serves code bodies and clears this field. Retain the
+    // assignContent also serves code bodies and clears this field. Retain the
     // identity afterwards so settled text keeps its layout and selection.
     this.segment = segment
     readingParts = buildReadingParts(segment.accessibleBlocks, segment.detailsBlocks)
@@ -352,6 +352,14 @@ private class TaskPress(val id: Int, val checked: Boolean)
     }
 
   fun setContent(text: Spanned, accessibleBlocks: List<AccessibleBlock>, rendered: RenderedDocument) {
+    assignContent(text, accessibleBlocks, rendered)
+    readingParts = buildReadingParts(accessibleBlocks, emptyList())
+    accessibility.contentChanged()
+  }
+
+  // Canonical segments attach their own details metadata after assignment, so
+  // assigning text must not build a second, temporary reading order or notify.
+  private fun assignContent(text: Spanned, accessibleBlocks: List<AccessibleBlock>, rendered: RenderedDocument) {
     streamingFrame = null
     streamingRendered = null
     streamingCanonicalAssigned = false
@@ -378,8 +386,6 @@ private class TaskPress(val id: Int, val checked: Boolean)
     rendered.style.colors.selectionColor?.let { highlight ->
       highlightColor = highlight
     }
-    readingParts = buildReadingParts(accessibleBlocks, segment?.detailsBlocks ?: emptyList())
-    accessibility.contentChanged()
   }
 
   /** A hosted fence need not retain the previous native body's text/layout. */

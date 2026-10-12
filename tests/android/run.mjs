@@ -221,6 +221,9 @@ try {
   execFileSync(process.execPath, [join(here, 'table-draw.mjs')], {
     stdio: 'inherit',
   });
+  execFileSync(process.execPath, [join(here, 'table-reading.mjs')], {
+    stdio: 'inherit',
+  });
   execFileSync(process.execPath, [join(here, 'segment-traversal.mjs')], {
     stdio: 'inherit',
   });
@@ -228,6 +231,9 @@ try {
     stdio: 'inherit',
   });
   execFileSync(process.execPath, [join(here, 'text-streaming.mjs')], {
+    stdio: 'inherit',
+  });
+  execFileSync(process.execPath, [join(here, 'text-assignment.mjs')], {
     stdio: 'inherit',
   });
 } finally {

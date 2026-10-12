@@ -258,11 +258,12 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     downloadButton.imageTintList = tint
     expandButton.imageTintList = tint
     fullscreenButton.imageTintList = tint
-    // The strip gets the same segment and nothing else: it reads the header row out
-    // of it, so the two grids cannot drift apart.
-    headerGrid.updateSegment(segment, resetFocus = false)
+    // Both grids share the segment and immutable reading parts. The strip draws
+    // only the header while retaining the same accessible entries as the body.
+    val readingParts = buildTableReadingParts(segment)
+    headerGrid.updateSegment(segment, readingParts, resetFocus = false)
     headerGrid.contentDescription = segment.accessibilityRows.firstOrNull()
-    grid.updateSegment(segment, resetFocus = !sameTable)
+    grid.updateSegment(segment, readingParts, resetFocus = !sameTable)
     requestLayout()
     invalidate()
   }
@@ -420,6 +421,43 @@ private class TableReadingPart(
   val heading: Boolean,
 )
 
+private fun buildTableReadingParts(segment: TableSegment): List<TableReadingPart> = buildList {
+  segment.cells.forEachIndexed { row, cells ->
+    val plain = StringBuilder()
+    var first = true
+    fun appendPart(value: String, column: Int?, piece: AccessibleTextPiece?) {
+      val heading = first && segment.hasHeader && row == 0
+      add(TableReadingPart(if (heading) "Header: $value" else value, row, column, piece, heading))
+      first = false
+    }
+    fun flushPlain() {
+      if (plain.isNotEmpty()) {
+        appendPart(plain.toString(), null, null)
+        plain.clear()
+      }
+    }
+    cells.forEachIndexed { column, cell ->
+      if (column > 0) plain.append(", ")
+      val text = cell.text
+      if (text is Spanned) {
+        for (piece in linkPieces(text, 0, text.length)) {
+          val value = text.subSequence(piece.start, piece.end).toString()
+          if (piece.linkIndex == null) {
+            plain.append(value)
+          } else {
+            flushPlain()
+            appendPart(value, column, piece)
+          }
+        }
+      } else {
+        plain.append(text)
+      }
+    }
+    flushPlain()
+    if (first) appendPart("", null, null)
+  }
+}
+
 private class TableGridView(context: Context) : View(context) {
   /**
    * Draws only the header row, which is what the pinned strip is: the same grid,
@@ -486,51 +524,14 @@ private class TableGridView(context: Context) : View(context) {
     invalidate()
   }
 
-  fun updateSegment(segment: TableSegment, resetFocus: Boolean) {
+  fun updateSegment(segment: TableSegment, readingParts: List<TableReadingPart>, resetFocus: Boolean) {
     this.segment = segment
-    readingParts = buildReadingParts(segment)
+    this.readingParts = readingParts
     invalidate()
     accessibility.contentChanged(resetFocus)
   }
 
   override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = accessibility
-
-  private fun buildReadingParts(segment: TableSegment): List<TableReadingPart> = buildList {
-    segment.cells.forEachIndexed { row, cells ->
-      val plain = StringBuilder()
-      var first = true
-      fun appendPart(value: String, column: Int?, piece: AccessibleTextPiece?) {
-        val heading = first && segment.hasHeader && row == 0
-        add(TableReadingPart(if (heading) "Header: $value" else value, row, column, piece, heading))
-        first = false
-      }
-      fun flushPlain() {
-        if (plain.isNotEmpty()) {
-          appendPart(plain.toString(), null, null)
-          plain.clear()
-        }
-      }
-      cells.forEachIndexed { column, cell ->
-        if (column > 0) plain.append(", ")
-        val text = cell.text
-        if (text is Spanned) {
-          for (piece in linkPieces(text, 0, text.length)) {
-            val value = text.subSequence(piece.start, piece.end).toString()
-            if (piece.linkIndex == null) {
-              plain.append(value)
-            } else {
-              flushPlain()
-              appendPart(value, column, piece)
-            }
-          }
-        } else {
-          plain.append(text)
-        }
-      }
-      flushPlain()
-      if (first) appendPart("", null, null)
-    }
-  }
 
   private fun accessiblePart(index: Int): MarkdownAccessibility.Entry? {
     val segment = segment ?: return null
