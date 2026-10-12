@@ -13,5 +13,7 @@
     "benchmarks/**/*.ts",
     "benchmarks/**/*.tsx",
     "vitest.config.mts"
-  ]
+  ],
+  // The local phone benchmark is gitignored and has its own dependencies.
+  "exclude": ["benchmarks/phone"]
 }

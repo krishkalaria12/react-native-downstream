@@ -86,3 +86,6 @@ nitrogen/
 
 # Host C++ test objects cached by CI
 .native-test-build-cache/
+
+# Local phone benchmark harness and results
+benchmarks/phone/
