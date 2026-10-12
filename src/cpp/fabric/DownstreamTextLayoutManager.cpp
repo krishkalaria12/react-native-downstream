@@ -59,6 +59,7 @@ DocumentMeasurement DownstreamTextLayoutManager::measure(const downstream::Docum
     }
 
     if (!cached) {
+      downstream::SessionTrace::recordDocument(document->id, "measure_cache_miss");
       measurement = measurePlatform(document, scale, maximumWidth, surfaceId, chrome, code, choices, caret, images,
                                     hosts, theme, tables, incrementalParagraphs, syntaxHighlighting);
       std::lock_guard<std::mutex> lock(cacheMutex_);

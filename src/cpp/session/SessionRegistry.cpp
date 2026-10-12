@@ -363,6 +363,10 @@ private:
     if (parsed && isCurrentGeneration(generation)) {
       // The view has not measured yet, so the widths other views use are the
       // best guess for this one.
+      // Bind before platform preparation: preparation can emit document-scoped
+      // trace events (for example while building Android spans), and those
+      // events must resolve to this session's generation and sequence.
+      SessionTrace::bindDocument(result.document, id_, generation, sequence);
       SessionTrace::record(id_, generation, sequence, "prepare_start");
       RenderPreparer::prepare(result.document, hints.empty() ? RenderPreparer::recentLayouts() : hints);
       SessionTrace::record(id_, generation, sequence, "prepare_end");
@@ -383,7 +387,6 @@ private:
         snapshotTagBodies_ = std::move(tagBodies);
         snapshotTagStructure_ = std::move(tagStructure);
         snapshotLive_ = !finished;
-        SessionTrace::bindDocument(snapshot_, id_, generation, sequence);
         SessionTrace::record(id_, generation, sequence, "snapshot_ready");
         readyGeneration_ = generation;
         readySequence_ = sequence;

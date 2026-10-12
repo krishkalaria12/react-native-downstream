@@ -22,6 +22,8 @@ export type NativeTraceEvent = SnapshotReadyEvent &
     event: string;
     clockDomain: 'native-monotonic';
     timeNs: string;
+    /** Opaque process-local ID of the native thread emitting this event. */
+    threadId: string;
   }>;
 
 /**

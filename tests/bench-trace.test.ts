@@ -59,6 +59,7 @@ test('stream trace keeps matching sampled session events', () => {
     event: 'parse_end',
     clockDomain: 'native-monotonic' as const,
     timeNs: '3000000',
+    threadId: 'host',
   };
   trace.recordStreamEvent({ ...native, sequence: 1 });
   trace.recordStreamEvent({ ...native, sessionId: 'another-session' });

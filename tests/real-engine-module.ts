@@ -96,6 +96,7 @@ function emitTrace(
       event,
       clockDomain: 'native-monotonic',
       timeNs: nowNs(),
+      threadId: 'host',
     });
   }
 }

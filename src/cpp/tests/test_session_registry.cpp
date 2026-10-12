@@ -18,9 +18,10 @@ using namespace downstream;
 namespace {
 std::mutex preparedMutex;
 std::vector<LayoutHint> preparedHints;
-void captureHints(const DocumentHandle &, const std::vector<LayoutHint> &hints) {
+void captureHints(const DocumentHandle &document, const std::vector<LayoutHint> &hints) {
   std::lock_guard<std::mutex> lock(preparedMutex);
   preparedHints = hints;
+  if (document) SessionTrace::recordDocument(document->id, "prepare_observed");
 }
 }
 
@@ -35,6 +36,7 @@ int main() {
     std::lock_guard<std::mutex> lock(traceMutex);
     traces.push_back(event);
   });
+  RenderPreparer::install(captureHints);
   const auto callback = [&](const SessionEvent &event) {
     if (event.sessionId != id || event.status != ParseStatus::Ok) {
       return;
@@ -58,8 +60,12 @@ int main() {
   };
 
   if (!SessionRegistry::create(id, ParseMode::IncrementalTail, callback) ||
-      SessionRegistry::create(id, ParseMode::FullParse, callback) ||
-      !SessionRegistry::append(id, "hello", 0, 2) || !await(0, 2)) {
+      SessionRegistry::create(id, ParseMode::FullParse, callback)) {
+    std::cerr << "Initial native session create failed\n";
+    return 1;
+  }
+  SessionRegistry::noteLayout(id, LayoutHint{1, 320});
+  if (!SessionRegistry::append(id, "hello", 0, 2) || !await(0, 2)) {
     std::cerr << "Initial native session append failed\n";
     return 1;
   }
@@ -77,17 +83,33 @@ int main() {
   {
     std::lock_guard<std::mutex> lock(traceMutex);
     bool parsed = false;
+    bool prepared = false;
     bool measured = false;
+    bool snapshotReady = false;
+    bool preparedBeforeSnapshot = false;
+    std::string parseThread;
+    std::string prepareThread;
+    std::string measureThread;
     for (const auto &event : traces) {
       if (event.sessionId != id || event.generation != 0 || event.sequence != 2 || event.timeNs.empty()) continue;
       parsed |= event.event == "parse_end";
+      prepared |= event.event == "prepare_observed";
       measured |= event.event == "measure_start";
+      snapshotReady |= event.event == "snapshot_ready";
+      if (event.event == "parse_end") parseThread = event.threadId;
+      if (event.event == "prepare_observed") {
+        preparedBeforeSnapshot = !snapshotReady;
+        prepareThread = event.threadId;
+      }
+      if (event.event == "measure_start") measureThread = event.threadId;
     }
-    if (!parsed || !measured) {
+    if (!parsed || !prepared || !measured || !preparedBeforeSnapshot || parseThread.empty() ||
+        prepareThread != parseThread || measureThread.empty() || measureThread == parseThread) {
       std::cerr << "Trace lost the snapshot correlation\n";
       return 1;
     }
   }
+  RenderPreparer::install(nullptr);
   for (uint64_t index = 1; index <= 200; index++) {
     auto transient = std::make_shared<Document>();
     transient->id = 1000000 + index;

@@ -23,6 +23,8 @@ struct TraceEvent {
   uint64_t sequence;
   std::string event;
   std::string timeNs;
+  /// Opaque process-local thread ID, not an operating-system TID.
+  std::string threadId;
 };
 
 /// A process-local, opt-in trace registry shared by the session worker and
@@ -87,7 +89,11 @@ public:
     }
     const auto now = std::chrono::steady_clock::now().time_since_epoch();
     const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-    callback({sessionId, generation, sequence, event, std::to_string(ns)});
+    // Allocate an ID only on the first enabled event from this thread. Repeated
+    // measurements of one snapshot can overlap on Fabric and the mount thread.
+    thread_local const auto threadId = std::to_string(
+        instance().nextThreadId.fetch_add(1, std::memory_order_relaxed));
+    callback({sessionId, generation, sequence, event, std::to_string(ns), threadId});
   }
 
   static void recordDocument(uint64_t documentId, const char *event) {
@@ -149,6 +155,7 @@ private:
   struct State {
     std::mutex mutex;
     std::atomic<bool> anyEnabled{false};
+    std::atomic<uint64_t> nextThreadId{1};
     std::unordered_map<std::string, Callback> callbacks;
     std::unordered_map<uint64_t, DocumentEntry> documents;
     size_t pruneThreshold{64};

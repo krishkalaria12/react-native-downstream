@@ -26,7 +26,8 @@ using SnapshotReadyEvent = NativeDownstreamSessionSnapshotReadyEvent<std::string
 using SessionErrorEvent =
     NativeDownstreamSessionSessionErrorEvent<std::string, int32_t, int32_t, std::string, std::string, bool>;
 using NativeTraceEvent =
-    NativeDownstreamSessionNativeTraceEvent<std::string, int32_t, int32_t, std::string, std::string, std::string>;
+    NativeDownstreamSessionNativeTraceEvent<std::string, int32_t, int32_t, std::string, std::string, std::string,
+                                          std::string>;
 
 template <>
 struct Bridging<SnapshotReadyEvent> : NativeDownstreamSessionSnapshotReadyEventBridging<SnapshotReadyEvent> {};
@@ -89,7 +90,7 @@ DownstreamSessionModule::~DownstreamSessionModule() {
 void DownstreamSessionModule::deliverTrace(const downstream::TraceEvent &event) {
   emitOnTrace(NativeTraceEvent{event.sessionId, eventCounter(static_cast<double>(event.generation)),
                                eventCounter(static_cast<double>(event.sequence)), event.event,
-                               "native-monotonic", event.timeNs});
+                               "native-monotonic", event.timeNs, event.threadId});
 }
 
 void DownstreamSessionModule::deliver(const downstream::SessionEvent &event) {
