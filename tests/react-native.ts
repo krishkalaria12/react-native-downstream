@@ -1,5 +1,5 @@
 /**
- * Minimal React Native stand-in for unit tests and benchmarks.
+ * Minimal React Native stand-in for unit tests.
  *
  * The library touches four runtime values from `react-native`: the TurboModule
  * registry, the codegen component factory, `__DEV__`, and the display metrics

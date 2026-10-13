@@ -87,5 +87,6 @@ nitrogen/
 # Host C++ test objects cached by CI
 .native-test-build-cache/
 
-# Local phone benchmark harness and results
-benchmarks/phone/
+# Phone benchmark output and its downloaded Perfetto tool
+benchmarks/phone/results/
+benchmarks/phone/.tools/

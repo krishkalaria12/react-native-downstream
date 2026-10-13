@@ -13,7 +13,6 @@
     "example/ios/**",
     "example/android/**",
     "example/dist/**",
-    "benchmarks/results/**",
     "src/cpp/md4c/**",
     "src/cpp/lexilla/**",
     "src/cpp/glew/**",

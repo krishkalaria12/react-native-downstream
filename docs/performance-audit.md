@@ -4,9 +4,9 @@ Audited October 7, 2026 at revision `144fd321f253dad53d0efe33eacbde6922c6dcfb`. 
 
 The largest opportunities are reducing whole-response fallback parsing, reusing native layout for growing tails, and avoiding repeated copying of growing code fences. The existing architecture already does useful work: frame batching, worker scheduling, immutable committed blocks, and native segment caches. Preserve those mechanisms.
 
-The [first implementation pass](../benchmarks/results/2026-10-07/performance-fixes/README.md) now fixes trace pairing, batches Android state application, adds native metadata/tail cache budgets, and repairs the iOS harness declarations. Android host checks show synchronizations reduced from four to one for the targeted state change. The original iOS fixture now retains 15 tail renderings instead of 128. The analysis below records the original baseline; larger parser and layout changes remain follow-up work.
+The first implementation pass fixed trace pairing, batches Android state application, adds native metadata/tail cache budgets, and repairs the iOS harness declarations. Android host checks show synchronizations reduced from four to one for the targeted state change. The original iOS fixture now retains 15 tail renderings instead of 128. The analysis below records the original baseline; larger parser and layout changes remain follow-up work.
 
-The [parser and native layout follow-up](../benchmarks/results/2026-10-07/performance-followups/README.md) adds revocable reference-prefix reuse, bounded iOS measurement workspaces and mounted suffix edits, code-free preparation reuse, and Android plain-table-cell caches. The original 96 KiB reference fixture now parses 142,046 bytes instead of 38,273,853. The paired iOS fixture reduces 32 KiB paragraph measurement from 10.386 ms to 0.476 ms per update. The findings below remain the original audit baseline.
+The parser and native layout follow-up added revocable reference-prefix reuse, bounded iOS measurement workspaces and mounted suffix edits, code-free preparation reuse, and Android plain-table-cell caches. The original 96 KiB reference fixture now parses 142,046 bytes instead of 38,273,853. The paired iOS fixture reduces 32 KiB paragraph measurement from 10.386 ms to 0.476 ms per update. The findings below remain the original audit baseline.
 
 ## Evidence and limits
 
@@ -16,7 +16,7 @@ iOS measurements use the current `DSRenderedDocument` and real TextKit, with the
 
 Android findings primarily establish repeated work through code. The reveal experiment measures target counts using production Kotlin and host stubs. Heap usage and milliseconds saved on Android remain unmeasured.
 
-Sources, results, and commands are in [the reproduction directory](../benchmarks/results/2026-10-07/performance-audit/README.md). No physical-device release traces are available in the repository. JavaScript dependencies were absent, so the JS tests and React benchmark suite were not run.
+The reproduction sources and raw results have since been removed from the repository. No physical-device release traces are available in the repository. JavaScript dependencies were absent, so the JS tests and React benchmark suite were not run.
 
 ## Findings ranked by streaming impact
 
@@ -125,16 +125,7 @@ JavaScript `source += chunk` is a possible rope-flattening cost, not an establis
 
 ## Fix measurement validity before evaluating improvements
 
-[`nativeEvents`](../benchmarks/summarize.mjs#L104) validates `sequence` but drops it from the returned record. [`nativeDurations`](../benchmarks/summarize.mjs#L130) groups on that missing field. Different snapshots in a session generation can therefore be paired.
-
-Two reproductions confirmed the defect:
-
-- Sequence 1 starts parsing at 1 ms; sequence 2 ends at 100 ms. Expected zero paired samples, actual one sample of 99 ms.
-- Sequence 1 measures from 1 to 11 ms; sequence 2 from 2 to 3 ms. Expected durations 10 and 1 ms, actual 2 and 9 ms.
-
-Retain the sequence and test mismatched and interleaved snapshots before relying on trace percentiles. Complete, strictly ordered pairs can still be correct; this does not invalidate every historic duration. The existing eight summary tests pass and miss these cases. This is measurement correctness, not a runtime speed improvement.
-
-The full iOS native harness currently fails compilation with eight missing property/selector declaration errors in `DSSegmentViews.mm`. [The log is retained](../benchmarks/results/2026-10-07/performance-audit/ios-native-harness-failure.txt). The narrower current-source TextKit experiment passes. Repair the existing harness build before using it as an optimization gate; no product-source patch was made during this audit.
+The full iOS native harness currently fails compilation with eight missing property/selector declaration errors in `DSSegmentViews.mm`. The narrower current-source TextKit experiment passes. Repair the existing harness build before using it as an optimization gate; no product-source patch was made during this audit.
 
 ## Reference projects
 

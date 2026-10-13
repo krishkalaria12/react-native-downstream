@@ -2,6 +2,8 @@
 export interface PhoneChunk {
   text: string;
   dueMs: number;
+  /** Receiving view in a concurrent workload; absent means the only view. */
+  thread?: number;
 }
 
 export interface PhoneWorkload {

@@ -32,7 +32,7 @@ These changes remove C++ flattening and repeated Android prefix-character transf
 
 ## Paired measurements
 
-The following historical measurements were recorded for the text-page implementation now in `72e8ff7`, against its preceding source snapshot. Their raw sample files were removed. The [stream-scaling fixture](../benchmarks/stream-scaling.cpp) uses identical release C++ sources for both variants. Apple M5, ARM64, Apple clang 21, `-O3 -DNDEBUG`. Execution order was baseline/current/current/baseline; each invocation had one warmup and five measured samples. These medians pooled ten samples per variant.
+The following historical measurements were recorded for the text-page implementation now in `72e8ff7`, against its preceding source snapshot. Their raw sample files and the benchmark fixtures were removed. The stream-scaling fixture used identical release C++ sources for both variants. Apple M5, ARM64, Apple clang 21, `-O3 -DNDEBUG`. Execution order was baseline/current/current/baseline; each invocation had one warmup and five measured samples. These medians pooled ten samples per variant.
 
 | Workload                                  |   Size | Chunk | Preceding implementation ms | Follow-up ms |
 | ----------------------------------------- | -----: | ----: | --------------------------: | -----------: |
@@ -45,13 +45,7 @@ The following historical measurements were recorded for the text-page implementa
 
 The fixture measures cumulative synchronous parser/highlighter work after every chunk, excluding finish, scheduling, JS delivery, native preparation and presentation. Both variants pass live/final parity checks before timing; only explicitly incomplete live colors may differ. Prose shows little change and a small measured cost increase in separated paragraphs. The substantial fence gains do not establish device-frame performance.
 
-The comparison snapshot is `/tmp/downstream-followup-baseline`. Reproduce in the current workspace with:
-
-```sh
-DOWNSTREAM_BENCH_COMPARE_ROOT=/tmp/downstream-followup-baseline node benchmarks/native-stream-scaling.mjs
-```
-
-The separate [retained-snapshot probe](../benchmarks/stream-snapshot-retention.cpp) uses fresh processes and captures whole-process high-water RSS before contiguous consumers or finish. Each mode runs in baseline/current/current/baseline order. For a 60 KiB plain fence in 16-byte updates, the median of two fresh processes per variant was:
+The separate retained-snapshot probe used fresh processes and captures whole-process high-water RSS before contiguous consumers or finish. Each mode runs in baseline/current/current/baseline order. For a 60 KiB plain fence in 16-byte updates, the median of two fresh processes per variant was:
 
 | Retention policy                     | Preceding implementation peak RSS | Follow-up peak RSS |
 | ------------------------------------ | --------------------------------: | -----------------: |
@@ -60,13 +54,9 @@ The separate [retained-snapshot probe](../benchmarks/stream-snapshot-retention.c
 
 These historical RSS values include process overhead and allocator retention. Their raw files were removed. Indexed old text is checked after more appends, with final text checked after closure. This synthetic result demonstrates immutable storage retention; it is not an isolated live-heap measurement or an application/device memory prediction. Rendering retained snapshots also creates platform text buffers.
 
-```sh
-DOWNSTREAM_BENCH_COMPARE_ROOT=/tmp/downstream-followup-baseline node benchmarks/native-snapshot-retention.mjs
-```
-
 ## Token-prefix measurements against `72e8ff7`
 
-The new measurements compare an immutable export of `72e8ff7` with the current sources on the same Apple M5 release configuration. The [stream-scaling runner](../benchmarks/native-stream-scaling.mjs) performs ABBA execution with one warmup and five samples per invocation, pooling ten samples per variant. Live/final correctness checks run before timing.
+The new measurements compare an immutable export of `72e8ff7` with the current sources on the same Apple M5 release configuration. The stream-scaling runner performed ABBA execution with one warmup and five samples per invocation, pooling ten samples per variant. Live/final correctness checks run before timing.
 
 | Workload                                  |   Size | Chunk | `72e8ff7` ms | Current ms |
 | ----------------------------------------- | -----: | ----: | -----------: | ---------: |
@@ -79,7 +69,7 @@ The new measurements compare an immutable export of `72e8ff7` with the current s
 
 The completed-line fence copied 283,194,780 token payload bytes before and 1,905,564 after. The single-line fence has no completed prefix to share and copied the same 1,746,888 bytes in both variants. Its initial paged full-rewrite implementation measured about 9% slower; the contiguous full-rewrite path above removed that measured overhead. Prose medians were about 1–2% higher, and these changes do not establish a prose speedup.
 
-The [token-retention fixture](../benchmarks/stream-token-retention.cpp) feeds 46,800 TypeScript bytes as 5,200 complete 9-byte lines. Its [runner](../benchmarks/native-token-retention.mjs) uses two ABBA rounds per retention policy, with each sample in a fresh process. Correctness checks cover final tokens and retained roots after further append and settlement, outside timing and RSS capture. Medians use four samples per variant.
+The token-retention fixture fed 46,800 TypeScript bytes as 5,200 complete 9-byte lines. Its runner used two ABBA rounds per retention policy, with each sample in a fresh process. Correctness checks cover final tokens and retained roots after further append and settlement, outside timing and RSS capture. Medians use four samples per variant.
 
 | Metric                           |     `72e8ff7` |     Current |
 | -------------------------------- | ------------: | ----------: |
@@ -91,12 +81,7 @@ The [token-retention fixture](../benchmarks/stream-token-retention.cpp) feeds 46
 
 Token payload copying fell about 274 times in this fixture. The retained case used about 16.4 times less peak process RSS. RSS includes allocator retention and process overhead; timing excludes finish, rendering, JS delivery and frame presentation. Fresh-process timings varied, including a slower first current latest-only sample. Earlier exploratory samples were also variable and are separate from the two reported ABBA rounds. These host results are not application/device memory or FPS predictions.
 
-Raw current outputs remain outside the repository at `/tmp/downstream-limits-stream-final.json` and `/tmp/downstream-token-retention.json`. Earlier exploratory token runs remain in `/tmp` as well. To reproduce, export `72e8ff7` to an empty directory and use that directory as the comparison root:
-
-```sh
-DOWNSTREAM_BENCH_COMPARE_ROOT=/path/to/exported-72e8ff7 pnpm bench:stream-scaling
-DOWNSTREAM_BENCH_COMPARE_ROOT=/path/to/exported-72e8ff7 pnpm bench:token-retention
-```
+These host benchmarks have since been removed from the repository.
 
 ## Viewport virtualization
 

@@ -4,9 +4,9 @@ This pass starts from `ac8b5c4cf93dd1a97206fe0e810e2b4d215d1669`. The physical p
 
 ## Existing phone evidence
 
-The local, git-ignored `benchmarks/phone/REPORT.md` records a OnePlus CPH2569 running an Android 15 arm64 Hermes release build. The original colored first-AI replay used 6.35 CPU seconds, versus 7.77 for RN Streamdown and 7.09 for Enriched. Its HWUI jank was 31.86%, versus 11.11% and 12.69%. Downstream's rich-AI replay used 9.67 CPU seconds with 36.33% jank. These results precede later optimization experiments; they are not measurements of this patch.
+Earlier local phone measurements (10 October 2026, since removed) recorded a OnePlus CPH2569 running an Android 15 arm64 Hermes release build. The original colored first-AI replay used 6.35 CPU seconds, versus 7.77 for RN Streamdown and 7.09 for Enriched. Its HWUI jank was 31.86%, versus 11.11% and 12.69%. Downstream's rich-AI replay used 9.67 CPU seconds with 36.33% jank. These results precede later optimization experiments; they are not measurements of this patch.
 
-The later `benchmarks/phone/OPTIMIZATIONS.md` records two rejected code-card experiments and rejected reductions of the document cache budget. Removing local work did not reliably improve whole-app results. Diagnostic traces placed instrumented span/precomputed-text preparation on workers. They did not measure TextView's internal measurement, layout or drawing. Rich-AI pilot memory included 42.63 MiB of graphics and 46.02 MiB of mapped code, alongside Java/native heaps. This evidence does not identify one root cause for the remaining frame misses or justify replacing canonical text layout without more measurement.
+Later local experiments recorded two rejected code-card experiments and rejected reductions of the document cache budget. Removing local work did not reliably improve whole-app results. Diagnostic traces placed instrumented span/precomputed-text preparation on workers. They did not measure TextView's internal measurement, layout or drawing. Rich-AI pilot memory included 42.63 MiB of graphics and 46.02 MiB of mapped code, alongside Java/native heaps. This evidence does not identify one root cause for the remaining frame misses or justify replacing canonical text layout without more measurement.
 
 ## Removed paragraph retention
 

@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { samples } from '../benchmarks/samples';
+import { samples } from './samples';
 import {
   assertStreamingMatchesFullParse,
   CONTAINER,

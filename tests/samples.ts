@@ -1,5 +1,5 @@
 /**
- * Markdown documents the benches replay, and the example's Bench and Testing
+ * Markdown documents the tests render, and the example's Bench and Testing
  * screens play back in turn. Chunk boundaries are the interesting part: a
  * renderer that only handles whole documents never sees a half-open fence or a
  * table that has not reached its separator row.

@@ -42,10 +42,8 @@
   "devDependencies": {
     "@babel/preset-typescript": "7.28.5",
     "@react-native/metro-config": "0.83.8",
-    "@streamdown/code": "2.0.0",
     "babel-preset-expo": "55.0.25",
-    "react-native-builder-bob": "^0.40.18",
-    "streamdown": "2.7.0"
+    "react-native-builder-bob": "^0.40.18"
   },
   "enriched-markdown": {
     "enableCodeHighlight": true,
