@@ -46,7 +46,7 @@
     "react-native-builder-bob": "^0.40.18"
   },
   "enriched-markdown": {
-    "enableCodeHighlight": true,
+    "enableCodeHighlight": false,
     "enableMath": false,
     "codeHighlightLanguages": [
       "javascript",

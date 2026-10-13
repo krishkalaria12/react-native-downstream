@@ -6,7 +6,9 @@ allowBuilds:
   # esbuild's postinstall places the platform binary vite and vitest load. Without
   # it a clean install fails before any test runs.
   esbuild: true
-  # Ships no build script, but pnpm lists it as unapproved, which is an error.
+  # Its postinstall downloads highlighter grammars. The example keeps highlighting
+  # off so CI and fresh clones build without them; the phone benchmark enables it
+  # and runs the download itself for its highlighted APK.
   react-native-enriched-markdown: false
 minimumReleaseAgeExclude:
   - '@ai-sdk/gateway@4.0.100'
