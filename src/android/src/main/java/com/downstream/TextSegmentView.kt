@@ -49,6 +49,21 @@ private class TextReadingPart(
 @SuppressLint("ViewConstructor")
 internal class TextSegmentView(context: Context) : TextView(context) {
   private var segment: TextSegment? = null
+  private var traceDocumentId = 0L
+
+  fun setTraceDocument(rendered: RenderedDocument) {
+    traceDocumentId = if (rendered.tracing) rendered.documentId else 0L
+  }
+
+  private inline fun traceText(stage: String, action: () -> Unit) {
+    val id = traceDocumentId
+    if (id != 0L) DownstreamNative.traceDocument(id, "android_text_${stage}_start")
+    try {
+      action()
+    } finally {
+      if (id != 0L) DownstreamNative.traceDocument(id, "android_text_${stage}_end")
+    }
+  }
   private var streamingFrame: StreamingParagraphFrame? = null
   // Candidate metadata survives a canonical fallback at another width.
   private var streamingRendered: RenderedDocument? = null
@@ -116,9 +131,9 @@ internal class TextSegmentView(context: Context) : TextView(context) {
 private class TaskPress(val id: Int, val checked: Boolean)
   private val chevronPath = Path()
   private val codeBounds = RectF()
-  private var readingParts = emptyList<TextReadingPart>()
+  private var cachedReadingParts: List<TextReadingPart>? = null
   private var readingBlocks = emptyList<AccessibleBlock>()
-  private val accessibility = MarkdownAccessibility(this, { readingParts.size }) { accessiblePart(it) }
+  private val accessibility = MarkdownAccessibility(this, { readingParts().size }) { accessiblePart(it) }
 
   init {
     includeFontPadding = false
@@ -258,6 +273,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
   }
 
   fun setSegment(segment: TextSegment, rendered: RenderedDocument, firstBlock: Int) {
+    setTraceDocument(rendered)
     installSelectionCallback()
     if (segment === this.segment && firstBlock == blockOffset) {
       return
@@ -296,7 +312,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
     // assignContent also serves code bodies and clears this field. Retain the
     // identity afterwards so settled text keeps its layout and selection.
     this.segment = segment
-    readingParts = buildReadingParts(segment.accessibleBlocks, segment.detailsBlocks)
+    cachedReadingParts = null
     accessibility.contentChanged()
     // The summary is the container's own first leaf, so at most one of a
     // segment's collapsible blocks is it, and it is the one a chevron belongs to.
@@ -353,13 +369,14 @@ private class TaskPress(val id: Int, val checked: Boolean)
 
   fun setContent(text: Spanned, accessibleBlocks: List<AccessibleBlock>, rendered: RenderedDocument) {
     assignContent(text, accessibleBlocks, rendered)
-    readingParts = buildReadingParts(accessibleBlocks, emptyList())
+    cachedReadingParts = null
     accessibility.contentChanged()
   }
 
   // Canonical segments attach their own details metadata after assignment, so
   // assigning text must not build a second, temporary reading order or notify.
   private fun assignContent(text: Spanned, accessibleBlocks: List<AccessibleBlock>, rendered: RenderedDocument) {
+    setTraceDocument(rendered)
     streamingFrame = null
     streamingRendered = null
     streamingCanonicalAssigned = false
@@ -390,6 +407,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
 
   /** A hosted fence need not retain the previous native body's text/layout. */
   fun clearContent() {
+    traceDocumentId = 0L
     streamingFrame = null
     streamingRendered = null
     streamingCanonicalAssigned = false
@@ -397,7 +415,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
     segment = null
     summary = null
     readingBlocks = emptyList()
-    readingParts = emptyList()
+    cachedReadingParts = emptyList()
     text = ""
     accessibility.contentChanged()
   }
@@ -455,6 +473,13 @@ private class TaskPress(val id: Int, val checked: Boolean)
     info.isFocusable = false
   }
 
+  // Read current fields on demand; streamed revisions do not retain builders or
+  // allocate reading stops until an accessibility provider actually needs them.
+  private fun readingParts(): List<TextReadingPart> {
+    return cachedReadingParts ?: buildReadingParts(readingBlocks, segment?.detailsBlocks ?: emptyList())
+      .also { cachedReadingParts = it }
+  }
+
   private fun buildReadingParts(
     blocks: List<AccessibleBlock>,
     details: List<DetailsBlock>,
@@ -474,7 +499,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
 
   private fun accessiblePart(index: Int): MarkdownAccessibility.Entry? {
     val layout = displayLayout() ?: return null
-    val part = readingParts.getOrNull(index) ?: return null
+    val part = readingParts().getOrNull(index) ?: return null
     val start = part.piece.start
     val end = part.piece.end
     val content = displayText()
@@ -511,6 +536,10 @@ private class TaskPress(val id: Int, val checked: Boolean)
   }
 
   override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    traceText("measure") { measureContent(widthMeasureSpec, heightMeasureSpec) }
+  }
+
+  private fun measureContent(widthMeasureSpec: Int, heightMeasureSpec: Int) {
     val current = segment
     val model = current?.streamingParagraph
     val rendered = streamingRendered
@@ -541,7 +570,15 @@ private class TaskPress(val id: Int, val checked: Boolean)
     super.onMeasure(widthMeasureSpec, heightMeasureSpec)
   }
 
+  override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+    traceText("layout") { super.onLayout(changed, left, top, right, bottom) }
+  }
+
   override fun onDraw(canvas: Canvas) {
+    traceText("draw") { drawFrame(canvas) }
+  }
+
+  private fun drawFrame(canvas: Canvas) {
     val band = findHost()?.revealFrame()?.let { bandFor(it) }
     if (band == null || band.count == 0) {
       drawContent(canvas)

@@ -260,7 +260,7 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     fullscreenButton.imageTintList = tint
     // Both grids share the segment and immutable reading parts. The strip draws
     // only the header while retaining the same accessible entries as the body.
-    val readingParts = buildTableReadingParts(segment)
+    val readingParts = TableReadingParts(segment)
     headerGrid.updateSegment(segment, readingParts, resetFocus = false)
     headerGrid.contentDescription = segment.accessibilityRows.firstOrNull()
     grid.updateSegment(segment, readingParts, resetFocus = !sameTable)
@@ -421,6 +421,13 @@ private class TableReadingPart(
   val heading: Boolean,
 )
 
+/** One demand-built reading order shared by the body and pinned header. */
+private class TableReadingParts(private val segment: TableSegment) {
+  private var cached: List<TableReadingPart>? = null
+
+  fun get(): List<TableReadingPart> = cached ?: buildTableReadingParts(segment).also { cached = it }
+}
+
 private fun buildTableReadingParts(segment: TableSegment): List<TableReadingPart> = buildList {
   segment.cells.forEachIndexed { row, cells ->
     val plain = StringBuilder()
@@ -479,8 +486,8 @@ private class TableGridView(context: Context) : View(context) {
     return parent as? DownstreamMarkdownView
   }
 
-  private var readingParts = emptyList<TableReadingPart>()
-  private val accessibility = MarkdownAccessibility(this, { readingParts.size }) { accessiblePart(it) }
+  private var readingParts: TableReadingParts? = null
+  private val accessibility = MarkdownAccessibility(this, { readingParts?.get()?.size ?: 0 }) { accessiblePart(it) }
   private var segment: TableSegment? = null
   private val paint = Paint()
   private var pressedLink = -1
@@ -524,7 +531,7 @@ private class TableGridView(context: Context) : View(context) {
     invalidate()
   }
 
-  fun updateSegment(segment: TableSegment, readingParts: List<TableReadingPart>, resetFocus: Boolean) {
+  fun updateSegment(segment: TableSegment, readingParts: TableReadingParts, resetFocus: Boolean) {
     this.segment = segment
     this.readingParts = readingParts
     invalidate()
@@ -535,7 +542,7 @@ private class TableGridView(context: Context) : View(context) {
 
   private fun accessiblePart(index: Int): MarkdownAccessibility.Entry? {
     val segment = segment ?: return null
-    val part = readingParts.getOrNull(index) ?: return null
+    val part = readingParts?.get()?.getOrNull(index) ?: return null
     val top = segment.rowTops[part.row]
     val bottom = segment.rowTops[part.row + 1]
     val bounds = Rect(0, top, segment.tableWidth, bottom)

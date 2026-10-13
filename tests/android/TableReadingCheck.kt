@@ -26,21 +26,23 @@ private class TableSegment(
 private object ColorStateList { fun valueOf(color: Int) = color }
 private class Button { var imageTintList = 0 }
 private class Scroll { var width = 100; var scrollX = 0 }
-private class Accessibility {
-  var focusedIndex = -1
+private class Accessibility(val entryCount: () -> Int) {
+  var focused = -1
+  var focusedIndex: Int
+    get() = focused
+    set(value) { focused = value }
   val changes = mutableListOf<Boolean>()
-  fun contentChanged(resetFocus: Boolean) {
-    changes.add(resetFocus)
-    if (resetFocus) focusedIndex = -1
-  }
+  /* PRODUCTION_contentChanged */
 }
 /* PRODUCTION_READING_PART */
 /* PRODUCTION_SHARED_BUILDER */
+/* PRODUCTION_READING_CACHE */
 private class TableGridView {
   var headerOnly = false
-  var readingParts = emptyList<TableReadingPart>()
+  var readingParts: TableReadingParts? = null
+  val parts get() = readingParts?.get() ?: emptyList()
   var segment: TableSegment? = null
-  val accessibility = Accessibility()
+  val accessibility = Accessibility { parts.size }
   var contentDescription: String? = null
   var invalidations = 0
   fun invalidate() { invalidations++ }
@@ -67,9 +69,9 @@ private class TableSegmentView {
 }
 private fun List<TableReadingPart>.values() = map { listOf(it.text, it.row, it.column, it.piece?.linkIndex, it.heading) }
 private fun assertShared(view: TableSegmentView, expected: List<List<Any?>>) {
-  check(view.headerGrid.readingParts === view.grid.readingParts) { "Header and body should share immutable reading metadata" }
-  check(view.grid.readingParts.values() == expected) { "Reading metadata changed: ${view.grid.readingParts.values()}" }
-  check(view.headerGrid.readingParts.values() == expected) { "Pinned header must retain all accessible rows" }
+  check(view.headerGrid.parts === view.grid.parts) { "Header and body should share immutable reading metadata" }
+  check(view.grid.parts.values() == expected) { "Reading metadata changed: ${view.grid.parts.values()}" }
+  check(view.headerGrid.parts.values() == expected) { "Pinned header must retain all accessible rows" }
 }
 fun main() {
   val linked = LinkedText("pre 🔗 后", listOf(
@@ -85,7 +87,7 @@ fun main() {
   val view = TableSegmentView()
   val first = TableSegment(rows, listOf("名字, status", "pre 🔗 后, ✅", "", "link", ", "))
   view.setSegment(first, 7, 28)
-  check(readingBuilds == 1) { "First binding should build reading metadata once; got $readingBuilds" }
+  check(readingBuilds == 0) { "Binding must not build unused reading metadata; got $readingBuilds" }
   assertShared(view, expected)
   check(view.headerGrid.contentDescription == "名字, status")
   check(view.headerGrid.accessibility.changes == listOf(false))
@@ -105,18 +107,18 @@ fun main() {
   check(view.headerGrid.accessibility.focusedIndex == 4 && view.grid.accessibility.focusedIndex == 2)
   check(view.headerGrid.accessibility.changes == listOf(false, false))
   check(view.grid.accessibility.changes == listOf(true, false))
-  val parts = view.grid.readingParts
+  val parts = view.grid.parts
   val layouts = view.layoutRequests
   val invalidations = view.invalidations
   view.setSegment(grown, 99, 30)
-  check(readingBuilds == 2 && view.grid.readingParts === parts)
+  check(readingBuilds == 2 && view.grid.parts === parts)
   check(view.sourceEpoch == 7 && view.layoutRequests == layouts + 1 && view.invalidations == invalidations)
   check(view.grid.accessibility.changes.size == 2 && view.headerGrid.accessibility.changes.size == 2)
   val reset = TableSegment(listOf(listOf(Cell(linkedStart)), emptyList()), listOf("link", ""))
   view.setSegment(reset, 8, 30)
   check(readingBuilds == 3)
   assertShared(view, listOf(listOf("Header: link", 0, 0, 5, true), listOf("", 1, null, null, false)))
-  check(view.grid.accessibility.focusedIndex == -1 && view.headerGrid.accessibility.focusedIndex == 4)
+  check(view.grid.accessibility.focusedIndex == -1 && view.headerGrid.accessibility.focusedIndex == -1)
   check(view.grid.accessibility.changes == listOf(true, false, true))
   check(view.pendingLeadingDistance == 0 && view.sourceEpoch == 8)
   // Missing headers and empty cells keep their existing reading order.
@@ -130,16 +132,20 @@ fun main() {
   view.scroll.scrollX = 80
   view.setSegment(TableSegment(rows, first.accessibilityRows, rtl = true, identity = 9, tableWidth = 550), 9, 30)
   check(view.pendingLeadingDistance == 320)
-  check(readingBuilds == 6)
+  check(readingBuilds == 4)
   val before = readingBuilds
-  var previousParts = view.grid.readingParts
   repeat(100) { revision ->
     val text = "流".repeat(revision + 1)
     view.setSegment(TableSegment(listOf(listOf(Cell(text))), listOf(text), hasHeader = false), 10, 30)
-    check(view.grid.readingParts !== previousParts) { "Revisions must not reuse stale metadata" }
-    assertShared(view, listOf(listOf(text, 0, null, null, false)))
-    previousParts = view.grid.readingParts
   }
-  check(readingBuilds - before == 100) { "Expected one build for each of 100 growing revisions" }
-  println("Table reading checks passed: one shared build per revision, metadata and independent focus preserved")
+  check(readingBuilds == before) { "Unused streamed revisions must build no metadata" }
+  assertShared(view, listOf(listOf("流".repeat(100), 0, null, null, false)))
+  check(readingBuilds == before + 1) { "Both providers should build current metadata exactly once" }
+  // Resetting focused content must clear focus without reading the new revision.
+  view.grid.accessibility.focusedIndex = 0
+  view.setSegment(TableSegment(listOf(listOf(Cell("replacement"))), listOf("replacement"), hasHeader = false), 11, 30)
+  check(view.grid.accessibility.focusedIndex == -1 && readingBuilds == before + 1)
+  assertShared(view, listOf(listOf("replacement", 0, null, null, false)))
+  check(readingBuilds == before + 2)
+  println("Table reading checks passed: unused revisions skip builds, first query shares current metadata, focus/reset preserved")
 }

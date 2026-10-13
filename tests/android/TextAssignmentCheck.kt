@@ -41,7 +41,8 @@ private object View {
 }
 private object DownstreamNative {
   val events = mutableListOf<String>()
-  fun traceDocument(id: Long, event: String) { events.add(event) }
+  val ids = mutableListOf<Long>()
+  fun traceDocument(id: Long, event: String) { events.add(event); ids.add(id) }
 }
 private object PrecomputedTexts {
   var enabled = false
@@ -52,9 +53,16 @@ private object PrecomputedTexts {
     return enabled
   }
 }
-private class Accessibility {
+private object AccessibilityEvent { const val TYPE_WINDOW_CONTENT_CHANGED = 1 }
+private class AccessibilityHost {
   var notifications = 0
-  fun contentChanged() { notifications++ }
+  fun sendAccessibilityEvent(type: Int) { notifications++ }
+}
+private class Accessibility(val entryCount: () -> Int) {
+  val host = AccessibilityHost()
+  val notifications get() = host.notifications
+  var focused = -1
+  /* PRODUCTION_contentChanged */
 }
 private open class PlatformView {
   var assignments = 0
@@ -76,10 +84,16 @@ private open class PlatformView {
   fun requestLayout() {}
   fun invalidate() {}
   fun setMeasuredDimension(width: Int, height: Int) {}
-  open fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {}
+  var failMeasure = false
+  open fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    if (failMeasure) error("platform measurement failed")
+  }
 }
 private class AssignmentView : PlatformView() {
   private var segment: TextSegment? = null
+  private var traceDocumentId = 0L
+  /* PRODUCTION_traceText */
+  /* PRODUCTION_setTraceDocument */
   private var blockOffset = 0
   private var streamingFrame: StreamingParagraphFrame? = null
   private var streamingRendered: RenderedDocument? = null
@@ -88,8 +102,9 @@ private class AssignmentView : PlatformView() {
   private var spoilersRevealed = false
   private var bandFrame: Any? = null
   private var readingBlocks = emptyList<AccessibleBlock>()
-  private var readingParts = emptyList<TextReadingPart>()
-  val accessibility = Accessibility()
+  private var cachedReadingParts: List<TextReadingPart>? = null
+  private val readingParts get() = readingParts()
+  val accessibility = Accessibility { readingParts().size }
   var readingBuilds = 0
   var lastBlocks = emptyList<AccessibleBlock>()
   var lastDetails = emptyList<DetailsBlock>()
@@ -120,6 +135,9 @@ private class AssignmentView : PlatformView() {
   fun checkReadingRange(end: Int) {
     check(readingParts.single().piece == AccessibleTextPiece(0, end))
   }
+  fun queryParts() = readingParts()
+  /* PRODUCTION_readingParts */
+  /* PRODUCTION_clearContent */
   /* PRODUCTION_displayText */
   /* PRODUCTION_buildReadingParts */
   /* PRODUCTION_setSegment */
@@ -127,6 +145,7 @@ private class AssignmentView : PlatformView() {
   /* PRODUCTION_assignContent */
   /* PRODUCTION_setSelectable */
   /* PRODUCTION_onMeasure */
+  /* PRODUCTION_measureContent */
 }
 
 fun main() {
@@ -140,26 +159,26 @@ fun main() {
     val segment = TextSegment(content, blocks, details)
     view.setSegment(segment, rendered, 7)
     check(view.assignments == revision + 1) { "canonical revision must assign text once" }
-    check(view.readingBuilds == revision + 1) { "canonical revision must build readings once; got ${view.readingBuilds}" }
+    check(view.readingBuilds == 0) { "unused canonical revisions must not build readings" }
     check(view.accessibility.notifications == revision + 1) { "canonical revision must notify once" }
-    check(view.lastBlocks === blocks && view.lastDetails === details)
     view.checkSegment(segment, 7)
-    view.checkDetails(details.single())
-    view.checkReadingRange(content.length)
     latest = segment
   }
+  check(view.queryParts() === view.queryParts() && view.readingBuilds == 1)
+  view.checkDetails(latest!!.detailsBlocks.single())
+  view.checkReadingRange(100)
   check(DownstreamNative.events.size == 200)
   repeat(100) { view.setSegment(latest!!, rendered, 7) }
-  check(view.assignments == 100 && view.readingBuilds == 100 && view.accessibility.notifications == 100)
+  check(view.assignments == 100 && view.readingBuilds == 1 && view.accessibility.notifications == 100)
   view.setSegment(latest!!, rendered, 8)
-  check(view.assignments == 101 && view.readingBuilds == 101 && view.accessibility.notifications == 101)
+  check(view.assignments == 101 && view.readingBuilds == 1 && view.accessibility.notifications == 101)
   view.checkSegment(latest, 8)
 
   val body = Spanned("code body")
   val bodyBlocks = listOf(AccessibleBlock(0, body.length))
   view.setContent(body, bodyBlocks, rendered)
-  check(view.text === body && view.lastBlocks === bodyBlocks && view.lastDetails.isEmpty())
-  check(view.assignments == 102 && view.readingBuilds == 102 && view.accessibility.notifications == 102)
+  check(view.text === body)
+  check(view.assignments == 102 && view.readingBuilds == 1 && view.accessibility.notifications == 102)
   view.checkSegment(null, 8)
   view.checkDetails(null)
   view.checkStreaming(null, false)
@@ -171,7 +190,7 @@ fun main() {
   check(view.buffer == BufferType.SPANNABLE)
   PrecomputedTexts.enabled = true
   view.setContent(body, bodyBlocks, rendered)
-  check(view.assignments == 104 && view.readingBuilds == 104 && view.accessibility.notifications == 104)
+  check(view.assignments == 104 && view.readingBuilds == 2 && view.accessibility.notifications == 104)
   PrecomputedTexts.enabled = false
 
   // Growing live revisions keep the canonical TextView empty and expose each
@@ -186,20 +205,23 @@ fun main() {
     liveView.setSegment(live!!, rendered, 4)
     liveView.checkSegment(live, 4)
     liveView.checkStreaming(rendered, false)
-    liveView.checkReadingRange(content.length)
     check(liveView.text.isEmpty() && liveView.assignments == 0)
-    check(liveView.readingBuilds == revision + 1 && liveView.accessibility.notifications == revision + 1)
+    check(liveView.readingBuilds == 0 && liveView.accessibility.notifications == revision + 1)
   }
+  liveView.checkReadingRange(100)
+  check(liveView.readingBuilds == 1)
+  liveView.queryParts()
+  check(liveView.readingBuilds == 1)
   liveView.setSegment(live!!, rendered, 4)
-  check(liveView.readingBuilds == 100 && liveView.accessibility.notifications == 100)
+  check(liveView.readingBuilds == 1 && liveView.accessibility.notifications == 100)
   model.warm = false
   liveView.onMeasure(200, 400)
   check(liveView.text === live!!.text)
   liveView.checkSegment(live, 4)
   liveView.checkStreaming(rendered, true)
-  check(liveView.assignments == 1 && liveView.readingBuilds == 101 && liveView.accessibility.notifications == 101)
+  check(liveView.assignments == 1 && liveView.readingBuilds == 1 && liveView.accessibility.notifications == 101)
   liveView.onMeasure(200, 400)
-  check(liveView.assignments == 1 && liveView.readingBuilds == 101 && liveView.accessibility.notifications == 101)
+  check(liveView.assignments == 1 && liveView.readingBuilds == 1 && liveView.accessibility.notifications == 101)
   model.warm = true
   liveView.onMeasure(200, 400)
   liveView.checkStreaming(rendered, false)
@@ -208,13 +230,52 @@ fun main() {
   liveView.checkSegment(live, 4)
   liveView.checkStreaming(rendered, true)
   check(liveView.text === live!!.text && liveView.isTextSelectable)
-  check(liveView.assignments == 3 && liveView.readingBuilds == 102 && liveView.accessibility.notifications == 102)
+  check(liveView.assignments == 3 && liveView.readingBuilds == 1 && liveView.accessibility.notifications == 102)
   val settled = TextSegment(Spanned("settled"), listOf(AccessibleBlock(0, 7)))
   liveView.setSegment(settled, rendered, 4)
   liveView.checkSegment(settled, 4)
   liveView.checkStreaming(null, false)
-  check(liveView.assignments == 4 && liveView.readingBuilds == 103 && liveView.accessibility.notifications == 103)
+  check(liveView.assignments == 4 && liveView.readingBuilds == 1 && liveView.accessibility.notifications == 103)
   liveView.setSegment(settled, rendered, 4)
-  check(liveView.assignments == 4 && liveView.readingBuilds == 103 && liveView.accessibility.notifications == 103)
-  println("text assignment: 100 canonical revisions assign/build/notify once; identity, details, direct content and live fallback preserve state")
+  check(liveView.assignments == 4 && liveView.readingBuilds == 1 && liveView.accessibility.notifications == 103)
+  liveView.checkReadingRange(7)
+  check(liveView.readingBuilds == 2)
+  liveView.queryParts()
+  check(liveView.readingBuilds == 2)
+  liveView.accessibility.focused = 0
+  liveView.setContent(Spanned("fresh"), listOf(AccessibleBlock(0, 5)), rendered)
+  check(liveView.readingBuilds == 3 && liveView.accessibility.focused == 0)
+  liveView.checkReadingRange(5)
+  liveView.setContent(Spanned(""), emptyList(), rendered)
+  check(liveView.readingBuilds == 4 && liveView.accessibility.focused == -1)
+  liveView.clearContent()
+  check(liveView.queryParts().isEmpty() && liveView.readingBuilds == 4)
+  liveView.setContent(Spanned("again"), listOf(AccessibleBlock(0, 5)), rendered)
+  check(liveView.readingBuilds == 4)
+  liveView.checkReadingRange(5)
+  check(liveView.readingBuilds == 5)
+  // Canonical measurement traces balance on success and failure. Updating a
+  // shared segment must refresh diagnostic ownership even when text is unchanged.
+  val measured = AssignmentView()
+  measured.setSegment(settled, RenderedDocument(documentId = 20), 0)
+  measured.setSegment(settled, RenderedDocument(documentId = 21), 0)
+  DownstreamNative.events.clear()
+  DownstreamNative.ids.clear()
+  measured.onMeasure(200, 400)
+  check(DownstreamNative.events == listOf("android_text_measure_start", "android_text_measure_end"))
+  check(DownstreamNative.ids == listOf(21L, 21L))
+  measured.failMeasure = true
+  DownstreamNative.events.clear()
+  check(runCatching { measured.onMeasure(200, 400) }.isFailure)
+  check(DownstreamNative.events == listOf("android_text_measure_start", "android_text_measure_end"))
+  measured.failMeasure = false
+  measured.setSegment(settled, RenderedDocument(tracing = false), 0)
+  DownstreamNative.events.clear()
+  measured.onMeasure(200, 400)
+  check(DownstreamNative.events.isEmpty())
+  measured.setTraceDocument(RenderedDocument())
+  measured.clearContent()
+  measured.onMeasure(200, 400)
+  check(DownstreamNative.events.isEmpty())
+  println("text assignment: 100 unused revisions build no metadata; lazy queries, focus, reset, identity, details, direct content and live fallback preserve state")
 }

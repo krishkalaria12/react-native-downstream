@@ -21,13 +21,22 @@ function method(name, optional = false) {
   if (!found && !optional) throw new Error(`Missing production ${name}`);
   return found ?? '';
 }
+const traceText = source.match(
+  /^  private inline fun traceText\([\s\S]*?^  }/m
+)?.[0];
+if (!traceText) throw new Error('Missing production traceText');
 let fixture = readFileSync(join(here, 'TextAssignmentCheck.kt'), 'utf8');
+fixture = fixture.replace('/* PRODUCTION_traceText */', traceText);
 for (const name of [
   'setSegment',
   'setContent',
+  'readingParts',
+  'clearContent',
   'assignContent',
   'setSelectable',
   'onMeasure',
+  'measureContent',
+  'setTraceDocument',
 ]) {
   fixture = fixture.replace(
     `/* PRODUCTION_${name} */`,
@@ -40,6 +49,17 @@ fixture = fixture.replace(
     'fun buildReadingParts(',
     'fun productionReadingParts('
   )
+);
+const accessibility = readFileSync(
+  join(
+    here,
+    '../../src/android/src/main/java/com/downstream/MarkdownAccessibility.kt'
+  ),
+  'utf8'
+);
+fixture = fixture.replace(
+  '/* PRODUCTION_contentChanged */',
+  accessibility.match(/^  fun contentChanged\([\s\S]*?^  }/m)[0]
 );
 const displayText = source.match(/^  private fun displayText\(\).*$/m)?.[0];
 if (!displayText) throw new Error('Missing production displayText');

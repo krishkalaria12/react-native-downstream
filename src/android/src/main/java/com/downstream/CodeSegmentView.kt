@@ -455,6 +455,7 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
 
   fun setSegment(segment: CodeSegment, rendered: RenderedDocument, firstBlock: Int) {
     this.rendered = rendered
+    body.setTraceDocument(rendered)
     // The body's reveal units name a document block, and a card is reused as its
     // block moves, so the offset is set on every snapshot, not only a new segment.
     body.setBlockOffset(firstBlock)

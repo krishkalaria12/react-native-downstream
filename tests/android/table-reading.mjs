@@ -35,6 +35,25 @@ const countedBuilder = builder.replace(
 );
 let fixture = readFileSync(join(here, 'TableReadingCheck.kt'), 'utf8')
   .replace('/* PRODUCTION_setSegment */', method('setSegment'))
+  .replace(
+    '/* PRODUCTION_READING_CACHE */',
+    source.match(/^private class TableReadingParts\([\s\S]*?^}/m)[0]
+  )
+  .replace(
+    '/* PRODUCTION_contentChanged */',
+    readFileSync(
+      join(
+        here,
+        '../../src/android/src/main/java/com/downstream/MarkdownAccessibility.kt'
+      ),
+      'utf8'
+    )
+      .match(/^  fun contentChanged\([\s\S]*?^  }/m)[0]
+      .replace(
+        'host.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)',
+        'changes.add(resetFocus)'
+      )
+  )
   .replace('/* PRODUCTION_updateSegment */', method('updateSegment'))
   .replace('/* PRODUCTION_GRID_BUILDER */', sharedBuilder ? '' : countedBuilder)
   .replace(

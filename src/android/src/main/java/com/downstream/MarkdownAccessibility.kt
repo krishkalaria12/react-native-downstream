@@ -148,7 +148,7 @@ internal class MarkdownAccessibility(
   }
 
   fun contentChanged(resetFocus: Boolean = false) {
-    if (resetFocus || focused >= entryCount()) focused = -1
+    if (resetFocus || (focused >= 0 && focused >= entryCount())) focused = -1
     host.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
   }
 

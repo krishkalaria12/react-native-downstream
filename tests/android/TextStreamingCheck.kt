@@ -178,6 +178,30 @@ internal class RenderedDocument(val id: Long, val segments: List<Segment>, val p
     }
     var paragraphBuilds = 0
     /* PRODUCTION_PARAGRAPH_LANES */
+    private fun seedParagraphLane(lane: Int): java.lang.ref.WeakReference<PlainParagraphKey> {
+      val content = lane.toString().padStart(3, '0') + "x".repeat(32765)
+      val key = PlainParagraphKey(content, listOf(1L, 1f, "en-US"))
+      cachePlainParagraph(key, lane, TextSegment(content))
+      return java.lang.ref.WeakReference(key)
+    }
+    fun checkParagraphLaneRetention() {
+      plainParagraphs.removeAll { true }
+      plainParagraphLanes.clear()
+      val references = List(128) { seedParagraphLane(it) }
+      repeat(30) {
+        if (references.take(126).any { it.get() != null }) System.gc()
+      }
+      check(references.take(126).all { it.get() == null }) {
+        "paragraph lanes retained evicted content: ${references.count { it.get() != null }} of 128 keys alive"
+      }
+      for (reference in references.takeLast(2)) {
+        val key = checkNotNull(reference.get()) { "live cache key lost its owner" }
+        check(plainParagraphs.get(key)?.text == key.content)
+      }
+      plainParagraphs.removeAll { true }
+      plainParagraphLanes.clear()
+      println("production paragraph lanes: 126 evicted keys collect; 2 budget-owned keys remain reusable")
+    }
     /* PRODUCTION_PARAGRAPH_KEY */
     /* PRODUCTION_STREAM_ELIGIBILITY */
     private val streamingParagraphs = StreamingParagraphSeeds<StreamingParagraphLayout>(16, 2L * 1024 * 1024)
@@ -238,6 +262,7 @@ private class HostedCode(val rendered: RenderedDocument) {
   /* PRODUCTION_BIND_FALLBACK */
 }
 fun main() {
+  RenderedDocument.checkParagraphLaneRetention()
   val plainRuns = InlineDocument(List(4096) { InlineRun() })
   check(styledRunIndices(plainRuns, false).isEmpty())
   check(styledRunIndices(plainRuns, true) == (0 until 4096).toList())

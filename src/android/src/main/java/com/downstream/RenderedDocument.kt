@@ -397,13 +397,15 @@ internal class RenderedDocument(
     // The paragraph each lane (first block and appearance) last cached. A
     // growing paragraph's earlier prefixes are never asked for again, so an
     // extension evicts its prefix rather than keeping every version.
-    private val plainParagraphLanes = object : LinkedHashMap<Any, PlainParagraphKey>(16, 0.75f, true) {
-      override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Any, PlainParagraphKey>) = size > 128
+    // Bookkeeping must not keep a paragraph's content alive after budget eviction.
+    // A live cache entry owns its key; an evicted key no longer needs removal.
+    private val plainParagraphLanes = object : LinkedHashMap<Any, java.lang.ref.WeakReference<PlainParagraphKey>>(16, 0.75f, true) {
+      override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Any, java.lang.ref.WeakReference<PlainParagraphKey>>) = size > 128
     }
 
     private fun cachePlainParagraph(key: PlainParagraphKey, block: Int, segment: TextSegment) {
       val superseded = synchronized(plainParagraphLanes) {
-        plainParagraphLanes.put(Pair(block, key.appearance), key)
+        plainParagraphLanes.put(Pair(block, key.appearance), java.lang.ref.WeakReference(key))?.get()
       }
       if (superseded != null && superseded != key && key.content.startsWith(superseded.content)) {
         plainParagraphs.remove(superseded)
