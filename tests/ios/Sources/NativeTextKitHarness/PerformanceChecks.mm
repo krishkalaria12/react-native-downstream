@@ -301,9 +301,12 @@ static void checkUnchangedSegmentAssignments() {
 static NSUInteger viewportAssignments;
 static NSUInteger viewportSegmentReads;
 static id viewportSegments;
+static id viewportSlots;
+static NSUInteger viewportSlotReads;
 static IMP originalViewportSubscript;
 static id countedViewportSubscript(id array, SEL selector, NSUInteger index) {
   if (array == viewportSegments) viewportSegmentReads++;
+  if (array == viewportSlots) viewportSlotReads++;
   return reinterpret_cast<id (*)(id, SEL, NSUInteger)>(originalViewportSubscript)(array, selector, index);
 }
 static IMP originalViewportAssignment;
@@ -366,6 +369,33 @@ static void checkSegmentViewport() {
   viewportSegments = rendered.segments;
   Method subscript = class_getInstanceMethod(object_getClass(viewportSegments), @selector(objectAtIndexedSubscript:));
   originalViewportSubscript = method_setImplementation(subscript, (IMP)countedViewportSubscript);
+  viewportSlots = [view valueForKey:@"segmentViews"];
+  Method slotSubscript = class_getInstanceMethod(object_getClass(viewportSlots), @selector(objectAtIndexedSubscript:));
+  // Immutable segment arrays and mutable view slots have different concrete classes.
+  IMP countedSlotSubscript = imp_implementationWithBlock(^id(id array, NSUInteger index) {
+    if (array == viewportSlots) viewportSlotReads++;
+    return [array objectAtIndex:index];
+  });
+  IMP originalSlotSubscript = method_setImplementation(slotSubscript, countedSlotSubscript);
+  UIGraphicsImageRenderer *viewportRenderer = [[UIGraphicsImageRenderer alloc] initWithSize:scroll.bounds.size];
+  UIImage *beforeSteadyLayout = [viewportRenderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+    [scroll.layer renderInContext:context.CGContext];
+  }];
+  viewportSegmentReads = 0; viewportSlotReads = 0;
+  for (NSUInteger pass = 0; pass < 100; pass++) { [view setNeedsLayout]; [view layoutIfNeeded]; }
+  const NSUInteger steadySegmentReads = viewportSegmentReads, steadySlotReads = viewportSlotReads;
+  UIImage *afterSteadyLayout = [viewportRenderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+    [scroll.layer renderInContext:context.CGContext];
+  }];
+  require([UIImagePNGRepresentation(beforeSteadyLayout) isEqual:UIImagePNGRepresentation(afterSteadyLayout)],
+      @"steady viewport layout changed visible pixels");
+  printf("ios_steady_viewport layouts=100 segment_reads=%lu slot_reads=%lu\n",
+      (unsigned long)steadySegmentReads, (unsigned long)steadySlotReads);
+  require(steadySegmentReads <= 300, @"steady layout traversed offscreen segment metadata");
+  require(steadySlotReads <= 300, @"steady layout traversed deferred view slots");
+  method_setImplementation(slotSubscript, originalSlotSubscript);
+  imp_removeBlock(countedSlotSubscript);
+  viewportSlots = nil;
   NSUInteger maxSegmentReads = 0;
   for (CGFloat offset : {CGFloat(4000), CGFloat(9000), std::max(CGFloat(0), size.height - 180), CGFloat(0)}) {
     viewportSegmentReads = 0;
@@ -388,6 +418,18 @@ static void checkSegmentViewport() {
   }
   method_setImplementation(subscript, originalViewportSubscript);
   viewportSegments = nil;
+  view.frame = CGRectMake(0, 0, 240, size.height);
+  [view setNeedsLayout]; [view layoutIfNeeded];
+  NSArray<NSValue *> *narrowFrames = [rendered segmentFramesForWidth:240 chrome:0 code:downstream::CodeLayout{}
+      images:downstream::ImageStateLayout{} hosts:downstream::HostLayout{} tables:downstream::TableLayout{}];
+  NSArray *narrowSlots = [view valueForKey:@"segmentViews"];
+  for (NSUInteger index = 0; index < narrowSlots.count; index++) {
+    UIView *child = narrowSlots[index];
+    if ([child isKindOfClass:DSTextSegmentView.class])
+      require(CGRectEqualToRect(child.frame, narrowFrames[index].CGRectValue), @"viewport width change retained stale frames");
+  }
+  view.frame = CGRectMake(0, 0, 320, size.height);
+  [view setNeedsLayout]; [view layoutIfNeeded];
   auto replacementDocument = std::make_shared<downstream::Document>(*document);
   replacementDocument->id++;
   replacementDocument->blocks.tail()[0].identity += 10000;
@@ -427,11 +469,21 @@ static void checkSegmentViewport() {
   }
   DSDocumentView *codeOnly = [[DSDocumentView alloc] initWithFrame:CGRectMake(0, 0, 320, 5000)];
   codeOnly.selectable = NO; [scroll addSubview:codeOnly];
-  codeOnly.rendered = [DSRenderedDocument renderedDocumentFor:codeDocument fontScale:1 syntaxHighlighting:NO
+  DSRenderedDocument *codeRendered = [DSRenderedDocument renderedDocumentFor:codeDocument fontScale:1 syntaxHighlighting:NO
       theme:downstream::Theme::defaultTheme() caret:downstream::PlacedCaret{}];
+  codeOnly.rendered = codeRendered;
   require(![clock.views containsObject:codeOnly], @"ineligible document drove a permanent viewport clock");
+  codeOnly.frame = CGRectMake(0, 0, 240, 5000);
+  [codeOnly setNeedsLayout]; [codeOnly layoutIfNeeded];
+  NSArray<NSValue *> *codeFrames = [codeRendered segmentFramesForWidth:240 chrome:0 code:downstream::CodeLayout{}
+      images:downstream::ImageStateLayout{} hosts:downstream::HostLayout{} tables:downstream::TableLayout{}];
+  NSArray *codeSlots = [codeOnly valueForKey:@"segmentViews"];
+  require(codeSlots.count == codeFrames.count, @"non-text fallback omitted segments");
+  for (NSUInteger index = 0; index < codeSlots.count; index++)
+    require(CGRectEqualToRect(((UIView *)codeSlots[index]).frame, codeFrames[index].CGRectValue),
+        @"non-text fallback retained stale offscreen geometry");
   [codeOnly removeFromSuperview];
   window.hidden = YES;
-  printf("ios_segment_viewport segments=%lu initial_text_assignments=%lu scroll_assignments=%lu max_segment_reads_per_scroll=%lu mounted_text_views_max=3 geometry_parity=1 recycle_text_parity=1 replacement=1 retained_snapshot=1 hidden_reexposed=1 selection=1 accessibility=1 detach_clock=1 ineligible_clock=0\n",
-      (unsigned long)rendered.segments.count, (unsigned long)initialAssignments, (unsigned long)scrollAssignments, (unsigned long)maxSegmentReads);
+  printf("ios_segment_viewport segments=%lu initial_text_assignments=%lu scroll_assignments=%lu max_segment_reads_per_scroll=%lu steady_layouts=100 steady_segment_reads=%lu steady_slot_reads=%lu mounted_text_views_max=3 steady_pixel_parity=1 width_parity=1 geometry_parity=1 recycle_text_parity=1 replacement=1 retained_snapshot=1 hidden_reexposed=1 selection=1 accessibility=1 detach_clock=1 ineligible_clock=0\n",
+      (unsigned long)rendered.segments.count, (unsigned long)initialAssignments, (unsigned long)scrollAssignments, (unsigned long)maxSegmentReads, (unsigned long)steadySegmentReads, (unsigned long)steadySlotReads);
 }

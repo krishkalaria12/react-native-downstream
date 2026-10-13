@@ -392,6 +392,9 @@ extern NSAttributedStringKey const DSCaretKindAttributeName;
 /// An immutable platform rendering of one Document at one font scale. The
 /// same object is used to measure and to lay out, so both agree.
 @interface DSRenderedDocument : NSObject
+@property (nonatomic, readonly) uint64_t documentId;
+/// Release cached variants after a mounted view advances. Existing owners stay valid.
++ (void)retireDocumentId:(uint64_t)documentId;
 /// DSTextSegment, DSCodeSegment, DSMathSegment, DSImageSegment, and
 /// DSTableSegment objects in document order.
 @property (nonatomic, readonly) NSArray<id> *segments;

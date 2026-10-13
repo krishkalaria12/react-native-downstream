@@ -310,6 +310,7 @@ NSString *symbolForExpand(BOOL expanded) {
   NSArray<NSValue *> *_virtualizedFrames;
   NSRange _virtualizedInterval;
   NSIndexSet *_viewportOnlyIndices;
+  NSMutableIndexSet *_mountedSegmentIndices;
   BOOL _virtualizedFramesOrdered;
 }
 
@@ -317,6 +318,7 @@ NSString *symbolForExpand(BOOL expanded) {
   if (self = [super initWithFrame:frame]) {
     self.backgroundColor = UIColor.clearColor;
     _segmentViews = [NSMutableArray new];
+    _mountedSegmentIndices = [NSMutableIndexSet new];
     _recycledTextViews = [NSMutableArray new];
     _segmentEligibility = [NSMapTable weakToStrongObjectsMapTable];
   }
@@ -489,6 +491,8 @@ static Class segmentViewClassFor(id segment) {
   [self updateDeferrableText];
   [self updateSegmentViewportClock];
   [self reconcileSegmentViews:previous];
+  if (previous != nil && previous.documentId != rendered.documentId)
+    [DSRenderedDocument retireDocumentId:previous.documentId];
 }
 
 - (void)updateDeferrableText {
@@ -531,8 +535,10 @@ static Class segmentViewClassFor(id segment) {
         view = [DSDeferredTextView new];
         if (index < _segmentViews.count) _segmentViews[index] = view; else [_segmentViews addObject:view];
       }
+      [_mountedSegmentIndices removeIndex:index];
       continue;
     }
+    [_mountedSegmentIndices addIndex:index];
     const BOOL reusable = view != nil && [view isKindOfClass:segmentViewClassFor(segment)];
     if (!reusable) {
       [self recycleTextView:view pool:NO];
@@ -633,6 +639,8 @@ static Class segmentViewClassFor(id segment) {
     }
     [self applyStateToSegmentView:view atIndex:index];
   }
+  if (_segmentViews.count > segments.count)
+    [_mountedSegmentIndices removeIndexesInRange:NSMakeRange(segments.count, _segmentViews.count - segments.count)];
   while (_segmentViews.count > segments.count) {
     [self recycleTextView:_segmentViews.lastObject pool:NO];
     [_segmentViews removeLastObject];
@@ -986,11 +994,6 @@ static Class segmentViewClassFor(id segment) {
   if (_rendered == nil) {
     return;
   }
-  if (!_selectable && _segmentViewportKnown && !_segmentAccessibilityExpanded && !_segmentAccessibilityActive) {
-    _segmentLayoutSync = YES;
-    [self reconcileSegmentViews:_rendered];
-    _segmentLayoutSync = NO;
-  }
   // The frames are measured under the same wrap choices the code cards are
   // drawn with, so a block's frame and its drawn layout are one decision. The
   // set is the reader's own, and `codeWraps` is what the card views call too.
@@ -1002,9 +1005,21 @@ static Class segmentViewClassFor(id segment) {
                                                            images:_imageState
                                                               hosts:_hostLayout
                                                              tables:_tableLayout];
-  for (NSUInteger index = _viewportOnlyIndices != nil ? _viewportOnlyIndices.firstIndex : 0;
+  // A cached frame array includes width, chrome, choices, image and host geometry.
+  // Viewport changes reconcile independently; a steady UIKit layout must not
+  // rebuild ordinals or visit thousands of deferred text slots again.
+  if (_hasDeferrableText && !_selectable && _segmentViewportKnown &&
+      !_segmentAccessibilityExpanded && !_segmentAccessibilityActive &&
+      (_virtualizedDocument != _rendered || _virtualizedFrames != frames)) {
+    _segmentLayoutSync = YES;
+    @try { [self reconcileSegmentViews:_rendered]; }
+    @finally { _segmentLayoutSync = NO; }
+  }
+  // Non-text and ineligible text views stay mounted even outside the viewport.
+  // Include those indexes so geometry changes still update every live view.
+  for (NSUInteger index = _mountedSegmentIndices.firstIndex;
        index < _segmentViews.count && index < frames.count;
-       index = _viewportOnlyIndices != nil ? [_viewportOnlyIndices indexGreaterThanIndex:index] : index + 1) {
+       index = [_mountedSegmentIndices indexGreaterThanIndex:index]) {
     UIView *view = _segmentViews[index];
     if ([view isKindOfClass:DSDeferredTextView.class]) continue;
     const CGRect frame = frames[index].CGRectValue;

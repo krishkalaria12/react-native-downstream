@@ -1794,6 +1794,7 @@ static NSUInteger addingRenderingCost(NSUInteger cost, size_t characters, NSUInt
 @interface DSDocumentRenderingCache : NSObject
 - (DSRenderedDocument *)objectForKey:(NSString *)key;
 - (void)setObject:(DSRenderedDocument *)object forKey:(NSString *)key cost:(NSUInteger)cost;
+- (void)retireDocumentId:(uint64_t)documentId;
 - (void)removeAllObjects;
 @end
 
@@ -1802,6 +1803,8 @@ static NSUInteger addingRenderingCost(NSUInteger cost, size_t characters, NSUInt
   NSLock *_lock;
   NSString *_latestOversizedKey;
   DSRenderedDocument *_latestOversized;
+  NSMutableDictionary<NSNumber *, NSMutableSet<NSString *> *> *_keysByDocument;
+  NSUInteger _trackedKeyCount;
 }
 
 - (instancetype)init {
@@ -1810,6 +1813,7 @@ static NSUInteger addingRenderingCost(NSUInteger cost, size_t characters, NSUInt
     _cache.countLimit = 128;
     _cache.totalCostLimit = kRenderedDocumentCostLimit;
     _lock = [NSLock new];
+    _keysByDocument = [NSMutableDictionary new];
   }
   return self;
 }
@@ -1834,6 +1838,62 @@ static NSUInteger addingRenderingCost(NSUInteger cost, size_t characters, NSUInt
     _cache.countLimit = 128;
     [_cache setObject:object forKey:key cost:cost];
   }
+  NSNumber *documentId = @(object.documentId);
+  NSMutableSet<NSString *> *keys = _keysByDocument[documentId];
+  if (keys == nil) {
+    keys = [NSMutableSet new];
+    _keysByDocument[documentId] = keys;
+  }
+  if (![keys containsObject:key]) {
+    [keys addObject:key];
+    _trackedKeyCount++;
+  }
+  // NSCache cannot enumerate its keys. Amortize cleanup of keys whose values it
+  // evicted; the index owns no renderings and never grows with stream history.
+  if (_trackedKeyCount > 256) {
+    for (NSNumber *identity in _keysByDocument.allKeys) {
+      NSMutableSet<NSString *> *tracked = _keysByDocument[identity];
+      for (NSString *candidate in tracked.allObjects) {
+        if (![_latestOversizedKey isEqualToString:candidate] && [_cache objectForKey:candidate] == nil) {
+          [tracked removeObject:candidate];
+          _trackedKeyCount--;
+        }
+      }
+      if (tracked.count == 0) [_keysByDocument removeObjectForKey:identity];
+    }
+    // NSCache's limits are advisory. Bound our index even if Foundation keeps
+    // more values than requested; preserve this insertion and its oversized slot.
+    if (_trackedKeyCount > 256) {
+      for (NSNumber *identity in _keysByDocument.allKeys) {
+        NSMutableSet<NSString *> *tracked = _keysByDocument[identity];
+        for (NSString *candidate in tracked.allObjects) {
+          if (_trackedKeyCount <= 256) break;
+          if ([candidate isEqualToString:key] || [_latestOversizedKey isEqualToString:candidate]) continue;
+          [_cache removeObjectForKey:candidate];
+          [tracked removeObject:candidate];
+          _trackedKeyCount--;
+        }
+        if (tracked.count == 0) [_keysByDocument removeObjectForKey:identity];
+        if (_trackedKeyCount <= 256) break;
+      }
+    }
+  }
+  [_lock unlock];
+}
+
+- (void)retireDocumentId:(uint64_t)documentId {
+  [_lock lock];
+  NSSet<NSString *> *keys = _keysByDocument[@(documentId)];
+  for (NSString *key in keys) {
+    [_cache removeObjectForKey:key];
+    if ([_latestOversizedKey isEqualToString:key]) {
+      _latestOversizedKey = nil;
+      _latestOversized = nil;
+      _cache.countLimit = 128;
+    }
+  }
+  _trackedKeyCount -= keys.count;
+  [_keysByDocument removeObjectForKey:@(documentId)];
   [_lock unlock];
 }
 
@@ -1842,6 +1902,8 @@ static NSUInteger addingRenderingCost(NSUInteger cost, size_t characters, NSUInt
   _latestOversizedKey = nil;
   _latestOversized = nil;
   [_cache removeAllObjects];
+  [_keysByDocument removeAllObjects];
+  _trackedKeyCount = 0;
   _cache.countLimit = 128;
   [_lock unlock];
 }
@@ -2065,9 +2127,8 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
                                   caret:caret
                                variants:variants tagStyles:tagStyles];
   }
-  // Preparation requests highlighting, while mounting uses the view prop.
-  // A code-free document paints identically under either setting, so it can
-  // share the prepared rendering and its exact-width measurements.
+  // A code-free document paints identically under either setting, so both
+  // policies share the prepared rendering and its exact-width measurements.
   if (!syntaxHighlighting) {
     syntaxHighlighting = std::none_of(document->blocks.begin(), document->blocks.end(),
                                     [](const Block &block) { return block.kind == BlockKind::CodeBlock; });
@@ -2103,6 +2164,10 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
   [plainTableCells() removeAllObjects];
 }
 
++ (void)retireDocumentId:(uint64_t)documentId {
+  if (documentId != 0) [self.cache retireDocumentId:documentId];
+}
+
 - (instancetype)initWithDocument:(const DocumentHandle &)documentHandle
                        fontScale:(CGFloat)rawScale
               syntaxHighlighting:(BOOL)syntaxHighlighting
@@ -2121,6 +2186,7 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
   const CGFloat scale = static_cast<CGFloat>(fontScale(theme, rawScale > 0 ? rawScale : 1));
   const Document emptyDocument;
   const Document &document = documentHandle ? *documentHandle : emptyDocument;
+  _documentId = document.id;
   self.theme = [DSThemeColors colorsFor:theme];
   // A marker uses the theme's own marker slots. With none set it draws as the
   // body did before theming: monospaced digits at the body's size, which is what

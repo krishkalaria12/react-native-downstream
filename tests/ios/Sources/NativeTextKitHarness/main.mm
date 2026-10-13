@@ -621,6 +621,7 @@ static void checkCellBreakHeight() {
 #include "PerformanceChecks.mm"
 #ifndef BASELINE
 #include "SnapshotStringChecks.mm"
+#include "RetirementChecks.mm"
 #endif
 
 int main() {
@@ -629,6 +630,7 @@ int main() {
     checkHighlightVariants();
 #ifndef BASELINE
     checkTableCellReuse();
+    checkRenderingRetirement();
     checkSnapshotStrings();
     checkExactStackWidths();
     checkLazyHostedFallback();

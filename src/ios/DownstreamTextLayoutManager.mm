@@ -98,17 +98,17 @@ DocumentMeasurement DownstreamTextLayoutManager::measurePlatform(
     const downstream::ReaderChoices &choices, const downstream::PlacedCaret &caret,
     const downstream::ImageLayout &images, const downstream::HostLayout &hosts,
     const downstream::Theme::Handle &theme, const downstream::TableLayoutProps &tables,
-    bool /*incrementalParagraphs*/, bool /*syntaxHighlighting*/) const {
+    bool /*incrementalParagraphs*/, bool syntaxHighlighting) const {
   @autoreleasepool {
     // The view's own theme, so a themed measure and a themed draw are the same
-    // numbers. Colors do not change metrics, so this is valid whether or not the
-    // view turns them on; the view builds the rendering it draws.
+    // numbers. Match its highlighting setting as well so measurement warms the
+    // exact rendering the view mounts, including when token colors are disabled.
     // The caret is measured with everything else rather than added at draw time:
     // its placeholder is a real character in the measured text, so measuring
     // without it and drawing with it would put the last line in the wrong place.
     DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:document
                                                                  fontScale:fontSizeMultiplier
-                                                        syntaxHighlighting:YES
+                                                        syntaxHighlighting:syntaxHighlighting
                                                                      theme:resolve(theme)
                                                                     caret:caret];
     // The props and the reader's choices travel separately and are bundled
@@ -150,7 +150,7 @@ void DownstreamTextLayoutManager::prepare(const downstream::DocumentHandle &docu
     for (const auto &hint : hints) {
       DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:document
                                                                    fontScale:hint.fontScale
-                                                      syntaxHighlighting:YES
+                                                      syntaxHighlighting:hint.syntaxHighlighting
                                                                        theme:resolve(hint.theme)
                                                                       caret:hint.caret];
       [rendered sizeForWidth:hint.width
