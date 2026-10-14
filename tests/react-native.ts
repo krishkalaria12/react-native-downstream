@@ -8,7 +8,10 @@
  */
 import { createElement } from 'react';
 import type React from 'react';
+import { unstable_batchedUpdates as batchedUpdates } from 'react-dom';
 import { vi } from 'vitest';
+
+export const unstable_batchedUpdates = vi.fn(batchedUpdates);
 
 /** The TurboModule surface the stream controller calls. */
 export interface TurboModuleStub {

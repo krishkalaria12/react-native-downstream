@@ -1,4 +1,5 @@
 /* eslint-disable no-bitwise -- the preview feature mask is a bitmask */
+import { unstable_batchedUpdates } from 'react-native';
 import NativeDownstreamSession, {
   type SessionErrorEvent,
   type SnapshotReadyEvent,
@@ -75,6 +76,35 @@ let nextSession = 0;
 let removeSnapshotListener: (() => void) | undefined;
 let removeErrorListener: (() => void) | undefined;
 
+// All sessions publish through one frame callback. Advance every dirty store
+// before notifying React, so a render reads a coherent revision across streams.
+const snapshotPublications = new Set<() => () => void>();
+let snapshotFrame: number | undefined;
+
+function scheduleSnapshotPublication(prepare: () => () => void): void {
+  snapshotPublications.add(prepare);
+  if (snapshotFrame !== undefined) return;
+  const frame = requestAnimationFrame(() => {
+    if (snapshotFrame !== frame) return;
+    snapshotFrame = undefined;
+    const pending = Array.from(snapshotPublications);
+    snapshotPublications.clear();
+    unstable_batchedUpdates(() => {
+      const notifications = pending.map((publication) => publication());
+      notifications.forEach((notify) => notify());
+    }, undefined);
+  });
+  snapshotFrame = frame;
+}
+
+function cancelSnapshotPublication(prepare: () => () => void): void {
+  snapshotPublications.delete(prepare);
+  if (snapshotPublications.size === 0 && snapshotFrame !== undefined) {
+    cancelAnimationFrame(snapshotFrame);
+    snapshotFrame = undefined;
+  }
+}
+
 export type ParseMode = 'full' | 'incremental';
 
 export type StreamBinding = Readonly<{
@@ -121,7 +151,6 @@ class StreamState implements MarkdownStreamController {
   private pending: PendingBatch[] = [];
   private inFlight: InFlight[] = [];
   private frame: number | undefined;
-  private snapshotFrame: number | undefined;
   private finished = false;
   private disposed = false;
   private bound = false;
@@ -325,7 +354,7 @@ class StreamState implements MarkdownStreamController {
     this.tracing = false;
     if (this.frame !== undefined) cancelAnimationFrame(this.frame);
     this.frame = undefined;
-    this.cancelSnapshotFrame();
+    cancelSnapshotPublication(this.prepareSnapshotPublication);
     this.pending = [];
     this.inFlight = [];
     this.subscribers.clear();
@@ -475,30 +504,32 @@ class StreamState implements MarkdownStreamController {
   }
 
   private publish(): void {
-    this.cancelSnapshotFrame();
-    this.revision++;
-    this.subscribers.forEach((callback) => callback());
+    cancelSnapshotPublication(this.prepareSnapshotPublication);
+    this.notifySnapshotRevision(++this.revision);
   }
 
   /**
-   * Renders at most once per frame. A stream can publish snapshots faster
-   * than the screen refreshes, and every render is a Fabric commit on the
-   * JavaScript thread; streams that publish in the same frame also share one
-   * React batch. The render reads the newest snapshot.
+   * Notifies at most once per frame, sharing an explicit React Native batch
+   * with every other dirty stream. React still controls when each surface
+   * commits; publication reads the newest native snapshot.
    */
   private publishOnNextFrame(): void {
-    if (this.snapshotFrame !== undefined) return;
-    this.snapshotFrame = requestAnimationFrame(() => {
-      this.snapshotFrame = undefined;
-      if (!this.disposed) this.publish();
-    });
+    scheduleSnapshotPublication(this.prepareSnapshotPublication);
   }
 
-  private cancelSnapshotFrame(): void {
-    if (this.snapshotFrame !== undefined) {
-      cancelAnimationFrame(this.snapshotFrame);
-      this.snapshotFrame = undefined;
-    }
+  private readonly prepareSnapshotPublication = (): (() => void) => {
+    const revision = ++this.revision;
+    return () => this.notifySnapshotRevision(revision);
+  };
+
+  private notifySnapshotRevision(revision: number): void {
+    this.subscribers.forEach((callback) => {
+      // Any subscriber can reset or dispose this stream during notification.
+      // Check each callback, since reset already publishes the new revision.
+      if (!this.disposed && this.revision === revision) {
+        callback();
+      }
+    });
   }
 
   private emitError(

@@ -8,6 +8,7 @@
  * batching rules allow.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { unstable_batchedUpdates } from 'react-native';
 
 import {
   createMarkdownStream,
@@ -35,24 +36,30 @@ function stream(): ReturnType<typeof createMarkdownStream> {
   return created;
 }
 
-let frames: FrameRequestCallback[] = [];
+let frames = new Map<number, FrameRequestCallback>();
+let nextFrame = 0;
 
 function runFrames(): void {
   const pending = frames;
-  frames = [];
-  for (const callback of pending) callback(0);
+  frames = new Map();
+  for (const callback of pending.values()) callback(0);
 }
 
 beforeEach(() => {
   resetEngine();
-  frames = [];
+  frames = new Map();
+  nextFrame = 0;
+  vi.mocked(unstable_batchedUpdates).mockClear();
   vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(
     (callback) => {
-      frames.push(callback);
-      return frames.length;
+      const frame = ++nextFrame;
+      frames.set(frame, callback);
+      return frame;
     }
   );
-  vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+  vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation((frame) => {
+    frames.delete(frame);
+  });
 });
 
 afterEach(() => {
@@ -207,6 +214,164 @@ describe('batching', () => {
     expect(() => session.append('b')).toThrow(
       expect.objectContaining({ code: 'invalid_state' })
     );
+  });
+});
+
+describe('snapshot publication', () => {
+  function ready(state: ReturnType<typeof getStreamState>, sequence?: number) {
+    const binding = state.binding();
+    state.snapshotReady({
+      sessionId: binding.sessionId,
+      generation: binding.generation,
+      sequence: sequence ?? binding.sequence,
+    });
+  }
+
+  it('publishes five dirty streams in one frame and one explicit React batch', () => {
+    const states = Array.from({ length: 5 }, () => getStreamState(stream()));
+    const observed: number[][] = [];
+    for (const state of states) {
+      state.subscribe(() => {
+        observed.push(states.map((other) => other.binding().revision));
+      });
+      ready(state);
+      ready(state);
+    }
+
+    expect(frames.size).toBe(1);
+    expect(observed).toEqual([]);
+    runFrames();
+    expect(observed).toEqual(Array.from({ length: 5 }, () => [1, 1, 1, 1, 1]));
+    expect(unstable_batchedUpdates).toHaveBeenCalledTimes(1);
+    expect(frames.size).toBe(0);
+  });
+
+  it('still publishes finish and preview snapshots at the same sequence', () => {
+    const session = stream();
+    const state = getStreamState(session);
+    const revisions: number[] = [];
+    state.subscribe(() => revisions.push(state.binding().revision));
+    session.append('A **draft');
+    state.flush();
+    runFrames();
+    session.setPreview(true);
+    runFrames();
+    session.finish();
+    runFrames();
+
+    expect(revisions).toEqual([1, 2, 3]);
+    expect(state.binding().readySequence).toBe(1);
+  });
+
+  it('acknowledges each stream separately and rejects stale sequence events', () => {
+    const first = getStreamState(stream());
+    const second = getStreamState(stream());
+    first.append('a');
+    first.append('b');
+    second.append('c');
+    // Keep input unflushed, so only the supplied events affect readiness.
+    ready(first, 2);
+    ready(second, 1);
+    ready(first, 1);
+    ready(second, 2);
+    expect(first.binding().readySequence).toBe(2);
+    expect(second.binding().readySequence).toBe(1);
+  });
+
+  it('reset publishes immediately and leaves other streams queued', () => {
+    const first = getStreamState(stream());
+    const second = getStreamState(stream());
+    const firstNotify = vi.fn();
+    const secondNotify = vi.fn();
+    first.subscribe(firstNotify);
+    second.subscribe(secondNotify);
+    ready(first);
+    ready(second);
+    first.reset('replacement');
+
+    expect(firstNotify).toHaveBeenCalledTimes(1);
+    expect(first.binding()).toMatchObject({ generation: 1, revision: 1 });
+    expect(frames.size).toBe(1);
+    runFrames();
+    expect(firstNotify).toHaveBeenCalledTimes(1);
+    expect(secondNotify).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels the shared frame only after its last dirty stream is disposed', () => {
+    const first = getStreamState(stream());
+    const second = getStreamState(stream());
+    const notify = vi.fn();
+    second.subscribe(notify);
+    ready(first);
+    ready(second);
+    first.dispose();
+    expect(frames.size).toBe(1);
+    second.dispose();
+    expect(frames.size).toBe(0);
+    runFrames();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('defers snapshots received by a subscriber until the next frame', () => {
+    const first = getStreamState(stream());
+    const second = getStreamState(stream());
+    const secondNotify = vi.fn();
+    first.subscribe(() => ready(second));
+    second.subscribe(secondNotify);
+    ready(first);
+    ready(second);
+    runFrames();
+
+    expect(secondNotify).toHaveBeenCalledTimes(1);
+    expect(second.binding().revision).toBe(1);
+    expect(frames.size).toBe(1);
+    runFrames();
+    expect(secondNotify).toHaveBeenCalledTimes(2);
+    expect(second.binding().revision).toBe(2);
+  });
+
+  it('drops a queued notification if another subscriber resets that stream', () => {
+    const first = getStreamState(stream());
+    const second = getStreamState(stream());
+    const secondNotify = vi.fn();
+    first.subscribe(() => second.reset('replacement'));
+    second.subscribe(secondNotify);
+    ready(first);
+    ready(second);
+    runFrames();
+
+    expect(secondNotify).toHaveBeenCalledTimes(1);
+    expect(second.binding()).toMatchObject({ generation: 1, revision: 2 });
+    expect(frames.size).toBe(0);
+  });
+
+  it('drops a queued notification if another subscriber disposes that stream', () => {
+    const first = getStreamState(stream());
+    const second = getStreamState(stream());
+    const secondNotify = vi.fn();
+    first.subscribe(() => second.dispose());
+    second.subscribe(secondNotify);
+    ready(first);
+    ready(second);
+    runFrames();
+    expect(secondNotify).not.toHaveBeenCalled();
+  });
+
+  it('stops the old notification when a subscriber resets its own stream', () => {
+    const state = getStreamState(stream());
+    const revisions: number[] = [];
+    let reset = false;
+    state.subscribe(() => {
+      if (!reset) {
+        reset = true;
+        state.reset('replacement');
+      }
+    });
+    state.subscribe(() => revisions.push(state.binding().revision));
+    ready(state);
+    runFrames();
+    expect(revisions).toEqual([2]);
+    expect(frames.size).toBe(0);
   });
 });
 
