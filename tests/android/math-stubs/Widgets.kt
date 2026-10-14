@@ -17,7 +17,8 @@ class HorizontalScrollView(context: Context) : FrameLayout(context) {
   var isFillViewport = false
   var overScrollMode = 0
   var scrollResets = 0
-  fun scrollTo(x: Int, y: Int) { scrollResets++ }
+  var scrollX = 0
+  fun scrollTo(x: Int, y: Int) { scrollResets++; scrollX = x.coerceAtLeast(0) }
 }
 class TextView(context: Context) : View(context) {
   var includeFontPadding = true

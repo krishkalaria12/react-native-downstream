@@ -122,6 +122,13 @@ internal class CodeGutterView(context: Context) : View(context) {
     }
   }
 
+  fun clearContent() {
+    segment = null
+    body = null
+    layout = null
+    bodyLayout = null
+  }
+
   override fun onDraw(canvas: Canvas) {
     val segment = this.segment ?: return
     val layout = this.layout ?: return
@@ -278,6 +285,14 @@ internal class CodeViewport(context: Context) : ScrollView(context) {
   private fun pinToBottom() {
     val range = computeVerticalScrollRange() - computeVerticalScrollExtent()
     if (range > 0) scrollTo(0, range)
+  }
+
+  fun capturePinState(): Int = if (pinned) 1 else 0
+
+  fun restorePinState(value: Int) {
+    pinned = value != 0
+    needsPin = false
+    touchScrolling = false
   }
 
   /** Moves to the newest line at the next layout, unless the reader has left. */
@@ -550,10 +565,43 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     requestLayout()
   }
 
+  fun captureViewportState(): IntArray = intArrayOf(
+    if (restoreScroll) savedOffset else scroll.scrollX,
+    if (restoreScroll) savedVerticalOffset else viewport.scrollY,
+    viewport.capturePinState(),
+  )
+
+  fun restoreViewportState(state: IntArray) {
+    savedOffset = state[0]
+    savedVerticalOffset = state[1]
+    viewport.restorePinState(state[2])
+    restoreScroll = true
+    requestLayout()
+  }
+
+  fun clearViewportContent() {
+    host.removeCallbacks(clearCopied)
+    copied = false
+    body.clearContent()
+    gutter.clearContent()
+    rendered = null
+    segment = null
+    boundSegment = null
+    ordinal = -1
+    streaming = false
+    viewport.streaming = false
+    viewport.restorePinState(1)
+    savedOffset = 0
+    savedVerticalOffset = 0
+    restoreScroll = true
+  }
+
   /** Drops the saved offsets and returns to the top, for a new generation. */
   fun resetScroll() {
     savedOffset = 0
     savedVerticalOffset = 0
+    viewport.restorePinState(1)
+    restoreScroll = true
     requestLayout()
   }
 

@@ -23,7 +23,10 @@ const names = [
   'viewportSegmentInterval',
   'checkViewportFrameOrder',
   'canDeferSegment',
-  'recycleTextView',
+  'segmentScrollKey',
+  'saveSegmentScroll',
+  'restoreSegmentScroll',
+  'recycleSegmentView',
   'syncSegmentViews',
   'layoutSegments',
 ];
@@ -41,10 +44,31 @@ const listener = source.match(
   /  private val segmentViewportListener = ViewTreeObserver.OnPreDrawListener \{[\s\S]*?\n  }/
 )?.[0];
 if (!listener) throw new Error('Missing production viewport listener');
-const fixture = readFileSync(
+let fixture = readFileSync(
   join(here, 'SegmentViewportCheck.kt'),
   'utf8'
 ).replace('/* PRODUCTION_METHODS */', [listener, ...methods].join('\n'));
+for (const kind of ['Code', 'Table', 'Math']) {
+  const contents = readFileSync(
+    join(
+      here,
+      `../../src/android/src/main/java/com/downstream/${kind}SegmentView.kt`
+    ),
+    'utf8'
+  );
+  const capture = contents.match(
+    /  fun captureViewportState\(\)[\s\S]*?(?=\n\n)/
+  )?.[0];
+  const restore = contents.match(
+    /  fun restoreViewportState\([\s\S]*?\n  }/
+  )?.[0];
+  if (!capture || !restore)
+    throw new Error(`Missing production ${kind} scroll state methods`);
+  fixture = fixture.replace(
+    `/* PRODUCTION_${kind.toUpperCase()}_SCROLL */`,
+    `${capture}\n${restore}`
+  );
+}
 const directory = mkdtempSync(join(tmpdir(), 'downstream-segment-viewport-'));
 try {
   const path = join(directory, 'Check.kt');

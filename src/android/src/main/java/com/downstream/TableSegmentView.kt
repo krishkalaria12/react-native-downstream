@@ -67,6 +67,7 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
   private var segment: TableSegment? = null
   private var sourceEpoch = -1
   private var pendingLeadingDistance: Int? = 0
+  private var pendingVerticalOffset: Int? = null
   private var controlLabels: List<String> = DEFAULT_LABELS
   private var controls = 0
   private var controlsEnabled = false
@@ -268,9 +269,39 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     invalidate()
   }
 
+  fun captureViewportState(): IntArray {
+    val current = segment
+    val range = ((current?.tableWidth ?: 0) - scroll.width).coerceAtLeast(0)
+    val leading = pendingLeadingDistance ?: if (current?.rtl == true) {
+      (range - scroll.scrollX).coerceAtLeast(0)
+    } else scroll.scrollX
+    return intArrayOf(leading, pendingVerticalOffset ?: viewport.scrollY, viewport.capturePinState())
+  }
+
+  fun restoreViewportState(state: IntArray) {
+    pendingLeadingDistance = state[0]
+    pendingVerticalOffset = state[1]
+    viewport.restorePinState(state[2])
+    requestLayout()
+  }
+
+  fun clearViewportContent() {
+    segment = null
+    sourceEpoch = -1
+    pendingLeadingDistance = 0
+    pendingVerticalOffset = 0
+    isStreaming = false
+    viewport.restorePinState(1)
+    grid.clearViewportContent()
+    headerGrid.clearViewportContent()
+    headerGrid.contentDescription = null
+  }
+
   fun resetScroll() {
     sourceEpoch = -1
     pendingLeadingDistance = 0
+    pendingVerticalOffset = 0
+    viewport.restorePinState(1)
     requestLayout()
   }
 
@@ -366,6 +397,8 @@ internal class TableSegmentView(context: Context) : FrameLayout(context) {
     scroll.scrollTo(restored, 0)
     headerScroll.scrollTo(restored, 0)
     pendingLeadingDistance = null
+    pendingVerticalOffset?.let { viewport.scrollTo(0, it) }
+    pendingVerticalOffset = null
 
     // The vertical scroller scrolls only while the table is past its cap, which is
     // the whole difference between a capped table and an uncapped one.
@@ -528,6 +561,15 @@ private class TableGridView(context: Context) : View(context) {
   private fun applyDrawViewport() {
     if (drawViewport == nextDrawViewport) return
     drawViewport.set(nextDrawViewport)
+    invalidate()
+  }
+
+  fun clearViewportContent() {
+    segment = null
+    readingParts = null
+    pressedLink = -1
+    hasDrawViewport = false
+    accessibility.contentChanged()
     invalidate()
   }
 

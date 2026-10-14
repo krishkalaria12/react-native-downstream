@@ -360,6 +360,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   private fun sourceChanged() {
     sourceEpoch++
+    segmentScrollStates.clear()
     // A new generation, a rebind or a new session has nothing to do with what this
     // view last showed, so the tracker forgets it. The next source animates from
     // its first word rather than resuming this one's timing.
@@ -375,6 +376,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       when (child) {
         is TableSegmentView -> child.resetScroll()
         is CodeSegmentView -> child.resetScroll()
+        is MathSegmentView -> child.restoreViewportState(intArrayOf(0))
       }
     }
   }
@@ -1200,6 +1202,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     generation = 0
     sessionId = null
     sourceEpoch++
+    segmentScrollStates.clear()
     codeLayout = CodeLayout()
     tableLayout = TableLayout()
     onControl = null
@@ -1221,6 +1224,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   fun release() {
     disposeReveal()
     sourceEpoch++
+    segmentScrollStates.clear()
     exporter.release()
   }
 
@@ -1493,17 +1497,26 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   // because the group also holds the React children mounted over the slots.
   private var segmentViews = mutableListOf<View>()
 
-  // Plain unselectable text can release its TextView while outside the actual
-  // ancestor clip. Index placeholders preserve reveal and host reconciliation.
-  private class DeferredTextView(context: Context) : View(context)
+  // Canonically measured segments release their native views outside the ancestor
+  // clip. Slot placeholders preserve reveal and host reconciliation.
+  private class DeferredSegmentView(context: Context) : View(context)
   private val recycledTextViews = java.util.ArrayDeque<TextSegmentView>()
   private val segmentEligibility = java.util.WeakHashMap<TextSegment, Boolean>()
+  private val recycledCodeViews = java.util.ArrayDeque<CodeSegmentView>()
+  private val recycledTableViews = java.util.ArrayDeque<TableSegmentView>()
+  private val recycledMathViews = java.util.ArrayDeque<MathSegmentView>()
+  // Only visited scrollable blocks need state. Keys survive immutable snapshots;
+  // source changes clear the map before ordinals can name a different document.
+  private data class SegmentScrollState(val tableIdentity: Long, val viewport: IntArray)
+  private val segmentScrollStates = mutableMapOf<String, SegmentScrollState>()
+  private var segmentScrollEpoch = -1
   private val segmentViewport = Rect()
   private var segmentViewportKnown = false
   private var segmentAccessibilityEnabled = false
   private var segmentViewportObserver: ViewTreeObserver? = null
   private var viewportOnlyIndices: IntArray? = null
   private var virtualizedDocument: RenderedDocument? = null
+  private var realizedDocument: RenderedDocument? = null
   private var virtualizedFrames: IntArray? = null
   private var virtualizedInterval = 0 until 0
   private var checkedFrameOrder: IntArray? = null
@@ -1573,26 +1586,84 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     return virtualizedFramesOrdered
   }
 
-  private fun canDeferSegment(segment: TextSegment): Boolean = segmentEligibility.getOrPut(segment) {
-    segment.customContainer < 0 && segment.caretOffset < 0 && segment.detailsContainers.isEmpty() &&
-      segment.detailsBlocks.isEmpty() && segment.taskBlocks.isEmpty() &&
-      segment.text.getSpans(0, segment.text.length, LinkSpan::class.java).isEmpty() &&
-      segment.text.getSpans(0, segment.text.length, TagSpan::class.java).isEmpty() &&
-      segment.text.getSpans(0, segment.text.length, SpoilerSpan::class.java).isEmpty() &&
-      segment.text.getSpans(0, segment.text.length, MathInlineSpan::class.java).isEmpty()
+  private fun canDeferSegment(segment: Segment): Boolean = when (segment) {
+    is TextSegment -> segmentEligibility.getOrPut(segment) {
+      // Links, tags, tasks and inline math bind from the immutable segment when
+      // remounted. Spoiler visibility is currently local mutable view state.
+      segment.customContainer < 0 && segment.caretOffset < 0 &&
+        segment.detailsContainers.isEmpty() && segment.detailsBlocks.isEmpty() &&
+        segment.text.getSpans(0, segment.text.length, SpoilerSpan::class.java).isEmpty()
+    }
+    is CodeSegment -> segment.caretOffset < 0 && segment.detailsContainers.isEmpty() &&
+      !hostLayout.hosts(segment.codeOrdinal)
+    is TableSegment -> segment.caretKind == 0 && segment.detailsContainers.isEmpty()
+    is MathSegment -> segment.detailsContainers.isEmpty()
+    // Image loading has asynchronous answers. Keeping its view mounted preserves
+    // the request and its callback until the image lifecycle has its own owner.
+    is ImageSegment -> false
   }
 
-  private fun recycleTextView(view: View) {
+  private fun segmentScrollKey(segment: Segment, firstBlock: Int): String? = when (segment) {
+    is CodeSegment -> "code:${segment.codeOrdinal}:${segment.firstLine}"
+    is TableSegment -> "table:${segment.ordinal}:${segment.rtl}:${segment.accessibilityRows.firstOrNull()}"
+    is MathSegment -> "math:$firstBlock:${segment.literal}"
+    else -> null
+  }
+
+  private fun saveSegmentScroll(view: View, segment: Segment, firstBlock: Int) {
+    val key = segmentScrollKey(segment, firstBlock) ?: return
+    val state = when (view) {
+      is CodeSegmentView -> view.captureViewportState()
+      is TableSegmentView -> view.captureViewportState()
+      is MathSegmentView -> view.captureViewportState()
+      else -> return
+    }
+    segmentScrollStates[key] = SegmentScrollState((segment as? TableSegment)?.identity ?: 0L, state)
+  }
+
+  private fun restoreSegmentScroll(view: View, segment: Segment, firstBlock: Int) {
+    val key = segmentScrollKey(segment, firstBlock) ?: return
+    val saved = segmentScrollStates[key] ?: return
+    if (segment is TableSegment && saved.tableIdentity != 0L && segment.identity != 0L &&
+      saved.tableIdentity != segment.identity) return
+    val state = saved.viewport
+    when (view) {
+      is CodeSegmentView -> view.restoreViewportState(state)
+      is TableSegmentView -> view.restoreViewportState(state)
+      is MathSegmentView -> view.restoreViewportState(state)
+    }
+  }
+
+  private fun recycleSegmentView(view: View) {
     segmentLayer.removeView(view)
-    if (view is TextSegmentView && recycledTextViews.size < 8) {
-      view.clearContent()
-      recycledTextViews.addLast(view)
+    when (view) {
+      is TextSegmentView -> {
+        view.clearContent()
+        if (recycledTextViews.size < 8) recycledTextViews.addLast(view)
+      }
+      is CodeSegmentView -> {
+        view.clearViewportContent()
+        if (recycledCodeViews.size < 4) recycledCodeViews.addLast(view)
+      }
+      is TableSegmentView -> {
+        view.clearViewportContent()
+        if (recycledTableViews.size < 4) recycledTableViews.addLast(view)
+      }
+      is MathSegmentView -> {
+        view.clearViewportContent()
+        if (recycledMathViews.size < 4) recycledMathViews.addLast(view)
+      }
     }
   }
 
   // Reuse views of the same kind in place, so unchanged segments keep their
   // selection and scroll position across updates.
   private fun syncSegmentViews() {
+    val preserveScroll = segmentScrollEpoch == sourceEpoch
+    if (!preserveScroll) {
+      segmentScrollStates.clear()
+      segmentScrollEpoch = sourceEpoch
+    }
     val document = rendered
     val traceId = if (document?.tracing == true) document.documentId else 0L
     val segments = document?.segments.orEmpty()
@@ -1600,21 +1671,29 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     val frames = if (!selectable && !segmentAccessibilityEnabled && segmentViewportKnown && column > 0) {
       document?.frames(column, chrome, codeLayout, imageLayout, hostLayout, tableLayout, readerChoices)
     } else null
+    val newlyRealized = mutableListOf<Int>()
     val indices: Iterable<Int> = viewportOnlyIndices?.asIterable() ?: segments.indices
     if (viewportOnlyIndices == null) revealSegmentEnds = IntArray(document?.plan?.size ?: 0) { document!!.plan[it].to }
     val overscan = maxOf((64 * resources.displayMetrics.density).toInt(), segmentViewport.height() / 2)
     fun deferAt(index: Int): Boolean {
       val segment = segments[index]
-      return segment is TextSegment && frames != null && canDeferSegment(segment) &&
+      return frames != null && canDeferSegment(segment) &&
         (segmentViewport.isEmpty || segmentLayer.top + paddingTop + frames[index * 2] > segmentViewport.bottom + overscan ||
           segmentLayer.top + paddingTop + frames[index * 2] + frames[index * 2 + 1] < segmentViewport.top - overscan)
     }
-    if (frames != null) while (segmentViews.size < segments.size) segmentViews.add(DeferredTextView(context))
+    if (frames != null) while (segmentViews.size < segments.size) segmentViews.add(DeferredSegmentView(context))
     // Retire first so scrolling upwards can reuse the views below the viewport.
     for (index in indices) {
-      if (deferAt(index) && segmentViews.getOrNull(index) !is DeferredTextView) {
-        segmentViews.getOrNull(index)?.let { recycleTextView(it) }
-        val placeholder = DeferredTextView(context)
+      if (deferAt(index) && segmentViews.getOrNull(index) !is DeferredSegmentView) {
+        segmentViews.getOrNull(index)?.let {
+          val previous = realizedDocument
+          if (preserveScroll && previous != null && index < previous.segments.size &&
+            (it is CodeSegmentView || it is TableSegmentView || it is MathSegmentView)) {
+            saveSegmentScroll(it, previous.segments[index], previous.plan[index].from)
+          }
+          recycleSegmentView(it)
+        }
+        val placeholder = DeferredSegmentView(context)
         if (index < segmentViews.size) segmentViews[index] = placeholder else segmentViews.add(placeholder)
       }
     }
@@ -1631,18 +1710,22 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       }
       if (!reusable) {
         if (view != null) {
-          recycleTextView(view)
-          segmentViews.removeAt(index)
+          recycleSegmentView(view)
         }
         view = when (segment) {
           is TextSegment -> if (recycledTextViews.isEmpty()) TextSegmentView(context) else recycledTextViews.removeLast()
-          is CodeSegment -> CodeSegmentView(context).apply { setControlHost(this@DownstreamMarkdownView) }
+          is CodeSegment -> {
+            val next = if (recycledCodeViews.isEmpty()) CodeSegmentView(context) else recycledCodeViews.removeLast()
+            next.apply { setControlHost(this@DownstreamMarkdownView) }
+          }
           is TableSegment -> {
-            if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_table_create_start")
-            try {
-              TableSegmentView(context).apply { setControlHost(this@DownstreamMarkdownView) }
-            } finally {
-              if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_table_create_end")
+            if (recycledTableViews.isNotEmpty()) recycledTableViews.removeLast() else {
+              if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_table_create_start")
+              try {
+                TableSegmentView(context).apply { setControlHost(this@DownstreamMarkdownView) }
+              } finally {
+                if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_table_create_end")
+              }
             }
           }
           is ImageSegment -> ImageSegmentView(context).also { new ->
@@ -1654,10 +1737,12 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
             new.onImagePress = { url, alt, title, range -> pressImage(url, alt, title, range) }
             new.onImageDownload = { image -> downloadImage(image) }
           }
-          is MathSegment -> MathSegmentView(context)
+          is MathSegment -> if (recycledMathViews.isEmpty()) MathSegmentView(context) else recycledMathViews.removeLast()
         }
         segmentLayer.addView(view)
-        segmentViews.add(index, view)
+        // Replacing a slot must not shift the document-sized backing array on
+        // every realization. Indices remain stable for reveal and host routing.
+        if (index < segmentViews.size) segmentViews[index] = view else segmentViews.add(view)
       }
       when (segment) {
         is TextSegment -> (view as TextSegmentView).setSegment(segment, document!!, document!!.plan[index].from)
@@ -1700,14 +1785,19 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
           setSegment(segment)
         }
       }
+      if (!reusable) newlyRealized.add(index)
     }
     while (segmentViews.size > segments.size) {
       val extra = segmentViews.removeAt(segmentViews.size - 1)
-      recycleTextView(extra)
+      recycleSegmentView(extra)
     }
     if (viewportOnlyIndices == null) revealTargets.build(revealRanges, revealSegmentEnds)
     applySettledState()
+    for (index in newlyRealized) {
+      restoreSegmentScroll(segmentViews[index], segments[index], document!!.plan[index].from)
+    }
     layoutSegments()
+    realizedDocument = document
     virtualizedDocument = if (frames != null) document else null
     virtualizedFrames = frames
     virtualizedInterval = if (frames != null && checkViewportFrameOrder(frames)) viewportSegmentInterval(frames) else 0 until 0
@@ -1839,7 +1929,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     val indices: Iterable<Int> = viewportOnlyIndices?.asIterable() ?: (0 until minOf(segmentViews.size, frames.size / 2))
     for (index in indices) {
       val child = segmentViews[index]
-      if (child is DeferredTextView) continue
+      if (child is DeferredSegmentView) continue
       val top = paddingTop + frames[index * 2]
       val height = frames[index * 2 + 1]
       // A closed details body has a zero frame. Hide its native child as well,

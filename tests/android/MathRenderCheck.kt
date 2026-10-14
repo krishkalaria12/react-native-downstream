@@ -100,5 +100,18 @@ fun main() {
   view.setSegment(segment(height = 3f))
   check(view.layoutRequests == changedMetrics + 1) { "changed metrics cannot hit the snapshot guard" }
   check(GradientDrawable.constructions == drawables) { "theme updates reuse one background drawable" }
+  scroll.scrollTo(37, 0)
+  val savedViewport = view.captureViewportState()
+  view.clearViewportContent()
+  check(glyphView.segment == null && literal.text.isEmpty() && view.contentDescription == null) { "pooled math view retains source or semantic description" }
+  view.setSegment(segment())
+  view.restoreViewportState(savedViewport)
+  check(view.captureViewportState().contentEquals(intArrayOf(37))) { "pending math scroll state is retained before layout" }
+  view.measure(View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY), 0)
+  view.layout(0, 0, 100, view.measuredHeight)
+  check(scroll.scrollX == 37) { "math re-realization restores horizontal scroll after exact layout" }
+  view.restoreViewportState(intArrayOf(0))
+  view.layout(0, 0, 100, view.measuredHeight)
+  check(scroll.scrollX == 0) { "new source resets math horizontal scroll" }
   println("math rendering: cached draw inputs, style guards, accessibility, metrics and lifecycle passed")
 }

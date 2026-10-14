@@ -49,6 +49,7 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
   private val contentViews = arrayOf(background, literal, scroll)
 
   private var segment: MathSegment? = null
+  private var pendingScrollOffset: Int? = null
   private var textColor = Color.BLACK
   private var fontSize = 0f
   private var padding = 0f
@@ -136,6 +137,21 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
     requestLayout()
   }
 
+  fun captureViewportState(): IntArray = intArrayOf(pendingScrollOffset ?: scroll.scrollX)
+
+  fun restoreViewportState(state: IntArray) {
+    pendingScrollOffset = state[0]
+    requestLayout()
+  }
+
+  fun clearViewportContent() {
+    segment = null
+    glyphs.segment = null
+    literal.text = ""
+    contentDescription = null
+    pendingScrollOffset = 0
+  }
+
   /** One `math.textAlign` value as a horizontal gravity. */
   private fun gravityFor(textAlign: Int): Int = when (textAlign) {
     ALIGN_LEFT -> Gravity.START
@@ -182,6 +198,8 @@ internal class MathSegmentView(context: Context) : FrameLayout(context) {
     for (child in contentViews) {
       child.layout(paddingLeft, paddingTop, paddingLeft + width, paddingTop + height)
     }
+    pendingScrollOffset?.let { scroll.scrollTo(it, 0) }
+    pendingScrollOffset = null
   }
 
   override fun onDetachedFromWindow() {

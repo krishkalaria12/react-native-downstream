@@ -23,7 +23,7 @@ private class Document(var frameData: IntArray) {
   fun frames(width: Int, chrome: Int, code: Int, image: Int, host: Int, table: Int, choices: Int) = frameData
 }
 private class MountedDocument(val rendered: Document?, val segmentViews: List<View>) {
-  private class DeferredTextView : View()
+  private class DeferredSegmentView : View()
   val viewportOnlyIndices: IntArray? = null
   var width = 200
   var paddingLeft = 3
