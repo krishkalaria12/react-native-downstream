@@ -9,10 +9,27 @@
 //   node benchmarks/phone/bench.mjs resume <dir>    retry failed and missing runs using the saved APK
 //   node benchmarks/phone/bench.mjs report <dir>    recompute statistics and REPORT.md from raw runs
 //   node benchmarks/phone/bench.mjs selftest        check the statistics and workload code
+//   node benchmarks/phone/tail-compare.mjs <dir>    compare saved matrix/huge tails without a phone
 //
-// Options: --device <serial> --profiles highlighted[,plain] --repeats 10 --seed 1
+// Animation comparison, identical replay inputs with traces retained:
+//   node benchmarks/phone/bench.mjs all --replay <recording-dir> --output <new-result-dir> \
+//     --profiles highlighted,highlighted-animated --candidates downstream-default,streamdown,enriched \
+//     --workloads ai-feature-matrix,ai-huge-concurrent-5 --keep-traces
+// Terminal-wait experiment: repeat that command in new result directories with
+//   --finish-delay-ms 0, then 1000, then 3000 (keep the same replay recording).
+// Diagnose native phases separately, with timings labeled as diagnostic:
+//   node benchmarks/phone/bench.mjs all --replay <recording-dir> --output <diagnostic-dir> \
+//     --candidates downstream-default --workloads ai-feature-matrix,ai-huge-concurrent-5 \
+//     --diagnostic-trace --finish-delay-ms 1000 --keep-traces
+//
+// Options: --device <serial> --profiles highlighted[,plain,highlighted-animated,plain-animated] --repeats 10 --seed 1
 //          --workloads ai-single,ai-code-heavy,ai-concurrent-5 --candidates <ids>
 //          --model gpt-6-luna --reasoning medium --output <dir> --keep-traces --skip-build --no-device-setup
+//          --settle-ms 2000 (same observation budget for every selected profile)
+//          --finish-delay-ms 0 (replay-only terminal delay; use 1000 and 3000 in separate result dirs)
+//          --diagnostic-trace (Downstream only; optional native phases, timings include tracing overhead)
+// Retirement measures release of session-owned superseded snapshots on a worker.
+// UI-held payload references can be released later; this is not all-platform deallocation timing.
 //
 // Method, in short. Each run asks the model for fresh replies through the Vercel
 // AI SDK on this Mac, and every text delta goes to the phone the moment it
@@ -68,6 +85,44 @@ const CANDIDATES = {
   'markdown-renderer': 'Markdown Renderer',
 };
 const BASELINE = 'downstream-default';
+
+export function profileConfig(profile) {
+  if (
+    ![
+      'highlighted',
+      'plain',
+      'highlighted-animated',
+      'plain-animated',
+    ].includes(profile)
+  )
+    throw new Error(`Unknown profile ${profile}`);
+  return {
+    syntaxHighlighting: profile.startsWith('highlighted'),
+    animated: profile.endsWith('-animated'),
+  };
+}
+
+export function candidatesForProfile(candidates, profile) {
+  return profileConfig(profile).animated
+    ? candidates.filter((candidate) =>
+        ['downstream-default', 'streamdown', 'enriched'].includes(candidate)
+      )
+    : candidates;
+}
+
+export function validateFinishDelay(finishDelayMs, replay) {
+  if (
+    !Number.isFinite(finishDelayMs) ||
+    finishDelayMs < 0 ||
+    finishDelayMs > 2147483647
+  )
+    throw new Error(
+      '--finish-delay-ms must be a nonnegative finite timer duration'
+    );
+  if (finishDelayMs > 0 && !replay)
+    throw new Error('--finish-delay-ms requires --replay');
+  return finishDelayMs;
+}
 
 // ---------------------------------------------------------------------------
 // Workloads: real AI responses recorded with `capture`, replayed exactly.
@@ -263,10 +318,10 @@ function threadGroup(thread, pid) {
 
 /**
  * Turns raw trace rows into metrics for the measured window. `window` holds
- * trace timestamps (ns): start, deliveryEnd, end.
+ * trace timestamps (ns): start, deliveryEnd, optional finishEnd, end.
  */
 export function traceMetrics(raw, window) {
-  const { start, deliveryEnd, end } = window;
+  const { start, deliveryEnd, finishEnd, end } = window;
   const span = end - start;
   const overlap = (ts, dur) =>
     Math.max(0, Math.min(ts + dur, end) - Math.max(ts, start));
@@ -287,7 +342,9 @@ export function traceMetrics(raw, window) {
 
   // Frames: SurfaceFlinger FrameTimeline for the app's layers. Overrun is the
   // actual end minus the expected (deadline) end, as in Macrobenchmark.
-  const frames = raw.frames.filter(([ts]) => ts >= start && ts < end);
+  const frames = raw.frames.filter(
+    ([ts, dur]) => dur > 0 && ts >= start && ts < end
+  );
   const durations = frames.map(([, dur]) => dur / 1e6);
   const overruns = frames.map(([ts, dur, , , expectedTs, expectedDur]) =>
     expectedTs == null ? null : (ts + dur - (expectedTs + expectedDur)) / 1e6
@@ -314,7 +371,8 @@ export function traceMetrics(raw, window) {
       .filter((gap) => gap > 0 && gap < 50)
   );
   const lastFrameEnd = raw.frames.reduce(
-    (last, [ts, dur]) => (ts < end ? Math.max(last, ts + dur) : last),
+    (last, [ts, dur]) =>
+      dur > 0 && ts >= start && ts < end ? Math.max(last, ts + dur) : last,
     0
   );
 
@@ -374,11 +432,174 @@ export function traceMetrics(raw, window) {
     vsyncMs: vsync,
     settleMs:
       lastFrameEnd > deliveryEnd ? (lastFrameEnd - deliveryEnd) / 1e6 : 0,
+    textToFinishMs: Number.isFinite(finishEnd)
+      ? Math.max(0, finishEnd - deliveryEnd) / 1e6
+      : null,
+    settleAfterFinishMs: Number.isFinite(finishEnd)
+      ? Math.max(0, lastFrameEnd - finishEnd) / 1e6
+      : null,
+    // Open frames have unknown end times. Later app frames prove that the
+    // fixed observation window cannot establish quiescence by itself.
+    tailWindowCensored: raw.frames.some(
+      ([ts, dur]) => ts >= start && (dur < 0 || (dur > 0 && ts + dur >= end))
+    ),
+    tail: {
+      afterLastText: phaseAttribution(raw, deliveryEnd, end),
+      beforeFinish: Number.isFinite(finishEnd)
+        ? phaseAttribution(raw, deliveryEnd, finishEnd)
+        : null,
+      afterFinish: Number.isFinite(finishEnd)
+        ? phaseAttribution(raw, finishEnd, end)
+        : null,
+    },
     memStartMiB: before / MiB,
     memPeakMiB: peak / MiB,
     memPeakIncreaseMiB: (peak - before) / MiB,
     memEndMiB: used(end) / MiB,
     memSamples: inside.length,
+  };
+}
+
+/** CPU clipped to a phase; frame counts include frames crossing its start. */
+export function phaseAttribution(raw, start, end) {
+  const threads = new Map(raw.threads.map((thread) => [thread.utid, thread]));
+  const cpu = { main: 0, js: 0, render: 0, other: 0 };
+  const byThread = new Map();
+  for (const [utid, ts, dur] of raw.sched) {
+    const used = Math.max(0, Math.min(ts + dur, end) - Math.max(ts, start));
+    if (dur <= 0 || !used) continue;
+    const thread = threads.get(utid);
+    cpu[threadGroup(thread, raw.pid)] += used;
+    const name = thread?.name ?? `utid ${utid}`;
+    byThread.set(name, (byThread.get(name) ?? 0) + used);
+  }
+  const frames =
+    end > start
+      ? raw.frames.filter(
+          ([ts, dur]) => dur > 0 && ts < end && ts + dur > start
+        )
+      : [];
+  return {
+    windowMs: Math.max(0, end - start) / 1e6,
+    cpuTotalS: Object.values(cpu).reduce((sum, value) => sum + value, 0) / 1e9,
+    cpuMainS: cpu.main / 1e9,
+    cpuJsS: cpu.js / 1e9,
+    cpuRenderS: cpu.render / 1e9,
+    cpuOtherS: cpu.other / 1e9,
+    cpuByThreadS: Object.fromEntries(
+      [...byThread]
+        .sort((a, b) => b[1] - a[1])
+        .map(([name, value]) => [name, value / 1e9])
+    ),
+    frames: frames.length,
+    slowFrames: frames.filter(([, dur]) => dur > 50e6).length,
+    appDeadlineMissedFrames: frames.filter(([, , jank]) =>
+      /App Deadline Missed/i.test(jank ?? '')
+    ).length,
+    // Frame counts can overlap adjacent phases; CPU slices cannot.
+    lastFrameAfterStartMs:
+      frames.reduce((last, [ts, dur]) => Math.max(last, ts + dur - start), 0) /
+      1e6,
+  };
+}
+
+/** Opt-in native wall-time phases. Never join native and JS clock domains. */
+export function nativePhaseSummary(trace) {
+  const native = (trace.events ?? [])
+    .filter(
+      (event) =>
+        event.clockDomain === 'native-monotonic' &&
+        /^\d+$/.test(event.timeNs ?? '')
+    )
+    .map((event) => ({ ...event, at: BigInt(event.timeNs) }))
+    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  const specs = {
+    queueWait: ['worker_queued', 'worker_start'],
+    parse: ['parse_start', 'parse_end'],
+    prepare: ['prepare_start', 'prepare_end'],
+    retirement: ['retire_start', 'retire_end'],
+    workerPass: ['worker_start', 'snapshot_staged'],
+    publicationWait: ['snapshot_staged', 'snapshot_ready'],
+    measure: ['measure_start', 'measure_end'],
+    apply: ['apply_start', 'apply_end'],
+  };
+  const describe = (values) => ({
+    count: values.length,
+    totalMs: values.reduce((sum, value) => sum + value, 0),
+    p50Ms: quantile(values, 0.5),
+    p95Ms: quantile(values, 0.95),
+    maxMs: values.length ? Math.max(...values) : null,
+  });
+  const finishBySession = new Map();
+  const key = (event) => `${event.sessionId}:${event.generation}`;
+  for (const event of native) {
+    if (event.event === 'finish_received')
+      finishBySession.set(key(event), event);
+  }
+  const phases = {};
+  let unmatchedEvents = 0;
+  for (const [name, [begin, end]] of Object.entries(specs)) {
+    const pending = new Map();
+    const durations = [];
+    const afterFinish = [];
+    for (const event of native) {
+      if (event.event !== begin && event.event !== end) continue;
+      // A session serializes workers. Dispatch and captured input sequences
+      // can differ, so queue pairs use lifecycle order, not sequence equality.
+      // Retirement and Fabric phases can overlap across worker/UI threads and
+      // need the exact publication/snapshot sequence and emitting thread.
+      const phaseKey = ['retirement', 'measure', 'apply'].includes(name)
+        ? `${key(event)}:${event.sequence}:${event.threadId}`
+        : key(event);
+      const starts = pending.get(phaseKey) ?? [];
+      if (event.event === begin) {
+        starts.push(event);
+        pending.set(phaseKey, starts);
+      } else {
+        const start = starts.shift();
+        if (!start) {
+          ++unmatchedEvents;
+          continue;
+        }
+        durations.push(Number(event.at - start.at) / 1e6);
+        const finish = finishBySession.get(key(event));
+        if (finish && event.at > finish.at) {
+          const after = start.at > finish.at ? start.at : finish.at;
+          afterFinish.push(Number(event.at - after) / 1e6);
+        }
+      }
+    }
+    for (const starts of pending.values()) unmatchedEvents += starts.length;
+    phases[name] = {
+      all: describe(durations),
+      afterFinish: describe(afterFinish),
+    };
+  }
+  const finishToLastObservedReady = [];
+  for (const [sessionKey, finish] of finishBySession) {
+    const ready = native
+      .filter(
+        (event) =>
+          key(event) === sessionKey &&
+          event.event === 'snapshot_ready' &&
+          event.sequence === finish.sequence &&
+          event.at >= finish.at
+      )
+      .at(-1);
+    if (ready)
+      finishToLastObservedReady.push(Number(ready.at - finish.at) / 1e6);
+    else ++unmatchedEvents;
+  }
+  return {
+    clockDomain: 'native-monotonic',
+    nativeEvents: native.length,
+    intervalComplete: trace.intervalComplete === true,
+    droppedEvents: trace.droppedEvents ?? 0,
+    unmatchedEvents,
+    phases,
+    finishToLastObservedReady: describe(finishToLastObservedReady),
+    notes:
+      'Phase durations are elapsed wall time, not CPU. Summaries describe retained events; counts are lower bounds when events are dropped. Worker and publication pairs follow per-session/generation lifecycle order, including same-sequence finish. Retirement and Fabric phases also match sequence/thread. Retirement measures release of session-owned superseded snapshots and can run inside workerPass or as a standalone worker job; do not add overlapping phase totals. UI-held payload references can be released later, so retirement is not all-platform deallocation timing. Finish-to-ready uses the last observed same-sequence publication and cannot prove complete drain if events are dropped or the trace ends early.',
   };
 }
 
@@ -468,6 +689,19 @@ const METRICS = [
   {
     key: 'settleMs',
     label: 'Settle after last chunk',
+    unit: 'ms',
+    digits: 0,
+    headline: true,
+  },
+  {
+    key: 'textToFinishMs',
+    label: 'Last chunk to finish receipt',
+    unit: 'ms',
+    digits: 0,
+  },
+  {
+    key: 'settleAfterFinishMs',
+    label: 'Settle after finish receipt',
     unit: 'ms',
     digits: 0,
     headline: true,
@@ -648,6 +882,18 @@ function renderReport(session, runs, stats) {
       `Every number is the median of ${session.repeats} cold-process runs, with its 95% bootstrap confidence interval in brackets. Lower is better everywhere.`
   );
   lines.push('');
+  if (session.diagnosticTrace) {
+    lines.push(
+      'Diagnostic native tracing is enabled. These timings include tracing overhead and should not be compared to trace-off performance measurements. Native phase summaries and bounded raw events are saved with each run. Retirement separately measures release of session-owned superseded snapshots on a worker; UI-held payload references may be released later, so it does not prove that all platform payloads were deallocated off the UI thread.'
+    );
+    lines.push('');
+  }
+  if (session.input.mode === 'replay') {
+    lines.push(
+      `Each thread receives its finish marker ${session.finishDelayMs ?? 0} ms after its last delivered chunk. Other threads continue on the original replay schedule. Aggregate done follows all finish markers.`
+    );
+    lines.push('');
+  }
   lines.push('## Workloads');
   lines.push('');
   const input = session.input;
@@ -685,12 +931,24 @@ function renderReport(session, runs, stats) {
   for (const profile of session.profiles) {
     lines.push('');
     lines.push(
-      `## ${profile === 'highlighted' ? 'Code colors on (library defaults)' : 'Code colors off'}`
+      `## ${profileConfig(profile).syntaxHighlighting ? 'Code colors on (library defaults)' : 'Code colors off'}${profileConfig(profile).animated ? ', default streaming animations on' : ', streaming animations off'}`
     );
     for (const workload of session.workloadIds) {
       lines.push('');
       lines.push(`### ${workload}: ${WORKLOADS[workload]?.label ?? ''}`);
       lines.push('');
+      const censored = measured.filter(
+        (run) =>
+          run.config.profile === profile &&
+          run.config.workload === workload &&
+          run.metrics.tailWindowCensored
+      ).length;
+      if (censored) {
+        lines.push(
+          `${censored} run(s) have unfinished frames or app drawing at/after the observation boundary. Their measured settle values cannot prove completion; inspect the retained traces and repeat with a longer window.`
+        );
+        lines.push('');
+      }
       const headline = METRICS.filter(
         (metric) =>
           metric.headline === true || metric.headline === session.input.mode
@@ -767,9 +1025,10 @@ function renderReport(session, runs, stats) {
       '- **Frames.** Perfetto records SurfaceFlinger FrameTimeline, which classifies every frame the app draws. "Janky (app deadline missed)" is the share of frames Android itself blames on the app; "any cause" adds SurfaceFlinger, display and prediction misses but not buffer or SurfaceFlinger stuffing (queueing latency, not a visible stutter). Frame time is FrameTimeline\'s actual frame duration (CPU start to GPU done or post). Deadline overrun is actual end minus expected end, as in Jetpack Macrobenchmark.',
       '- **CPU.** Scheduler slices for every thread of the app process inside the measured window, split into the UI thread, the JS thread (mqt_js), RenderThread and everything else (native workers, GC, worklets). This is exact on-CPU time, not sampling.',
       '- **Memory.** Anonymous RSS plus swap, polled by Perfetto every 100 ms. "Peak increase" is the highest value during the window minus the value when streaming started. PSS from `dumpsys meminfo` is read after the window so it cannot disturb it.',
-      '- **Settle.** Time from the last delivered chunk to the last frame the app drew, from the trace.',
+      '- **Settle.** Time from the last delivered chunk to the last completed frame the app drew, from the trace. New runs also split last text to app finish receipt from finish receipt to last frame. Finish receipt is separate from host done, which can wait for provider usage metadata. Raw runs contain per-thread boundaries and scheduler/frame attribution before and after finish. Missing boundaries in older runs remain unknown.',
+      "- **Animation profiles.** `highlighted` and `plain` disable streaming animations. `highlighted-animated` and `plain-animated` enable each supported library's default effect and include only Downstream, Streamdown and Enriched. These effects differ: Enriched also changes incomplete block presentation and defers code highlighting. Compare profiles with the same replay recording; live replies differ. The 150 ms renderer-tail target applies to animation-off runs. Open frames or app drawing at/after the window conservatively mark the tail as censored. Later frames can include benchmark activity; inspect the retained trace before attributing them to the renderer. Use `--settle-ms` to extend the same observation budget for all profiles.",
       '- **JS lateness.** How late the app delivered each chunk against its schedule, a proxy for a busy JS thread.',
-      `- **Window.** From the moment streaming starts until ${session.settleMs / 1000} s after the last chunk. App start-up and mounting are outside it.`,
+      `- **Window.** From the moment streaming starts until ${session.settleMs / 1000} s after stream done is received (after the final chunk in replay runs). App start-up and mounting are outside it.`,
       `- **Order and noise.** ${session.repeats} measured blocks plus one warmup block; every block runs each library and workload once in a seeded random order (seed ${session.seed}). Before each run the app is force-stopped, background apps are killed and the harness waits until the thermal status is 0 and the battery is at most ${session.thermal.maxBatteryC} °C. App code is AOT-compiled (\`cmd package compile -m speed\`). The screen stays on at fixed brightness${session.deviceSetup ? ' with the refresh rate pinned' : ''}.`,
       '- **Statistics.** Medians of per-run values, percentile bootstrap 95% intervals (4,000 resamples). Ratios are bootstrapped from both groups. Mann-Whitney U is two-sided with a normal approximation; no multiple-comparison correction, so read single stars with care.',
       '- **Limits.** One phone model. The common app contains every library, so memory is not a per-package size. Clock speeds are not locked (needs root). Markdown output differs between libraries (see Features); equal input is not equal rendering.',
@@ -1102,7 +1361,7 @@ async function build(profile, outputDir) {
     // Enriched Markdown compiles its highlighter in or out at build time.
     const pkg = JSON.parse(originalPackage);
     pkg['enriched-markdown'] = {
-      enableCodeHighlight: profile === 'highlighted',
+      enableCodeHighlight: profileConfig(profile).syntaxHighlighting,
       enableMath: true,
       codeHighlightLanguages: ['javascript', 'typescript', 'python', 'json'],
     };
@@ -1348,12 +1607,66 @@ export async function queryTrace(tracePath, pid) {
 
 /** Wall-clock time of the app's last delivered chunk. */
 export function lastDeliveryWall(result, startWall) {
+  const exact = Math.max(
+    ...(result.deliveries ?? [])
+      .map((delivery) => delivery.wallTimeMs)
+      .filter(Number.isFinite)
+  );
+  if (Number.isFinite(exact)) return exact;
   const last = Math.max(
     ...(result.deliveries ?? []).map((delivery) => delivery.actualMs)
   );
   return Number.isFinite(last) && Number.isFinite(startWall)
     ? startWall + last
     : null;
+}
+
+/** Only a complete set of app finish receipts gives an exact finish boundary. */
+export function lastFinishWall(result) {
+  if (!Number.isInteger(result.threadCount) || result.threadCount < 1)
+    return null;
+  const finishes = (result.finishes ?? []).filter(
+    (finish) =>
+      Number.isFinite(finish.wallTimeMs) &&
+      Number.isInteger(finish.thread) &&
+      finish.thread >= 0 &&
+      finish.thread < result.threadCount
+  );
+  const threads = new Set(finishes.map((finish) => finish.thread));
+  if (threads.size !== result.threadCount) return null;
+  return Math.max(...finishes.map((finish) => finish.wallTimeMs));
+}
+
+export function shouldKeepTrace(options, item, metrics, failed = false) {
+  return Boolean(
+    options.keepTraces ||
+    options.diagnosticTrace ||
+    failed ||
+    metrics.settleMs > 500 ||
+    metrics.tailWindowCensored ||
+    (item.block === 0 && WORKLOADS[item.workload].repeats == null)
+  );
+}
+
+/** Older saved APKs must not silently ignore newly requested run options. */
+export function appOptionErrors(config, result) {
+  const errors = [];
+  if (config.animated && result.animationEnabled !== true)
+    errors.push('animated profile needs an updated benchmark APK; rebuild it');
+  if (result.settleMs !== config.settleMs)
+    errors.push(
+      'app settle budget differs from the session; rebuild the benchmark APK'
+    );
+  if (
+    (config.finishDelayMs ?? 0) > 0 &&
+    result.finishDelayAppliedMs !== config.finishDelayMs
+  )
+    errors.push(
+      'app ignored the replay finish delay; rebuild the benchmark APK'
+    );
+  if (config.trace && !result.trace?.enabled)
+    errors.push('app did not collect requested diagnostic native tracing');
+  return errors;
 }
 
 /**
@@ -1377,6 +1690,10 @@ export function loadResumeState(output) {
     throw new Error(
       'Resume needs a saved schemaVersion 2 session with its run order'
     );
+  validateFinishDelay(
+    session.finishDelayMs ?? 0,
+    session.input?.mode === 'replay'
+  );
   const savedRuns = readdirSync(join(output, 'runs'))
     .filter((name) => name.endsWith('.json'))
     .map((name) => ({
@@ -1396,6 +1713,13 @@ export function loadResumeState(output) {
     )
       throw new Error(`${name}: saved run does not match the session order`);
     if (record.status === 'ok') {
+      if (
+        (record.config.finishDelayMs ?? 0) !== (session.finishDelayMs ?? 0) ||
+        Boolean(record.config.trace) !== Boolean(session.diagnosticTrace)
+      )
+        throw new Error(
+          `${name}: saved run finish delay or tracing differs from the session`
+        );
       if (completed.has(item.index))
         throw new Error(`${name}: duplicate successful run ${item.index}`);
       completed.add(item.index);
@@ -1437,7 +1761,7 @@ export function archiveFailedRuns(output, savedRuns, item) {
   }
 }
 
-function schedule(candidates, workloads, profiles, repeats, seed) {
+export function schedule(candidates, workloads, profiles, repeats, seed) {
   const random = mulberry32(seed);
   const order = [];
   // A workload with a fixed repeat count skips the warmup block and joins only
@@ -1449,10 +1773,11 @@ function schedule(candidates, workloads, profiles, repeats, seed) {
   };
   for (const profile of profiles) {
     for (let block = -1; block < repeats; block += 1) {
-      const cells = candidates.flatMap((candidate) =>
-        workloads
-          .filter((workload) => inBlock(workload, block))
-          .map((workload) => ({ candidate, workload }))
+      const cells = candidatesForProfile(candidates, profile).flatMap(
+        (candidate) =>
+          workloads
+            .filter((workload) => inBlock(workload, block))
+            .map((workload) => ({ candidate, workload }))
       );
       for (const cell of shuffle(cells, random)) {
         order.push({ ...cell, profile, block, warmup: block < 0 });
@@ -1607,7 +1932,10 @@ async function measureOne(device, host, item, options, workload, ai) {
     workload: item.workload,
     mode: 'stream',
     warmup: item.warmup,
-    syntaxHighlighting: item.profile === 'highlighted',
+    settleMs: options.settleMs,
+    finishDelayMs: options.finishDelayMs ?? 0,
+    trace: Boolean(options.diagnosticTrace),
+    ...profileConfig(item.profile),
     math: WORKLOADS[item.workload].math ?? false,
     ...(ai
       ? { live: { threads: prompts.length } }
@@ -1666,7 +1994,7 @@ async function measureOne(device, host, item, options, workload, ai) {
   await device.shell(`am force-stop ${PACKAGE}`, { allowFailure: true });
   const after = await device.thermal();
 
-  const errors = [...(result.errors ?? [])];
+  const errors = [...(result.errors ?? []), ...appOptionErrors(config, result)];
   if (result.failed) errors.push('app reported failure');
   if (ai) {
     if (state.liveError) errors.push(`live model: ${state.liveError}`);
@@ -1685,16 +2013,21 @@ async function measureOne(device, host, item, options, workload, ai) {
   let metrics = {};
   if (!errors.length) {
     const raw = await queryTrace(tracePath, state.appPid);
+    const startWall = result.startWallTimeMs ?? wall('start');
+    const finishWall = lastFinishWall(result);
     const window = {
-      start: wallToTrace(raw.clockOffsetUs, wall('start')),
+      start: wallToTrace(raw.clockOffsetUs, startWall),
       // Settle counts from the last delivered text, not the later end marker.
       deliveryEnd: wallToTrace(
         raw.clockOffsetUs,
-        lastDeliveryWall(result, wall('start')) ?? wall('delivery-end')
+        lastDeliveryWall(result, startWall) ?? wall('delivery-end')
       ),
+      finishEnd:
+        finishWall == null ? null : wallToTrace(raw.clockOffsetUs, finishWall),
       end: wallToTrace(raw.clockOffsetUs, wall('end')),
     };
     metrics = { ...traceMetrics(raw, window), ...appMetrics(result) };
+    if (result.trace) metrics.nativePhases = nativePhaseSummary(result.trace);
     // Live replies differ in length between runs, so CPU is also given per KiB.
     metrics.textKiB =
       (result.threadSources ?? []).reduce((sum, info) => sum + info.bytes, 0) /
@@ -1710,10 +2043,8 @@ async function measureOne(device, host, item, options, workload, ai) {
     if (metrics.memSamples < 5)
       errors.push('too few memory samples in the window');
   }
-  // Keep one small trace per library and workload; huge runs' traces are large.
-  const keepTrace =
-    options.keepTraces ||
-    (item.block === 0 && WORKLOADS[item.workload].repeats == null);
+  // Keep baseline examples and slow/failed runs, including huge workloads.
+  const keepTrace = shouldKeepTrace(options, item, metrics, errors.length > 0);
   if (!keepTrace) rmSync(tracePath, { force: true });
   const record = {
     config: {
@@ -1734,7 +2065,15 @@ async function measureOne(device, host, item, options, workload, ai) {
       threadCount: result.threadCount,
       sourceInfo: result.sourceInfo,
       revisionCount: result.revisionCount,
+      startWallTimeMs: result.startWallTimeMs,
+      deliveries: result.deliveries,
+      finishes: result.finishes,
+      streamDone: result.streamDone,
+      animationEnabled: result.animationEnabled,
+      settleMs: result.settleMs,
+      finishDelayAppliedMs: result.finishDelayAppliedMs,
     },
+    ...(result.trace && { nativeTrace: result.trace }),
     ...(state.live && { live: state.live }),
     events: state.events.map(({ type, wallTimeMs, appTimeMs, hostMs }) => ({
       type,
@@ -1756,6 +2095,17 @@ async function runSession(options) {
   const resumed = options.resume ? loadResumeState(options.output) : null;
   if (resumed) {
     const { session, completed, pending } = resumed;
+    if (
+      options.finishDelayRequested &&
+      options.finishDelayMs !== (session.finishDelayMs ?? 0)
+    )
+      throw new Error(
+        '--finish-delay-ms cannot change during resume; use a new result directory'
+      );
+    if (options.diagnosticTrace && !session.diagnosticTrace)
+      throw new Error(
+        'Diagnostic tracing cannot be enabled during resume; use a new result directory'
+      );
     options = {
       ...options,
       device: options.device ?? session.device.serial,
@@ -1772,6 +2122,8 @@ async function runSession(options) {
           : null,
       deviceSetup: session.deviceSetup,
       skipBuild: true,
+      finishDelayMs: session.finishDelayMs ?? 0,
+      diagnosticTrace: Boolean(session.diagnosticTrace),
     };
     log(
       `Resuming ${completed.size}/${session.order.length} successful runs; ${pending.length} remaining`
@@ -1859,7 +2211,9 @@ async function runSession(options) {
         },
     repeats: options.repeats,
     seed: options.seed,
-    settleMs: 2000,
+    settleMs: options.settleMs ?? 2000,
+    finishDelayMs: options.finishDelayMs ?? 0,
+    diagnosticTrace: Boolean(options.diagnosticTrace),
     deviceSetup: options.deviceSetup,
     thermal: {
       maxBatteryC: Math.max(
@@ -1872,6 +2226,9 @@ async function runSession(options) {
     builds: [],
   };
   options.thermal = session.thermal;
+  options.settleMs = session.settleMs;
+  options.finishDelayMs = session.finishDelayMs ?? 0;
+  options.diagnosticTrace = Boolean(session.diagnosticTrace);
   const order =
     resumed?.session.order ??
     schedule(
@@ -2332,6 +2689,9 @@ async function main() {
       'max-battery-c': { type: 'string' },
       'cooldown-ms': { type: 'string', default: '3000' },
       'timeout-ms': { type: 'string', default: '600000' },
+      'settle-ms': { type: 'string', default: '2000' },
+      'finish-delay-ms': { type: 'string' },
+      'diagnostic-trace': { type: 'boolean', default: false },
       'keep-traces': { type: 'boolean', default: false },
       'skip-build': { type: 'boolean', default: false },
       'no-device-setup': { type: 'boolean', default: false },
@@ -2356,16 +2716,33 @@ async function main() {
       : undefined,
     cooldownMs: Number(values['cooldown-ms']),
     timeoutMs: Number(values['timeout-ms']),
+    settleMs: Number(values['settle-ms']),
+    finishDelayMs: Number(values['finish-delay-ms'] ?? 0),
+    finishDelayRequested: values['finish-delay-ms'] != null,
+    diagnosticTrace: values['diagnostic-trace'],
     keepTraces: values['keep-traces'],
     skipBuild: values['skip-build'] || command === 'run',
     deviceSetup: !values['no-device-setup'],
     publish: !values['no-publish'],
   };
   for (const profile of options.profiles) {
-    if (!['highlighted', 'plain'].includes(profile))
-      throw new Error(`Unknown profile ${profile}`);
+    profileConfig(profile);
+    if (!candidatesForProfile(options.candidates, profile).length)
+      throw new Error(
+        `${profile}: no selected candidates support streaming animations`
+      );
   }
   if (!(options.repeats >= 2)) throw new Error('--repeats must be at least 2');
+  if (!Number.isFinite(options.settleMs) || options.settleMs <= 0)
+    throw new Error('--settle-ms must be a positive finite number');
+  if (command !== 'resume')
+    validateFinishDelay(options.finishDelayMs, options.replay);
+  if (
+    command !== 'resume' &&
+    options.diagnosticTrace &&
+    options.candidates.some((candidate) => !candidate.startsWith('downstream-'))
+  )
+    throw new Error('--diagnostic-trace requires Downstream-only --candidates');
 
   switch (command) {
     case 'capture':

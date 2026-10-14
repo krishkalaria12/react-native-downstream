@@ -34,6 +34,7 @@ import {
   phoneWorkloads,
 } from './phoneWorkloads';
 import type { PhoneChunk, PhoneWorkload } from './phoneWorkloads';
+import { replayFinishes } from './replayFinish';
 
 const mathOptions = { singleDollarTextMath: true };
 
@@ -154,6 +155,9 @@ interface RunConfig {
   trace?: boolean;
   diagnostic?: boolean;
   syntaxHighlighting?: boolean;
+  animated?: boolean;
+  settleMs?: number;
+  finishDelayMs?: number;
   math?: boolean;
   endpoint?: string;
   source?: string;
@@ -180,6 +184,7 @@ interface RunSamples {
     /** Scheduled time in replay runs; live deltas have no schedule. */
     dueMs: number | null;
     actualMs: number;
+    wallTimeMs: number;
     latenessMs: number | null;
     codepoints: number;
     thread: number;
@@ -188,11 +193,15 @@ interface RunSamples {
   commits: { revision: number; atMs: number }[];
   errors: string[];
   startAt: number;
+  startWallTimeMs: number;
+  finishes: { thread: number; actualMs: number; wallTimeMs: number }[];
+  streamDone: { actualMs: number; wallTimeMs: number } | null;
   deliveryDurationMs: number;
 }
 interface TraceSamples {
   enabled: true;
   sessionId: string;
+  sessions: { sessionId: string; thread: number }[];
   eventLimit: number;
   droppedEvents: number;
   intervalComplete: boolean;
@@ -337,7 +346,7 @@ function Candidate({
           }
           markdownStyle={markdownStyle}
           theme={downstreamTheme}
-          animated={false}
+          animated={config.animated ?? false}
           syntaxHighlighting={syntaxHighlighting}
           lineNumbers={false}
           codeBlockMaxHeight={0}
@@ -354,7 +363,7 @@ function Candidate({
           markdown={source}
           flavor="github"
           markdownStyle={markdownStyle}
-          streamingAnimation={false}
+          streamingAnimation={config.animated ?? false}
           selectable={false}
           allowFontScaling={false}
           md4cFlags={{ latexMath: config.math ?? false }}
@@ -367,7 +376,7 @@ function Candidate({
           markdown={source}
           flavor="github"
           markdownStyle={markdownStyle}
-          streamingAnimation={false}
+          streamingAnimation={config.animated ?? false}
           selectable={false}
           allowFontScaling={false}
           md4cFlags={{ latexMath: config.math ?? false }}
@@ -416,6 +425,9 @@ export default function PhoneBenchmark() {
     commits: [],
     errors: [],
     startAt: 0,
+    startWallTimeMs: 0,
+    finishes: [],
+    streamDone: null,
     deliveryDurationMs: 0,
   });
   const stopTraceOnError = useRef<(() => void) | null>(null);
@@ -444,19 +456,26 @@ export default function PhoneBenchmark() {
       });
     let activeConfig: RunConfig | null = null;
     let trace: TraceSamples | undefined;
+    let traceWriteIndex = 0;
     let unsubscribeTrace: (() => void) | undefined;
     const stopTrace = (intervalComplete: boolean) => {
       if (!unsubscribeTrace) return;
       if (trace) trace.intervalComplete = intervalComplete;
-      try {
-        if (controllers.current[0])
-          setStreamTracing(controllers.current[0], false);
-      } catch (error) {
-        if (trace) trace.intervalComplete = false;
-        samples.current.errors.push(`Trace cleanup: ${String(error)}`);
-      } finally {
-        unsubscribeTrace();
-        unsubscribeTrace = undefined;
+      for (const controller of controllers.current) {
+        try {
+          setStreamTracing(controller, false);
+        } catch (error) {
+          if (trace) trace.intervalComplete = false;
+          samples.current.errors.push(`Trace cleanup: ${String(error)}`);
+        }
+      }
+      unsubscribeTrace();
+      unsubscribeTrace = undefined;
+      if (trace && trace.droppedEvents > 0) {
+        trace.events = [
+          ...trace.events.slice(traceWriteIndex),
+          ...trace.events.slice(0, traceWriteIndex),
+        ];
       }
     };
     const reportError = (error: unknown) => {
@@ -481,6 +500,31 @@ export default function PhoneBenchmark() {
       }
       if (disposed || !activeConfig) return;
       const run = activeConfig;
+      const finishDelayMs = run.finishDelayMs ?? 0;
+      if (
+        !Number.isFinite(finishDelayMs) ||
+        finishDelayMs < 0 ||
+        finishDelayMs > 2147483647 ||
+        (run.live && finishDelayMs > 0)
+      ) {
+        throw new Error(
+          'Finish delay must be a valid replay-only nonnegative timer duration'
+        );
+      }
+      const settleMs = run.settleMs ?? SETTLE_MS;
+      if (!Number.isFinite(settleMs) || settleMs <= 0) {
+        throw new Error('Settle budget must be a positive finite number');
+      }
+      if (
+        run.animated &&
+        !run.candidate.startsWith('downstream-') &&
+        run.candidate !== 'streamdown' &&
+        run.candidate !== 'enriched'
+      ) {
+        throw new Error(
+          `Streaming animations are unsupported for ${run.candidate}`
+        );
+      }
       const endpoint = run.endpoint ?? HOST;
       const workload = run.live ? null : await getWorkload(run);
       if (disposed) return;
@@ -491,9 +535,6 @@ export default function PhoneBenchmark() {
           Math.max(0, ...workload!.chunks.map((chunk) => chunk.thread ?? 0));
       if (run.trace && !run.candidate.startsWith('downstream-')) {
         throw new Error('Diagnostic tracing requires a Downstream candidate');
-      }
-      if (run.trace && threadCount > 1) {
-        throw new Error('Diagnostic tracing supports one stream');
       }
       if (run.candidate.startsWith('downstream-')) {
         const options = {
@@ -509,10 +550,17 @@ export default function PhoneBenchmark() {
               )
         );
         if (run.trace) {
-          const sessionId = getStreamState(controllers.current[0]!).sessionId;
+          const sessions = controllers.current.map((controller, thread) => ({
+            sessionId: getStreamState(controller).sessionId,
+            thread,
+          }));
+          const sessionIds = new Set(
+            sessions.map((session) => session.sessionId)
+          );
           const collection: TraceSamples = {
             enabled: true,
-            sessionId,
+            sessionId: sessions[0]!.sessionId,
+            sessions,
             eventLimit: TRACE_EVENT_LIMIT,
             droppedEvents: 0,
             intervalComplete: false,
@@ -521,12 +569,19 @@ export default function PhoneBenchmark() {
           trace = collection;
           // Trace delivery stays in memory; one result POST occurs after the interval.
           unsubscribeTrace = subscribeStreamTrace((entry) => {
-            if (entry.sessionId !== sessionId) return;
+            if (!sessionIds.has(entry.sessionId)) return;
             if (collection.events.length < collection.eventLimit)
               collection.events.push(entry);
-            else collection.droppedEvents += 1;
+            else {
+              // Keep the tail of huge runs, with explicit truncation metadata.
+              collection.events[traceWriteIndex] = entry;
+              traceWriteIndex = (traceWriteIndex + 1) % collection.eventLimit;
+              collection.droppedEvents += 1;
+            }
           });
-          setStreamTracing(controllers.current[0]!, true);
+          controllers.current.forEach((controller) =>
+            setStreamTracing(controller, true)
+          );
         }
       }
       setSnapshot({
@@ -564,6 +619,7 @@ export default function PhoneBenchmark() {
       };
       const beginMeasuring = () => {
         data.startAt = now();
+        data.startWallTimeMs = Date.now();
         previousFrame = data.startAt;
         measuring = true;
         frame = requestAnimationFrame(observeFrame);
@@ -573,6 +629,7 @@ export default function PhoneBenchmark() {
       let revision = 0;
       const deliver = (thread: number, text: string, dueMs: number | null) => {
         const actualMs = now() - data.startAt;
+        const wallTimeMs = Date.now();
         source += text;
         sources[thread] += text;
         revision += 1;
@@ -580,6 +637,7 @@ export default function PhoneBenchmark() {
           revision,
           dueMs,
           actualMs,
+          wallTimeMs,
           latenessMs: dueMs == null ? null : actualMs - dueMs,
           codepoints: Array.from(text).length,
           thread,
@@ -587,6 +645,12 @@ export default function PhoneBenchmark() {
         controllers.current[thread]?.append(text);
       };
       const finishThread = (thread: number) => {
+        if (disposed) return;
+        data.finishes.push({
+          thread,
+          actualMs: now() - data.startAt,
+          wallTimeMs: Date.now(),
+        });
         controllers.current[thread]?.finish();
       };
 
@@ -616,6 +680,10 @@ export default function PhoneBenchmark() {
             if ('error' in message)
               throw new Error(`Live model: ${message.error}`);
             if ('done' in message) {
+              data.streamDone = {
+                actualMs: now() - data.startAt,
+                wallTimeMs: Date.now(),
+              };
               done = true;
               break;
             }
@@ -637,6 +705,7 @@ export default function PhoneBenchmark() {
         if (!measuring) throw new Error('Live stream delivered no text');
       } else {
         const chunks = workload!.chunks;
+        const finishes = replayFinishes(finishDelayMs, delay, finishThread);
         const lastChunk = new Map<number, number>();
         chunks.forEach((chunk, index) =>
           lastChunk.set(chunk.thread ?? 0, index)
@@ -650,7 +719,7 @@ export default function PhoneBenchmark() {
           if (wait > 0) await delay(wait);
           if (disposed) return;
           deliver(thread, chunk.text, chunk.dueMs);
-          if (lastChunk.get(thread) === index) finishThread(thread);
+          if (lastChunk.get(thread) === index) finishes.schedule(thread);
           setSnapshot({
             sources: [...sources],
             revision,
@@ -658,14 +727,22 @@ export default function PhoneBenchmark() {
           });
         }
         if (chunks.length === 0) {
-          controllers.current.forEach((controller) => controller.finish());
+          for (let thread = 0; thread < threadCount; thread += 1) {
+            finishes.schedule(thread);
+          }
           setSnapshot({ sources, revision: 0, finished: true });
         }
+        await finishes.done();
+        if (disposed) return;
+        data.streamDone = {
+          actualMs: now() - data.startAt,
+          wallTimeMs: Date.now(),
+        };
       }
       data.deliveryDurationMs = now() - data.startAt;
       // All renderers get the same settle budget; native readiness is not a speed metric.
       void event('delivery-end').catch(reportError);
-      await delay(SETTLE_MS);
+      await delay(settleMs);
       const totalDurationMs = now() - data.startAt;
       measuring = false;
       cancelAnimationFrame(frame);
@@ -678,6 +755,8 @@ export default function PhoneBenchmark() {
         diagnostic: Boolean(run.trace || run.diagnostic),
         ...(trace && { trace }),
         syntaxHighlighting: run.syntaxHighlighting ?? false,
+        animationEnabled: run.animated ?? false,
+        finishDelayAppliedMs: finishDelayMs,
         source,
         sourceInfo: phoneSourceInfo(source),
         sourceEqualsFixture: workload ? source === workload.source : null,
@@ -690,8 +769,11 @@ export default function PhoneBenchmark() {
         revisionCount: revision,
         expectedDurationMs: workload?.chunks.at(-1)?.dueMs ?? null,
         deliveryDurationMs: data.deliveryDurationMs,
+        startWallTimeMs: data.startWallTimeMs,
+        finishes: data.finishes,
+        streamDone: data.streamDone,
         totalDurationMs,
-        settleMs: SETTLE_MS,
+        settleMs,
         deliveries: data.deliveries,
         rafSamples: data.rafSamples,
         commits: data.commits,
