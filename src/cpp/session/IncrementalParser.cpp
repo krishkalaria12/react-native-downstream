@@ -805,8 +805,9 @@ bool IncrementalParser::commitRegion(size_t boundary) {
       committedCount() + parsed.document->blocks.size() <= kMaxCommittedBlocks;
   if (closed && !parsed.document->blocks.empty()) {
     const BlockKind kind = parsed.document->blocks.back().kind;
-    // Open fences and some HTML blocks run to the end of input.
-    if (kind == BlockKind::CodeBlock || kind == BlockKind::HtmlBlock) {
+    // Open fences and some HTML blocks run to the end of input. A `$$` line
+    // opens a formula as well as closing one, so a math block is probed too.
+    if (kind == BlockKind::CodeBlock || kind == BlockKind::HtmlBlock || kind == BlockKind::MathBlock) {
       std::string probe(region);
       probe += "x\n";
       counters_.bytesParsed += probe.size();
