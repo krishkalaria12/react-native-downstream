@@ -467,7 +467,10 @@ class DownstreamMarkdownViewManager :
     val layoutWidth = if (widthMode == YogaMeasureMode.UNDEFINED || !width.isFinite()) {
       rendered.desiredWidth(code, images)
     } else {
-      width.toInt()
+      // Rounded, as Fabric rounds the frame it mounts the view at: truncated, the
+      // measurement laid text out a pixel narrower than the view then drew it,
+      // which is every layout made twice and a height that can disagree.
+      Math.round(width)
     }
     return YogaMeasureOutput.make(
       PixelUtil.toDIPFromPixel(layoutWidth.toFloat()),

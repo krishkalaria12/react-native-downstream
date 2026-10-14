@@ -175,6 +175,8 @@ internal class RenderedDocument(val id: Long, val segments: List<Segment>, val p
     private val cache = RenderingCache<String, RenderedDocument>(128, 1024) { 1 }
     private val committedSegments = RenderingCache<String, Segment>(128, 1024) { 1 }
     private fun segmentCost(segment: Segment): Long = if (segment is TextSegment) segment.text.length * 24L + 256 else 512
+    /* PRODUCTION_COMMITTED_LANES */
+    /* PRODUCTION_STREAM_LANES */
     private fun buildSegment(document: NativeDocument, images: NativeImages, style: Style, planned: PlannedSegment,
       ordinal: Int, tableOrdinal: Int, highlights: Boolean, bottom: Float, caret: PlacedCaret,
       variants: LinkVariants, urls: List<String>, traceId: Long, incrementalParagraphs: Boolean = false): Segment {
@@ -214,6 +216,8 @@ internal class RenderedDocument(val id: Long, val segments: List<Segment>, val p
     /* PRODUCTION_PARAGRAPH_KEY */
     /* PRODUCTION_STREAM_ELIGIBILITY */
     private val streamingParagraphs = StreamingParagraphSeeds<StreamingParagraphLayout>(16, 2L * 1024 * 1024)
+    var chunkedText = false
+    private fun chunkedTextEligible(planned: PlannedSegment, details: List<Any>, text: CharSequence) = chunkedText
     fun layoutPolicy(document: NativeDocument, style: Style, planned: PlannedSegment,
                      caret: PlacedCaret = PlacedCaret.NONE, incrementalParagraphs: Boolean = true): Pair<Boolean, Any> {
       val paint = style.paint
@@ -222,6 +226,7 @@ internal class RenderedDocument(val id: Long, val segments: List<Segment>, val p
       val text = document.text
       val traceId = 0L
       val isCode = false
+      val detailsBlocks = emptyList<Any>()
       fun px(dp: Float) = style.px(dp)
       /* PRODUCTION_STREAM_PREPARE */
       return Pair(streamingParagraph != null, displayText)
@@ -241,22 +246,33 @@ private object View { const val GONE = 8; const val VISIBLE = 0 }
 private class Visibility { var visibility = View.VISIBLE }
 private class CardBackground { fun setColor(color: Int) {} }
 private class CodeColors { val codeBlockBackground = 1 }
-private class HostedCodeSegment(val source: String) {
+private class BodyFrame(val text: String) { val layout = Any(); val contentWidth = 1 }
+private class HostedCodeSegment(val source: String, val chunked: Boolean = false) {
   var preparations = 0
   val text by lazy { preparations++; source }
   val accessibleBlocks = emptyList<String>()
   val colors = CodeColors()
+  val contentLeading = 0
+  fun gutterWidth(layout: CodeBlockLayout) = 0
+  fun bodyFrame(cardWidth: Int, wrapped: Boolean, gutterWidth: Int) = if (chunked) BodyFrame(source) else null
 }
+private class CodeBlockLayout(val wraps: Boolean = false)
 private class Body {
   var bindings = 0
+  var preparedBindings = 0
   var shown = ""
   fun clearContent() { shown = "" }
   fun setContent(text: String, accessibleBlocks: List<String>, rendered: RenderedDocument) {
     bindings++; shown = text
   }
+  fun setPreparedContent(text: String, accessibleBlocks: List<String>, rendered: RenderedDocument, layout: Any, contentWidth: Int) {
+    preparedBindings++; shown = text
+  }
 }
 private class HostedCode(val rendered: RenderedDocument) {
   private var hosted = false
+  var layout: CodeBlockLayout? = CodeBlockLayout()
+  val width = 100
   var segment: HostedCodeSegment? = null
   private var boundSegment: HostedCodeSegment? = null
   val body = Body()
@@ -269,6 +285,7 @@ private class HostedCode(val rendered: RenderedDocument) {
   fun update(next: HostedCodeSegment) { segment = next; if (!hosted) bindFallback() }
   /* PRODUCTION_HOSTED */
   /* PRODUCTION_BIND_FALLBACK */
+  /* PRODUCTION_BIND_BODY */
 }
 fun main() {
   RenderedDocument.checkParagraphLaneRetention()
@@ -307,6 +324,33 @@ fun main() {
   check(RenderedDocument.obtain(context, 4, 1f, true)!!.segments[0] !== provisional.segments[0])
   DownstreamNative.plans[5] = listOf(PlannedSegment(0, 2, 0, 31, lastIdentity = 32))
   check(RenderedDocument.obtain(context, 5, 1f, true)!!.segments[0] === provisional.segments[0])
+  // A committed chunk that grows by a block drops its smaller version, so a
+  // reply's finished text is held once rather than once per size it passed.
+  DownstreamNative.plans[6] = listOf(PlannedSegment(0, 1, 0, 41, lastIdentity = 41))
+  val oneBlock = RenderedDocument.obtain(context, 6, 1f, true)!!.segments[0]
+  DownstreamNative.plans[7] = listOf(PlannedSegment(0, 2, 0, 41, lastIdentity = 42))
+  val twoBlocks = RenderedDocument.obtain(context, 7, 1f, true)!!.segments[0]
+  check(twoBlocks !== oneBlock)
+  DownstreamNative.plans[8] = listOf(PlannedSegment(0, 2, 0, 41, lastIdentity = 42))
+  check(RenderedDocument.obtain(context, 8, 1f, true)!!.segments[0] === twoBlocks)
+  DownstreamNative.plans[9] = listOf(PlannedSegment(0, 1, 0, 41, lastIdentity = 41))
+  check(RenderedDocument.obtain(context, 9, 1f, true)!!.segments[0] !== oneBlock) { "a grown chunk kept its smaller version" }
+  println("production committed lanes: a grown chunk reuses its latest size and drops the smaller one; same-size replacements both stay")
+  // A stream's later snapshot retires the renderings of its earlier ones, which
+  // Fabric measured but will never mount; an earlier one arriving late retires
+  // nothing, and another stream is untouched.
+  DownstreamNative.plans[30] = listOf(PlannedSegment(0, 1, 0, 61), PlannedSegment(1, 2, 0, 0, false))
+  DownstreamNative.plans[31] = listOf(PlannedSegment(0, 1, 0, 61), PlannedSegment(1, 2, 0, 0, false))
+  DownstreamNative.plans[32] = listOf(PlannedSegment(0, 1, 0, 71), PlannedSegment(1, 2, 0, 0, false))
+  val earlier = RenderedDocument.obtain(context, 30, 1f, true)!!
+  val other = RenderedDocument.obtain(context, 32, 1f, true)!!
+  val later = RenderedDocument.obtain(context, 31, 1f, true)!!
+  check(RenderedDocument.obtain(context, 31, 1f, true) === later)
+  check(RenderedDocument.obtain(context, 32, 1f, true) === other) { "another stream's rendering was retired" }
+  val rebuilt = RenderedDocument.obtain(context, 30, 1f, true)!!
+  check(rebuilt !== earlier) { "a superseded snapshot's rendering stayed cached" }
+  check(RenderedDocument.obtain(context, 31, 1f, true) === later) { "a late earlier snapshot retired the newer one" }
+  println("production stream lanes: a later snapshot retires earlier renderings; late arrivals and other streams keep theirs")
   val mixedLivePlan = listOf(
     PlannedSegment(0, 1, SEGMENT_TEXT, 0, false, 0),
     PlannedSegment(1, 2, SEGMENT_CODE, 0, false, 0),
@@ -444,6 +488,21 @@ fun main() {
   check(card.body.bindings == 2 && versions.last().preparations == 1)
   println("production hosted fallback: 100 revisions, 0 bindings/preparations; unmount binds latest content immediately")
 
+  // A chunked body binds its prepared layout and never shapes the canonical text,
+  // hosted or not; a card that has not learned its layout yet binds nothing.
+  val chunkedCard = HostedCode(prepared)
+  val chunkedVersions = List(100) { HostedCodeSegment("code".repeat(it + 1), chunked = true) }
+  chunkedVersions.forEach { chunkedCard.update(it) }
+  check(chunkedCard.body.preparedBindings == 100 && chunkedCard.body.bindings == 0)
+  check(chunkedCard.body.shown == chunkedVersions.last().source && chunkedVersions.all { it.preparations == 0 })
+  chunkedCard.setHosted(true)
+  chunkedCard.setHosted(false)
+  check(chunkedCard.body.preparedBindings == 101 && chunkedVersions.all { it.preparations == 0 })
+  val newCard = HostedCode(prepared).apply { layout = null }
+  newCard.update(HostedCodeSegment("late", chunked = true))
+  check(newCard.body.preparedBindings == 0 && newCard.body.bindings == 0)
+  println("production chunked code: 100 revisions bind prepared layouts, 0 canonical preparations; unlaid cards wait for layout")
+
   check(NativeDocument().isPlainParagraph())
   for (document in listOf(
     NativeDocument(kind = 1), NativeDocument(blockCount = 2), NativeDocument(contained = 1),
@@ -466,6 +525,14 @@ fun main() {
   check(!RenderedDocument.layoutPolicy(liveDocument, policyStyle, livePlan.copy(isCommitted = true)).first)
   check(!RenderedDocument.layoutPolicy(liveDocument, policyStyle, livePlan.copy(to = 2)).first)
   check(!RenderedDocument.layoutPolicy(liveDocument, policyStyle, livePlan, PlacedCaret(1)).first)
+  // Chunked text shows its own text, so nothing precomputes the whole segment.
+  RenderedDocument.chunkedText = true
+  PrecomputedTexts.creates = 0
+  val chunked = RenderedDocument.layoutPolicy(liveDocument, policyStyle, livePlan.copy(settledBlocks = 1))
+  check(!chunked.first && chunked.second === liveDocument.text && PrecomputedTexts.creates == 0)
+  // The opt-in live paragraph still takes precedence.
+  check(RenderedDocument.layoutPolicy(liveDocument, policyStyle, livePlan).first)
+  RenderedDocument.chunkedText = false
   for (document in listOf(
     NativeDocument(text = "emoji \uD83D\uDE42"), NativeDocument(text = "Arabic مرحبا"),
     NativeDocument(text = "two\nlines"), NativeDocument(text = "tab\tstop"), NativeDocument(text = ""),
@@ -564,6 +631,42 @@ fun main() {
   repeat(20) { charged.put(it.toLong(), largeFinal) }
   check(charged.get(0) == null && charged.get(19) === largeFinal)
   println("production finish retention: newly committed shared tail remains charged; 8 MiB cache evicts repeated aliases")
+
+  // A final alias still advances the stream's retirement lane. Its new wrapper
+  // must stay cached while the parent wrapper releases its growing tail.
+  DownstreamNative.plans[9400] = listOf(
+    PlannedSegment(0, 1, SEGMENT_TEXT, 94000),
+    PlannedSegment(1, 2, SEGMENT_TEXT, 0, false, 1),
+  )
+  DownstreamNative.plans[9401] = DownstreamNative.plans[9400]!!.map { it.copy(settledBlocks = 2) }
+  DownstreamNative.reuseFrom[9401] = 9400
+  val parentRendering = RenderedDocument.obtain(context, 9400, 1f)!!
+  val aliasReads = DownstreamNative.reads
+  val retiredAlias = RenderedDocument.obtain(context, 9401, 1f)!!
+  check(retiredAlias.segments === parentRendering.segments && DownstreamNative.reads == aliasReads)
+  check(RenderedDocument.obtain(context, 9400, 1f) !== parentRendering) {
+    "a final alias kept its superseded parent cached"
+  }
+  check(RenderedDocument.obtain(context, 9401, 1f) === retiredAlias) {
+    "rebuilding an earlier parent retired the final alias"
+  }
+  println("production finish retirement: alias insertion retires parent; late parent rebuild preserves final wrapper")
+
+  // Committed payloads also depend on absolute placement and native ordinals.
+  // A lane can discard a smaller chunk only under the same rendering settings.
+  val placed = PlannedSegment(0, 2, SEGMENT_TEXT, 95000, lastIdentity = 95001)
+  DownstreamNative.plans[9500] = listOf(placed)
+  val placedSegment = RenderedDocument.obtain(context, 9500, 1f)!!.segments.single()
+  for ((index, changed) in listOf(
+    placed.copy(from = 1, to = 3), placed.copy(kind = 4),
+    placed.copy(tableOrdinal = 2), placed.copy(imageOrdinal = 3),
+    placed.copy(codeOrdinal = 4),
+  ).withIndex()) {
+    val id = 9501L + index
+    DownstreamNative.plans[id] = listOf(changed)
+    check(RenderedDocument.obtain(context, id, 1f)!!.segments.single() !== placedSegment)
+  }
+  println("production committed keys: absolute range, kind and code/table/image ordinals reject incompatible payloads")
 
   check(DownstreamNative.traceEvents.isEmpty()) { "disabled tracing must emit no events" }
   DownstreamNative.tracedId = 9100

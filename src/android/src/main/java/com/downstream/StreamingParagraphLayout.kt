@@ -1,7 +1,5 @@
 package com.downstream
 
-import android.graphics.Canvas
-import android.graphics.Path
 import android.os.Build
 import android.text.Layout
 import android.text.StaticLayout
@@ -20,7 +18,7 @@ internal class StreamingParagraphLayout(
   paint: TextPaint,
   previous: StreamingParagraphLayout? = null,
   private val lineHeight: Int = 0,
-) {
+) : LiveTextLayout {
   private val paint = TextPaint(paint)
   private val metrics = ParagraphMetrics(paint)
   private val supported = text.isNotEmpty() && text.all { it in ' '..'~' }
@@ -34,7 +32,7 @@ internal class StreamingParagraphLayout(
 
   /** Widths are exact; null asks the caller to use canonical full layout. */
   @Synchronized
-  fun frame(width: Int): StreamingParagraphFrame? {
+  override fun frame(width: Int): StreamingParagraphFrame? {
     val actualWidth = width.coerceAtLeast(1)
     if (frames.containsKey(actualWidth)) return frames[actualWidth]
     val seed = seeds.firstOrNull { it.layout.width == actualWidth }
@@ -92,7 +90,7 @@ internal class StreamingParagraphLayout(
 }
 
 /** Every property used by shaping; colors also reset the immutable paint. */
-private data class ParagraphMetrics(
+internal data class ParagraphMetrics(
   val size: Float, val scale: Float, val skew: Float, val spacing: Float,
   val flags: Int, val face: android.graphics.Typeface?, val features: String?,
   val locales: android.os.LocaleList, val density: Float, val color: Int,
@@ -133,140 +131,11 @@ internal class StreamingParagraphFrame(
   internal val suffix: StaticLayout,
   internal val suffixStart: Int,
   val shapedCharacters: Int,
-) {
+) : LiveTextFrame {
   val reusedLines: Int = groups.sumOf { it.lines }
-  val layout: Layout = ParagraphCompositeLayout(source, paint, width, groups, suffix, suffixStart)
-  val height: Int get() = layout.height
-}
-
-/**
- * Global offsets and line geometry for reveal and accessibility. Platform
- * TextView never receives this live text, so it cannot shape the full paragraph
- * again during assignment or measurement.
- */
-private class ParagraphCompositeLayout(
-  source: String,
-  paint: TextPaint,
-  width: Int,
-  groups: List<ParagraphGroup>,
-  suffix: StaticLayout,
-  suffixStart: Int,
-) : Layout(source, TextPaint(paint), width, Alignment.ALIGN_NORMAL, 1f, 0f) {
-  private class Part(val layout: StaticLayout, val start: Int, val lines: Int, val firstLine: Int, val top: Int)
-  private val parts: List<Part>
-  private val lines: Int
-  private val totalHeight: Int
-
-  init {
-    var line = 0
-    var top = 0
-    parts = buildList {
-      for (group in groups) {
-        add(Part(group.layout, group.start, group.lines, line, top))
-        line += group.lines
-        top += group.height
-      }
-      add(Part(suffix, suffixStart, suffix.lineCount, line, top))
-    }
-    lines = line + suffix.lineCount
-    totalHeight = top + suffix.height
-  }
-
-  private fun partIndexForLine(line: Int): Int {
-    var low = 0
-    var high = parts.lastIndex
-    while (low < high) {
-      val mid = (low + high + 1) ushr 1
-      if (parts[mid].firstLine <= line) low = mid else high = mid - 1
-    }
-    return low
-  }
-
-  private fun partForLine(line: Int): Part = parts[partIndexForLine(line)]
-
-  override fun getLineCount(): Int = lines
-  override fun getHeight(): Int = totalHeight
-  override fun getLineTop(line: Int): Int {
-    if (line == lines) return totalHeight
-    val part = partForLine(line)
-    return part.top + part.layout.getLineTop(line - part.firstLine)
-  }
-  override fun getLineStart(line: Int): Int {
-    if (line == lines) return text.length
-    val part = partForLine(line)
-    return part.start + part.layout.getLineStart(line - part.firstLine)
-  }
-  override fun getLineDescent(line: Int): Int {
-    val part = partForLine(line)
-    return part.layout.getLineDescent(line - part.firstLine)
-  }
-  override fun getParagraphDirection(line: Int): Int = DIR_LEFT_TO_RIGHT
-  override fun getLineContainsTab(line: Int): Boolean = false
-  override fun getLineDirections(line: Int): Directions {
-    val part = partForLine(line)
-    return part.layout.getLineDirections(line - part.firstLine)
-  }
-  override fun getTopPadding(): Int = 0
-  override fun getBottomPadding(): Int = 0
-  override fun getEllipsisStart(line: Int): Int = 0
-  override fun getEllipsisCount(line: Int): Int = 0
-  override fun getLineLeft(line: Int): Float {
-    val part = partForLine(line)
-    return part.layout.getLineLeft(line - part.firstLine)
-  }
-  override fun getLineRight(line: Int): Float {
-    val part = partForLine(line)
-    return part.layout.getLineRight(line - part.firstLine)
-  }
-  override fun getLineWidth(line: Int): Float {
-    val part = partForLine(line)
-    return part.layout.getLineWidth(line - part.firstLine)
-  }
-  override fun getLineMax(line: Int): Float {
-    val part = partForLine(line)
-    return part.layout.getLineMax(line - part.firstLine)
-  }
-  override fun getPrimaryHorizontal(offset: Int): Float {
-    val part = partForLine(getLineForOffset(offset.coerceIn(0, text.length)))
-    return part.layout.getPrimaryHorizontal((offset - part.start).coerceIn(0, part.layout.text.length))
-  }
-  override fun getSecondaryHorizontal(offset: Int): Float = getPrimaryHorizontal(offset)
-  override fun getOffsetForHorizontal(line: Int, horizontal: Float): Int {
-    val part = partForLine(line)
-    return part.start + part.layout.getOffsetForHorizontal(line - part.firstLine, horizontal)
-  }
-  override fun getSelectionPath(start: Int, end: Int, destination: Path) {
-    destination.rewind()
-    if (start >= end) return
-    val scratch = Path()
-    var index = partIndexForLine(getLineForOffset(start))
-    while (index < parts.size) {
-      val part = parts[index++]
-      if (part.start >= end) break
-      val partEnd = part.start + part.layout.getLineStart(part.lines)
-      val from = maxOf(start, part.start) - part.start
-      val to = minOf(end, partEnd) - part.start
-      if (from < to) {
-        part.layout.getSelectionPath(from, to, scratch)
-        scratch.offset(0f, part.top.toFloat())
-        destination.addPath(scratch)
-      }
-    }
-  }
-  override fun draw(canvas: Canvas) {
-    val clip = android.graphics.Rect()
-    canvas.getClipBounds(clip)
-    var index = partIndexForLine(getLineForVertical(clip.top.coerceAtLeast(0)))
-    while (index < parts.size) {
-      val part = parts[index++]
-      if (part.top >= clip.bottom) break
-      val bottom = part.top + part.layout.getLineTop(part.lines)
-      if (bottom <= clip.top) continue
-      val saved = canvas.save()
-      canvas.clipRect(0, part.top, width, bottom)
-      canvas.translate(0f, part.top.toFloat())
-      part.layout.draw(canvas)
-      canvas.restoreToCount(saved)
-    }
-  }
+  override val layout: Layout = CompositeLayout(
+    source, paint, width,
+    groups.map { LayoutPart(it.layout, it.start, it.lines) } + LayoutPart(suffix, suffixStart, suffix.lineCount),
+  )
+  override val height: Int get() = layout.height
 }

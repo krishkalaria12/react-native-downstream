@@ -871,8 +871,15 @@ static CGFloat buildContainers(const Block &block, const Block *previous, const 
     NSMutableArray<DSContainerInfo *> *containers = [NSMutableArray new];
     NSMutableArray<NSString *> *spoken = [NSMutableArray new];
     bool inQuote = false;
-    const CGFloat leading =
+    CGFloat leading =
         buildContainers(block, previous, theme, colors, scale, markerFont, markerColor, containers, spoken, &inQuote);
+    if (isCode && inCard) {
+      // A code card draws its containers' bars and marker in its own margin,
+      // beside the body, so the body's text carries neither the decoration nor
+      // the indent: drawn here too, a list item's number appeared twice.
+      [containers removeAllObjects];
+      leading = 0;
+    }
     info.containers = containers;
     info.contentLeading = leading;
     info.accessibilityPrefix = spoken.count > 0 ? [spoken componentsJoinedByString:@", "] : nil;
@@ -1998,12 +2005,13 @@ static NSString *committedVariantsKey(DSLinkVariants *variants) {
   // and a paragraph and the two are not interchangeable.
   // A final matching prefix can reach the last block, so its caret reservation
   // must also distinguish immutable payloads with different measured text.
-  NSString *key =
-      [NSString stringWithFormat:@"%llu:%zu:%zu:%llu:%.4f:%d:%d:%d:%d:%@:%@", (unsigned long long)document.blocks[from].identity,
-                                 from,
-                                 to - from, (unsigned long long)theme.id(), scale, syntaxHighlighting,
+  // Growing segments share a lane so their superseded payloads can retire.
+  NSString *lane =
+      [NSString stringWithFormat:@"%llu:%zu:%llu:%.4f:%d:%d:%d:%d:%@:%@", (unsigned long long)document.blocks[from].identity,
+                                 from, (unsigned long long)theme.id(), scale, syntaxHighlighting,
                                  static_cast<int>(kind), static_cast<int>(caretAfter.kind),
                                  static_cast<int>(caretAfter.place), committedVariantsKey(variants), tagStylesKey(tagStyles)];
+  NSString *key = [NSString stringWithFormat:@"%zu:%@", to - from, lane];
   DSCommittedSegment *cached = [self.committedSegmentCache objectForKey:key];
   bool matches = cached != nil && cached->identities.size() == to - from;
   for (size_t index = from; matches && index < to; index++) {
@@ -2074,7 +2082,43 @@ static NSString *committedVariantsKey(DSLinkVariants *variants) {
       break;
   }
   [self.committedSegmentCache setObject:cached forKey:key cost:cost];
+  [self noteCommittedKey:key lane:lane blocks:to - from];
   return cached->segment;
+}
+
+/// Drops a committed chunk's smaller versions as it grows.
+///
+/// Finished blocks join a committed chunk one at a time until it is full, and
+/// each size is a new segment with its own text and measurements, so kept until
+/// the budget evicted them a reply held its finished text about eight times over.
+/// A same-size replacement, a revoked last block, keeps both, because the stream
+/// can return to either.
++ (void)noteCommittedKey:(NSString *)key lane:(NSString *)lane blocks:(size_t)blocks {
+  static NSMutableDictionary<NSString *, NSString *> *lanes;
+  static NSMutableDictionary<NSString *, NSNumber *> *sizes;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    lanes = [NSMutableDictionary new];
+    sizes = [NSMutableDictionary new];
+  });
+  NSString *superseded = nil;
+  @synchronized(lanes) {
+    NSNumber *previous = sizes[lane];
+    if (previous == nil || blocks >= previous.unsignedLongValue) {
+      superseded = previous != nil && blocks > previous.unsignedLongValue ? lanes[lane] : nil;
+      // Bounded like the cache itself: a lane past the budget is one whose
+      // segments the cache has already let go.
+      if (previous == nil && lanes.count >= 512) {
+        [lanes removeAllObjects];
+        [sizes removeAllObjects];
+      }
+      lanes[lane] = key;
+      sizes[lane] = @(blocks);
+    }
+  }
+  if (superseded != nil) {
+    [self.committedSegmentCache removeObjectForKey:superseded];
+  }
 }
 
 /// A cache key for the variants, or empty when there are none to key on.

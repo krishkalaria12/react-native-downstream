@@ -434,32 +434,51 @@ bool snapshotsShareCommittedBlocks() {
 
 // Renderers reuse committed segments by first identity and block count, so a
 // committed segment that is followed by another must keep its boundaries in
-// every later snapshot, and a text chunk must not split a quote or list.
+// every later snapshot. A text chunk never splits a quote, and splits a list
+// only between two of its top-level items, which is also where the committed
+// prefix may end while the list is still arriving.
 bool committedSegmentsAreStable(ParseMode mode) {
   std::string text;
   for (int i = 0; i < 40; i++) {
     text += "Paragraph " + std::to_string(i) + " has enough words to be worth committing on its own line.\n\n";
     if (i % 7 == 3) text += "> quoted\n> lines\n\n- one\n- two\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n";
+    if (i % 9 == 5) {
+      for (int item = 1; item <= 24; item++) {
+        text += std::to_string(item) + ". **Item " + std::to_string(item) + ".** A list item long enough to commit on its own.\n";
+      }
+      text += "\n";
+    }
   }
   IncrementalParser parser(mode);
   std::map<std::pair<uint64_t, size_t>, size_t> sealed;
   std::string source;
   size_t committedSegments = 0;
+  // Chunks sealed inside a long list, which a mode that commits list items
+  // produces and full mode, committing nothing, does not.
+  size_t listChunks = 0;
   for (const auto &chunk : splitChunks(text, 3)) {
     source += chunk;
     const auto result = feed(parser, source, false);
     if (result.status != ParseStatus::Ok) return false;
     const Document &document = *result.document;
     const auto plan = planSegments(document);
+    size_t completed = 0;
+    while (completed < document.blocks.size() && document.blocks[completed].identity != 0) completed++;
     for (size_t i = 0; i < plan.size(); i++) {
       const SegmentPlan &segment = plan[i];
       if (!segment.committed) continue;
       committedSegments++;
-      // Text chunks also end where a table or a code block starts; any other
-      // end is top-level.
+      // Text chunks also end where a table or a code block starts, or between
+      // two items of a top-level list; any other end is top-level.
       const bool beforeTable = segment.to < document.blocks.size() &&
           document.blocks[segment.to].kind == BlockKind::TableRow;
-      if (!segment.isTable() && !beforeTable && !document.blocks[segment.to - 1].containers.empty()) return false;
+      const Block &last = document.blocks[segment.to - 1];
+      const bool beforeItem = segment.to < document.blocks.size() && !last.containers.empty() &&
+          last.containers[0].kind == ContainerKind::ListItem && !document.blocks[segment.to].containers.empty() &&
+          document.blocks[segment.to].containers[0].showsMarker &&
+          document.blocks[segment.to].containers[0].id != last.containers[0].id;
+      if (!segment.isTable() && !beforeTable && !beforeItem && !last.containers.empty()) return false;
+      listChunks += beforeItem && segment.to != completed;
       // A code block is a segment of its own, so nothing else shares its range.
       if (segment.isCode() &&
           (segment.to - segment.from != 1 || document.blocks[segment.from].kind != BlockKind::CodeBlock)) {
@@ -488,7 +507,99 @@ bool committedSegmentsAreStable(ParseMode mode) {
       }
     }
   }
-  return committedSegments > 0 && sealed.size() > 2;
+  return committedSegments > 0 && sealed.size() > 2 && (mode == ParseMode::FullParse || listChunks > 0);
+}
+
+std::string numberedItems(int from, int to, const std::string &delimiter = ".") {
+  std::string text;
+  for (int item = from; item <= to; item++) {
+    text += std::to_string(item) + delimiter + " **Point " + std::to_string(item) +
+        ".** A sentence long enough that the item is worth committing, with *emphasis* and `code`.\n";
+  }
+  return text;
+}
+
+// Items of a list that is still arriving are committed once the next item
+// starts, and the tail is parsed as the same list's continuation. Every
+// snapshot still equals a full parse: numbering, tightness turning loose part
+// way, a marker change starting a new list, lazy lines, nested blocks, and
+// items that are not what they look like.
+bool openListItems() {
+  const std::string intro = "Intro paragraph that commits on its own before the list starts.\n\n";
+  const std::string tight = intro + numberedItems(1, 24) + "\nAfter the list.\n\n";
+  const std::string turnsLoose = "## Heading\n\n" + numberedItems(1, 5) +
+      "6. **Materials.** Stone and timber.\n\n   | Material | Use |\n   |---|---|\n   | Timber | Easy |\n\n" +
+      numberedItems(7, 12) + "\n## Next\n\n" + numberedItems(13, 20) + "21. " + std::string(150, 'w') +
+      // A `$$` line alone opens a formula, though it looks like the line that
+      // closes one, so the commit after the list must not stop there. The long
+      // item makes that line a candidate on its own.
+      "\n\n$$\nH \\approx \\frac{wL^2}{8f}\n$$\n\n```text\nset out arch profile\n```\n\nDone.\n";
+  const std::string bullets = "Start.\n\n- first bullet item with enough words to matter here\n"
+      "- second bullet item with enough words to matter here\n"
+      "  - nested item under the second one, also long enough\n"
+      "  - another nested item that keeps the nested list going\n"
+      "- third bullet item that follows a nested list closing\n"
+      "* a star bullet starts a new list right after the dashes\n"
+      "* and a second star item continues that new list here\n"
+      "+ then a plus list item, which is a third list again\n\nEnd.\n";
+  const std::string delimiters = "Lead.\n\n" + numberedItems(1, 4, ")") +
+      "5. a dot item cannot interrupt, so it is lazy\n" + numberedItems(6, 9, ")") +
+      "1. but a dot list starting at one does interrupt it now\n" + numberedItems(2, 5) + "\nTail.\n";
+  const std::string blocks = "Intro.\n\n" + numberedItems(1, 3) +
+      "4. **Code.** An item with a fence:\n\n   ```ts\n   const a = 1;\n\n   const b = 2;\n   ```\n" +
+      "5. **Quote.** An item with a quote\n   > quoted line\n   > another quoted line\n" +
+      " 6. indented by one space, still a sibling item of the list\n" +
+      "  7. indented by two spaces, still a sibling item too\n" +
+      "   8. indented by three spaces, the last that can be\n" + numberedItems(9, 12) +
+      "13.\n    text on the next line after an empty marker line\n14.\n" +
+      "15. lazy\ncontinuation line without indent\n16. [link](https://example.com) item\n" +
+      "- [ ] a task in a new bullet list\n- [x] a done task item in the same list\n\n* * *\n\nAfter.\n";
+  std::string looseFromStart = "Intro.\n\n";
+  for (int item = 1; item <= 12; item++) {
+    looseFromStart += "- Loose item " + std::to_string(item) + " separated from the next one by a blank line.\n\n";
+  }
+  looseFromStart += "Paragraph.\n";
+  const std::string numbers = "Zero.\n\n" + numberedItems(0, 4) + "\nBig.\n\n" + numberedItems(999999995, 999999999) +
+      "\nAfter.\n\n" + numberedItems(8, 12) + "---\n\n" + numberedItems(1, 3) + "- a bullet ends it\n";
+  const std::string setext = "Intro.\n\n" + numberedItems(1, 4) + "plain lazy text\n---\n\n" + numberedItems(1, 4) +
+      "   ---\n" + numberedItems(5, 6) + "\n\n\n" + numberedItems(7, 8);
+  const std::vector<std::pair<const char *, std::string>> documents = {
+      {"tight list", tight}, {"list turns loose", turnsLoose}, {"bullets", bullets},
+      {"delimiters", delimiters}, {"blocks in items", blocks}, {"loose from start", looseFromStart},
+      {"numbers", numbers}, {"setext and breaks", setext}};
+  for (const auto &[label, text] : documents) {
+    for (uint32_t seed = 1; seed <= 6; seed++) {
+      if (!check(splitChunks(text, seed), label)) return false;
+    }
+    std::vector<std::string> bytes;
+    for (char byte : text) bytes.emplace_back(1, byte);
+    if (!check(bytes, label)) return false;
+    if (!check(splitChunks(text, 99), label, ParseOptions(ParseFlags::Enabled))) return false;
+  }
+
+  // The tail stays one or two items long through a long list, and the items
+  // committed while it is open never count as settled.
+  IncrementalParser parser(ParseMode::IncrementalTail);
+  std::string source;
+  size_t largestTail = 0;
+  for (const auto &chunk : splitChunks(intro + numberedItems(1, 40), 5)) {
+    source += chunk;
+    const auto result = feed(parser, source, false);
+    if (result.status != ParseStatus::Ok) return false;
+    const Document &document = *result.document;
+    if (document.settledBlocks > 1) {
+      std::cerr << "An item of an open list was settled\n";
+      return false;
+    }
+    if (source.size() > intro.size() + 1000) largestTail = std::max(largestTail, document.blocks.tail().size());
+  }
+  if (largestTail == 0 || largestTail > 3) {
+    std::cerr << "Open list tail held " << largestTail << " blocks\n";
+    return false;
+  }
+  source += "\nAfter the list, a paragraph long enough to commit on its own once a blank line follows.\n\nMore.\n";
+  const auto closed = feed(parser, source, false);
+  return closed.status == ParseStatus::Ok && closed.document->settledBlocks >= 41;
 }
 
 bool identitiesAreGlobal() {
@@ -1124,6 +1235,24 @@ bool canonicalFinishFallbacks() {
         parser.counters().fullParses != before.fullParses + 1 ||
         parser.counters().fallbackCount(ParseFallback::Finished) != before.fallbackCount(ParseFallback::Finished) + 1) return false;
   }
+  // Items committed from an open list are provisional. Their raw tail cannot
+  // finish independently of the list lead and its final tightness.
+  for (const bool ordered : {false, true}) {
+    IncrementalParser parser(ParseMode::IncrementalTail);
+    std::string source = prefix;
+    if (feed(parser, source, false).status != ParseStatus::Ok) return false;
+    for (unsigned i = 1; i <= 20; ++i) {
+      source += (ordered ? std::to_string(i) + ". " : "- ") + std::string(80, 'w') + "\n";
+      if (feed(parser, source, false).status != ParseStatus::Ok) return false;
+    }
+    if (parser.committedBytes() == 0 || parser.reusedBytes() <= parser.committedBytes() ||
+        parser.document()->settledBlocks >= parser.document()->blocks.size()) return false;
+    const auto before = parser.counters();
+    const auto final = parser.parse(true);
+    if (final.status != ParseStatus::Ok || !scan::sameDocument(*final.document, *colored(parseMarkdown(source))) ||
+        parser.counters().fullParses != before.fullParses + 1 ||
+        final.document->settledBlocks != final.document->blocks.size()) return false;
+  }
   IncrementalParser preview(ParseMode::IncrementalTail);
   preview.setPreview(remend::PreviewOptions::all());
   feed(preview, prefix + "**unfinished", false);
@@ -1285,6 +1414,7 @@ int main(int argc, char **argv) {
   CHECK(committedSegmentsAreStable(ParseMode::FullParse),
         "committed segments are stable (full)");
   CHECK(identitiesAreGlobal(), "identities are global");
+  CHECK(openListItems(), "open list items commit and the tail continues the list");
   CHECK(realisticAnswer(), "realistic answer");
   CHECK(unchangedTailCodeIsCached(), "unchanged tail code is cached in both parse modes");
   CHECK(fullModeKeepsIdentities(), "full mode keeps identities");

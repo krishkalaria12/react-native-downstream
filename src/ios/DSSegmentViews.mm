@@ -1022,11 +1022,16 @@ static Class segmentViewClassFor(id segment) {
        index = [_mountedSegmentIndices indexGreaterThanIndex:index]) {
     UIView *view = _segmentViews[index];
     if ([view isKindOfClass:DSDeferredTextView.class]) continue;
-    const CGRect frame = frames[index].CGRectValue;
+    CGRect frame = frames[index].CGRectValue;
     id segment = _rendered.segments[index];
     const BOOL hostedTag = [segment isKindOfClass:DSTextSegment.class] &&
         _hostLayout.hostsTag(((DSTextSegment *)segment).customContainer);
     const BOOL hidden = frame.size.height == 0 || hostedTag;
+    // The last segment is the text a stream grows, and nothing is drawn below it,
+    // so its text view is framed in steps and redraws only what a snapshot edited.
+    if (!hidden && index + 1 == frames.count && [view isKindOfClass:DSTextSegmentView.class]) {
+      frame.size.height = DSSteppedTextHeight(frame.size.height);
+    }
     if (view.hidden != hidden) {
       view.hidden = hidden;
     }

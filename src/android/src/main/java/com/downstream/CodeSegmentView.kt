@@ -61,7 +61,7 @@ internal class CodeGutterView(context: Context) : View(context) {
     codeFace: Typeface,
     color: Int,
   ) {
-    val bodyLayout = body.layout
+    val bodyLayout = body.shownLayout
     if (this.segment === segment && this.body === body && this.layout == layout &&
       this.bodyLayout === bodyLayout && this.color == color &&
       numberPaint.textSize == codeTextSize.toFloat() && numberPaint.typeface == codeFace) return
@@ -133,7 +133,7 @@ internal class CodeGutterView(context: Context) : View(context) {
     val segment = this.segment ?: return
     val layout = this.layout ?: return
     val body = this.body ?: return
-    val textLayout = body.layout ?: return
+    val textLayout = body.shownLayout ?: return
     drawLineMarks(canvas, textLayout)
     val color = this.color
     if (segment.lineStarts.isEmpty() || color == 0) return
@@ -486,6 +486,40 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
     streaming = true
     ordinal = segment.codeOrdinal
     this.segment = segment
+    // An open fence is a new segment on every snapshot with the same chrome, and
+    // restyling the header relays out its label and reloads its icons, so the
+    // chrome is applied only when something it reads changed.
+    val chrome = chromeKey(segment)
+    if (chrome != appliedChrome) {
+      appliedChrome = chrome
+      applyChrome(segment)
+    }
+    if (!hosted) bindFallback()
+    requestLayout()
+    invalidate()
+  }
+
+  /** Everything [applyChrome] reads from a segment, as one comparable value. */
+  private fun chromeKey(segment: CodeSegment): List<Any?> = listOf(
+    segment.colors.codeBlockBackground,
+    segment.colors.slotOrNull(ThemeSlots.SLOT_CODE_BLOCK_BORDER_COLOR),
+    segment.colors.headerBackground,
+    segment.colors.headerBorderColor,
+    segment.colors.headerColor,
+    segment.colors.headerButtonColor,
+    segment.colors.text,
+    segment.radius,
+    segment.borderWidth,
+    segment.headerSize,
+    segment.headerFace,
+    segment.title,
+    segment.language,
+    segment.fenceMeta.startLine,
+  )
+
+  private var appliedChrome: List<Any?>? = null
+
+  private fun applyChrome(segment: CodeSegment) {
     // The card's own fill, and the header row's three colors, all from the
     // theme. Read once per block rather than per draw, because the card is
     // redrawn whenever its bounds change.
@@ -511,14 +545,11 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
       intArrayOf(segment.colors.text, segment.colors.headerButtonColor),
     )
     for (button in allButtons) button.imageTintList = tint
-    if (!hosted) bindFallback()
     // A fence's title replaces the language, and the spoken label keeps both plus
     // the start line, so a screen reader still hears what kind of code this is.
     language.text = if (segment.title.isNotEmpty()) segment.title else segment.language
     language.contentDescription = spokenLabel(segment)
     updateButtons()
-    requestLayout()
-    invalidate()
   }
 
   /**
@@ -582,6 +613,9 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   fun clearViewportContent() {
     host.removeCallbacks(clearCopied)
     copied = false
+    // A pooled card changes ownership; reapply chrome for its new block even
+    // when the style matches, restoring copy feedback and hosted backgrounds.
+    appliedChrome = null
     body.clearContent()
     gutter.clearContent()
     rendered = null
@@ -634,6 +668,25 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
   private fun bindFallback() {
     val segment = segment ?: return
     val rendered = rendered ?: return
+    // A body's layout depends on whether it wraps and, if it does, on the card's
+    // width. A new card learns both at its first layout pass and binds there,
+    // before it draws, rather than laying its body out at a width it never shows.
+    val layout = layout ?: return
+    if (layout.wraps && width == 0) return
+    bindBody(segment, rendered, layout, width)
+  }
+
+  /**
+   * Shows the segment's chunked body where it has one, laid out on the measuring
+   * thread at the width this card draws at, and its canonical text otherwise.
+   */
+  private fun bindBody(segment: CodeSegment, rendered: RenderedDocument, layout: CodeBlockLayout, width: Int) {
+    val frame = segment.bodyFrame(width, layout.wraps, segment.gutterWidth(layout))
+    if (frame != null) {
+      body.setPreparedContent(frame.text, segment.accessibleBlocks, rendered, frame.layout, frame.contentWidth)
+      boundSegment = null
+      return
+    }
     if (boundSegment === segment) return
     body.setContent(segment.text, segment.accessibleBlocks, rendered)
     boundSegment = segment
@@ -740,14 +793,17 @@ internal class CodeSegmentView(context: Context) : FrameLayout(context) {
       val headerHeight = headerHeight()
       val padding = segment.padding
       val leading = segment.contentLeading
-      val cardWidth = (width - leading).coerceAtLeast(0)
       val gutterWidth = segment.gutterWidth(layout)
       gutter.visibility = if (gutterWidth > 0) View.VISIBLE else View.GONE
       // The gutter narrows the width a wrapped body wraps at, which is the only way
       // numbers change a block's height. An unwrapped body is laid out at its own
       // length either way, so it never lays code out again on a rotation.
-      val bodyWidth = segment.bodyWidth(rendered.paint, cardWidth, layout.wraps, gutterWidth)
-      val bodyHeight = segment.bodyHeight(rendered.paint, cardWidth, layout.wraps, gutterWidth)
+      // The width the measurement wrapped at: the segment's whole width, from
+      // which the body takes the margin, the padding and the gutter once.
+      val bodyWidth = segment.bodyWidth(rendered.paint, width, layout.wraps, gutterWidth)
+      val bodyHeight = segment.bodyHeight(rendered.paint, width, layout.wraps, gutterWidth)
+      // The frame those two answers came from, now that the width is known.
+      if (!hosted) bindBody(segment, rendered, layout, width)
       // The viewport scrolls only while the block is past its cap, which is the whole
       // difference between a capped card and an uncapped one. It is decided before
       // the header is laid out, because the expand button depends on it.

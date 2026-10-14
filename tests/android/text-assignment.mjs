@@ -37,6 +37,8 @@ for (const name of [
   'onMeasure',
   'measureContent',
   'setTraceDocument',
+  'setPreparedContent',
+  'clearPrepared',
 ]) {
   fixture = fixture.replace(
     `/* PRODUCTION_${name} */`,

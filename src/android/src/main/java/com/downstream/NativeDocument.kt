@@ -631,7 +631,9 @@ internal object DownstreamNative {
       val width = layout.numberAt("width", 0.0).toFloat()
       if (width.isFinite() && width > 0) {
         rendered.height(
-          PixelUtil.toPixelFromDIP(width.toDouble()).toInt(),
+          // Rounded as Fabric rounds the mounted frame, so the worker prepares the
+          // width the view draws at rather than one a pixel narrower.
+          Math.round(PixelUtil.toPixelFromDIP(width.toDouble())).toInt(),
           layout.numberAt("chrome", 0.0).toInt(),
           layout.toCodeLayout(),
           layout.toImageLayout(),

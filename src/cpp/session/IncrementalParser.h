@@ -5,12 +5,14 @@
 #include "Preview.h"
 #include "math/MathBlocks.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace downstream {
@@ -129,9 +131,15 @@ public:
   std::string_view source() const { return source_; }
   DocumentHandle document() const { return document_; }
   IncrementalCounters counters() const { return counters_; }
-  size_t committedBytes() const { return referencePrefix_ ? referencePrefix_->bytes : committedBytes_; }
-  /// Source prefix reused provisionally until a new reference dependency arrives.
-  /// Unlike committedBytes(), this prefix can be revoked.
+  size_t committedBytes() const {
+    size_t bytes = committedBytes_;
+    if (referencePrefix_) bytes = std::min(bytes, referencePrefix_->bytes);
+    if (listPrefix_) bytes = std::min(bytes, listPrefix_->bytes);
+    return bytes;
+  }
+  /// Source prefix reused provisionally until a new reference dependency
+  /// arrives or an open list it ends inside turns loose. Unlike
+  /// committedBytes(), this prefix can be revoked.
   size_t reusedBytes() const { return committedBytes_; }
 
   /// Opts the unstable tail into provisional styling. Off by default, which is
@@ -149,6 +157,9 @@ public:
   void setPreview(remend::PreviewOptions options) {
     preview_ = remend::Preview(options);
     previewDirty_ = true;
+    // The preview parses the tail on its own, with no list lead to parse it
+    // after, so items of an open list go back to the tail.
+    if (preview_.enabled()) invalidateListPrefix();
   }
   bool previewEnabled() const { return preview_.enabled(); }
   /// Cumulative across every parse since the last reset, so a caller can see
@@ -188,6 +199,20 @@ private:
   void noteMath(const MathLayoutStats &stats);
   void tryCommit();
   bool commitRegion(size_t boundary);
+  /// Of a region that ends inside a top-level list, how many leading blocks
+  /// end before the list's last item and the byte where that item's line
+  /// starts, or zero blocks when there is no such item to stop before.
+  std::pair<size_t, size_t> finishedListItems(std::string_view region, const ParseResult &parsed) const;
+  /// The synthetic item the tail is parsed after while `listContext_` is set,
+  /// or empty.
+  std::string listLead() const;
+  /// Parses `region`, which starts at the committed boundary, with the
+  /// definitions and list context the committed prefix leaves it.
+  ParseResult parseAfterCommitted(std::string_view region);
+  /// True when a parse made with the list lead left the list as tight as the
+  /// committed items assumed. Otherwise those items have to be respaced.
+  bool keepsListContext(const ParseResult &parsed) const;
+  void invalidateListPrefix();
   bool appendOpenFence();
   bool appendPlainParagraph();
   void watchPlainParagraph();
@@ -219,10 +244,21 @@ private:
   uint32_t committedContainers_{0};
   uint32_t committedTables_{0};
 
-  // A closed region with unresolved references can be reused provisionally.
-  // Its blocks have identities but never count as settled. A new definition
-  // marker or budget-limited expansion revokes this strict-prefix checkpoint.
-  struct ReferencePrefix {
+  // The top-level list the committed prefix ends inside, when it does. The
+  // tail starts with that list's next item and is parsed after a one-item list
+  // standing in for the committed ones: same marker, the number before the
+  // tail's, and the same tightness. See `listLead`.
+  struct ListContext {
+    bool ordered;
+    char mark;
+    uint32_t number;
+    bool tight;
+  };
+  std::optional<ListContext> listContext_;
+
+  // The committed state at some earlier point, restored when a provisional
+  // prefix after it is revoked.
+  struct Checkpoint {
     std::shared_ptr<const SharedList<Block>::Prefix> blocks;
     std::shared_ptr<const SharedList<Link>::Prefix> links;
     std::shared_ptr<const SharedList<Image>::Prefix> images;
@@ -233,8 +269,18 @@ private:
     uint32_t tables;
     std::string definitions;
     uint32_t referenceOutputUsed;
+    std::optional<ListContext> list;
   };
-  std::optional<ReferencePrefix> referencePrefix_;
+  Checkpoint checkpoint() const;
+  void restore(Checkpoint checkpoint);
+  // A closed region with unresolved references can be reused provisionally.
+  // Its blocks have identities but never count as settled. A new definition
+  // marker or budget-limited expansion revokes this strict-prefix checkpoint.
+  std::optional<Checkpoint> referencePrefix_;
+  // Items of a list that is still open are reused provisionally too: a later
+  // blank line can make the whole list loose and respace every item. Revoked
+  // when that happens, and dropped once a commit ends after the list.
+  std::optional<Checkpoint> listPrefix_;
   size_t dependencyScannedBytes_{0};
   bool referenceDependentSource_{false};
   // md4c-confirmed definition-only replay. Bounded and source-order preserving.

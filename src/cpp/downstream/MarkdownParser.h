@@ -151,6 +151,20 @@ struct ByteRange {
   uint32_t end{0};
 };
 
+/// One list that is not inside any container, as md4c closed it or as it
+/// stood when the input ran out.
+struct ListSummary {
+  bool ordered{false};
+  /// The bullet (`-`, `+`, `*`) or, for an ordered list, the delimiter (`.`, `)`).
+  char mark{0};
+  bool tight{true};
+  /// The number the next item would take. Ordered lists only.
+  uint32_t nextNumber{0};
+  uint32_t items{0};
+  /// Container id of the list's last item.
+  uint32_t lastItem{0};
+};
+
 struct ParseResult {
   ParseStatus status{ParseStatus::Ok};
   /// Set only when status is Ok.
@@ -169,6 +183,9 @@ struct ParseResult {
   std::vector<ByteRange> referenceDefinitions;
   uint32_t referenceOutputUsed{0};
   bool referenceOutputLimited{false};
+  /// Top-level lists in source order. A stream reads the last one to commit a
+  /// list's finished items while the list is still open.
+  std::vector<ListSummary> lists;
   /// The options this parse ran under. Parse options are part of a source's
   /// identity, so a caller caching parses keys on it as well.
   ParseOptions parse;
@@ -193,9 +210,16 @@ ParseResult parseMarkdownAt(std::string_view region, size_t origin, ParseOptions
 /// Parses a tail with previously confirmed definition-only source replayed.
 /// References retain md4c normalization and first-definition precedence; output
 /// ranges are relative to the tail, as with parseMarkdownAt.
+///
+/// `lead`, when present, is one list item that stands in for the open list the
+/// tail continues. It is parsed before the tail and its block, container and
+/// list item are removed from the result, so the tail's items are numbered and
+/// spaced as the same list's. A lead that does not come back as exactly one
+/// block in one list item, because the tail did not continue its list, fails
+/// the parse with `ParseFailed`.
 ParseResult parseMarkdownWithReferences(std::string_view region, size_t origin,
                                        std::string_view definitions, ParseOptions options = ParseOptions(),
-                                       uint32_t referenceBudget = UINT32_MAX);
+                                       uint32_t referenceBudget = UINT32_MAX, std::string_view lead = {});
 
 /// Allocates an ID for a derived immutable snapshot without reparsing it.
 uint64_t allocateDocumentId();

@@ -52,6 +52,16 @@ typedef NS_ENUM(NSInteger, DSExportFormat) {
 /// The height of a control row, matching the one the measurement reserves.
 extern const CGFloat kChromeRowHeight;
 
+/// A growing text view's height, rounded up to a step of 512 points.
+///
+/// A text view redraws all of its text whenever its height changes, and a
+/// growing text changes it every few snapshots. Framed in steps, it keeps its
+/// drawing in between and redraws only the lines a snapshot edited. Only for a
+/// view with nothing drawn below it, which the extra height leaves empty.
+static inline CGFloat DSSteppedTextHeight(CGFloat height) {
+  return ceil(MAX(height, 0) / 512) * 512;
+}
+
 /// How far outside a glyph a press still counts as its link.
 extern const CGFloat kLinkHitSlop;
 

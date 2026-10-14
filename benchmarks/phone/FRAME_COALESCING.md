@@ -24,6 +24,8 @@ Trace phases include `finish_received`, `worker_queued`, `worker_start`, `parse_
 
 Global dependencies retain full canonical parsing: references and definitions, footnotes, bracket math, unresolved tags/containers, preview policies and reference budget limits. Formula overflow also requires a whole-document pass because the cap changes prefix rendering. That fallback now discards stale committed formula layouts. Final malformed math receives its canonical error instead of remaining provisionally incomplete.
 
+Integration with the newer list-prefix parser retains full canonical finish for provisional list items and their synthetic list lead. Ordered and unordered list regressions prove that provisional reuse occurs before finish and still produces the complete canonical document. Render-cache integration retains superseded chunk retirement, including the finish-alias path, with location, caret and ordinal isolation in its cache lanes.
+
 The native regression streams a 120-paragraph prefix with links, images, custom tags and list context, then finalizes twelve different tails. It checks exact parsed-byte growth against remaining tail bytes, shared prefix storage, final canonical model and math parity, settled state and repeat-finish work counters. It also exercises dependency and global formula-cap fallbacks.
 
 ### Preserve unchanged render payload through finish
@@ -66,19 +68,19 @@ The benchmark used `animated={false}`. Caret defaults to none. Reveal animation 
 
 The estimate below is `app.deliveryDurationMs - (max(live.lastDeltaMs) - min(live.firstDeltaMs))`. It compares the phone's delivery-loop duration with the host's text-delta span. It includes terminal waiting, transport/scheduling differences, and usage/finish-reason waits. It is not an exact phone finish timestamp or native finalization duration.
 
-| Workload/run | Reported settle, ms | Completion-gap estimate, ms | UI CPU, s | Other CPU, s | App frames | React commits |
-|---|---:|---:|---:|---:|---:|---:|
-| matrix 0040, fast | 17.2 | 97.9 | 3.03 | 2.79 | 239 | 461 |
-| matrix 0079 | 978.7 | 926.1 | 3.49 | 3.03 | 260 | 437 |
-| matrix 0101 | 1693.0 | 1635.4 | 3.26 | 2.66 | 241 | 396 |
-| matrix 0117 | 1450.6 | 1278.9 | 3.26 | 3.00 | 235 | 663 |
-| matrix 0145 | 1049.0 | 1015.8 | 3.04 | 2.73 | 224 | 407 |
-| matrix 0168, fast | 44.4 | 625.7 | 3.06 | 2.48 | 162 | 365 |
-| matrix 0199, fast | 30.1 | 103.1 | 2.40 | 1.90 | 206 | 385 |
-| matrix 0227 | 883.6 | 873.7 | 3.76 | 3.52 | 267 | 584 |
-| matrix 0234, fast | 20.9 | 1100.4 | 2.76 | 2.15 | 159 | 330 |
-| matrix 0262 | 573.4 | 539.5 | 3.77 | 3.56 | 252 | 634 |
-| huge concurrent 0051 | 2937.3 | 2882.5 | 20.26 | 33.34 | 1244 | 1945 |
+| Workload/run         | Reported settle, ms | Completion-gap estimate, ms | UI CPU, s | Other CPU, s | App frames | React commits |
+| -------------------- | ------------------: | --------------------------: | --------: | -----------: | ---------: | ------------: |
+| matrix 0040, fast    |                17.2 |                        97.9 |      3.03 |         2.79 |        239 |           461 |
+| matrix 0079          |               978.7 |                       926.1 |      3.49 |         3.03 |        260 |           437 |
+| matrix 0101          |              1693.0 |                      1635.4 |      3.26 |         2.66 |        241 |           396 |
+| matrix 0117          |              1450.6 |                      1278.9 |      3.26 |         3.00 |        235 |           663 |
+| matrix 0145          |              1049.0 |                      1015.8 |      3.04 |         2.73 |        224 |           407 |
+| matrix 0168, fast    |                44.4 |                       625.7 |      3.06 |         2.48 |        162 |           365 |
+| matrix 0199, fast    |                30.1 |                       103.1 |      2.40 |         1.90 |        206 |           385 |
+| matrix 0227          |               883.6 |                       873.7 |      3.76 |         3.52 |        267 |           584 |
+| matrix 0234, fast    |                20.9 |                      1100.4 |      2.76 |         2.15 |        159 |           330 |
+| matrix 0262          |               573.4 |                       539.5 |      3.77 |         3.56 |        252 |           634 |
+| huge concurrent 0051 |              2937.3 |                      2882.5 |     20.26 |        33.34 |       1244 |          1945 |
 
 Rows come from `runs/highlighted-<run>-downstream-default-ai-<workload>.json`. CPU, frame, and commit totals cover each entire run, not just its tail. For matrix 0101, settle is at JSON line 84, app duration at 103, and host delta boundaries at 120–121. For huge 0051 those fields are at 82, 101, and 118–215. Fast 0040 records them at 79, 98, and 115–116.
 

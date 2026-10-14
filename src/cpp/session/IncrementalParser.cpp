@@ -33,6 +33,8 @@ constexpr size_t kMaxDefinitionReplayBytes = 8 * 1024;
 // Smaller regions reparse cheaply as tail, so a commit attempt costs more
 // than it saves.
 constexpr size_t kMinCommitBytes = 128;
+// md4c reads at most nine digits of an ordered list marker.
+constexpr uint32_t kMaxListNumber = 999999999;
 // md4c rewrites these inside code text: line endings, NUL, and tab expansion.
 constexpr std::string_view kVerbatimBreakers("\r\0\t", 3);
 
@@ -272,13 +274,39 @@ size_t IncrementalParser::committedCount() const {
 }
 
 size_t IncrementalParser::settledCount() const {
-  return referencePrefix_ ? (referencePrefix_->blocks ? referencePrefix_->blocks->size() : 0) : committedCount();
+  size_t settled = committedCount();
+  for (const auto *prefix : {&referencePrefix_, &listPrefix_}) {
+    if (*prefix) settled = std::min(settled, (*prefix)->blocks ? (*prefix)->blocks->size() : size_t{0});
+  }
+  return settled;
+}
+
+IncrementalParser::Checkpoint IncrementalParser::checkpoint() const {
+  return Checkpoint{committedBlocks_,     committedLinks_,       committedImages_,
+                    committedTags_,       committedBytes_,       committedUtf16_,
+                    committedContainers_, committedTables_,      committedDefinitions_,
+                    committedReferenceOutput_, listContext_};
 }
 
 void IncrementalParser::invalidateReferencePrefix() {
   if (!referencePrefix_) return;
-  const ReferencePrefix checkpoint = std::move(*referencePrefix_);
+  Checkpoint checkpoint = std::move(*referencePrefix_);
   referencePrefix_.reset();
+  // A list checkpoint taken at or after this one describes commits that are
+  // being revoked with it.
+  if (listPrefix_ && listPrefix_->bytes >= checkpoint.bytes) listPrefix_.reset();
+  restore(std::move(checkpoint));
+}
+
+void IncrementalParser::invalidateListPrefix() {
+  if (!listPrefix_) return;
+  Checkpoint checkpoint = std::move(*listPrefix_);
+  listPrefix_.reset();
+  if (referencePrefix_ && referencePrefix_->bytes >= checkpoint.bytes) referencePrefix_.reset();
+  restore(std::move(checkpoint));
+}
+
+void IncrementalParser::restore(Checkpoint checkpoint) {
   committedBlocks_ = checkpoint.blocks;
   committedLinks_ = checkpoint.links;
   committedImages_ = checkpoint.images;
@@ -289,6 +317,7 @@ void IncrementalParser::invalidateReferencePrefix() {
   committedTables_ = checkpoint.tables;
   committedDefinitions_ = checkpoint.definitions;
   committedReferenceOutput_ = checkpoint.referenceOutputUsed;
+  listContext_ = checkpoint.list;
   plainParagraph_ = false;
   openFence_ = false;
   highlight_.clear();
@@ -308,10 +337,15 @@ void IncrementalParser::scanReferenceDependencies() {
   dependencyScannedBytes_ = source_.size();
   if (marker || referenceDependentSource_ || preview_.enabled() || previousReferenceLimited_)
     invalidateReferencePrefix();
+  // Footnotes and bracket math keep the full-document proof, which a tail
+  // parsed after a list lead does not have.
+  if (referenceDependentSource_ || preview_.enabled()) invalidateListPrefix();
 }
 
 void IncrementalParser::clearCommitted() {
   referencePrefix_.reset();
+  listPrefix_.reset();
+  listContext_.reset();
   committedBlocks_.reset();
   committedLinks_.reset();
   committedImages_.reset();
@@ -639,7 +673,7 @@ ParseResult IncrementalParser::parseTail() {
     // provisional repairs or dependency replay changing the source grammar.
     result = parseMarkdownAt(tail, committedBytes_, parse_);
     counters_.bytesParsed += tail.size();
-  } else if (committedDefinitions_.empty()) {
+  } else if (committedDefinitions_.empty() && !listContext_) {
     const remend::PreviewResult preview = preview_.apply(tail, committedBytes_, 0, parse_);
     notePreview(preview);
     result = preview.parsed;
@@ -649,12 +683,15 @@ ParseResult IncrementalParser::parseTail() {
     if (preview_.enabled() || referenceDependentSource_) {
       return fullParse(ParseFallback::InitialOrUnprovenBoundary, true, false);
     }
-    const uint32_t totalBudget = static_cast<uint32_t>(16 * std::min<size_t>(source_.size(), kMaxSourceBytes / 16));
-    result = parseMarkdownWithReferences(tail, committedBytes_, committedDefinitions_, parse_,
-                                         totalBudget - std::min(totalBudget, committedReferenceOutput_));
-    counters_.bytesParsed += tail.size() + committedDefinitions_.size();
+    result = parseAfterCommitted(tail);
   }
   counters_.tailParses++;
+  if (listContext_ && (result.status != ParseStatus::Ok || !keepsListContext(result))) {
+    // The list turned loose, or the tail no longer continues it, so the
+    // provisional items go back to the tail and are parsed with it.
+    invalidateListPrefix();
+    return committedBytes_ == 0 ? fullParse(ParseFallback::InitialOrUnprovenBoundary, true, false) : parseTail();
+  }
   if (result.status != ParseStatus::Ok) {
     return result;
   }
@@ -668,8 +705,9 @@ ParseResult IncrementalParser::parseTail() {
   for (Block &block : blocks) {
     offsetIds(block, committedContainers_, committedTables_, committedLinks, committedImages, committedTags);
   }
-  // The tail parse saw an empty document before its first block.
-  if (committed > 0 && !blocks.empty()) {
+  // The tail parse saw an empty document before its first block, unless it
+  // saw the list lead, which spaced it as the list's next item.
+  if (committed > 0 && !blocks.empty() && !listContext_) {
     blocks.front().spacingBefore = BlockSpacing::Normal;
   }
   std::vector<Link> links(result.document->links.begin(), result.document->links.end());
@@ -829,13 +867,14 @@ void IncrementalParser::tryCommit() {
 }
 
 bool IncrementalParser::commitRegion(size_t boundary) {
-  const std::string_view region = std::string_view(source_).substr(committedBytes_, boundary - committedBytes_);
+  std::string_view region = std::string_view(source_).substr(committedBytes_, boundary - committedBytes_);
   counters_.commitAttempts++;
-  counters_.bytesParsed += region.size();
-  const uint32_t totalBudget = static_cast<uint32_t>(16 * std::min<size_t>(source_.size(), kMaxSourceBytes / 16));
-  const uint32_t availableBudget = totalBudget - std::min(totalBudget, committedReferenceOutput_);
-  const ParseResult parsed = parseMarkdownWithReferences(region, committedBytes_, committedDefinitions_, parse_, availableBudget);
-  counters_.bytesParsed += committedDefinitions_.size();
+  ParseResult parsed = parseAfterCommitted(region);
+  if (listContext_ && parsed.status == ParseStatus::Ok && !keepsListContext(parsed)) {
+    invalidateListPrefix();
+    counters_.rejectedCommits++;
+    return false;
+  }
   const bool allowReferences = !referenceDependentSource_ && !preview_.enabled() &&
       !parsed.referenceOutputLimited &&
       std::string_view(source_).substr(boundary).find("]:") == kNoOffset;
@@ -845,13 +884,12 @@ bool IncrementalParser::commitRegion(size_t boundary) {
       committedCount() + parsed.document->blocks.size() <= kMaxCommittedBlocks;
   if (closed && !parsed.document->blocks.empty()) {
     const BlockKind kind = parsed.document->blocks.back().kind;
-    // Open fences and some HTML blocks run to the end of input.
-    if (kind == BlockKind::CodeBlock || kind == BlockKind::HtmlBlock) {
+    // Open fences and some HTML blocks run to the end of input. A `$$` line
+    // opens a formula as well as closing one, so a math block is probed too.
+    if (kind == BlockKind::CodeBlock || kind == BlockKind::HtmlBlock || kind == BlockKind::MathBlock) {
       std::string probe(region);
       probe += "x\n";
-      counters_.bytesParsed += probe.size();
-      closed = splitsBefore(parsed, parseMarkdownWithReferences(probe, committedBytes_, committedDefinitions_, parse_, availableBudget));
-      counters_.bytesParsed += committedDefinitions_.size();
+      closed = splitsBefore(parsed, parseAfterCommitted(probe));
     }
   }
   std::string definitions = committedDefinitions_;
@@ -872,15 +910,58 @@ bool IncrementalParser::commitRegion(size_t boundary) {
           replay.containerCount == 0 && replay.referenceDefinitions.size() >= parsed.referenceDefinitions.size();
     }
   }
+  // A region that ends inside a top-level list commits the items before its
+  // last one: a sibling item starting closes every block before it. Only the
+  // list's tightness can still change, which is why these commits stay
+  // provisional until a commit ends after the list.
+  std::optional<ListContext> nextList;
+  if (!closed && !preview_.enabled() && !referenceDependentSource_ && parsed.status == ParseStatus::Ok &&
+      parsed.referenceDefinitions.empty() && !parsed.referenceOutputLimited) {
+    const auto [count, end] = finishedListItems(region, parsed);
+    // finishedListItems finds items only in a region that ends inside a list.
+    const ListSummary list = count > 0 ? parsed.lists.back() : ListSummary{};
+    // The number before the tail's first item, which the lead takes.
+    const uint32_t number = list.ordered ? list.nextNumber - 2 : 0;
+    if (count > 0 && number <= kMaxListNumber && committedCount() + count <= kMaxCommittedBlocks) {
+      const std::string_view items = region.substr(0, end);
+      ParseResult head = parseAfterCommitted(items);
+      bool confirmed = head.status == ParseStatus::Ok && head.document->blocks.size() == count &&
+          head.referenceDefinitions.empty() && !head.referenceOutputLimited &&
+          (!listContext_ || keepsListContext(head));
+      // An empty item left open at the end can still take the next line.
+      uint32_t lastContainer = 0;
+      for (size_t i = 0; confirmed && i < count; i++) {
+        confirmed = sameBlock(head.document->blocks[i], parsed.document->blocks[i]);
+        for (const Container &container : head.document->blocks[i].containers) {
+          lastContainer = std::max(lastContainer, container.id);
+        }
+      }
+      // The definition markers that matter start after the shorter region.
+      const bool itemsAllowReferences =
+          allowReferences && std::string_view(source_).substr(committedBytes_ + end).find("]:") == kNoOffset;
+      confirmed = confirmed && lastContainer == head.containerCount &&
+          (itemsAllowReferences ||
+           std::none_of(head.document->blocks.begin(), head.document->blocks.end(), hasUnresolvedBracket));
+      if (confirmed) {
+        parsed = std::move(head);
+        region = items;
+        boundary = committedBytes_ + end;
+        nextList = ListContext{list.ordered, list.mark, number, list.tight};
+        closed = true;
+      }
+    }
+  }
   if (!closed) {
     counters_.rejectedCommits++;
     return false;
   }
 
+  if (nextList && !listPrefix_) {
+    listPrefix_ = checkpoint();
+  }
   const auto &parsedBlocks = parsed.document->blocks;
   if (!referencePrefix_ && std::any_of(parsedBlocks.begin(), parsedBlocks.end(), hasUnresolvedBracket)) {
-    referencePrefix_ = ReferencePrefix{committedBlocks_, committedLinks_, committedImages_, committedTags_, committedBytes_,
-                                       committedUtf16_, committedContainers_, committedTables_, committedDefinitions_, committedReferenceOutput_};
+    referencePrefix_ = checkpoint();
   }
   const size_t committed = committedCount();
   const size_t committedLinks = committedLinks_ ? committedLinks_->size() : 0;
@@ -905,7 +986,7 @@ bool IncrementalParser::commitRegion(size_t boundary) {
     const ByteRange bytes = parsed.blockSource[i];
     block.sourceRange = {committedUtf16_ + offsets.toUtf16(bytes.start), committedUtf16_ + offsets.toUtf16(bytes.end)};
     offsetIds(block, committedContainers_, committedTables_, committedLinks, committedImages, committedTags);
-    if (i == 0 && committed > 0) {
+    if (i == 0 && committed > 0 && !listContext_) {
       block.spacingBefore = BlockSpacing::Normal;
     }
     // A closed code block is colored here from its whole text before sharing.
@@ -959,7 +1040,72 @@ bool IncrementalParser::commitRegion(size_t boundary) {
   nextBlankAttempt_ = 0;
   nextLineAttempt_ = 0;
   if (!referencePrefix_) counters_.committedBlocks += parsedBlocks.size();
+  // A commit that ends outside every list closed the one the earlier items
+  // belonged to, so their spacing is final.
+  listContext_ = nextList;
+  if (!nextList) listPrefix_.reset();
   return true;
+}
+
+std::pair<size_t, size_t> IncrementalParser::finishedListItems(std::string_view region, const ParseResult &parsed) const {
+  const std::pair<size_t, size_t> none{0, 0};
+  const auto &blocks = parsed.document->blocks;
+  if (parsed.lists.empty() || blocks.empty() || parsed.blockSource.size() != blocks.size()) return none;
+  const ListSummary &list = parsed.lists.back();
+  if (list.items < 2) return none;
+  const auto inLastItem = [&](const Block &block) {
+    return !block.containers.empty() && block.containers[0].kind == ContainerKind::ListItem &&
+        block.containers[0].id == list.lastItem;
+  };
+  if (!inLastItem(blocks.back())) return none;
+  size_t first = blocks.size() - 1;
+  while (first > 0 && inLastItem(blocks[first - 1])) first--;
+  if (first == 0 || !blocks[first].containers[0].showsMarker) return none;
+  // The line the item's first text is on has to be the line its marker is on.
+  // An item whose text starts on a later line is left alone.
+  const size_t text = parsed.blockSource[first].start;
+  const size_t newline = text == 0 ? kNoOffset : region.rfind('\n', text - 1);
+  if (newline == kNoOffset) return none;
+  const size_t lineStart = newline + 1;
+  size_t at = lineStart;
+  while (at < region.size() && at - lineStart < 3 && region[at] == ' ') at++;
+  if (list.ordered) {
+    const size_t digits = at;
+    while (at < region.size() && region[at] >= '0' && region[at] <= '9') at++;
+    if (at == digits || at - digits > 9) return none;
+  }
+  if (at >= region.size() || region[at] != list.mark) return none;
+  at++;
+  if (at >= region.size() || (region[at] != ' ' && region[at] != '\t') || at > text) return none;
+  return {first, lineStart};
+}
+
+std::string IncrementalParser::listLead() const {
+  if (!listContext_) return {};
+  // The lead sits at the tail's own indent, so the tail's first item starts
+  // beside it rather than inside it.
+  const std::string_view tail = std::string_view(source_).substr(committedBytes_);
+  size_t indent = 0;
+  while (indent < tail.size() && indent < 3 && tail[indent] == ' ') indent++;
+  std::string lead(indent, ' ');
+  if (listContext_->ordered) lead += std::to_string(listContext_->number);
+  lead += listContext_->mark;
+  // A blank line between two items makes a list loose, which is how the lead
+  // passes on a looseness the committed items already showed.
+  lead += listContext_->tight ? " x\n" : " x\n\n";
+  return lead;
+}
+
+ParseResult IncrementalParser::parseAfterCommitted(std::string_view region) {
+  const uint32_t totalBudget = static_cast<uint32_t>(16 * std::min<size_t>(source_.size(), kMaxSourceBytes / 16));
+  const std::string lead = listLead();
+  counters_.bytesParsed += region.size() + committedDefinitions_.size() + lead.size();
+  return parseMarkdownWithReferences(region, committedBytes_, committedDefinitions_, parse_,
+                                     totalBudget - std::min(totalBudget, committedReferenceOutput_), lead);
+}
+
+bool IncrementalParser::keepsListContext(const ParseResult &parsed) const {
+  return !listContext_ || (!parsed.lists.empty() && parsed.lists.front().tight == listContext_->tight);
 }
 void IncrementalParser::watchOpenFence(std::string_view source, size_t from, size_t blocksBefore) {
   openFence_ = false;
@@ -1190,7 +1336,7 @@ bool IncrementalParser::appendPlainParagraph() {
 }
 
 bool IncrementalParser::canFinishTail() const {
-  if (committedBytes_ == 0 || referencePrefix_ || !committedDefinitions_.empty() ||
+  if (committedBytes_ == 0 || referencePrefix_ || listPrefix_ || listContext_ || !committedDefinitions_.empty() ||
       referenceDependentSource_ || previousReferenceLimited_ || preview_.enabled() || previewDirty_ ||
       source_.find("]:") != std::string::npos) return false;
   if (committedTags_) {

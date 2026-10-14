@@ -169,11 +169,13 @@ public:
           unorderedDepth += list.ordered ? 0 : 1;
         }
         static const char16_t bullets[] = {u'\u2022', u'\u25E6', u'\u2023'};
+        noteTopLevelList(false, static_cast<char>(ul->mark), ul->is_tight != 0, 0);
         lists_.push_back({false, ul->is_tight != 0, 0, 0, bullets[std::min<size_t>(unorderedDepth, 2)], 0});
         break;
       }
       case MD_BLOCK_OL: {
         const auto *ol = static_cast<MD_BLOCK_OL_DETAIL *>(detail);
+        noteTopLevelList(true, ol->mark_delimiter, ol->is_tight != 0, ol->start);
         lists_.push_back({true, ol->is_tight != 0, ol->start, ol->mark_delimiter, 0, 0});
         break;
       }
@@ -193,7 +195,14 @@ public:
         if (li->is_task) {
           task = li->task_mark == ' ' ? TaskState::Unchecked : TaskState::Checked;
         }
+        const bool topLevelItem = lists_.size() == 1 && containers_.empty();
         pushContainer(ContainerKind::ListItem, std::move(marker), task);
+        if (topLevelItem && !topLists_.empty()) {
+          ListSummary &summary = topLists_.back();
+          summary.items++;
+          summary.lastItem = containers_.back().container.id;
+          summary.nextNumber = lists_.back().nextNumber;
+        }
         break;
       }
       case MD_BLOCK_ADMONITION: {
@@ -764,6 +773,7 @@ public:
   }
 
   uint32_t containerCount() const { return containerCount_; }
+  std::vector<ListSummary> takeLists() { return std::move(topLists_); }
   uint32_t tableCount() const { return tableCount_; }
   std::vector<ByteRange> takeBlockSource() { return std::move(blockSource_); }
   /// The bytes to hand to md4c: the source, or the same-length rewrite.
@@ -1609,6 +1619,20 @@ private:
 
   static bool endsWithAscii(std::u16string_view text, std::u16string_view suffix) {
     return text.size() >= suffix.size() && text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
+  }
+
+  /// Starts a summary when a list opens outside every container. Called before
+  /// the list frame is pushed, so an empty stack is what makes it top-level.
+  void noteTopLevelList(bool ordered, char mark, bool tight, unsigned start) {
+    if (!lists_.empty() || !containers_.empty()) {
+      return;
+    }
+    ListSummary summary;
+    summary.ordered = ordered;
+    summary.mark = mark;
+    summary.tight = tight;
+    summary.nextNumber = start;
+    topLists_.push_back(summary);
   }
 
   void pushContainer(ContainerKind kind, std::u16string marker, TaskState task) {
@@ -2836,6 +2860,7 @@ private:
   size_t cursor_{0};
   unsigned tableRow_{0};
   uint32_t containerCount_{0};
+  std::vector<ListSummary> topLists_;
   uint32_t tableCount_{0};
   int strongDepth_{0};
   int emphasisDepth_{0};
@@ -3017,6 +3042,7 @@ DocumentBuilder builder(source, options);
   result.referenceDefinitions = builder.takeReferenceDefinitions();
   result.referenceOutputUsed = builder.referenceOutputUsed();
   result.referenceOutputLimited = builder.referenceOutputLimited();
+  result.lists = builder.takeLists();
   return result;
 }
 
@@ -3076,8 +3102,11 @@ ParseResult parseMarkdownAt(std::string_view region, size_t origin, ParseOptions
 }
 
 ParseResult parseMarkdownWithReferences(std::string_view region, size_t origin,
-                                       std::string_view definitions, ParseOptions options, uint32_t referenceBudget) {
-  if (definitions.empty() && referenceBudget == UINT32_MAX) return parseMarkdownAt(region, origin, options);
+                                       std::string_view definitions, ParseOptions options, uint32_t referenceBudget,
+                                       std::string_view lead) {
+  if (definitions.empty() && referenceBudget == UINT32_MAX && lead.empty()) {
+    return parseMarkdownAt(region, origin, options);
+  }
   if (origin > kMaxSourceBytes || region.size() > kMaxSourceBytes - origin) {
     ParseResult rejected;
     rejected.status = ParseStatus::InputLimit;
@@ -3086,14 +3115,47 @@ ParseResult parseMarkdownWithReferences(std::string_view region, size_t origin,
   }
   // Every replay ends in a blank line. Additional blank padding keeps md4c's
   // line-record offsets congruent to the canonical tail, without visible text.
+  // The padding goes before the lead: a blank line between the lead and the
+  // tail would make the list loose.
   std::string replay(definitions);
-  const size_t padding = (origin + 256 - replay.size() % 256) % 256;
+  const size_t padding = (origin + 256 - (replay.size() + lead.size()) % 256) % 256;
   replay.append(padding, '\n');
+  replay.append(lead);
   const uint32_t bytes = static_cast<uint32_t>(replay.size());
   const uint32_t units = static_cast<uint32_t>(utf8ToUtf16(replay).size());
   replay.append(region);
   ParseResult result = parseMarkdownImpl(replay, options, referenceBudget, replay.size());
   if (result.status != ParseStatus::Ok) return result;
+  if (!lead.empty()) {
+    // Definitions produce no blocks or containers, so the lead's paragraph is
+    // the first block and its item the first container. Anything else means the
+    // tail's first line joined the lead's item rather than following it.
+    const auto &blocks = result.document->blocks;
+    const bool alone = !blocks.empty() && !result.lists.empty() && blocks[0].kind == BlockKind::Paragraph &&
+        blocks[0].text == u"x" && blocks[0].containers.size() == 1 &&
+        blocks[0].containers[0].kind == ContainerKind::ListItem && blocks[0].containers[0].id == 1 &&
+        (blocks.size() == 1 || blocks[1].containers.empty() || blocks[1].containers[0].id != 1);
+    if (!alone) {
+      ParseResult rejected;
+      rejected.status = ParseStatus::ParseFailed;
+      rejected.message = "The tail does not continue the list.";
+      return rejected;
+    }
+    auto trimmed = std::make_shared<Document>(*result.document);
+    // A fresh parse has no shared prefix, so every block is in the tail.
+    std::vector<Block> rest(blocks.tail().begin() + 1, blocks.tail().end());
+    for (Block &block : rest) {
+      for (Container &container : block.containers) container.id--;
+    }
+    trimmed->blocks = SharedList<Block>(nullptr, std::move(rest));
+    result.document = std::move(trimmed);
+    result.blockSource.erase(result.blockSource.begin());
+    result.containerCount--;
+    // The lead's item was container 1 of the lead's list, so every id moves
+    // down by one and that list loses an item.
+    for (ListSummary &list : result.lists) list.lastItem--;
+    result.lists.front().items--;
+  }
   for (ByteRange &range : result.blockSource) {
     range.start = range.start > bytes ? range.start - bytes : 0;
     range.end = range.end > bytes ? range.end - bytes : 0;

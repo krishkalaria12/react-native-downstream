@@ -68,6 +68,13 @@ for (const kind of ['Code', 'Table', 'Math']) {
     `/* PRODUCTION_${kind.toUpperCase()}_SCROLL */`,
     `${capture}\n${restore}`
   );
+  if (kind === 'Code') {
+    const clear = contents.match(
+      /  fun clearViewportContent\([\s\S]*?\n  }/
+    )?.[0];
+    if (!clear) throw new Error('Missing production Code recycling method');
+    fixture = fixture.replace('/* PRODUCTION_CODE_CLEAR */', clear);
+  }
 }
 const directory = mkdtempSync(join(tmpdir(), 'downstream-segment-viewport-'));
 try {

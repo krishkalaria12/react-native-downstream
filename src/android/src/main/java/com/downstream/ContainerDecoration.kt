@@ -70,4 +70,8 @@ internal class ContainerDecoration(
 ) {
   /** Whether the box is checked, which is what a press reports the opposite of. */
   val checked: Boolean get() = task == 2
+
+  /** Everything a block's span draws for this level, as one comparable value. */
+  val drawKey: List<Any?>
+    get() = listOf(leading, width, barColor, continuesPrevious, marker, barWidth, markerGap, markerColor)
 }

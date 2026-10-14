@@ -26,11 +26,24 @@ internal object RenderedDocument {
 }
 
 /** Host fixture for TextSegment routing; the backend itself runs on real Android. */
-internal class StreamingParagraphLayout(private val heightAtWidth: (Int) -> Int?) {
+internal class StreamingParagraphLayout(private val heightAtWidth: (Int) -> Int?) : LiveTextLayout {
   var calls = 0
-  fun frame(width: Int): StreamingParagraphFrame? {
+  override fun frame(width: Int): StreamingParagraphFrame? {
     calls++
     return heightAtWidth(width)?.let { StreamingParagraphFrame(it) }
   }
 }
-internal class StreamingParagraphFrame(val height: Int)
+internal class StreamingParagraphFrame(override val height: Int) : LiveTextFrame {
+  override val layout = Layout()
+}
+
+/** Host fixture for CodeSegment routing; chunked layout itself runs on real Android. */
+internal const val UNBOUNDED_CODE_WIDTH = (1 shl 30) - 1
+internal class ChunkedTextFrame(val height: Int, val contentWidth: Int)
+internal class ChunkedTextLayout(private val frameAt: (Int) -> ChunkedTextFrame?) {
+  val widths = ArrayList<Int>()
+  fun frame(width: Int): ChunkedTextFrame? {
+    widths.add(width)
+    return frameAt(width)
+  }
+}

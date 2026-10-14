@@ -89,20 +89,40 @@ private class TextSegmentView(context: Context): View(context) {
   fun clearContent() { shown=null }
   companion object { var creations=0; var bindings=0 }
 }
-private class Scroller { var scrollX=0; var scrollY=0; var width=200; var pin=1
+private class Scroller { var scrollX=0; var scrollY=0; var width=200; var pin=1; var streaming=false
   fun capturePinState()=pin
   fun restorePinState(value:Int) { pin=value }
 }
 private class CodeSegmentView(context: Context): View(context) {
   var shown: CodeSegment?=null
+  private var segment: CodeSegment? get()=shown; set(value) { shown=value }
+  private var rendered: RenderedDocument?=null
+  private var boundSegment: CodeSegment?=null
+  private var ordinal=-1; private var streaming=false
+  private var copied=false; private var appliedChrome: List<Any?>?=null
+  private val clearCopied=Any()
+  private val host=object { var cancellations=0; fun removeCallbacks(callback:Any) { cancellations++ } }
+  private class Payload { var value:Any?=null; fun clearContent() { value=null } }
+  private val body=Payload(); private val gutter=Payload()
   private val scroll=Scroller(); private val viewport=Scroller()
   private var savedOffset=0; private var savedVerticalOffset=0; private var restoreScroll=false
   var state: IntArray get()=captureViewportState(); set(value) { restoreViewportState(value) }
   init { creations++ }
   fun setControlHost(host: MountedDocument) {}; fun setHosted(value: Boolean) {}
-  fun setSegment(s:CodeSegment,d:RenderedDocument,f:Int) { if(shown !== s) isLayoutRequested=true; shown=s }
+  fun setSegment(s:CodeSegment,d:RenderedDocument,f:Int) { if(shown !== s) isLayoutRequested=true; shown=s; rendered=d }
   /* PRODUCTION_CODE_SCROLL */
-  fun clearViewportContent() { shown=null; restoreScroll=false; scroll.scrollX=0; viewport.scrollY=0; viewport.pin=1 }
+  /* PRODUCTION_CODE_CLEAR */
+  fun checkRecycle(document:RenderedDocument) {
+    segment=CodeSegment(); rendered=document; boundSegment=segment; ordinal=7
+    body.value=segment; gutter.value=segment
+    copied=true; appliedChrome=listOf("same style"); streaming=true; viewport.streaming=true
+    savedOffset=99; savedVerticalOffset=66; viewport.pin=0
+    clearViewportContent()
+    check(!copied && appliedChrome==null) { "recycled card kept copy feedback or its chrome memo" }
+    check(segment==null && rendered==null && boundSegment==null && ordinal==-1)
+    check(body.value==null && gutter.value==null && !streaming && !viewport.streaming)
+    check(host.cancellations==1 && state.contentEquals(intArrayOf(0,0,1)))
+  }
   companion object { var creations=0 }
 }
 private class TableSegmentView(context: Context): View(context) {
@@ -172,6 +192,7 @@ private class MountedDocument(val context: Context, var rendered: RenderedDocume
   /* PRODUCTION_METHODS */
 }
 fun main() {
+  CodeSegmentView(Context()).checkRecycle(RenderedDocument(emptyList(),IntArray(0)))
   val segments=List(10_000) { TextSegment(Text("original-$it")) }
   val positions=IntArray(20_000) { if(it%2==0) it/2*20 else 20 }
   val context=Context(); val host=MountedDocument(context,RenderedDocument(segments,positions))
@@ -219,13 +240,14 @@ fun main() {
   protectedHost.attach()
   check(protectedHost.segmentLayer.children.size==protected.size) { "stateful or hosted segments must not be deferred" }
   check(DownstreamNative.events == listOf(
+    42L to "android_code_create_start", 42L to "android_code_create_end",
     42L to "android_table_create_start", 42L to "android_table_create_end",
     42L to "android_table_bind_start", 42L to "android_table_bind_end",
-  )) { "table diagnostics lost document identity or balanced stages" }
+  )) { "card diagnostics lost document identity or balanced stages" }
   DownstreamNative.events.clear()
   protectedHost.drive()
   check(DownstreamNative.events == listOf(42L to "android_table_bind_start", 42L to "android_table_bind_end")) {
-    "reused table repeated creation diagnostics"
+    "reused cards repeated creation diagnostics"
   }
   val paddedHost=MountedDocument(Context(),RenderedDocument(segments,positions))
   paddedHost.paddingTop=100; paddedHost.segmentLayer.top=100

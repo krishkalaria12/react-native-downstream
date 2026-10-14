@@ -376,9 +376,18 @@ internal class RenderedDocument(
     }
 
     private fun segmentCost(value: Segment): Long = when (value) {
-      // Precomputed text also keeps a width per character.
-      is TextSegment -> value.text.length * 24L + 256
-      is CodeSegment -> value.textLength * 24L + 512 + (value.sourcePages?.length ?: 0) * 2L
+      // Precomputed text keeps every word's shaped glyphs in native memory, which
+      // a heap profile puts at about 40 bytes a character on top of the text and
+      // its spans; plain text keeps only those.
+      // Chunked text also keeps its chunks' copies of the text and their lines.
+      is TextSegment -> value.text.length * when {
+        isPrecomputed(value.text) -> PRECOMPUTED_CHARACTER_COST
+        value.streamingParagraph is ChunkedTextLayout -> CHUNKED_CHARACTER_COST
+        else -> 24L
+      } + 256
+      // A body is chunked too; its fallback text is never counted, because
+      // asking for it would build it.
+      is CodeSegment -> value.textLength * CHUNKED_CHARACTER_COST + 512 + (value.sourcePages?.length ?: 0) * 2L
       is TableSegment -> value.accessibilityText.length * 32L + 1024
       // Picture bitmaps belong to the image pipeline's cache.
       is ImageSegment -> 512L
@@ -393,6 +402,35 @@ internal class RenderedDocument(
     private val committedSegments = object : LruCache<String, Segment>(16 * 1024 * 1024) {
       override fun sizeOf(key: String, value: Segment) =
         segmentCost(value).coerceAtMost(16L * 1024 * 1024 + 1).toInt()
+    }
+
+    private const val PRECOMPUTED_CHARACTER_COST = 64L
+
+    /** Chunked text: the source, each chunk's copy of it and their line metrics. */
+    private const val CHUNKED_CHARACTER_COST = 40L
+
+    private fun isPrecomputed(text: CharSequence): Boolean =
+      Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && text is PrecomputedText
+
+    // The largest committed segment each lane cached, by its first block and its
+    // rendering settings, with its block count. Finished blocks join a committed
+    // chunk one at a time until it is full, and each size is a new segment with
+    // its own precomputed text, so a chunk's smaller versions are dropped as it
+    // grows rather than kept until the budget evicts them: kept, a reply held its
+    // finished text about eight times over. A same-size replacement, a revoked
+    // last block, keeps both, because the stream can return to either.
+    private val committedLanes = object : LinkedHashMap<String, Pair<String, Int>>(16, 0.75f, true) {
+      override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<String, Int>>) = size > 512
+    }
+
+    private fun cacheCommitted(key: String, lane: String, blocks: Int, segment: Segment) {
+      val superseded = synchronized(committedLanes) {
+        val previous = committedLanes[lane]
+        if (previous == null || blocks >= previous.second) committedLanes[lane] = Pair(key, blocks)
+        previous?.takeIf { blocks > it.second }?.first
+      }
+      if (superseded != null) committedSegments.remove(superseded)
+      committedSegments.put(key, segment)
     }
 
     private val plainParagraphs = RenderingCache<PlainParagraphKey, TextSegment>(128, 2L * 1024 * 1024) {
@@ -430,6 +468,34 @@ internal class RenderedDocument(
       cache.removeAll { it.startsWith(prefix) }
     }
 
+    // The newest snapshot rendered for each stream, by its first finished block,
+    // whose identity a stream keeps for its whole life and no other stream shares.
+    private val streamLanes = object : LinkedHashMap<Long, Long>(16, 0.75f, true) {
+      override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, Long>) = size > 256
+    }
+
+    /**
+     * Drops the renderings of a stream's earlier snapshots once a later one is
+     * rendered.
+     *
+     * Fabric measures more snapshots than it mounts, and a view only retires the
+     * snapshot it mounted, so the rest stayed until the cache's budget evicted
+     * them, each with its own copy of the growing tail. A later snapshot of the
+     * same stream is never followed by an earlier one, so those renderings are
+     * never asked for again; a view still showing one keeps its own reference.
+     */
+    private fun retireSuperseded(plan: List<PlannedSegment>, documentId: Long) {
+      val lane = plan.firstOrNull()?.takeIf { it.isCommitted }?.identity ?: return
+      if (lane == 0L) return
+      val superseded = synchronized(streamLanes) {
+        val previous = streamLanes[lane]
+        if (previous != null && previous > documentId) return
+        streamLanes[lane] = documentId
+        previous?.takeIf { it != documentId }
+      }
+      if (superseded != null) retire(superseded)
+    }
+
     // Compatible append branches coexist for independently streaming messages.
     private val streamingParagraphs = StreamingParagraphSeeds<StreamingParagraphLayout>(16, 2L * 1024 * 1024)
 
@@ -447,9 +513,16 @@ internal class RenderedDocument(
       it.text.length * 24L + 256
     }
 
-    /** The text layout configuration shared by measurement and TextViews. */
-    fun buildLayout(text: CharSequence, paint: TextPaint, width: Int, alignment: Layout.Alignment): StaticLayout {
-      val builder = StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
+    /** The text layout configuration shared by measurement and TextViews, over text[start, end). */
+    fun buildLayout(
+      text: CharSequence,
+      paint: TextPaint,
+      width: Int,
+      alignment: Layout.Alignment,
+      start: Int = 0,
+      end: Int = text.length,
+    ): StaticLayout {
+      val builder = StaticLayout.Builder.obtain(text, start, end, paint, width)
         .setAlignment(alignment)
         .setLineSpacing(0f, 1f)
         .setIncludePad(false)
@@ -537,7 +610,10 @@ internal class RenderedDocument(
           val tracing = DownstreamNative.isTracingDocument(documentId)
           if (tracing) DownstreamNative.traceDocument(documentId, "android_render_finish_reuse")
           return RenderedDocument(documentId, previous.segments, plan, previous.paint, previous.style, tracing, previous.cacheCost())
-            .also { cache.put(key, it) }
+            .also {
+              cache.put(key, it)
+              retireSuperseded(plan, documentId)
+            }
         }
       }
       // Measurement prepares highlighted code even when the view hides colors.
@@ -601,9 +677,10 @@ internal class RenderedDocument(
           val caretKey = if (isLast) "${caret.kind}:${caret.place}" else "0:0"
           val segmentParagraphs = incrementalParagraphs && planned.kind == SEGMENT_TEXT &&
             !planned.isCommitted && planned.from >= planned.settledBlocks
-          val segmentKey =
-            "${planned.identity}:${planned.lastIdentity}:${planned.from}:${planned.to}:${planned.kind}:$ordinal:${planned.tableOrdinal}:${planned.imageOrdinal}:$scaled:$night:" +
-              "${highlights && planned.kind == SEGMENT_CODE}:$themeId:$caretKey:${linkVariants.hashCode()}:$segmentParagraphs"
+          val segmentSettings = "${planned.from}:${planned.kind}:$ordinal:${planned.tableOrdinal}:${planned.imageOrdinal}:$scaled:$night:" +
+            "${highlights && planned.kind == SEGMENT_CODE}:$themeId:" +
+            "$caretKey:${linkVariants.hashCode()}:$segmentParagraphs"
+          val segmentKey = "${planned.identity}:${planned.lastIdentity}:${planned.to}:$segmentSettings"
           val reused = (if (!planned.isCommitted && planned.kind != SEGMENT_CODE) opposite?.segments?.getOrNull(index) else null)
             ?: (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
           if (traceId != 0L) DownstreamNative.traceDocument(traceId,
@@ -628,11 +705,18 @@ internal class RenderedDocument(
                   }
                 }
               }
-              ?.also { if (planned.isCommitted) committedSegments.put(segmentKey, it) }
+              ?.also {
+                if (planned.isCommitted) {
+                  cacheCommitted(segmentKey, "${planned.identity}:$segmentSettings", planned.to - planned.from, it)
+                }
+              }
             ?: return null
           segments.add(segment)
         }
-        return RenderedDocument(documentId, segments, plan, style.paint, style, traceId != 0L).also { cache.put(key, it) }
+        return RenderedDocument(documentId, segments, plan, style.paint, style, traceId != 0L).also {
+          cache.put(key, it)
+          retireSuperseded(plan, documentId)
+        }
       } finally {
         if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_render_build_end")
       }
@@ -1016,7 +1100,10 @@ internal class RenderedDocument(
         if (color != null) {
           text.setSpan(ForegroundColorSpan(color), start, end, flags)
         }
-        val margin = leading.toInt()
+        // A code card draws its containers' bars and marker in its own margin,
+        // beside the body, so the body's text carries neither the decoration nor
+        // the indent: drawn here too, a list item's number appeared twice.
+        val margin = if (isCode) 0 else leading.toInt()
         if (margin > 0) {
           text.setSpan(LeadingMarginSpan.Standard(margin), start, spanEnd, Spanned.SPAN_PARAGRAPH)
         }
@@ -1025,8 +1112,8 @@ internal class RenderedDocument(
           text.setSpan(BlockLineHeightSpan(px(lineHeight).toInt()), start, spanEnd, Spanned.SPAN_PARAGRAPH)
         }
         text.setSpan(
-          BlockSpan(gap.toInt(), leading, decoration, containers, markerPaint, colors, density,
-            isCode || document.blockIsRtl(block), style.ruleHeight),
+          BlockSpan(gap.toInt(), if (isCode) 0f else leading, decoration, if (isCode) emptyList() else containers,
+            markerPaint, colors, density, isCode || document.blockIsRtl(block), style.ruleHeight),
           start,
           spanEnd,
           Spanned.SPAN_PARAGRAPH,
@@ -1383,12 +1470,19 @@ internal class RenderedDocument(
           streamingParagraphs.put(seedKey, paragraphText, it)
         }
       } else null
+      // Prose is laid out in reusable chunks ahead of its view, committed or not,
+      // so it needs no precomputed copy of the whole segment either. A committed
+      // segment that grows, as a list does item by item, reshapes only its last
+      // chunk, and plain chunks hold a fraction of a precomputed text's memory.
+      val chunkedText = streamingParagraph == null && !isCode && chunkedTextEligible(planned, detailsBlocks, text)
       val displayText = if (streamingParagraph != null) {
         SpannedString(text)
-      } else if (isCode) {
-        // This builder stays private inside CodeSegment's lazy initializer.
-        // The initializer publishes an immutable copy when fallback is needed.
-        // Hosted snapshots avoid both that copy and glyph measurement.
+      } else if (isCode || chunkedText) {
+        // Both draw from chunks shaped on their own, so neither precomputes the
+        // whole text. A code body's builder stays private inside CodeSegment's lazy
+        // initializer, which publishes an immutable copy when fallback is needed;
+        // hosted snapshots avoid both that copy and glyph measurement. Chunked
+        // text's builder is read only, and a TextView copies it on fallback.
         text
       } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
         PrecomputedTexts.create(text, paint, traceId)
@@ -1426,6 +1520,7 @@ internal class RenderedDocument(
           caret.kind,
           traceId,
           sourcePages = document.text as? PagedText,
+          bodySeedKey = "${style.themeId}:${style.scale}:${style.density}:${colors.night}:$syntaxHighlighting:$from",
         )
       }
       // The plan grouped this segment for one custom container, if it did: the
@@ -1441,9 +1536,23 @@ internal class RenderedDocument(
         displayText, accessibleBlocks, detailsBlocks, taskBlocks, custom,
         contentLeading = contentLeading(containersOf(0, -1).first).toInt(),
         gapBefore = gapBefore, caretOffset = caretOffset, caretKind = caret.kind,
-        streamingParagraph = streamingParagraph,
+        streamingParagraph = streamingParagraph ?: if (chunkedText) {
+          chunkedLayout(text, codeLineStarts(text), style.paint,
+            "${style.themeId}:${style.scale}:${style.density}:${colors.night}:text:$from")
+        } else null,
       ).also { segment -> plainKey?.let { cachePlainParagraph(it, planned.from, segment) } }
     }
+
+    /**
+     * Whether a text segment is drawn from chunks laid out ahead of its view.
+     * Collapsible bodies change height without a new layout and spoilers are
+     * revealed by editing the view's own text, so both keep the canonical
+     * `TextView`; so does Android before 9, without fallback line spacing to
+     * match it.
+     */
+    private fun chunkedTextEligible(planned: PlannedSegment, details: List<DetailsBlock>, text: Spanned): Boolean =
+      Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && planned.kind == SEGMENT_TEXT &&
+        details.isEmpty() && text.getSpans(0, text.length, SpoilerSpan::class.java).isEmpty()
 
     /** Parser output and resolved typography define the supported live subset. */
     private fun streamingParagraphEligible(
@@ -1614,18 +1723,20 @@ internal class RenderedDocument(
       caretKind: Int = 0,
       traceId: Long = 0L,
       sourcePages: CharSequence? = null,
+      bodySeedKey: String? = null,
     ): CodeSegment {
       val newline = text.indexOfFirst { it == '\n' }
       val firstLine = text.substring(0, if (newline < 0) text.length else newline).toString()
+      // Found once here, on whichever thread built the rendering, so the
+      // gutter's draw pass never searches the text for newlines.
+      val lineStarts = codeLineStarts(text)
       return CodeSegment(
         text = displayText,
         accessibleBlocks = accessibleBlocks,
         language = language,
         title = fenceMeta.title,
         fenceMeta = fenceMeta,
-        // Found once here, on whichever thread built the rendering, so the
-        // gutter's draw pass never searches the text for newlines.
-        lineStarts = codeLineStarts(text),
+        lineStarts = lineStarts,
         codeTextSize = codeTextSize,
         codeFace = codeFace,
         blockIndex = blockIndex,
@@ -1661,7 +1772,42 @@ internal class RenderedDocument(
             PrecomputedTexts.create(displayText, style.paint, traceId)
           } else SpannedString(displayText)
         },
+        body = codeBody(text, lineStarts, style, containers.first, bodySeedKey),
       )
+    }
+
+    // A growing fence's or tail's previous snapshot, so its next one lays out
+    // only what changed. Branches rather than one entry per block, for the same
+    // reason paragraphs keep them: two messages streaming at once.
+    private val chunkedLayouts =
+      StreamingParagraphSeeds<ChunkedTextLayout>(32, 4L * 1024 * 1024, CHUNKED_CHARACTER_COST)
+
+    /** Chunked text seeded from the previous snapshot of the same growing text. */
+    private fun chunkedLayout(text: Spanned, lineStarts: IntArray, paint: TextPaint, seedKey: String): ChunkedTextLayout {
+      val source = text.toString()
+      // Only complete paragraphs are ever reused, so a caret placeholder or a line
+      // still arriving at the end does not stop the next snapshot matching.
+      val settled = source.substring(0, source.lastIndexOf('\n') + 1)
+      return ChunkedTextLayout(text, lineStarts, paint, chunkedLayouts.matching(seedKey, source)).also {
+        chunkedLayouts.put(seedKey, settled, it)
+      }
+    }
+
+    /**
+     * The chunked body for a code block, or null before Android 9, which has no
+     * fallback line spacing to match the `TextView` with. A card draws its own
+     * containers, so its body's text has none and every card can be chunked.
+     */
+    private fun codeBody(
+      text: Spanned,
+      lineStarts: IntArray,
+      style: Style,
+      containers: List<ContainerDecoration>,
+      seedKey: String?,
+    ): ChunkedTextLayout? {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
+      if (seedKey == null) return ChunkedTextLayout(text, lineStarts, style.paint)
+      return chunkedLayout(text, lineStarts, style.paint, seedKey)
     }
 
     private fun buildTable(
