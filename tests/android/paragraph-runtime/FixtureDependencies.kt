@@ -27,8 +27,9 @@ internal class Colors(val selectionColor: Int? = null)
 internal class Style(val colors: Colors = Colors())
 internal class RenderedDocument(val paint: TextPaint, val tracing: Boolean = false, val documentId: Long = 0L, val style: Style = Style()) {
   companion object {
-    fun buildLayout(text: CharSequence, paint: TextPaint, width: Int, alignment: Layout.Alignment): StaticLayout =
-      StaticLayout.Builder.obtain(text, 0, text.length, paint, width).setAlignment(alignment)
+    fun buildLayout(text: CharSequence, paint: TextPaint, width: Int, alignment: Layout.Alignment,
+      start: Int = 0, end: Int = text.length): StaticLayout =
+      StaticLayout.Builder.obtain(text, start, end, paint, width).setAlignment(alignment).setLineSpacing(0f, 1f)
         .setTextDirection(TextDirectionHeuristics.FIRSTSTRONG_LTR).setIncludePad(false)
         .setBreakStrategy(Layout.BREAK_STRATEGY_HIGH_QUALITY).setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
         .setUseLineSpacingFromFallbacks(true).setUseBoundsForWidth(false).build()
@@ -49,8 +50,14 @@ internal class DownstreamMarkdownView(context: Context) : FrameLayout(context) {
   fun onToggleDetails(id: Int, open: Boolean) {}
   fun onToggleTask(id: Int, checked: Boolean) {}
 }
-internal class LinkSpan(val index: Int, val color: Int = 0, val underlined: Boolean = true) : ClickableSpan() {
+internal class LinkSpan(val index: Int, val color: Int = 0, val underlined: Boolean = true) : ClickableSpan(), ReusableSpan {
+  override val reuseKey: Any get() = Triple(index, color, underlined)
   override fun onClick(widget: View) {}
+  // Production's drawing, so a pixel comparison sees the link a reader sees.
+  override fun updateDrawState(paint: android.text.TextPaint) {
+    paint.color = color
+    paint.isUnderlineText = underlined
+  }
 }
 internal class TagSpan(val index: Int)
 internal class SpoilerSpan(val color: Int)

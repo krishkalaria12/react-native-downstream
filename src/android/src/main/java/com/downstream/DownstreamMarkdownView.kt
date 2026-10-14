@@ -1636,7 +1636,16 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
         }
         view = when (segment) {
           is TextSegment -> if (recycledTextViews.isEmpty()) TextSegmentView(context) else recycledTextViews.removeLast()
-          is CodeSegment -> CodeSegmentView(context).apply { setControlHost(this@DownstreamMarkdownView) }
+          is CodeSegment -> {
+            // A card is a header, four buttons, two scroll views and a body, built
+            // once per block, so it is traced as a stage of its own.
+            if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_code_create_start")
+            try {
+              CodeSegmentView(context).apply { setControlHost(this@DownstreamMarkdownView) }
+            } finally {
+              if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_code_create_end")
+            }
+          }
           is TableSegment -> {
             if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_table_create_start")
             try {

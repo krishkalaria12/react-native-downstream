@@ -104,6 +104,9 @@ try {
   const productionRoot = join(repo, 'src/android/src/main/java/com/downstream');
   const productionSources = [
     'CodeLayout.kt',
+    'ChunkedTextLayout.kt',
+    'LiveTextLayout.kt',
+    'CompositeLayout.kt',
     'PagedText.kt',
     'StreamingParagraphLayout.kt',
     'StreamingParagraphSeeds.kt',
@@ -186,6 +189,8 @@ try {
     join(here, 'ReactResources.kt'),
     join(here, 'PagedTextChecks.kt'),
     join(here, 'ParagraphChecks.kt'),
+    join(here, 'CodeBodyChecks.kt'),
+    join(here, 'ProseTailChecks.kt'),
     join(here, 'ParagraphInstrumentation.kt'),
   ]);
   run(join(build, 'd8'), [
@@ -278,6 +283,9 @@ try {
       '-r',
       ...(process.env.DOWNSTREAM_PAGED_ONLY === '1'
         ? ['-e', 'pagesOnly', 'true']
+        : []),
+      ...(process.env.DOWNSTREAM_CODE_ONLY === '1'
+        ? ['-e', 'codeOnly', 'true']
         : []),
       'com.downstream.paragraphruntime/com.downstream.ParagraphInstrumentation',
     ],

@@ -142,8 +142,12 @@ internal class TextSegment(
   val caretOffset: Int,
   /** The caret's shape, or 0 for none. */
   val caretKind: Int,
-  /** Opt-in live plain-paragraph layout; complete text uses canonical shaping. */
-  val streamingParagraph: StreamingParagraphLayout? = null,
+  /**
+   * The unsettled text laid out ahead of the view: the opt-in live paragraph, or
+   * the reply's growing tail in reusable chunks. Settled text uses canonical
+   * shaping in the platform's own layout.
+   */
+  val streamingParagraph: LiveTextLayout? = null,
 ) : Segment(gapBefore) {
   private var heightWidth = -1
   private var fullHeight = 0
@@ -330,6 +334,12 @@ internal class CodeSegment(
   prepareText: (() -> Spanned)? = null,
   /** Retains shared JNI pages until this model is evicted, including across GC. */
   @field:DoNotStrip val sourcePages: CharSequence? = null,
+  /**
+   * The body laid out in reusable chunks of lines, or null where only the
+   * canonical `TextView` lays it out. A card draws it directly, so neither the
+   * measurement nor the view shapes the whole block again for each delta.
+   */
+  private val body: ChunkedTextLayout? = null,
 ) : Segment(gapBefore) {
   val textLength = text.length
   val text: Spanned by lazy { prepareText?.invoke() ?: text }
@@ -374,6 +384,7 @@ internal class CodeSegment(
    */
   @Synchronized
   fun bodyHeight(paint: TextPaint, cardWidth: Int, wrapped: Boolean, gutterWidth: Int = 0): Int {
+    bodyFrame(cardWidth, wrapped, gutterWidth)?.let { return it.height }
     val width = layoutWidth(cardWidth, wrapped, gutterWidth)
     if (wrapped) {
       if (width != wrappedWidth) {
@@ -408,10 +419,20 @@ internal class CodeSegment(
   @Synchronized
   fun bodyWidth(paint: TextPaint, cardWidth: Int, wrapped: Boolean, gutterWidth: Int = 0): Int {
     if (!wrapped) {
+      bodyFrame(cardWidth, false)?.let { return it.contentWidth }
       bodyHeight(paint, cardWidth, false)
       return unwrappedWidth
     }
     return layoutWidth(cardWidth, true, gutterWidth)
+  }
+
+  /**
+   * The body laid out at a card width, or null where the canonical `TextView`
+   * lays it out. The same frame answers the height, the width and the drawing.
+   */
+  fun bodyFrame(cardWidth: Int, wrapped: Boolean, gutterWidth: Int = 0): ChunkedTextFrame? {
+    val body = body ?: return null
+    return body.frame(if (wrapped) layoutWidth(cardWidth, true, gutterWidth) else UNBOUNDED_CODE_WIDTH)
   }
 
   /**

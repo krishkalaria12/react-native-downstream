@@ -105,6 +105,7 @@ const suites = [
     sources: [
       ...kotlin(
         'Segments.kt',
+        'LiveTextLayout.kt',
         'PlainParagraphKey.kt',
         'CodeLayout.kt',
         'ContainerDecoration.kt',

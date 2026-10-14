@@ -273,8 +273,18 @@ internal class MathRenderer {
  * It draws at the run's own size times KaTeX's 1.21 and in the run's own color,
  * which is the paint it is handed, and raises the line to fit a tall formula.
  */
-internal class MathInlineSpan(private val list: MathDisplayList, private val minimumRule: Float) : ReplacementSpan() {
+internal class MathInlineSpan(private val list: MathDisplayList, private val minimumRule: Float) : ReplacementSpan(),
+  ReusableSpan {
   private val renderer = MathRenderer()
+
+  /**
+   * A formula's list is the engine's layout of the literal this span covers, and
+   * a reused chunk's text is the same literal, so the list's own size and item
+   * counts are enough to tell one layout from another. Without a value, every
+   * chunk holding a formula was laid out again on every snapshot.
+   */
+  override val reuseKey: Any
+    get() = listOf(minimumRule, list.width, list.height, list.depth, list.glyphs.size, list.rules.size, list.paths.size)
 
   override fun getSize(paint: Paint, text: CharSequence?, start: Int, end: Int, fm: Paint.FontMetricsInt?): Int {
     val size = paint.textSize * kInlineMathScale

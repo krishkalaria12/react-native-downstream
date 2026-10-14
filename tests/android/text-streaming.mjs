@@ -34,6 +34,13 @@ for (const [marker, value] of [
   ],
   ['PRODUCTION_HOSTED', method('CodeSegmentView.kt', 'setHosted', 2)],
   ['PRODUCTION_BIND_FALLBACK', method('CodeSegmentView.kt', 'bindFallback', 2)],
+  [
+    'PRODUCTION_BIND_BODY',
+    method('CodeSegmentView.kt', 'bindBody', 2).replace(
+      'segment: CodeSegment',
+      'segment: HostedCodeSegment'
+    ),
+  ],
 ])
   fixture = fixture.replace(`/* ${marker} */`, value);
 const lookup = readFileSync(join(sources, 'RenderedDocument.kt'), 'utf8').match(
@@ -41,6 +48,22 @@ const lookup = readFileSync(join(sources, 'RenderedDocument.kt'), 'utf8').match(
 )?.[0];
 if (!lookup) throw new Error('Missing production paragraph cache lookup');
 fixture = fixture.replace('/* PRODUCTION_PARAGRAPH_LOOKUP */', lookup);
+const streamLanes = readFileSync(
+  join(sources, 'RenderedDocument.kt'),
+  'utf8'
+).match(
+  /^    fun retire\([\s\S]*?^    private fun retireSuperseded\([\s\S]*?^    }/m
+)?.[0];
+if (!streamLanes) throw new Error('Missing production stream lanes');
+fixture = fixture.replace('/* PRODUCTION_STREAM_LANES */', streamLanes);
+const committedLanes = readFileSync(
+  join(sources, 'RenderedDocument.kt'),
+  'utf8'
+).match(
+  /^    private val committedLanes[\s\S]*?^    private fun cacheCommitted\([\s\S]*?^    }/m
+)?.[0];
+if (!committedLanes) throw new Error('Missing production committed lanes');
+fixture = fixture.replace('/* PRODUCTION_COMMITTED_LANES */', committedLanes);
 const lanes = readFileSync(join(sources, 'RenderedDocument.kt'), 'utf8').match(
   /^    private val plainParagraphLanes[\s\S]*?^    private fun cachePlainParagraph\([\s\S]*?^    }/m
 )?.[0];

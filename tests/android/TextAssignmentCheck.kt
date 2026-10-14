@@ -25,6 +25,7 @@ private class Paint {
   var color = 42
   fun set(other: Paint) { typeface = other.typeface; textSize = other.textSize; color = other.color }
 }
+private class Layout(val height: Int)
 private class Colors(val selectionColor: Int? = 17)
 private class Style(val colors: Colors = Colors())
 private class RenderedDocument(val paint: Paint = Paint(), val style: Style = Style(),
@@ -80,10 +81,13 @@ private open class PlatformView {
   fun setText(text: Spanned, buffer: BufferType) { this.buffer = buffer; this.text = text }
   fun setTextSize(unit: Int, size: Float) { paint.textSize = size }
   fun setTextColor(color: Int) { paint.color = color }
+  val currentTextColor get() = paint.color
+  var layoutRequests = 0
   fun setTextIsSelectable(value: Boolean) { isTextSelectable = value }
-  fun requestLayout() {}
+  fun requestLayout() { layoutRequests++ }
   fun invalidate() {}
-  fun setMeasuredDimension(width: Int, height: Int) {}
+  var measured = Pair(0, 0)
+  fun setMeasuredDimension(width: Int, height: Int) { measured = Pair(width, height) }
   var failMeasure = false
   open fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
     if (failMeasure) error("platform measurement failed")
@@ -98,6 +102,14 @@ private class AssignmentView : PlatformView() {
   private var streamingFrame: StreamingParagraphFrame? = null
   private var streamingRendered: RenderedDocument? = null
   private var streamingCanonicalAssigned = false
+  private var preparedLayout: Layout? = null
+  private var preparedText: Spanned? = null
+  private var preparedRendered: RenderedDocument? = null
+  private var preparedWidth = 0
+  private fun displayLayout(): Layout? = preparedLayout
+  fun checkPrepared(layout: Layout?, text: Spanned?) {
+    check(preparedLayout === layout && preparedText === text)
+  }
   private var summary: DetailsBlock? = null
   private var spoilersRevealed = false
   private var bandFrame: Any? = null
@@ -146,6 +158,8 @@ private class AssignmentView : PlatformView() {
   /* PRODUCTION_setSelectable */
   /* PRODUCTION_onMeasure */
   /* PRODUCTION_measureContent */
+  /* PRODUCTION_setPreparedContent */
+  /* PRODUCTION_clearPrepared */
 }
 
 fun main() {
@@ -277,5 +291,39 @@ fun main() {
   measured.clearContent()
   measured.onMeasure(200, 400)
   check(DownstreamNative.events.isEmpty())
+
+  // A code body laid out ahead of the view is shown without assigning text or
+  // measuring the platform layout; equal layouts are not bound twice.
+  val codeView = AssignmentView()
+  codeView.setContent(Spanned("canonical"), listOf(AccessibleBlock(0, 9)), rendered)
+  check(codeView.assignments == 1)
+  var source = Spanned("")
+  var frame = Layout(0)
+  repeat(100) { revision ->
+    source = Spanned("c".repeat(revision + 1))
+    frame = Layout(20 + revision / 10 * 20)
+    codeView.setPreparedContent(source, listOf(AccessibleBlock(0, source.length)), rendered, frame, 300)
+    codeView.checkPrepared(frame, source)
+  }
+  // Only the first binding clears the canonical text; nothing else is assigned.
+  check(codeView.assignments == 2 && codeView.text.isEmpty())
+  // A new layout of the same size relays nothing out: ten sizes, ten requests.
+  check(codeView.layoutRequests == 10) { "${codeView.layoutRequests}" }
+  check(codeView.readingBuilds == 0)
+  codeView.checkReadingRange(100)
+  codeView.setPreparedContent(source, listOf(AccessibleBlock(0, source.length)), rendered, frame, 300)
+  check(codeView.accessibility.notifications == 101)
+  codeView.failMeasure = true
+  codeView.onMeasure(10, 10)
+  check(codeView.measured == Pair(300, frame.height)) { "${codeView.measured}" }
+  codeView.failMeasure = false
+  // A selection needs the platform layout, so selecting returns to canonical text.
+  codeView.setSelectable(true)
+  codeView.checkPrepared(null, null)
+  check(codeView.text === source && codeView.assignments == 3)
+  codeView.setPreparedContent(source, listOf(AccessibleBlock(0, source.length)), rendered, frame, 300)
+  codeView.clearContent()
+  codeView.checkPrepared(null, null)
+  println("text assignment: prepared code body, 100 revisions, 1 text clear, 10 relayouts, measured from its layout; selection and reset return to canonical")
   println("text assignment: 100 unused revisions build no metadata; lazy queries, focus, reset, identity, details, direct content and live fallback preserve state")
 }

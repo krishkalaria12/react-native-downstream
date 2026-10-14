@@ -64,12 +64,30 @@ internal class TextSegmentView(context: Context) : TextView(context) {
       if (id != 0L) DownstreamNative.traceDocument(id, "android_text_${stage}_end")
     }
   }
-  private var streamingFrame: StreamingParagraphFrame? = null
+  private var streamingFrame: LiveTextFrame? = null
   // Candidate metadata survives a canonical fallback at another width.
   private var streamingRendered: RenderedDocument? = null
   private var streamingCanonicalAssigned = false
-  private fun displayLayout(): Layout? = streamingFrame?.layout ?: layout
-  private fun displayText(): CharSequence = if (streamingRendered != null) segment?.text ?: text else text
+
+  /**
+   * Text laid out ahead of this view, which it draws without a `TextView` layout
+   * of its own: a code body, laid out in chunks on the measuring thread. The
+   * platform text stays empty, so assigning, measuring and drawing never shape
+   * the whole block on the UI thread.
+   */
+  private var preparedLayout: Layout? = null
+  private var preparedText: Spanned? = null
+  private var preparedRendered: RenderedDocument? = null
+  private var preparedWidth = 0
+  private fun displayLayout(): Layout? = streamingFrame?.layout ?: preparedLayout ?: layout
+
+  /**
+   * The layout this view draws, which is not the platform's own while it shows a
+   * live paragraph or a prepared body. For views drawn beside it, as a code
+   * gutter's numbers are, line for line.
+   */
+  internal val shownLayout: Layout? get() = displayLayout()
+  private fun displayText(): CharSequence = preparedText ?: if (streamingRendered != null) segment?.text ?: text else text
 
   /**
    * The document block this view's first block is, which is what maps a reveal
@@ -166,6 +184,12 @@ private class TaskPress(val id: Int, val checked: Boolean)
   }
 
   fun setSelectable(selectable: Boolean) {
+    val preparedSource = preparedText
+    val preparedOwner = preparedRendered
+    if (selectable && preparedSource != null && preparedOwner != null) {
+      // A selection is the platform's, over the platform's own layout.
+      setContent(preparedSource, readingBlocks, preparedOwner)
+    }
     if (selectable && streamingRendered != null && !streamingCanonicalAssigned) {
       val current = segment
       val rendered = streamingRendered
@@ -282,6 +306,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
     // segment itself only knows its own text, and a reveal unit names a document
     // block.
     blockOffset = firstBlock
+    clearPrepared()
     streamingFrame = null
     streamingRendered = null
     streamingCanonicalAssigned = false
@@ -302,6 +327,9 @@ private class TaskPress(val id: Int, val checked: Boolean)
       readingBlocks = segment.accessibleBlocks
       bandFrame = null
       paint.set(rendered.paint)
+      // The caret draws in the view's text color, which the platform text that
+      // would have set it never arrives to set.
+      if (currentTextColor != rendered.paint.color) setTextColor(rendered.paint.color)
       // Clear the platform layout once on entry; subsequent updates never assign
       // growing text to TextView. Reading and reveal use the composite layout.
       if (text.isNotEmpty()) text = ""
@@ -373,10 +401,54 @@ private class TaskPress(val id: Int, val checked: Boolean)
     accessibility.contentChanged()
   }
 
+  /**
+   * Shows [layout], laid out ahead of this view over [text], as [setContent]
+   * shows text: the same reading order, reveal and caret, with none of the
+   * platform's assignment or layout. [contentWidth] is the width the layout's
+   * lines need, which is what an unconstrained measurement answers.
+   *
+   * Not for selectable text: a selection needs the platform's own layout.
+   */
+  fun setPreparedContent(
+    text: Spanned,
+    accessibleBlocks: List<AccessibleBlock>,
+    rendered: RenderedDocument,
+    layout: Layout,
+    contentWidth: Int,
+  ) {
+    if (layout === preparedLayout && text === preparedText) return
+    setTraceDocument(rendered)
+    streamingFrame = null
+    streamingRendered = null
+    streamingCanonicalAssigned = false
+    bandFrame = null
+    segment = null
+    summary = null
+    spoilersRevealed = false
+    readingBlocks = accessibleBlocks
+    // A layout of the same size needs no new measurement, only a new drawing.
+    val sized = preparedLayout?.height == layout.height && preparedWidth == contentWidth
+    preparedText = text
+    preparedWidth = contentWidth
+    preparedLayout = layout
+    preparedRendered = rendered
+    // The caret and the reading order read the view's own paint and color, which
+    // the precomputed path would have set from the same paint.
+    paint.set(rendered.paint)
+    if (currentTextColor != rendered.paint.color) setTextColor(rendered.paint.color)
+    // Cleared once on entry; the layout above is what draws from here on.
+    if (this.text.isNotEmpty()) this.text = ""
+    cachedReadingParts = null
+    accessibility.contentChanged()
+    if (!sized) requestLayout()
+    invalidate()
+  }
+
   // Canonical segments attach their own details metadata after assignment, so
   // assigning text must not build a second, temporary reading order or notify.
   private fun assignContent(text: Spanned, accessibleBlocks: List<AccessibleBlock>, rendered: RenderedDocument) {
     setTraceDocument(rendered)
+    clearPrepared()
     streamingFrame = null
     streamingRendered = null
     streamingCanonicalAssigned = false
@@ -408,6 +480,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
   /** A hosted fence need not retain the previous native body's text/layout. */
   fun clearContent() {
     traceDocumentId = 0L
+    clearPrepared()
     streamingFrame = null
     streamingRendered = null
     streamingCanonicalAssigned = false
@@ -418,6 +491,13 @@ private class TaskPress(val id: Int, val checked: Boolean)
     cachedReadingParts = emptyList()
     text = ""
     accessibility.contentChanged()
+  }
+
+  private fun clearPrepared() {
+    preparedLayout = null
+    preparedText = null
+    preparedRendered = null
+    preparedWidth = 0
   }
 
   /**
@@ -540,6 +620,16 @@ private class TaskPress(val id: Int, val checked: Boolean)
   }
 
   private fun measureContent(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    val prepared = preparedLayout
+    if (prepared != null) {
+      // The owner laid the text out at the width it will be drawn at, so the
+      // answer is the layout's, whatever this pass offers.
+      setMeasuredDimension(
+        View.resolveSize(preparedWidth + paddingLeft + paddingRight, widthMeasureSpec),
+        View.resolveSize(prepared.height + paddingTop + paddingBottom, heightMeasureSpec),
+      )
+      return
+    }
     val current = segment
     val model = current?.streamingParagraph
     val rendered = streamingRendered
@@ -650,16 +740,18 @@ private class TaskPress(val id: Int, val checked: Boolean)
   /** Everything the segment draws: the one call the clipped passes repeat. */
   private fun drawContent(canvas: Canvas) {
     drawInlineCodeBackgrounds(canvas)
-    val live = streamingFrame
-    if (live != null) {
+    val direct = streamingFrame?.layout ?: preparedLayout
+    if (direct != null) {
       canvas.save()
       canvas.translate(totalPaddingLeft.toFloat(), totalPaddingTop.toFloat())
-      live.layout.draw(canvas)
+      direct.draw(canvas)
       canvas.restore()
     } else {
       super.onDraw(canvas)
     }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && text is PrecomputedText) {
+    // Precomputed text leaves link underlines and strikes to this pass, and so
+    // does live text, whose layouts are made to draw what precomputed text does.
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && (direct != null || text is PrecomputedText)) {
       drawDecorations(canvas)
     }
     // Drawn after the text because the chevron sits in the leading margin and a
@@ -974,8 +1066,9 @@ private class TaskPress(val id: Int, val checked: Boolean)
   // sees it, so selection neither highlights the link nor clicks its span.
   @SuppressLint("ClickableViewAccessibility")
   override fun onTouchEvent(event: MotionEvent): Boolean {
-    // This opt-in branch contains only noninteractive plain active text.
-    if (streamingRendered != null && !isTextSelectable) return false
+    // Hit tests read the drawn layout and its text, which for live text and a
+    // prepared body are not the platform's own, so a link in a growing tail is as
+    // pressable as one in settled text.
     val layout = displayLayout() ?: return super.onTouchEvent(event)
     val x = event.x - totalPaddingLeft + scrollX
     val y = event.y - totalPaddingTop + scrollY
@@ -1135,7 +1228,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
 
   /** A tag run under the point, or -1. The whole run is the control. */
   private fun tagAt(layout: Layout, x: Float, y: Float): Int {
-    val content = text as? Spanned ?: return -1
+    val content = displayText() as? Spanned ?: return -1
     if (y < 0 || y > layout.height) return -1
     val line = layout.getLineForVertical(y.toInt())
     val offset = layout.getOffsetForHorizontal(line, x)
@@ -1145,7 +1238,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
 
   /** The tag run's own words under the point, or empty. */
   private fun tagTextAt(layout: Layout, x: Float, y: Float): String {
-    val content = text as? Spanned ?: return ""
+    val content = displayText() as? Spanned ?: return ""
     if (y < 0 || y > layout.height) return ""
     val line = layout.getLineForVertical(y.toInt())
     val offset = layout.getOffsetForHorizontal(line, x)
@@ -1156,7 +1249,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
 
   /** A spoiler run under the point, or null. Hidden text has no ink, so the range is the target. */
   private fun spoilerAt(layout: Layout, x: Float, y: Float): Boolean {
-    val content = text as? Spanned ?: return false
+    val content = displayText() as? Spanned ?: return false
     if (y < 0 || y > layout.height) return false
     val line = layout.getLineForVertical(y.toInt())
     val offset = layout.getOffsetForHorizontal(line, x)

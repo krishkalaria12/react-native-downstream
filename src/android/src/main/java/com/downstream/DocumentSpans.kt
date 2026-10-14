@@ -15,7 +15,9 @@ import android.view.View
  * Marks a link's text. Taps are hit-tested by the views; accessibility
  * services activate links through ClickableSpan.onClick.
  */
-internal class LinkSpan(val index: Int, val color: Int, val underlined: Boolean = true) : ClickableSpan() {
+internal class LinkSpan(val index: Int, val color: Int, val underlined: Boolean = true) : ClickableSpan(), ReusableSpan {
+  override val reuseKey: Any get() = Triple(index, color, underlined)
+
   override fun onClick(widget: View) {
     var parent: Any? = widget
     while (parent is View) {
@@ -39,7 +41,9 @@ internal class LinkSpan(val index: Int, val color: Int, val underlined: Boolean 
  * A marker span rather than a drawing span: the tag's style comes from the
  * theme or the variant, and this only says *that* the run is a tag press.
  */
-internal class TagSpan(val index: Int)
+internal class TagSpan(val index: Int) : ReusableSpan {
+  override val reuseKey: Any get() = index
+}
 
 /**
  * Raises text by [pixels], or lowers it for a negative value, for footnote
@@ -47,7 +51,9 @@ internal class TagSpan(val index: Int)
  * because the size span applied before this one has already shrunk the paint
  * and the shift is a share of the block's size, not the script's.
  */
-internal class BaselineShiftSpan(private val pixels: Int) : MetricAffectingSpan() {
+internal class BaselineShiftSpan(private val pixels: Int) : MetricAffectingSpan(), ReusableSpan {
+  override val reuseKey: Any get() = pixels
+
   // A positive baseline shift moves text down.
   override fun updateDrawState(paint: TextPaint) {
     paint.baselineShift -= pixels
@@ -64,7 +70,9 @@ internal class BaselineShiftSpan(private val pixels: Int) : MetricAffectingSpan(
  * inline code, and a raised or lowered run would open its line the same way.
  * Runs before BlockSpan, which adds block spacing.
  */
-internal class HeldLineSpan(private val ascent: Int, private val descent: Int) : LineHeightSpan {
+internal class HeldLineSpan(private val ascent: Int, private val descent: Int) : LineHeightSpan, ReusableSpan {
+  override val reuseKey: Any get() = Pair(ascent, descent)
+
   override fun chooseHeight(
     text: CharSequence,
     lineStart: Int,
@@ -86,7 +94,9 @@ internal class HeldLineSpan(private val ascent: Int, private val descent: Int) :
  * it. Runs after HeldLineSpan, which sets absolute metrics, and before
  * BlockSpan, which adds block spacing on top of the line.
  */
-internal class BlockLineHeightSpan(private val height: Int) : LineHeightSpan {
+internal class BlockLineHeightSpan(private val height: Int) : LineHeightSpan, ReusableSpan {
+  override val reuseKey: Any get() = height
+
   override fun chooseHeight(
     text: CharSequence,
     lineStart: Int,
@@ -108,7 +118,9 @@ internal class BlockLineHeightSpan(private val height: Int) : LineHeightSpan {
  * between the code's ascent and descent. BackgroundColorSpan fills the whole
  * line, which on a block's first line includes the block spacing above it.
  */
-internal class InlineCodeBackgroundSpan(val color: Int, val ascent: Int, val descent: Int)
+internal class InlineCodeBackgroundSpan(val color: Int, val ascent: Int, val descent: Int) : ReusableSpan {
+  override val reuseKey: Any get() = Triple(color, ascent, descent)
+}
 
 /**
  * A strikethrough in a color the theme chose.
@@ -118,7 +130,9 @@ internal class InlineCodeBackgroundSpan(val color: Int, val ascent: Int, val des
  * own. A null color means the text color, which is what the platform's span
  * does, so an unset slot is still the platform's span rather than this one.
  */
-internal class ThemedStrikeSpan(val color: Int) : UnderlineSpan() {
+internal class ThemedStrikeSpan(val color: Int) : UnderlineSpan(), ReusableSpan {
+  override val reuseKey: Any get() = color
+
   override fun updateDrawState(ds: TextPaint) {
     ds.flags = ds.flags or Paint.STRIKE_THRU_TEXT_FLAG
     ds.color = color
@@ -133,7 +147,9 @@ internal class ThemedStrikeSpan(val color: Int) : UnderlineSpan() {
  * text color, and a theme that wants its links — or its `<u>` — underlined in
  * another color needs a span of its own.
  */
-internal class ThemedUnderlineSpan(val color: Int) : UnderlineSpan() {
+internal class ThemedUnderlineSpan(val color: Int) : UnderlineSpan(), ReusableSpan {
+  override val reuseKey: Any get() = color
+
   override fun updateDrawState(ds: TextPaint) {
     super.updateDrawState(ds)
     ds.underlineColor = color
@@ -201,8 +217,20 @@ internal class BlockSpan(
   private val rtl: Boolean,
   /** A rule's thickness, from the theme, rather than a density-sized hairline. */
   private val ruleHeight: Float,
-) : LineHeightSpan, LineBackgroundSpan {
+) : LineHeightSpan, LineBackgroundSpan, ReusableSpan {
   private fun blockStart(text: CharSequence) = (text as Spanned).getSpanStart(this)
+
+  /**
+   * Everything this span lays out and draws: the block spacing, a rule in its
+   * color, and each container's bar and marker, with the marker paint's metrics
+   * and color. Each snapshot builds new containers and paints, so they are
+   * compared by these values rather than by identity.
+   */
+  override val reuseKey: Any
+    get() = listOf(spacingBefore, contentLeading, decoration, rtl, ruleHeight, density,
+      if (decoration == DECORATION_RULE) colors.rule else 0,
+      if (containers.any { it.marker != null }) ParagraphMetrics(markerPaint) else null,
+      containers.map { it.drawKey })
 
   // The first line's metrics before and after the block spacing. StaticLayout
   // hands the next line of the same paragraph the metrics this span left on the

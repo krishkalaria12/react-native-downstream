@@ -173,13 +173,14 @@ fun main() {
   protectedHost.attach()
   check(protectedHost.segmentLayer.children.size==protected.size) { "stateful or hosted segments must not be deferred" }
   check(DownstreamNative.events == listOf(
+    42L to "android_code_create_start", 42L to "android_code_create_end",
     42L to "android_table_create_start", 42L to "android_table_create_end",
     42L to "android_table_bind_start", 42L to "android_table_bind_end",
-  )) { "table diagnostics lost document identity or balanced stages" }
+  )) { "card diagnostics lost document identity or balanced stages" }
   DownstreamNative.events.clear()
   protectedHost.drive()
   check(DownstreamNative.events == listOf(42L to "android_table_bind_start", 42L to "android_table_bind_end")) {
-    "reused table repeated creation diagnostics"
+    "reused cards repeated creation diagnostics"
   }
   val paddedHost=MountedDocument(Context(),RenderedDocument(segments,positions))
   paddedHost.paddingTop=100; paddedHost.segmentLayer.top=100

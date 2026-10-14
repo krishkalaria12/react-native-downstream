@@ -8,6 +8,8 @@ package com.downstream
 internal class StreamingParagraphSeeds<V>(
   private val maxEntries: Int,
   private val maxCost: Long,
+  /** What a value holds per character of its text, in approximate bytes. */
+  private val characterCost: Long = 24L,
 ) {
   private data class Entry<V>(val key: String, val text: String, val value: V, val cost: Long)
   private val entries = ArrayList<Entry<V>>()
@@ -40,7 +42,7 @@ internal class StreamingParagraphSeeds<V>(
     }
     // Two exact width geometries, text storage, and line metadata. Oversized
     // candidates are not retained; views still own their current snapshot.
-    val nextCost = text.length * 24L + 1024L
+    val nextCost = text.length * characterCost + 1024L
     if (nextCost > maxCost) return
     while (entries.isNotEmpty() && (entries.size >= maxEntries || cost > maxCost - nextCost)) {
       cost -= entries.removeAt(0).cost
