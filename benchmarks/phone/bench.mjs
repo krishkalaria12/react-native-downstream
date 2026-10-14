@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 // Phone benchmark for React Native Markdown renderers, in one file.
 //
-//   node benchmarks/phone/bench.mjs                 capture (if missing), build, install, run and report
-//   node benchmarks/phone/bench.mjs capture         record new AI responses (Vercel AI SDK, costs API calls)
+//   node benchmarks/phone/bench.mjs                 build, install, run live and report
+//   node benchmarks/phone/bench.mjs --replay <dir>  same, replaying recorded responses instead of live ones
+//   node benchmarks/phone/bench.mjs capture --replay <dir>   record responses for --replay
 //   node benchmarks/phone/bench.mjs build           build and fingerprint the release APK only
 //   node benchmarks/phone/bench.mjs run             run on the phone with an existing build
+//   node benchmarks/phone/bench.mjs resume <dir>    retry failed and missing runs using the saved APK
 //   node benchmarks/phone/bench.mjs report <dir>    recompute statistics and REPORT.md from raw runs
 //   node benchmarks/phone/bench.mjs selftest        check the statistics and workload code
 //
 // Options: --device <serial> --profiles highlighted[,plain] --repeats 10 --seed 1
 //          --workloads ai-single,ai-code-heavy,ai-concurrent-5 --candidates <ids>
-//          --recordings <dir> --output <dir> --keep-traces --skip-build --no-device-setup
+//          --model gpt-6-luna --reasoning medium --output <dir> --keep-traces --skip-build --no-device-setup
 //
-// Method, in short. Every library receives the same recorded AI deltas at their
-// recorded arrival times, inside the same release APK, one cold process per run.
+// Method, in short. Each run asks the model for fresh replies through the Vercel
+// AI SDK on this Mac, and every text delta goes to the phone the moment it
+// arrives. All libraries share one release APK, one cold process per run.
 // Perfetto records the run: SurfaceFlinger FrameTimeline for every frame, the
 // scheduler for CPU time per thread, and process memory every 100 ms. Runs are
 // ordered in seeded random blocks, start only when the phone is cool, and the
@@ -27,6 +30,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -36,6 +40,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import assert from 'node:assert/strict';
+import { FEATURE_ORDERS, PROMPTS, WORKLOADS } from './workloads.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '../..');
@@ -66,21 +71,6 @@ const BASELINE = 'downstream-default';
 
 // ---------------------------------------------------------------------------
 // Workloads: real AI responses recorded with `capture`, replayed exactly.
-
-const WORKLOADS = {
-  'ai-single': {
-    responses: [0],
-    label: 'One AI reply (prose, table, TypeScript)',
-  },
-  'ai-code-heavy': {
-    responses: [4],
-    label: 'One code-heavy AI reply (14 code blocks)',
-  },
-  'ai-concurrent-5': {
-    responses: [0, 1, 2, 3, 4],
-    label: 'Five AI replies streaming at once',
-  },
-};
 
 function loadRecordings(folder) {
   return readdirSync(folder)
@@ -231,7 +221,8 @@ export function mannWhitney(a, b) {
   const y = b.filter(Number.isFinite);
   const n1 = x.length;
   const n2 = y.length;
-  if (!n1 || !n2) return null;
+  // One run per group gives no test; huge workloads run once.
+  if (n1 < 2 || n2 < 2) return null;
   const all = [
     ...x.map((value) => ({ value, group: 0 })),
     ...y.map((value) => ({ value, group: 1 })),
@@ -305,10 +296,22 @@ export function traceMetrics(raw, window) {
     /App Deadline Missed/i.test(jank ?? '')
   ).length;
   const anyJank = frames.filter(
-    ([, , jank]) => jank && jank !== 'None' && jank !== 'Buffer Stuffing'
+    ([, , jank]) =>
+      jank &&
+      jank !== 'None' &&
+      !/^(Buffer|SurfaceFlinger) Stuffing$/.test(jank)
   ).length;
+  // A frame's expected duration is its deadline window, not the refresh
+  // period; consecutive expected starts are one vsync apart while drawing.
+  const expectedStarts = frames
+    .map(([, , , , expectedTs]) => expectedTs)
+    .filter((value) => value != null)
+    .sort((a, b) => a - b);
   const vsync = median(
-    frames.map(([, , , , , expectedDur]) => (expectedDur ?? NaN) / 1e6)
+    expectedStarts
+      .slice(1)
+      .map((ts, index) => (ts - expectedStarts[index]) / 1e6)
+      .filter((gap) => gap > 0 && gap < 50)
   );
   const lastFrameEnd = raw.frames.reduce(
     (last, [ts, dur]) => (ts < end ? Math.max(last, ts + dur) : last),
@@ -474,7 +477,21 @@ const METRICS = [
     label: 'JS delivery lateness p95',
     unit: 'ms',
     digits: 1,
-    headline: true,
+    headline: 'replay',
+  },
+  {
+    key: 'textKiB',
+    label: 'Text streamed',
+    unit: 'KiB',
+    digits: 1,
+    headline: 'live',
+  },
+  {
+    key: 'cpuMsPerKiB',
+    label: 'CPU per KiB',
+    unit: 'ms',
+    digits: 0,
+    headline: 'live',
   },
   { key: 'rafGapP95Ms', label: 'JS frame gap p95', unit: 'ms', digits: 1 },
 ];
@@ -626,24 +643,45 @@ function renderReport(session, runs, stats) {
   lines.push('# Phone streaming benchmark');
   lines.push('');
   lines.push(
-    `${device.model} · Android ${device.release} · ${device.vsyncHz ?? '?'} Hz · arm64 Hermes release · ${session.startedAt.slice(0, 10)}. ` +
+    `${device.model} · Android ${device.release} · ${session.vsyncHz ?? '?'} Hz · arm64 Hermes release · ${session.startedAt.slice(0, 10)}. ` +
       `${measured.length} measured runs, ${runs.length - measured.length} warmups excluded. ` +
       `Every number is the median of ${session.repeats} cold-process runs, with its 95% bootstrap confidence interval in brackets. Lower is better everywhere.`
   );
   lines.push('');
   lines.push('## Workloads');
   lines.push('');
-  lines.push('| Workload | What streams | Deltas | Duration |');
-  lines.push('|---|---|---:|---:|');
-  for (const [id, workload] of Object.entries(session.workloads)) {
+  const input = session.input;
+  if (input.mode === 'live') {
     lines.push(
-      `| ${id} | ${WORKLOADS[id]?.label ?? id} | ${workload.chunks} | ${(workload.lastDueMs / 1000).toFixed(1)} s |`
+      '| Workload | What streams | Replies at once | Runs per library |'
+    );
+    lines.push('|---|---|---:|---:|');
+    for (const [id, workload] of Object.entries(session.workloads)) {
+      lines.push(
+        `| ${id} | ${WORKLOADS[id]?.label ?? id} | ${workload.prompts} | ${workload.repeats ?? session.repeats} |`
+      );
+    }
+    lines.push('');
+    lines.push(
+      'Huge workloads run once per library, so their rows have no confidence interval or significance test.'
+    );
+    lines.push('');
+    lines.push(
+      `Live: every run asks \`${input.model}\` (reasoning ${input.reasoningEffort}) for fresh replies through the Vercel AI SDK \`streamText\` on the Mac, and each text delta reaches the phone over USB the moment it arrives. Replies differ from run to run, so "CPU per KiB" normalizes CPU by the text each run actually streamed.`
+    );
+  } else {
+    lines.push('| Workload | What streams | Deltas | Duration |');
+    lines.push('|---|---|---:|---:|');
+    for (const [id, workload] of Object.entries(session.workloads)) {
+      lines.push(
+        `| ${id} | ${WORKLOADS[id]?.label ?? id} | ${workload.chunks} | ${(workload.lastDueMs / 1000).toFixed(1)} s |`
+      );
+    }
+    lines.push('');
+    lines.push(
+      `Replay: responses recorded from \`${input.model}\` (reasoning ${input.reasoningEffort}) through the Vercel AI SDK \`streamText\`. Each library gets the same deltas at the same recorded times.`
     );
   }
-  lines.push('');
-  lines.push(
-    `Recorded from \`${session.recordings.model}\` (reasoning ${session.recordings.reasoningEffort}) through the Vercel AI SDK \`streamText\`, five prompts requested at once. Each library gets the same deltas at the same recorded times.`
-  );
   for (const profile of session.profiles) {
     lines.push('');
     lines.push(
@@ -653,7 +691,10 @@ function renderReport(session, runs, stats) {
       lines.push('');
       lines.push(`### ${workload}: ${WORKLOADS[workload]?.label ?? ''}`);
       lines.push('');
-      const headline = METRICS.filter((metric) => metric.headline);
+      const headline = METRICS.filter(
+        (metric) =>
+          metric.headline === true || metric.headline === session.input.mode
+      );
       lines.push(
         `| Library | ${headline.map((metric) => `${metric.label}${metric.unit ? ` (${metric.unit})` : ''}`).join(' | ')} |`
       );
@@ -718,8 +759,12 @@ function renderReport(session, runs, stats) {
   lines.push('');
   lines.push(
     [
-      '- **Same input.** One release APK holds every library. Each run is a cold process showing one library full screen (five stacked panes for the concurrent workload, all visible). The host serves the recorded deltas; the app delivers them on their recorded schedule and checks that the text it delivered equals the recording.',
-      '- **Frames.** Perfetto records SurfaceFlinger FrameTimeline, which classifies every frame the app draws. "Janky (app deadline missed)" is the share of frames Android itself blames on the app; "any cause" adds SurfaceFlinger, display and prediction misses but not buffer stuffing. Frame time is FrameTimeline\'s actual frame duration (CPU start to GPU done or post). Deadline overrun is actual end minus expected end, as in Jetpack Macrobenchmark.',
+      session.input.mode === 'live'
+        ? '- **Live input.** One release APK holds every library. Each run is a cold process showing one library full screen (five stacked panes for the concurrent workload, all visible). The Mac streams fresh model replies and forwards each delta over USB as it arrives; the app appends it immediately and the harness checks that the phone rendered exactly the text the model streamed. The window starts at the first delta, so model thinking time is not measured.'
+        : '- **Same input.** One release APK holds every library. Each run is a cold process showing one library full screen (five stacked panes for the concurrent workload, all visible). The host serves the recorded deltas; the app delivers them on their recorded schedule and checks that the text it delivered equals the recording.',
+      '- **Feature coverage.** New captures and live runs request all eight subsets of math, code and tables, including every ordering, in one 16-section reply. Existing replies also mix nested formatting, lists, tasks, links, alerts, footnotes and Unicode. Huge replies rotate the six three-feature orderings. This covers content combinations, not every renderer option. Model output can omit requested constructs; inspect the recorded or live text before claiming complete coverage. Older captures retain their original content and must be recaptured for this matrix.',
+      '- **Math.** Math parsing is enabled for the matrix, concurrent and huge workloads. Downstream uses its installed math package; Streamdown and Enriched use their native math engines. Other libraries receive the same source with their default handling. Unsupported features can remain literal, so rendering and performance are not equivalent.',
+      '- **Frames.** Perfetto records SurfaceFlinger FrameTimeline, which classifies every frame the app draws. "Janky (app deadline missed)" is the share of frames Android itself blames on the app; "any cause" adds SurfaceFlinger, display and prediction misses but not buffer or SurfaceFlinger stuffing (queueing latency, not a visible stutter). Frame time is FrameTimeline\'s actual frame duration (CPU start to GPU done or post). Deadline overrun is actual end minus expected end, as in Jetpack Macrobenchmark.',
       '- **CPU.** Scheduler slices for every thread of the app process inside the measured window, split into the UI thread, the JS thread (mqt_js), RenderThread and everything else (native workers, GC, worklets). This is exact on-CPU time, not sampling.',
       '- **Memory.** Anonymous RSS plus swap, polled by Perfetto every 100 ms. "Peak increase" is the highest value during the window minus the value when streaming started. PSS from `dumpsys meminfo` is read after the window so it cannot disturb it.',
       '- **Settle.** Time from the last delivered chunk to the last frame the app drew, from the trace.',
@@ -856,22 +901,21 @@ async function pickDevice(requested) {
 // ---------------------------------------------------------------------------
 // capture: real AI responses through the Vercel AI SDK
 
-const PROMPT_RULES =
-  'Answer in GitHub-flavored Markdown. Do not use images, HTML, or mathematics.';
-const PROMPTS = [
-  `Explain how to build a retry-safe background job in about 600 words. Use headings, a numbered list, a bullet list, a GFM table comparing three retry policies, bold and italic emphasis, an inline code span, and a TypeScript code block of about 15 lines. ${PROMPT_RULES}`,
-  `Compare PostgreSQL and MongoDB for a chat application's message storage in about 600 words. Include a comparison table with five rows, a Python code block that inserts and pages through messages, a short blockquote, and a recommendation section with a bullet list. ${PROMPT_RULES}`,
-  `Write a step-by-step guide to finding and fixing dropped frames in a React Native app, about 600 words. Use nested numbered and bullet lists, a task list checklist, a JSON configuration code block, a bash code block, and links to https://reactnative.dev/docs/performance. ${PROMPT_RULES}`,
-  `Plan a three-day trip to Kyoto in about 600 words. Use a heading per day, a table with times and places (include Japanese names such as 清水寺 and 伏見稲荷大社), bullet lists of food to try, bold highlights, a blockquote tip, and a short packing checklist. ${PROMPT_RULES}`,
-  `Teach an interactive git rebase workflow for cleaning up a feature branch in about 600 words. Include shell code blocks, a numbered list of steps, a table of common rebase commands, inline code for flags, a warning section, and a reference-style link to https://git-scm.com/docs/git-rebase. ${PROMPT_RULES}`,
-];
+// Room for medium reasoning plus a 60-point reply; a limit, not a target.
+const MAX_OUTPUT_TOKENS = 16000;
 
-async function capture(options) {
-  const outputDir = resolve(options.recordings);
-  if (existsSync(outputDir))
-    throw new Error(
-      `${outputDir} already exists; pass a new --recordings folder`
-    );
+/**
+ * Version of a package the example app depends on. Read from disk because some
+ * packages (remend) do not export their package.json to require().
+ */
+function exampleVersion(name) {
+  return JSON.parse(
+    readFileSync(join(EXAMPLE, 'node_modules', name, 'package.json'), 'utf8')
+  ).version;
+}
+
+/** The Vercel AI SDK from the example app, with the key from example/.env. */
+export async function loadModel(options) {
   const requireExample = createRequire(join(EXAMPLE, 'package.json'));
   const load = (name) =>
     import(pathToFileURL(requireExample.resolve(name)).href);
@@ -884,10 +928,98 @@ async function capture(options) {
     process.env.OPENAI_API_KEY || process.env.EXPO_PUBLIC_OPENAI_API_KEY;
   if (!apiKey)
     throw new Error('Set EXPO_PUBLIC_OPENAI_API_KEY in example/.env');
-  const model = options.model;
-  const reasoningEffort = options.reasoning;
-  const openai = createOpenAI({ apiKey });
-  const client = `ai ${requireExample('ai/package.json').version} streamText · @ai-sdk/openai ${requireExample('@ai-sdk/openai/package.json').version}`;
+  return {
+    streamText,
+    model: createOpenAI({ apiKey })(options.model),
+    modelId: options.model,
+    reasoningEffort: options.reasoning,
+    client: `ai ${exampleVersion('ai')} streamText · @ai-sdk/openai ${exampleVersion('@ai-sdk/openai')}`,
+  };
+}
+
+/** JSON with every non-ASCII character escaped, so one byte is one character. */
+export function asciiJson(value) {
+  return JSON.stringify(value).replace(
+    /[\u007f-\uffff]/g,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`
+  );
+}
+
+/**
+ * Requests every prompt at once and writes each text delta to the phone the
+ * moment the model produces it, one NDJSON line per delta. Nothing is buffered.
+ */
+export async function relayLive(ai, prompts, response) {
+  response.writeHead(200, {
+    'Content-Type': 'application/x-ndjson',
+    'Cache-Control': 'no-store',
+  });
+  response.socket?.setNoDelay(true);
+  const write = (message) => response.write(`${asciiJson(message)}\n`);
+  const abort = new AbortController();
+  const started = performance.now();
+  try {
+    const threads = await Promise.all(
+      prompts.map(async (prompt, thread) => {
+        const failures = [];
+        const result = ai.streamText({
+          model: ai.model,
+          prompt,
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
+          abortSignal: abort.signal,
+          providerOptions: {
+            openai: { reasoningEffort: ai.reasoningEffort, store: false },
+          },
+          onError: ({ error }) => failures.push(error),
+        });
+        let text = '';
+        const arrivals = [];
+        for await (const delta of result.textStream) {
+          if (!delta) continue;
+          write({ thread, text: delta });
+          text += delta;
+          arrivals.push(performance.now() - started);
+        }
+        if (failures.length) throw failures[0];
+        write({ thread, finished: true });
+        const [usage, finishReason] = await Promise.all([
+          result.totalUsage,
+          result.finishReason,
+        ]);
+        return {
+          thread,
+          text,
+          sha256: sha(text),
+          bytes: Buffer.byteLength(text),
+          deltas: arrivals.length,
+          firstDeltaMs: arrivals[0] ?? null,
+          lastDeltaMs: arrivals.at(-1) ?? null,
+          finishReason,
+          usage,
+        };
+      })
+    );
+    write({ done: true });
+    return threads;
+  } catch (error) {
+    abort.abort();
+    write({ error: String(error?.message ?? error) });
+    throw error;
+  } finally {
+    response.end();
+  }
+}
+
+async function capture(options) {
+  const outputDir = resolve(
+    options.replay ?? join(HERE, 'recordings', 'luna-medium')
+  );
+  if (existsSync(outputDir))
+    throw new Error(`${outputDir} already exists; pass a new --replay folder`);
+  const ai = await loadModel(options);
+  const { streamText, client } = ai;
+  const model = ai.modelId;
+  const reasoningEffort = ai.reasoningEffort;
   log(
     `Requesting ${PROMPTS.length} responses at once from ${model} (reasoning ${reasoningEffort})`
   );
@@ -897,9 +1029,9 @@ async function capture(options) {
       const chunks = [];
       const failures = [];
       const result = streamText({
-        model: openai(model),
+        model: ai.model,
         prompt,
-        maxOutputTokens: 6000,
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
         providerOptions: { openai: { reasoningEffort, store: false } },
         onChunk: ({ chunk }) => {
           if (chunk.type === 'text-delta' && chunk.text)
@@ -934,7 +1066,7 @@ async function capture(options) {
         request: {
           model,
           reasoningEffort,
-          maxOutputTokens: 6000,
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
           concurrentRequests: PROMPTS.length,
         },
         firstArrivalMs,
@@ -971,19 +1103,17 @@ async function build(profile, outputDir) {
     const pkg = JSON.parse(originalPackage);
     pkg['enriched-markdown'] = {
       enableCodeHighlight: profile === 'highlighted',
-      enableMath: false,
+      enableMath: true,
       codeHighlightLanguages: ['javascript', 'typescript', 'python', 'json'],
     };
     writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + '\n');
-    if (profile === 'highlighted') {
-      runVisible(
-        'node',
-        ['example/node_modules/react-native-enriched-markdown/postinstall.mjs'],
-        {
-          env: { ...process.env, INIT_CWD: EXAMPLE },
-        }
-      );
-    }
+    runVisible(
+      'node',
+      ['example/node_modules/react-native-enriched-markdown/postinstall.mjs'],
+      {
+        env: { ...process.env, INIT_CWD: EXAMPLE },
+      }
+    );
     const env = {
       ...process.env,
       EXPO_NO_DOTENV: '1',
@@ -996,19 +1126,11 @@ async function build(profile, outputDir) {
     };
     delete env.EXPO_PUBLIC_OPENAI_API_KEY;
     delete env.OPENAI_API_KEY;
+    // The example's own expo binary, so the build never waits on Corepack.
     runVisible(
-      'pnpm',
-      [
-        '--filter',
-        'react-native-downstream-example',
-        'exec',
-        'expo',
-        'prebuild',
-        '--platform',
-        'android',
-        '--no-install',
-      ],
-      { env }
+      join(EXAMPLE, 'node_modules/.bin/expo'),
+      ['prebuild', '--platform', 'android', '--no-install'],
+      { cwd: EXAMPLE, env }
     );
     // Cleartext only to the phone's own loopback, which adb reverse maps to this Mac.
     const manifestPath = join(
@@ -1069,7 +1191,6 @@ async function build(profile, outputDir) {
 
   const git = (...args) =>
     spawnSync('git', args, { cwd: ROOT }).stdout.toString();
-  const requireExample = createRequire(join(EXAMPLE, 'package.json'));
   const versions = Object.fromEntries(
     [
       'react-native',
@@ -1081,7 +1202,7 @@ async function build(profile, outputDir) {
       'react-native-marked',
       'react-native-markdown-renderer',
       'remend',
-    ].map((name) => [name, requireExample(`${name}/package.json`).version])
+    ].map((name) => [name, exampleVersion(name)])
   );
   const apk = readFileSync(APK);
   const record = {
@@ -1121,7 +1242,9 @@ data_sources { config { name: "linux.ftrace" target_buffer: 0 ftrace_config {
   ftrace_events: "sched/sched_process_free" ftrace_events: "task/task_newtask"
   ftrace_events: "task/task_rename" ftrace_events: "power/suspend_resume"
   ftrace_events: "power/cpu_frequency" } } }
-duration_ms: 120000
+duration_ms: 900000
+write_into_file: true
+file_write_period_ms: 1000
 `;
 
 async function ensureTraceProcessor() {
@@ -1174,10 +1297,10 @@ async function stopTrace(device, pid, localPath) {
 }
 
 /** One trace_processor pass that returns every raw row the metrics need. */
-async function queryTrace(tracePath, pid) {
+export async function queryTrace(tracePath, pid) {
   const query = `
     INCLUDE PERFETTO MODULE android.frames.timeline;
-    SELECT json_object(
+    SELECT '@@JSON@@' || json_object(
       -- Microseconds keep the wall-clock offset exact in a JS number.
       'clockOffsetUs', (SELECT (r.clock_value - b.clock_value) / 1000 FROM clock_snapshot r
                         JOIN clock_snapshot b ON r.snapshot_id = b.snapshot_id
@@ -1197,7 +1320,7 @@ async function queryTrace(tracePath, pid) {
                  WHERE t.upid = (SELECT upid FROM process WHERE pid = ${pid} ORDER BY start_ts DESC LIMIT 1)
                    AND t.name IN ('mem.rss.anon', 'mem.swap', 'mem.rss.file', 'mem.rss')
                  ORDER BY c.ts)
-    ) AS result;`;
+    ) || '@@END@@' AS result;`;
   const queryFile = `${tracePath}.sql`;
   writeFileSync(queryFile, query);
   const { stdout } = await runCommand(
@@ -1206,18 +1329,31 @@ async function queryTrace(tracePath, pid) {
     { timeout: 120000 }
   );
   rmSync(queryFile);
-  // Output is a CSV-style column: header line, then the JSON as a quoted cell.
-  const cell = stdout.slice(stdout.indexOf('\n') + 1).trim();
-  const json = cell.startsWith('"')
-    ? cell.slice(1, -1).replace(/""/g, '"')
-    : cell;
-  const raw = JSON.parse(json);
+  // The shell prints cells without escaping their quotes, so the JSON is cut
+  // out between markers rather than parsed as CSV.
+  const begin = stdout.indexOf('@@JSON@@');
+  const finish = stdout.lastIndexOf('@@END@@');
+  if (begin < 0 || finish < begin)
+    throw new Error(
+      `trace_processor returned no result: ${stdout.slice(0, 500)}`
+    );
+  const raw = JSON.parse(stdout.slice(begin + '@@JSON@@'.length, finish));
   for (const key of ['threads', 'sched', 'frames', 'memory']) {
     raw[key] =
       typeof raw[key] === 'string' ? JSON.parse(raw[key]) : (raw[key] ?? []);
   }
   raw.pid = Number(pid);
   return raw;
+}
+
+/** Wall-clock time of the app's last delivered chunk. */
+export function lastDeliveryWall(result, startWall) {
+  const last = Math.max(
+    ...(result.deliveries ?? []).map((delivery) => delivery.actualMs)
+  );
+  return Number.isFinite(last) && Number.isFinite(startWall)
+    ? startWall + last
+    : null;
 }
 
 /**
@@ -1233,13 +1369,90 @@ export function wallToTrace(offsetUs, wallMs) {
 // ---------------------------------------------------------------------------
 // run: the measurement session
 
+export function loadResumeState(output) {
+  const session = JSON.parse(
+    readFileSync(join(output, 'session.json'), 'utf8')
+  );
+  if (session.schemaVersion !== 2 || !Array.isArray(session.order))
+    throw new Error(
+      'Resume needs a saved schemaVersion 2 session with its run order'
+    );
+  const savedRuns = readdirSync(join(output, 'runs'))
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => ({
+      name,
+      record: JSON.parse(readFileSync(join(output, 'runs', name), 'utf8')),
+    }));
+  const completed = new Set();
+  for (const { name, record } of savedRuns) {
+    const item = session.order.find(
+      (scheduled) => scheduled.index === record.config.index
+    );
+    if (
+      !item ||
+      ['profile', 'candidate', 'workload', 'block', 'warmup'].some(
+        (key) => item[key] !== record.config[key]
+      )
+    )
+      throw new Error(`${name}: saved run does not match the session order`);
+    if (record.status === 'ok') {
+      if (completed.has(item.index))
+        throw new Error(`${name}: duplicate successful run ${item.index}`);
+      completed.add(item.index);
+    }
+  }
+  const pending = session.order.filter((item) => !completed.has(item.index));
+  for (const profile of new Set(pending.map((item) => item.profile))) {
+    const buildRecord = session.builds.find(
+      (savedBuild) => savedBuild.profile === profile
+    );
+    const apkPath = join(output, 'builds', `${profile}.apk`);
+    if (
+      !buildRecord ||
+      !existsSync(apkPath) ||
+      sha(readFileSync(apkPath)) !== buildRecord.apkSha256
+    )
+      throw new Error(
+        `Cannot resume: saved ${profile} APK is missing or changed`
+      );
+  }
+  return { session, savedRuns, completed, pending };
+}
+
+// Keep failed attempts out of the report while preserving them for inspection.
+export function archiveFailedRuns(output, savedRuns, item) {
+  for (const { name, record } of savedRuns) {
+    if (record.status === 'ok' || record.config.index !== item.index) continue;
+    const archive = join(output, 'failed-attempts');
+    mkdirSync(archive, { recursive: true });
+    let attempt = 1;
+    let destination;
+    do {
+      destination = join(
+        archive,
+        `${name.slice(0, -5)}-attempt-${attempt++}.json`
+      );
+    } while (existsSync(destination));
+    renameSync(join(output, 'runs', name), destination);
+  }
+}
+
 function schedule(candidates, workloads, profiles, repeats, seed) {
   const random = mulberry32(seed);
   const order = [];
+  // A workload with a fixed repeat count skips the warmup block and joins only
+  // its first blocks.
+  const inBlock = (workload, block) => {
+    const fixed = WORKLOADS[workload]?.repeats;
+    if (fixed == null) return true;
+    return block >= 0 && block < fixed;
+  };
   for (const profile of profiles) {
     for (let block = -1; block < repeats; block += 1) {
       const cells = candidates.flatMap((candidate) =>
-        workloads.map((workload) => ({ candidate, workload }))
+        workloads
+          .filter((workload) => inBlock(workload, block))
+          .map((workload) => ({ candidate, workload }))
       );
       for (const cell of shuffle(cells, random)) {
         order.push({ ...cell, profile, block, warmup: block < 0 });
@@ -1318,8 +1531,21 @@ class Host {
       response.end(body);
     };
     try {
-      if (request.method === 'GET' && request.url === '/config') {
+      const url = new URL(request.url, 'http://host');
+      if (request.method === 'GET' && url.pathname === '/config') {
         reply(200, this.current?.config ?? { waiting: true });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/stream') {
+        const active = this.current;
+        if (
+          !active?.onStream ||
+          url.searchParams.get('runId') !== active.config.runId
+        ) {
+          reply(409, { error: 'no live run is active' });
+          return;
+        }
+        await active.onStream(response);
         return;
       }
       const chunks = [];
@@ -1332,7 +1558,7 @@ class Host {
         reply(409, { error: 'runId is not active' });
         return;
       }
-      if (request.url === '/event') {
+      if (url.pathname === '/event') {
         active.events.push({ ...body, hostMs: Date.now() });
         // The app waits for this reply, so tracing is armed before any text arrives.
         if (body.type === 'mounted') await active.onMounted();
@@ -1340,7 +1566,7 @@ class Host {
         reply(200, { ok: true });
         return;
       }
-      if (request.url === '/result') {
+      if (url.pathname === '/result') {
         reply(200, { ok: true });
         active.resolve(body);
         return;
@@ -1348,12 +1574,12 @@ class Host {
       reply(404, { error: 'not found' });
     } catch (error) {
       this.current?.reject?.(error);
-      reply(500, { error: String(error) });
+      if (!response.headersSent) reply(500, { error: String(error) });
     }
   }
 }
 
-async function measureOne(device, host, item, options, workload) {
+async function measureOne(device, host, item, options, workload, ai) {
   const runId = `${item.profile}-${String(item.index).padStart(4, '0')}-${item.candidate}-${item.workload}${item.warmup ? '-warmup' : ''}`;
   const runDir = join(options.output, 'runs');
   const tracePath = join(options.output, 'traces', `${runId}.pftrace`);
@@ -1369,7 +1595,12 @@ async function measureOne(device, host, item, options, workload) {
     appPid: null,
     meminfoBefore: null,
     meminfoAfter: null,
+    live: null,
+    liveError: null,
   };
+  const prompts = WORKLOADS[item.workload].responses.map(
+    (index) => PROMPTS[index]
+  );
   const config = {
     runId,
     candidate: item.candidate,
@@ -1377,8 +1608,10 @@ async function measureOne(device, host, item, options, workload) {
     mode: 'stream',
     warmup: item.warmup,
     syntaxHighlighting: item.profile === 'highlighted',
-    source: workload.source,
-    chunks: workload.chunks,
+    math: WORKLOADS[item.workload].math ?? false,
+    ...(ai
+      ? { live: { threads: prompts.length } }
+      : { source: workload.source, chunks: workload.chunks }),
   };
   let endWork = Promise.resolve();
   const result = await new Promise((resolveRun, rejectRun) => {
@@ -1398,6 +1631,15 @@ async function measureOne(device, host, item, options, workload) {
         );
         state.tracePid = await startTrace(device);
       },
+      onStream: ai
+        ? async (response) => {
+            try {
+              state.live = await relayLive(ai, prompts, response);
+            } catch (error) {
+              state.liveError = String(error.message ?? error);
+            }
+          }
+        : null,
       onEnd: () => {
         // After the window: reading meminfo now cannot disturb the measurement.
         endWork = device
@@ -1426,8 +1668,18 @@ async function measureOne(device, host, item, options, workload) {
 
   const errors = [...(result.errors ?? [])];
   if (result.failed) errors.push('app reported failure');
-  if (result.sourceEqualsFixture !== true)
+  if (ai) {
+    if (state.liveError) errors.push(`live model: ${state.liveError}`);
+    else if (!state.live) errors.push('the app never opened the live stream');
+    else if (
+      state.live.some(
+        (thread, index) => result.threadTexts?.[index] !== thread.text
+      )
+    )
+      errors.push('the app rendered different text than the model streamed');
+  } else if (result.sourceEqualsFixture !== true) {
     errors.push('delivered text differs from the recording');
+  }
   const wall = (type) =>
     state.events.find((event) => event.type === type)?.wallTimeMs;
   let metrics = {};
@@ -1435,10 +1687,20 @@ async function measureOne(device, host, item, options, workload) {
     const raw = await queryTrace(tracePath, state.appPid);
     const window = {
       start: wallToTrace(raw.clockOffsetUs, wall('start')),
-      deliveryEnd: wallToTrace(raw.clockOffsetUs, wall('delivery-end')),
+      // Settle counts from the last delivered text, not the later end marker.
+      deliveryEnd: wallToTrace(
+        raw.clockOffsetUs,
+        lastDeliveryWall(result, wall('start')) ?? wall('delivery-end')
+      ),
       end: wallToTrace(raw.clockOffsetUs, wall('end')),
     };
     metrics = { ...traceMetrics(raw, window), ...appMetrics(result) };
+    // Live replies differ in length between runs, so CPU is also given per KiB.
+    metrics.textKiB =
+      (result.threadSources ?? []).reduce((sum, info) => sum + info.bytes, 0) /
+      1024;
+    metrics.cpuMsPerKiB =
+      metrics.textKiB > 0 ? (metrics.cpuTotalS * 1000) / metrics.textKiB : null;
     metrics.pssBeforeMiB = state.meminfoBefore?.pssMiB ?? null;
     metrics.pssEndMiB = state.meminfoAfter?.pssMiB ?? null;
     metrics.javaHeapEndMiB = state.meminfoAfter?.javaHeapMiB ?? null;
@@ -1448,7 +1710,10 @@ async function measureOne(device, host, item, options, workload) {
     if (metrics.memSamples < 5)
       errors.push('too few memory samples in the window');
   }
-  const keepTrace = options.keepTraces || item.block === 0;
+  // Keep one small trace per library and workload; huge runs' traces are large.
+  const keepTrace =
+    options.keepTraces ||
+    (item.block === 0 && WORKLOADS[item.workload].repeats == null);
   if (!keepTrace) rmSync(tracePath, { force: true });
   const record = {
     config: {
@@ -1470,6 +1735,7 @@ async function measureOne(device, host, item, options, workload) {
       sourceInfo: result.sourceInfo,
       revisionCount: result.revisionCount,
     },
+    ...(state.live && { live: state.live }),
     events: state.events.map(({ type, wallTimeMs, appTimeMs, hostMs }) => ({
       type,
       wallTimeMs,
@@ -1487,18 +1753,51 @@ async function measureOne(device, host, item, options, workload) {
 }
 
 async function runSession(options) {
+  const resumed = options.resume ? loadResumeState(options.output) : null;
+  if (resumed) {
+    const { session, completed, pending } = resumed;
+    options = {
+      ...options,
+      device: options.device ?? session.device.serial,
+      profiles: session.profiles,
+      candidates: session.candidates,
+      workloads: session.workloadIds,
+      repeats: session.repeats,
+      seed: session.seed,
+      model: session.input.model,
+      reasoning: session.input.reasoningEffort,
+      replay:
+        session.input.mode === 'replay'
+          ? resolve(ROOT, session.input.folder)
+          : null,
+      deviceSetup: session.deviceSetup,
+      skipBuild: true,
+    };
+    log(
+      `Resuming ${completed.size}/${session.order.length} successful runs; ${pending.length} remaining`
+    );
+    if (!pending.length) return report(options.output, options);
+  }
   await ensureTraceProcessor();
   const device = await pickDevice(options.device);
-  const recordings = loadRecordings(resolve(options.recordings));
-  const workloads = Object.fromEntries(
-    options.workloads.map((id) => {
-      if (!WORKLOADS[id])
-        throw new Error(
-          `Unknown workload ${id}; choose from ${Object.keys(WORKLOADS).join(', ')}`
-        );
-      return [id, buildWorkload(recordings, WORKLOADS[id].responses)];
-    })
-  );
+  for (const id of options.workloads) {
+    if (!WORKLOADS[id])
+      throw new Error(
+        `Unknown workload ${id}; choose from ${Object.keys(WORKLOADS).join(', ')}`
+      );
+  }
+  const recordings = options.replay
+    ? loadRecordings(resolve(options.replay))
+    : null;
+  const workloads = recordings
+    ? Object.fromEntries(
+        options.workloads.map((id) => [
+          id,
+          buildWorkload(recordings, WORKLOADS[id].responses),
+        ])
+      )
+    : null;
+  const ai = recordings ? null : await loadModel(options);
   for (const candidate of options.candidates) {
     if (!CANDIDATES[candidate])
       throw new Error(`Unknown candidate ${candidate}`);
@@ -1513,8 +1812,14 @@ async function runSession(options) {
   const fingerprint = (
     await device.shell('getprop ro.build.fingerprint')
   ).trim();
+  if (
+    resumed &&
+    (device.serial !== resumed.session.device.serial ||
+      fingerprint !== resumed.session.device.fingerprint)
+  )
+    throw new Error('Resume requires the original phone and Android build');
   const startThermal = await device.thermal();
-  const session = {
+  const session = resumed?.session ?? {
     schemaVersion: 2,
     startedAt: new Date().toISOString(),
     output: options.output,
@@ -1523,22 +1828,35 @@ async function runSession(options) {
     candidates: options.candidates,
     workloadIds: options.workloads,
     workloads: Object.fromEntries(
-      Object.entries(workloads).map(([id, workload]) => [
+      options.workloads.map((id) => [
         id,
-        {
-          chunks: workload.chunks.length,
-          lastDueMs: workload.chunks.at(-1).dueMs,
-          sourceSha256: sha(workload.source),
-          threads: workload.threads,
-        },
+        workloads
+          ? {
+              chunks: workloads[id].chunks.length,
+              lastDueMs: workloads[id].chunks.at(-1).dueMs,
+              sourceSha256: sha(workloads[id].source),
+              threads: workloads[id].threads,
+            }
+          : {
+              prompts: WORKLOADS[id].responses.length,
+              repeats: WORKLOADS[id].repeats ?? options.repeats,
+            },
       ])
     ),
-    recordings: {
-      folder: relative(ROOT, resolve(options.recordings)),
-      model: recordings[0].model,
-      reasoningEffort: recordings[0].request?.reasoningEffort,
-      client: recordings[0].client,
-    },
+    input: recordings
+      ? {
+          mode: 'replay',
+          folder: relative(ROOT, resolve(options.replay)),
+          model: recordings[0].model,
+          reasoningEffort: recordings[0].request?.reasoningEffort,
+          client: recordings[0].client,
+        }
+      : {
+          mode: 'live',
+          model: ai.modelId,
+          reasoningEffort: ai.reasoningEffort,
+          client: ai.client,
+        },
     repeats: options.repeats,
     seed: options.seed,
     settleMs: 2000,
@@ -1554,13 +1872,16 @@ async function runSession(options) {
     builds: [],
   };
   options.thermal = session.thermal;
-  const order = schedule(
-    options.candidates,
-    options.workloads,
-    options.profiles,
-    options.repeats,
-    options.seed
-  ).map((item, index) => ({ ...item, index }));
+  const order =
+    resumed?.session.order ??
+    schedule(
+      options.candidates,
+      options.workloads,
+      options.profiles,
+      options.repeats,
+      options.seed
+    ).map((item, index) => ({ ...item, index }));
+  session.output = options.output;
   session.order = order;
 
   const host = new Host();
@@ -1574,18 +1895,30 @@ async function runSession(options) {
     process.exit(130);
   };
   process.once('SIGINT', interrupt);
-  const runs = [];
+  const runs = resumed
+    ? resumed.savedRuns
+        .filter(({ record }) => record.status === 'ok')
+        .map(({ record }) => record)
+    : [];
   try {
+    if (resumed)
+      await device.adb(['shell', 'pkill -TERM perfetto'], {
+        allowFailure: true,
+      });
     for (const profile of options.profiles) {
-      const buildRecord = options.skipBuild
-        ? JSON.parse(
-            readFileSync(
-              join(options.output, 'builds', `${profile}.json`),
-              'utf8'
+      if (resumed && !resumed.pending.some((item) => item.profile === profile))
+        continue;
+      const buildRecord = resumed
+        ? session.builds.find((savedBuild) => savedBuild.profile === profile)
+        : options.skipBuild
+          ? JSON.parse(
+              readFileSync(
+                join(options.output, 'builds', `${profile}.json`),
+                'utf8'
+              )
             )
-          )
-        : await build(profile, options.output);
-      session.builds.push(buildRecord);
+          : await build(profile, options.output);
+      if (!resumed) session.builds.push(buildRecord);
       log(`Installing ${profile} APK`);
       await device.adb(
         ['install', '-r', join(options.output, 'builds', `${profile}.apk`)],
@@ -1603,8 +1936,10 @@ async function runSession(options) {
 
       const items = order.filter((item) => item.profile === profile);
       for (const [position, item] of items.entries()) {
+        if (resumed?.completed.has(item.index)) continue;
         if ((await device.installedSha256()) !== buildRecord.apkSha256)
           throw new Error('Installed APK changed mid-session');
+        if (resumed) archiveFailedRuns(options.output, resumed.savedRuns, item);
         let record;
         try {
           record = await measureOne(
@@ -1612,7 +1947,8 @@ async function runSession(options) {
             host,
             item,
             options,
-            workloads[item.workload]
+            workloads?.[item.workload],
+            ai
           );
         } catch (error) {
           record = {
@@ -1707,7 +2043,7 @@ function report(output, options = {}) {
 // ---------------------------------------------------------------------------
 // selftest
 
-function selftest() {
+async function selftest() {
   assert.equal(quantile([1, 2, 3, 4], 0.5), 2.5);
   assert.equal(quantile([5], 0.95), 5);
   assert.equal(quantile([], 0.5), null);
@@ -1744,6 +2080,49 @@ function selftest() {
     order,
     schedule(['a', 'b', 'c'], ['x', 'y'], ['highlighted'], 4, 9)
   );
+  const huge = schedule(
+    ['a', 'b'],
+    ['ai-single', 'ai-huge-single'],
+    ['highlighted'],
+    4,
+    2
+  ).filter((item) => item.workload === 'ai-huge-single');
+  assert.equal(huge.length, 2, 'one huge run per library');
+  assert.ok(huge.every((item) => item.block === 0 && !item.warmup));
+  assert.equal(PROMPTS.length, 10);
+  assert.equal(FEATURE_ORDERS.length, 16);
+  assert.equal(
+    new Set(FEATURE_ORDERS.map((sequence) => sequence.join(','))).size,
+    16
+  );
+  for (let mask = 0; mask < 8; mask += 1) {
+    const subset = ['math', 'code', 'table'].filter(
+      (_, bit) => Math.floor(mask / 2 ** bit) % 2 === 1
+    );
+    const orders = FEATURE_ORDERS.filter(
+      (sequence) =>
+        sequence.length === subset.length &&
+        subset.every((feature) => sequence.includes(feature))
+    );
+    assert.equal(
+      orders.length,
+      [1, 1, 2, 6][subset.length],
+      'every subset has all its permutations'
+    );
+    assert.ok(
+      orders.every((sequence) => new Set(sequence).size === sequence.length)
+    );
+  }
+  assert.ok(
+    FEATURE_ORDERS.every((sequence) =>
+      PROMPTS[3].includes(sequence.join(' then ') || 'prose only')
+    )
+  );
+  assert.deepEqual(WORKLOADS['ai-feature-matrix'].responses, [3]);
+  assert.ok(WORKLOADS['ai-feature-matrix'].math);
+  assert.ok(WORKLOADS['ai-concurrent-5'].responses.includes(3));
+  assert.ok(WORKLOADS['ai-concurrent-5'].math);
+  assert.equal(mannWhitney([1], [2]), null);
 
   const recording = (text, first, step) => {
     const chunks = [...text].map((character, index) => ({
@@ -1849,13 +2228,78 @@ function selftest() {
   assert.equal(metrics.frameMaxMs, 30);
   assert.equal(metrics.memPeakIncreaseMiB, 30);
   assert.equal(metrics.settleMs, 110);
-  assert.equal(metrics.vsyncMs, 8);
+  assert.equal(metrics.vsyncMs, 10, 'spacing of expected frame starts');
+  assert.equal(
+    lastDeliveryWall({ deliveries: [{ actualMs: 5 }, { actualMs: 40 }] }, 1000),
+    1040
+  );
+  assert.equal(lastDeliveryWall({ deliveries: [] }, 1000), null);
 
   const meminfo = parseMeminfo(
     '  Java Heap:    10240\n  Native Heap:  20480\n  Graphics:  4096\n  TOTAL PSS:   153600   TOTAL RSS: 1\n'
   );
   assert.equal(meminfo.pssMiB, 150);
   assert.equal(meminfo.javaHeapMiB, 10);
+  const unicode = { thread: 0, text: 'café 漢字 👩‍💻 "q"\n' };
+  const escaped = asciiJson(unicode);
+  assert.ok([...escaped].every((character) => character.charCodeAt(0) < 128));
+  assert.deepEqual(JSON.parse(escaped), unicode);
+
+  // The relay forwards deltas in arrival order, per thread, then finishes.
+  const fakeModel = (deltasByPrompt, failOn) => ({
+    model: 'fake',
+    reasoningEffort: 'medium',
+    streamText: ({ prompt, onError }) => ({
+      textStream: (async function* () {
+        for (const delta of deltasByPrompt[prompt]) {
+          await sleep(1);
+          yield delta;
+        }
+        if (prompt === failOn) onError({ error: new Error('rate limited') });
+      })(),
+      totalUsage: Promise.resolve({ outputTokens: 3 }),
+      finishReason: Promise.resolve('stop'),
+    }),
+  });
+  const fakeResponse = () => {
+    const lines = [];
+    return {
+      lines,
+      writeHead: () => {},
+      write: (chunk) =>
+        lines.push(
+          ...chunk
+            .split('\n')
+            .filter(Boolean)
+            .map((line) => JSON.parse(line))
+        ),
+      end: () => lines.push('end'),
+    };
+  };
+  const ok = fakeResponse();
+  const threads = await relayLive(
+    fakeModel({ a: ['He', 'llo'], b: ['漢', '字'] }),
+    ['a', 'b'],
+    ok
+  );
+  assert.deepEqual(
+    threads.map((thread) => thread.text),
+    ['Hello', '漢字']
+  );
+  assert.deepEqual(
+    ok.lines
+      .filter((line) => line.text)
+      .map((line) => `${line.thread}:${line.text}`)
+      .sort(),
+    ['0:He', '0:llo', '1:字', '1:漢']
+  );
+  assert.deepEqual(ok.lines.slice(-2), [{ done: true }, 'end']);
+  const failing = fakeResponse();
+  await assert.rejects(
+    relayLive(fakeModel({ a: ['x'] }, 'a'), ['a'], failing),
+    /rate limited/
+  );
+  assert.deepEqual(failing.lines.slice(-2), [{ error: 'rate limited' }, 'end']);
   console.log('selftest passed');
 }
 
@@ -1878,10 +2322,7 @@ async function main() {
         type: 'string',
         default: Object.keys(CANDIDATES).join(','),
       },
-      'recordings': {
-        type: 'string',
-        default: join(HERE, 'recordings/luna-medium'),
-      },
+      'replay': { type: 'string' },
       'output': { type: 'string' },
       'model': {
         type: 'string',
@@ -1890,7 +2331,7 @@ async function main() {
       'reasoning': { type: 'string', default: 'medium' },
       'max-battery-c': { type: 'string' },
       'cooldown-ms': { type: 'string', default: '3000' },
-      'timeout-ms': { type: 'string', default: '120000' },
+      'timeout-ms': { type: 'string', default: '600000' },
       'keep-traces': { type: 'boolean', default: false },
       'skip-build': { type: 'boolean', default: false },
       'no-device-setup': { type: 'boolean', default: false },
@@ -1906,7 +2347,7 @@ async function main() {
     seed: Number(values.seed),
     workloads: values.workloads.split(','),
     candidates: values.candidates.split(','),
-    recordings: values.recordings,
+    replay: values.replay,
     output: resolve(values.output ?? join(HERE, 'results', `bench-${stamp}`)),
     model: values.model,
     reasoning: values.reasoning,
@@ -1939,9 +2380,17 @@ async function main() {
           'run needs --output <dir> holding builds/<profile>.apk from `build`'
         );
       return runSession(options);
+    case 'resume':
+      if (!target && !values.output)
+        throw new Error(
+          'resume needs <dir> holding session.json, runs/ and builds/'
+        );
+      return runSession({
+        ...options,
+        output: resolve(target ?? values.output),
+        resume: true,
+      });
     case 'all':
-      // A fresh checkout has no recordings yet: capture them first.
-      if (!existsSync(resolve(options.recordings))) await capture(options);
       return runSession({ ...options, skipBuild: false });
     case 'report':
       return report(resolve(target ?? options.output), options);

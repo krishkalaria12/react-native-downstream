@@ -8,6 +8,7 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 import { ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { fetch as expoFetch } from 'expo/fetch';
 import {
   createMarkdownStream,
   DownstreamMarkdown,
@@ -33,6 +34,8 @@ import {
   phoneWorkloads,
 } from './phoneWorkloads';
 import type { PhoneChunk, PhoneWorkload } from './phoneWorkloads';
+
+const mathOptions = { singleDollarTextMath: true };
 
 const downstreamTheme = {
   colors: {
@@ -151,11 +154,20 @@ interface RunConfig {
   trace?: boolean;
   diagnostic?: boolean;
   syntaxHighlighting?: boolean;
+  math?: boolean;
   endpoint?: string;
   source?: string;
   chunks?: PhoneChunk[] | string[];
   dueMs?: number[];
+  /** Live runs stream model deltas relayed by the host as they arrive. */
+  live?: { threads: number };
 }
+/** One line of the host's live NDJSON stream. */
+type LiveMessage =
+  | { thread: number; text: string }
+  | { thread: number; finished: true }
+  | { done: true }
+  | { error: string };
 /** Every concurrent view's text; single-stream workloads have one thread. */
 interface Snapshot {
   sources: string[];
@@ -165,9 +177,10 @@ interface Snapshot {
 interface RunSamples {
   deliveries: {
     revision: number;
-    dueMs: number;
+    /** Scheduled time in replay runs; live deltas have no schedule. */
+    dueMs: number | null;
     actualMs: number;
-    latenessMs: number;
+    latenessMs: number | null;
     codepoints: number;
     thread: number;
   }[];
@@ -188,6 +201,18 @@ interface TraceSamples {
 const now = () =>
   (globalThis as { performance?: { now: () => number } }).performance?.now() ??
   Date.now();
+
+/**
+ * The host escapes every non-ASCII character in its stream, so each byte is one
+ * character and a network read can split anywhere without breaking a character.
+ */
+function asciiText(bytes: Uint8Array) {
+  let text = '';
+  for (let index = 0; index < bytes.length; index += 1) {
+    text += String.fromCharCode(bytes[index]!);
+  }
+  return text;
+}
 
 async function post(endpoint: string, path: string, value: unknown) {
   const response = await fetch(`${endpoint}${path}`, {
@@ -317,7 +342,7 @@ function Candidate({
           lineNumbers={false}
           codeBlockMaxHeight={0}
           controls={false}
-          math={false}
+          math={config.math ? mathOptions : false}
           selectable={false}
           onError={(error) => onError(JSON.stringify(error))}
         />
@@ -332,7 +357,7 @@ function Candidate({
           streamingAnimation={false}
           selectable={false}
           allowFontScaling={false}
-          md4cFlags={{ latexMath: false }}
+          md4cFlags={{ latexMath: config.math ?? false }}
         />
       );
       break;
@@ -345,7 +370,7 @@ function Candidate({
           streamingAnimation={false}
           selectable={false}
           allowFontScaling={false}
-          md4cFlags={{ latexMath: false }}
+          md4cFlags={{ latexMath: config.math ?? false }}
         />
       );
       break;
@@ -457,15 +482,13 @@ export default function PhoneBenchmark() {
       if (disposed || !activeConfig) return;
       const run = activeConfig;
       const endpoint = run.endpoint ?? HOST;
-      const workload = await getWorkload(run);
+      const workload = run.live ? null : await getWorkload(run);
       if (disposed) return;
       // Concurrent workloads tag each chunk with the view that receives it.
-      const threadCount =
-        1 + Math.max(0, ...workload.chunks.map((chunk) => chunk.thread ?? 0));
-      const lastChunk = new Map<number, number>();
-      workload.chunks.forEach((chunk, index) =>
-        lastChunk.set(chunk.thread ?? 0, index)
-      );
+      const threadCount = run.live
+        ? run.live.threads
+        : 1 +
+          Math.max(0, ...workload!.chunks.map((chunk) => chunk.thread ?? 0));
       if (run.trace && !run.candidate.startsWith('downstream-')) {
         throw new Error('Diagnostic tracing requires a Downstream candidate');
       }
@@ -474,7 +497,7 @@ export default function PhoneBenchmark() {
       }
       if (run.candidate.startsWith('downstream-')) {
         const options = {
-          math: false,
+          math: run.math ? mathOptions : false,
           onError: (error: unknown) => reportError(JSON.stringify(error)),
         };
         controllers.current = Array.from({ length: threadCount }, () =>
@@ -527,11 +550,8 @@ export default function PhoneBenchmark() {
       // Common empty-renderer mount settling. Startup is outside the measured run.
       await delay(1000);
       if (disposed) return;
-      await event('start');
       const data = samples.current;
-      data.startAt = now();
-      measuring = true;
-      let previousFrame = data.startAt;
+      let previousFrame = 0;
       const observeFrame = () => {
         if (!measuring || disposed) return;
         const at = now();
@@ -542,36 +562,105 @@ export default function PhoneBenchmark() {
         previousFrame = at;
         frame = requestAnimationFrame(observeFrame);
       };
-      frame = requestAnimationFrame(observeFrame);
+      const beginMeasuring = () => {
+        data.startAt = now();
+        previousFrame = data.startAt;
+        measuring = true;
+        frame = requestAnimationFrame(observeFrame);
+      };
       let source = '';
       const sources = Array<string>(threadCount).fill('');
-      for (let index = 0; index < workload.chunks.length; index += 1) {
-        const chunk = workload.chunks[index]!;
-        const thread = chunk.thread ?? 0;
-        const wait = chunk.dueMs - (now() - data.startAt);
-        if (wait > 0) await delay(wait);
-        if (disposed) return;
+      let revision = 0;
+      const deliver = (thread: number, text: string, dueMs: number | null) => {
         const actualMs = now() - data.startAt;
-        source += chunk.text;
-        sources[thread] += chunk.text;
-        const revision = index + 1;
-        const finished = revision === workload.chunks.length;
+        source += text;
+        sources[thread] += text;
+        revision += 1;
         data.deliveries.push({
           revision,
-          dueMs: chunk.dueMs,
+          dueMs,
           actualMs,
-          latenessMs: actualMs - chunk.dueMs,
-          codepoints: Array.from(chunk.text).length,
+          latenessMs: dueMs == null ? null : actualMs - dueMs,
+          codepoints: Array.from(text).length,
           thread,
         });
-        const controller = controllers.current[thread];
-        controller?.append(chunk.text);
-        if (lastChunk.get(thread) === index) controller?.finish();
-        setSnapshot({ sources: [...sources], revision, finished });
-      }
-      if (workload.chunks.length === 0) {
-        controllers.current.forEach((controller) => controller.finish());
-        setSnapshot({ sources, revision: 0, finished: true });
+        controllers.current[thread]?.append(text);
+      };
+      const finishThread = (thread: number) => {
+        controllers.current[thread]?.finish();
+      };
+
+      if (run.live) {
+        // The host relays each model delta the moment it arrives; the window
+        // starts with the first one, so model thinking time is not measured.
+        const response = await expoFetch(
+          `${endpoint}/stream?runId=${encodeURIComponent(run.runId)}`
+        );
+        if (!response.ok || !response.body) {
+          throw new Error(`Live stream: HTTP ${response.status}`);
+        }
+        const reader = response.body.getReader();
+        let pending = '';
+        let done = false;
+        while (!done && !disposed) {
+          const read = await reader.read();
+          if (read.done) break;
+          pending += asciiText(read.value);
+          let newline = pending.indexOf('\n');
+          while (newline >= 0) {
+            const message = JSON.parse(
+              pending.slice(0, newline)
+            ) as LiveMessage;
+            pending = pending.slice(newline + 1);
+            newline = pending.indexOf('\n');
+            if ('error' in message)
+              throw new Error(`Live model: ${message.error}`);
+            if ('done' in message) {
+              done = true;
+              break;
+            }
+            if ('finished' in message) {
+              finishThread(message.thread);
+              continue;
+            }
+            if (!measuring) {
+              beginMeasuring();
+              void event('start').catch(reportError);
+            }
+            deliver(message.thread, message.text, null);
+          }
+          setSnapshot({ sources: [...sources], revision, finished: done });
+        }
+        if (disposed) return;
+        if (!done)
+          throw new Error('Live stream ended before the host finished');
+        if (!measuring) throw new Error('Live stream delivered no text');
+      } else {
+        const chunks = workload!.chunks;
+        const lastChunk = new Map<number, number>();
+        chunks.forEach((chunk, index) =>
+          lastChunk.set(chunk.thread ?? 0, index)
+        );
+        await event('start');
+        beginMeasuring();
+        for (let index = 0; index < chunks.length; index += 1) {
+          const chunk = chunks[index]!;
+          const thread = chunk.thread ?? 0;
+          const wait = chunk.dueMs - (now() - data.startAt);
+          if (wait > 0) await delay(wait);
+          if (disposed) return;
+          deliver(thread, chunk.text, chunk.dueMs);
+          if (lastChunk.get(thread) === index) finishThread(thread);
+          setSnapshot({
+            sources: [...sources],
+            revision,
+            finished: index === chunks.length - 1,
+          });
+        }
+        if (chunks.length === 0) {
+          controllers.current.forEach((controller) => controller.finish());
+          setSnapshot({ sources, revision: 0, finished: true });
+        }
       }
       data.deliveryDurationMs = now() - data.startAt;
       // All renderers get the same settle budget; native readiness is not a speed metric.
@@ -591,13 +680,15 @@ export default function PhoneBenchmark() {
         syntaxHighlighting: run.syntaxHighlighting ?? false,
         source,
         sourceInfo: phoneSourceInfo(source),
-        sourceEqualsFixture: source === workload.source,
+        sourceEqualsFixture: workload ? source === workload.source : null,
         threadCount,
         threadSources: sources.map(phoneSourceInfo),
+        // Live text differs per run, so the host checks it against what it relayed.
+        ...(run.live && { threadTexts: sources }),
         renderedOutputEquality:
           'requires native accessibility and screenshot inspection; source equality alone is insufficient',
-        revisionCount: workload.chunks.length,
-        expectedDurationMs: workload.chunks.at(-1)?.dueMs ?? 0,
+        revisionCount: revision,
+        expectedDurationMs: workload?.chunks.at(-1)?.dueMs ?? null,
         deliveryDurationMs: data.deliveryDurationMs,
         totalDurationMs,
         settleMs: SETTLE_MS,
