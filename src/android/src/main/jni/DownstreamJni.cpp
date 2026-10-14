@@ -91,6 +91,12 @@ void deliverControlExport(JNIEnv *env, jobject callback, jmethodID method, const
 
 } // namespace
 
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_downstream_DownstreamNative_nativeRenderReuseFrom(JNIEnv *, jclass, jlong id) {
+  const auto document = DocumentRegistry::find(static_cast<uint64_t>(id));
+  return document ? static_cast<jlong>(document->renderReuseFrom) : 0;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_downstream_DownstreamNative_nativeTraceDocument(JNIEnv *env, jclass /*clazz*/, jlong id, jstring event) {
   if (!event) return;
@@ -136,7 +142,7 @@ RevealOptions optionsFromArray(JNIEnv *env, jdoubleArray timing) {
     return options;
   }
   const jsize count = env->GetArrayLength(timing);
-  if (count < 9) {
+  if (count < 10) {
     return options;
   }
   std::vector<double> values(static_cast<size_t>(count));

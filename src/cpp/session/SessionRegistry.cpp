@@ -1,5 +1,6 @@
 #include "SessionRegistry.h"
 
+#include "FrameScheduler.h"
 #include "MarkdownParser.h"
 #include "RenderPreparer.h"
 #include "SessionTrace.h"
@@ -8,6 +9,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -19,10 +22,9 @@
 namespace downstream {
 namespace {
 
-// A session has no thread of its own. While it has unparsed input, one job for
-// it is queued on the shared pool; the job parses once, prepares the platform
-// rendering, publishes, and queues itself again if more input arrived. Many
-// streams therefore share a few cores fairly, and a quiet stream costs nothing.
+// Native frame ticks dispatch shared-pool work and publish prepared results.
+// Each session has at most one worker and one outstanding frame callback.
+// Unparsed deltas accumulate between dispatches; quiet sessions request no frames.
 class Session : public std::enable_shared_from_this<Session> {
 public:
   Session(std::string id, ParseMode mode, SessionCallback callback)
@@ -32,6 +34,7 @@ public:
     std::lock_guard<std::mutex> lock(mutex_);
     stopped_ = true;
     dirty_ = false;
+    staged_.reset();
   }
 
   bool append(const std::string &chunk, uint64_t generation, uint64_t sequence) {
@@ -41,7 +44,7 @@ public:
     if (!isValidUtf8(chunk)) {
       return false;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
     if (stopped_ || finished_ || generation != generation_ || sequence <= sequence_ ||
         chunk.size() > 64 * 1024 || sourceBytes_ + chunk.size() > kMaxSourceBytes) {
       return false;
@@ -50,7 +53,9 @@ public:
     sourceBytes_ += chunk.size();
     sequence_ = sequence;
     SessionTrace::record(id_, generation, sequence, "append_received");
-    markDirty();
+    const bool request = markDirty();
+    lock.unlock();
+    if (request) requestTick();
     return true;
   }
 
@@ -58,10 +63,12 @@ public:
     if (source.size() > kMaxSourceBytes || !isValidUtf8(source)) {
       return false;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
     if (stopped_ || generation <= generation_) {
       return false;
     }
+    urgent_ = true;
+    staged_.reset();
     replacement_ = source;
     pending_.clear();
     sourceBytes_ = source.size();
@@ -85,18 +92,24 @@ public:
     shown_.reset();
     readyGeneration_ = 0;
     readySequence_ = 0;
-    markDirty();
+    const bool request = markDirty();
+    lock.unlock();
+    if (request) requestTick();
     return true;
   }
 
   bool finish(uint64_t generation, uint64_t sequence) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
     if (stopped_ || generation != generation_ || sequence != sequence_) {
       return false;
     }
     if (!finished_) {
       finished_ = true;
-      markDirty();
+      SessionTrace::record(id_, generation_, sequence_, "finish_received");
+      urgent_ = true;
+      const bool request = markDirty();
+      lock.unlock();
+      if (request) requestTick();
     }
     return true;
   }
@@ -185,14 +198,16 @@ public:
   /// repaint. The policy still waits for the worker, and applies from the next
   /// reset.
   void setPreview(remend::PreviewOptions options) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
     if (stopped_) {
       return;
     }
     preview_ = options;
     SessionTrace::record(id_, generation_, sequence_, "preview_set");
     if (!finished_) {
-      markDirty();
+      const bool request = markDirty();
+      lock.unlock();
+      if (request) requestTick();
     }
   }
 
@@ -204,27 +219,31 @@ public:
   /// touches it. Set once, right after `create`, so there is at most one queued
   /// pass between a session existing and its flags being right.
   void setParse(ParseOptions parse) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
     if (stopped_) {
       return;
     }
     parse_ = parse;
     parsePending_ = true;
     if (!finished_) {
-      markDirty();
+      const bool request = markDirty();
+      lock.unlock();
+      if (request) requestTick();
     }
   }
 
   /// The same, for the tag policy alone. See `SessionRegistry::setParseTags`.
   void setParseTags(TagPolicy tags) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
     if (stopped_) {
       return;
     }
     parse_.tags = std::move(tags);
     parsePending_ = true;
     if (!finished_) {
-      markDirty();
+      const bool request = markDirty();
+      lock.unlock();
+      if (request) requestTick();
     }
   }
 
@@ -250,19 +269,122 @@ public:
   }
 
 private:
-  /// Requires mutex_. Queues one job unless one is already queued or running;
-  /// a running job sees dirty_ and queues the next pass itself.
-  void markDirty() {
+  struct Completed {
+    SessionEvent event;
+    DocumentHandle document;
+    std::shared_ptr<const SharedList<std::string>::Prefix> source;
+    std::shared_ptr<const TagSourceBodies> tagBodies;
+    std::shared_ptr<const std::vector<TagSlotRange>> tagStructure;
+    bool live;
+    double workMs;
+  };
+
+  /// Requires mutex_. The caller requests the frame after releasing it.
+  bool markDirty() {
     dirty_ = true;
-    if (!scheduled_) {
-      scheduled_ = true;
-      WorkerPool::shared().post([self = shared_from_this()] { self->step(); });
+    return queueTick();
+  }
+
+  bool queueTick() {
+    if (frameQueued_ || workerRunning_ || stopped_) return false;
+    frameQueued_ = true;
+    return true;
+  }
+
+  void requestTick() {
+    const std::weak_ptr<Session> weak = shared_from_this();
+    FrameScheduler::post([weak](const FrameInfo &info) {
+      if (const auto self = weak.lock()) self->onFrame(info);
+    });
+  }
+
+  void adapt(double workMs, const FrameInfo &info) {
+    const double budget = std::max(1.0, info.intervalMs) * 0.7;
+    const unsigned needed = static_cast<unsigned>(std::clamp(std::ceil(workMs / budget), 1.0, 4.0));
+    const unsigned target = info.late ? std::min(4u, std::max(needed, stride_ + 1)) : needed;
+    if (target > stride_) {
+      stride_ = target;
+      healthyPasses_ = 0;
+    } else if (!info.late && target < stride_) {
+      if (++healthyPasses_ >= 8) {
+        --stride_;
+        healthyPasses_ = 0;
+      }
+    } else {
+      healthyPasses_ = 0;
     }
+  }
+
+  void onFrame(const FrameInfo &info) {
+    bool dispatch = false;
+    bool request = false;
+    std::optional<Completed> retired;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      frameQueued_ = false;
+      if (stopped_) return;
+      ++framesSinceDispatch_;
+      if (staged_) {
+        auto completed = std::move(*staged_);
+        staged_.reset();
+        if (completed.event.generation == generation_) {
+          adapt(completed.workMs, info);
+          if (completed.document) {
+            snapshot_.swap(completed.document);
+            snapshotSource_.swap(completed.source);
+            snapshotTagBodies_.swap(completed.tagBodies);
+            snapshotTagStructure_.swap(completed.tagStructure);
+            snapshotLive_ = completed.live;
+            readyGeneration_ = completed.event.generation;
+            readySequence_ = completed.event.sequence;
+            SessionTrace::record(id_, readyGeneration_, readySequence_, "snapshot_ready");
+          }
+          // Preserve stop()'s no-later-event guarantee. Callbacks must not
+          // reenter this session, as in the previous worker publication path.
+          callback_(completed.event);
+          // A superseded tail can own large strings, spans and tag bodies.
+          // Swap on the tick, but release its owners on the worker pool.
+          if (completed.document || completed.source || completed.tagBodies || completed.tagStructure) {
+            retired = std::move(completed);
+          }
+        }
+      }
+      if (dirty_ && !workerRunning_) {
+        if (urgent_ || framesSinceDispatch_ >= stride_) {
+          workerRunning_ = true;
+          framesSinceDispatch_ = 0;
+          urgent_ = false;
+          dispatch = true;
+          SessionTrace::record(id_, generation_, sequence_, "worker_queued");
+        } else {
+          request = queueTick();
+        }
+      }
+    }
+    if (dispatch) {
+      WorkerPool::shared().post([self = shared_from_this(), retired = std::move(retired)]() mutable {
+        self->step(std::move(retired));
+      });
+    } else if (retired) {
+      WorkerPool::shared().post([retired = std::move(retired)]() mutable { releaseRetired(retired); });
+    }
+    if (request) requestTick();
+  }
+
+  static void releaseRetired(std::optional<Completed> &retired) {
+    if (!retired) return;
+    const auto id = std::move(retired->event.sessionId);
+    const auto generation = retired->event.generation;
+    const auto sequence = retired->event.sequence;
+    SessionTrace::record(id, generation, sequence, "retire_start");
+    retired.reset();
+    SessionTrace::record(id, generation, sequence, "retire_end");
   }
 
   /// One parse pass. The job holds a reference, so a disposed session lives
   /// until the pass in progress finishes and nobody has to wait for it.
-  void step() {
+  void step(std::optional<Completed> retired) {
+    const auto started = std::chrono::steady_clock::now();
     // Only the bytes accepted since the last pass cross the lock; the parser
     // owns the canonical source.
     std::optional<std::string> replacement;
@@ -279,7 +401,7 @@ private:
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (stopped_ || !dirty_) {
-        scheduled_ = false;
+        workerRunning_ = false;
         return;
       }
       replacement.swap(replacement_);
@@ -296,6 +418,8 @@ private:
       hints = layoutHints_;
     }
 
+    SessionTrace::record(id_, generation, sequence, "worker_start");
+    releaseRetired(retired);
     if (preview) {
       parser_.setPreview(*preview);
     }
@@ -372,32 +496,27 @@ private:
       SessionTrace::record(id_, generation, sequence, "prepare_end");
     }
 
-    // The callback runs under the lock so that no event follows stop().
-    // It must not call back into this session.
-    std::lock_guard<std::mutex> lock(mutex_);
-    // A pass publishes even when newer input arrived meanwhile. Waiting for
-    // input to pause would show nothing while a stream outpaces parsing; the
-    // newer input is parsed by the next pass. Only a reset discards it.
-    if (stopped_ || generation != generation_) {
-      SessionTrace::record(id_, generation, sequence, "dropped");
-    } else {
-      if (parsed) {
-        snapshot_ = std::move(result.document);
-        snapshotSource_ = std::move(source);
-        snapshotTagBodies_ = std::move(tagBodies);
-        snapshotTagStructure_ = std::move(tagStructure);
-        snapshotLive_ = !finished;
-        SessionTrace::record(id_, generation, sequence, "snapshot_ready");
-        readyGeneration_ = generation;
-        readySequence_ = sequence;
+    const double workMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+    bool request = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      workerRunning_ = false;
+      // Publish a completed prefix even when input has outpaced this worker.
+      // Only reset/dispose discard it. The published snapshot remains intact
+      // until the next frame installs this result and emits its exact version.
+      if (stopped_ || generation != generation_) {
+        SessionTrace::record(id_, generation, sequence, "dropped");
+      } else {
+        staged_ = Completed{{id_, generation, sequence, parsed ? ParseStatus::Ok : result.status,
+                             std::move(result.message)},
+                            parsed ? std::move(result.document) : nullptr, std::move(source),
+                            std::move(tagBodies), std::move(tagStructure), !finished, workMs};
+        SessionTrace::record(id_, generation, sequence, "snapshot_staged");
       }
-      callback_({id_, generation, sequence, parsed ? ParseStatus::Ok : result.status, std::move(result.message)});
+      if (staged_ || dirty_) request = queueTick();
     }
-    if (dirty_ && !stopped_) {
-      WorkerPool::shared().post([self = shared_from_this()] { self->step(); });
-    } else {
-      scheduled_ = false;
-    }
+    if (request) requestTick();
   }
 
   bool isCurrentGeneration(uint64_t generation) const {
@@ -443,7 +562,13 @@ private:
   ParseOptions parse_;
   bool parsePending_{false};
   bool dirty_{false};
-  bool scheduled_{false};
+  std::optional<Completed> staged_;
+  bool frameQueued_{false};
+  bool workerRunning_{false};
+  bool urgent_{false};
+  unsigned stride_{1};
+  unsigned healthyPasses_{0};
+  unsigned framesSinceDispatch_{1};
   bool finished_{false};
   bool stopped_{false};
 };

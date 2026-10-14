@@ -4,6 +4,8 @@
 
 #include "Clipboard.h"
 #include "DownstreamSessionModule.h"
+#include "DownstreamSessionFrameClock.h"
+
 
 namespace {
 
@@ -41,6 +43,7 @@ bool pasteOnMainThread(std::string_view text) {
 + (void)initialize {
   if (self == [DownstreamSessionProvider class]) {
     downstream::installClipboardWriter(&pasteOnMainThread);
+    downstream::installSessionFrameClock();
   }
 }
 

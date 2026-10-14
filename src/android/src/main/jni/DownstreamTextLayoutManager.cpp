@@ -3,6 +3,7 @@
 #include "Clipboard.h"
 #include "DocumentRegistry.h"
 #include "ImageLoaderRegistry.h"
+#include "FrameScheduler.h"
 #include "theme/Theme.h"
 
 #include <fbjni/fbjni.h>
@@ -255,6 +256,21 @@ Java_com_downstream_DownstreamNative_nativeInstallPreparer(JNIEnv *env, jclass c
   prepareMethod = method;
   hostFramesMethod = frames;
   javaReady.store(true, std::memory_order_release);
+  const jmethodID requestFrame = env->GetStaticMethodID(clazz, "requestSessionFrame", "()V");
+  env->ExceptionClear();
+  if (requestFrame != nullptr) {
+    downstream::FrameScheduler::install([requestFrame] {
+      JNIEnv *worker = attachedEnv();
+      if (!worker) return;
+      worker->CallStaticVoidMethod(nativeClass, requestFrame);
+      if (worker->ExceptionCheck()) worker->ExceptionClear();
+    });
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_downstream_DownstreamNative_nativeSessionFrame(JNIEnv *, jclass, jdouble intervalMs, jboolean late) {
+  downstream::FrameScheduler::onFrame(intervalMs, late);
 }
 
 namespace {

@@ -33,6 +33,9 @@ sources=(
   ios/DSLayoutManager.mm ios/DSThemeColors.mm \
   cpp/theme/Theme.cpp cpp/theme/ThemeLayout.cpp cpp/downstream/CodeLayout.cpp cpp/downstream/SegmentPlan.cpp
 )
+if [ -f "$source_root/src/ios/DownstreamSessionFrameClock.mm" ]; then
+  sources+=(ios/DownstreamSessionFrameClock.mm)
+fi
 if [ -f "$source_root/src/ios/DSSnapshotString.mm" ]; then
   sources+=(ios/DSSnapshotString.mm)
 fi

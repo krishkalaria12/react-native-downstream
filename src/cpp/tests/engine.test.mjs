@@ -94,6 +94,8 @@ before(async () => {
     ['test_reveal', [incremental, ...engine]],
     ['test_preview', [incremental, ...engine]],
     ['test_session_registry', [registry, incremental, ...pool, ...engine]],
+    ['test_frame_coalescing', [registry, incremental, ...pool, ...engine]],
+    ['test_render_reuse', engine],
     [
       'test_controlled_slots',
       [
@@ -1390,6 +1392,14 @@ describe('input', () => {
 
   test('native session versions and lifecycle', () => {
     execFileSync(binary('test_session_registry'), { timeout: 15_000 });
+  });
+
+  test('frame-aligned session coalescing and adaptive cadence', () => {
+    execFileSync(binary('test_frame_coalescing'), { timeout: 15_000 });
+  });
+
+  test('finish rendering equivalence preserves payload and rejects changed inputs', () => {
+    execFileSync(binary('test_render_reuse'), { timeout: 15_000 });
   });
 
   test('worker pool prepares and shares sessions', () => {

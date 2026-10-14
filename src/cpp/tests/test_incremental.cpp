@@ -1049,6 +1049,173 @@ bool tagMetadataSurvivesSplicing() {
   return true;
 }
 
+// Finalization reparses the canonical tail and keeps the proven prefix's
+// immutable storage. Its cost must not grow with the already settled answer.
+bool canonicalFinishBoundsAndContexts() {
+  ParseOptions options{ParseFlags::Default | ParseFlags::InlineHtml};
+  options.tags.tags = {{"user", {"id"}}};
+  std::string prefix;
+  for (unsigned i = 0; i < 120; ++i) prefix += "café paragraph " + std::to_string(i) + " " + std::string(180, 'p') + "\n\n";
+  prefix += "[prefix link](https://example.test)\n\n![prefix image](https://example.test/image.png)\n\n";
+  prefix += "<user id='prefix'>\nbody\n</user>\n\n";
+  prefix += "- list item\n\nclosing paragraph " + std::string(180, 'c') + "\n\n";
+  const std::vector<std::string> tails = {
+      "raw **unfinished", "[tail link](https://tail.test) ![tail image](https://tail.test/image.png)",
+      "```ts title=\"file\"\nconst value = compute(42);\n", "```ts\nconst value = 42;\n```\n",
+      "$$\nx + y\n", "$$x + y$$", "> quote\n> - nested item", "- first\n- second",
+      "| a | b |\n| - | - |\n| 1 | 2 |", "<div>\nopen HTML\n",
+      "<user id='tail'>\nbody\n", "<user id='tail'>\nbody\n</user>\n",
+  };
+  for (const std::string &tail : tails) {
+    IncrementalParser parser(ParseMode::IncrementalTail, options);
+    const auto first = feed(parser, prefix, false);
+    if (first.status != ParseStatus::Ok || parser.committedBytes() != prefix.size()) return false;
+    const auto live = feed(parser, prefix + tail, false);
+    if (live.status != ParseStatus::Ok) return false;
+    const auto retained = live.document;
+    const auto prefixBlock = &retained->blocks[0];
+    const size_t bytes = parser.reusedBytes();
+    const auto before = parser.counters();
+    const auto final = parser.parse(true);
+    IncrementalParser full(ParseMode::FullParse, options);
+    full.append(prefix + tail);
+    const auto expected = full.parse(true);
+    const auto after = parser.counters();
+    if (final.status != ParseStatus::Ok || !scan::sameDocument(*final.document, *expected.document) ||
+        final.document->streaming || final.document->settledBlocks != final.document->blocks.size() ||
+        &final.document->blocks[0] != prefixBlock || final.document->blocks[0].identity != prefixBlock->identity ||
+        after.bytesParsed - before.bytesParsed != prefix.size() + tail.size() - bytes ||
+        after.fullParses != before.fullParses || after.tailParses != before.tailParses + 1 || !retained->streaming) {
+      std::cerr << "Canonical finish failed or reparsed prefix in " << tail << "\n"
+                << "bytes " << bytes << " delta " << after.bytesParsed - before.bytesParsed
+                << " full " << before.fullParses << "->" << after.fullParses
+                << " shared " << retained->blocks.sharedSize() << "->" << final.document->blocks.sharedSize()
+                << " parity " << scan::sameDocument(*final.document, *expected.document) << "\n";
+      return false;
+    }
+    for (size_t i = 0; i < final.document->blocks.size(); ++i) {
+      const auto &actualMath = final.document->blocks[i].math;
+      const auto &expectedMath = expected.document->blocks[i].math;
+      for (size_t j = 0; j < actualMath.size(); ++j) {
+        if (actualMath[j].layout != expectedMath[j].layout || actualMath[j].error != expectedMath[j].error) return false;
+      }
+    }
+    const auto again = parser.parse(true);
+    const auto repeated = parser.counters();
+    if (again.document != final.document || repeated.bytesParsed != after.bytesParsed ||
+        repeated.blocksHighlighted != after.blocksHighlighted || repeated.formulasLaidOut != after.formulasLaidOut) return false;
+  }
+  return true;
+}
+
+bool canonicalFinishFallbacks() {
+  const std::string prefix = std::string(200, 'p') + "\n\n";
+  const std::vector<std::string> dependencies = {
+      "[ref]\n\n[ref]: /target\n", "footnote[^n]\n\n[^n]: body\n", "\\(x + y\\)",
+      "\\[\nx + y\n\\]\n", "[unresolved]\n\n" + std::string(200, 'q') + "\n\nactive",
+  };
+  for (const std::string &tail : dependencies) {
+    IncrementalParser parser(ParseMode::IncrementalTail);
+    if (feed(parser, prefix, false).status != ParseStatus::Ok ||
+        feed(parser, prefix + tail, false).status != ParseStatus::Ok) return false;
+    const auto before = parser.counters();
+    const auto final = parser.parse(true);
+    if (final.status != ParseStatus::Ok || !scan::sameDocument(*final.document, *colored(parseMarkdown(prefix + tail))) ||
+        parser.counters().fullParses != before.fullParses + 1 ||
+        parser.counters().fallbackCount(ParseFallback::Finished) != before.fallbackCount(ParseFallback::Finished) + 1) return false;
+  }
+  IncrementalParser preview(ParseMode::IncrementalTail);
+  preview.setPreview(remend::PreviewOptions::all());
+  feed(preview, prefix + "**unfinished", false);
+  const auto beforePreview = preview.counters();
+  const auto finishedPreview = preview.parse(true);
+  if (!scan::sameDocument(*finishedPreview.document, *parseMarkdown(prefix + "**unfinished").document) ||
+      preview.counters().fullParses != beforePreview.fullParses + 1) return false;
+
+  // The cap applies to all formulas, including shared prefix formulas. Full
+  // fallback must drop their old layouts and record the canonical global error.
+  IncrementalParser capped(ParseMode::IncrementalTail);
+  std::string many;
+  for (unsigned i = 0; i <= math_limits::kMaxFormulas; ++i) {
+    many += "$$x$$\n\n";
+    if (feed(capped, many, false).status != ParseStatus::Ok) return false;
+  }
+  const auto beforeCap = capped.counters();
+  const auto finalCap = capped.parse(true);
+  IncrementalParser full(ParseMode::FullParse);
+  full.append(many);
+  const auto expected = full.parse(true);
+  if (!scan::sameDocument(*finalCap.document, *expected.document) ||
+      capped.counters().fullParses != beforeCap.fullParses + 1) return false;
+  for (size_t i = 0; i < finalCap.document->blocks.size(); ++i) {
+    for (size_t j = 0; j < finalCap.document->blocks[i].math.size(); ++j) {
+      if (finalCap.document->blocks[i].math[j].layout != expected.document->blocks[i].math[j].layout ||
+          finalCap.document->blocks[i].math[j].error != expected.document->blocks[i].math[j].error) return false;
+    }
+  }
+  return true;
+}
+
+MathEngineResult rejectFinalMath(const char *, const MathEngineOptions *) { return {nullptr, 1}; }
+void releaseFinalMath(char *) {}
+const char *finalMathError() { return "The final formula is incomplete."; }
+
+bool finalMathSettlesAndRenderingHint() {
+  MathEngine::install({rejectFinalMath, releaseFinalMath, finalMathError}, "");
+  bool correct = true;
+  for (const ParseMode mode : {ParseMode::FullParse, ParseMode::IncrementalTail}) {
+    IncrementalParser parser(mode);
+    const std::string source = std::string(200, 'p') + "\n\n$$\n\\frac{a}{\n";
+    const auto live = feed(parser, source, false);
+    const auto before = parser.counters();
+    const auto final = parser.parse(true);
+    correct = correct && live.status == ParseStatus::Ok && final.status == ParseStatus::Ok &&
+        live.document->blocks.back().math.size() == 1 && live.document->blocks.back().math[0].error.empty() &&
+        final.document->blocks.back().math.size() == 1 &&
+        final.document->blocks.back().math[0].error == finalMathError() &&
+        final.document->renderReuseFrom == 0 && parser.counters().mathFailed > before.mathFailed;
+    const auto after = parser.counters();
+    correct = correct && parser.parse(true).document == final.document &&
+        parser.counters().bytesParsed == after.bytesParsed && parser.counters().mathFailed == after.mathFailed;
+  }
+  MathEngine::install({}, "");
+  return correct;
+}
+
+bool finishedRenderingHintRequiresProof() {
+  for (const ParseMode mode : {ParseMode::FullParse, ParseMode::IncrementalTail}) {
+    IncrementalParser parser(mode);
+    const auto live = feed(parser, "unchanged prose", false);
+    const auto final = parser.parse(true);
+    if (final.document->id == live.document->id || final.document->renderReuseFrom != live.document->id) return false;
+    parser.append(" changed");
+    const auto changed = parser.parse(false);
+    if (changed.document->renderReuseFrom != 0) return false;
+    parser.setPreview(remend::PreviewOptions::all());
+    parser.append(" **unfinished");
+    const auto repaired = parser.parse(false);
+    const auto canonical = parser.parse(true);
+    if (repaired.document->blocks.back().text == canonical.document->blocks.back().text ||
+        canonical.document->renderReuseFrom != 0) return false;
+  }
+  return true;
+}
+
+bool fullModeDropsChangedMathIdentities() {
+  IncrementalParser parser(ParseMode::FullParse);
+  parser.append("$$x$$\n\n$$y$$\n\n");
+  if (parser.parse(false).status != ParseStatus::Ok) return false;
+  parser.append("plain\n\n");
+  const auto before = parser.parse(false);
+  if (before.document->blocks[0].identity == 0 || !before.document->blocks[0].math[0].error.empty()) return false;
+  std::string overflow;
+  for (unsigned i = 0; i < math_limits::kMaxFormulas; ++i) overflow += "$$z$$\n\n";
+  parser.append(overflow);
+  const auto final = parser.parse(true);
+  return final.status == ParseStatus::Ok && final.document->blocks[0].identity == 0 &&
+      !final.document->blocks[0].math[0].error.empty() && final.document->renderReuseFrom == 0;
+}
+
 // What a pass returns is what a session hands every view, so it has to be the
 // snapshot the parser recorded, carrying both of its flags: a stream still
 // arriving, and how many leading blocks have settled. Each path is fed in turn:
@@ -1130,5 +1297,10 @@ int main(int argc, char **argv) {
   CHECK(plainParagraphAppendAndFallback(), "plain paragraph append bounds work and falls back for grammar mutations");
   CHECK(tagMetadataSurvivesSplicing(), "tag indices and source ranges survive tail splicing");
   CHECK(fullParseOracleSettles(), "the full-parse oracle settles code with a zero highlight budget");
+  CHECK(canonicalFinishBoundsAndContexts(), "canonical finish parses only safe tail and preserves immutable prefix");
+  CHECK(canonicalFinishFallbacks(), "canonical finish retains global dependency and formula-cap fallbacks");
+  CHECK(finalMathSettlesAndRenderingHint(), "final math errors settle and repeated finish does no work");
+  CHECK(finishedRenderingHintRequiresProof(), "finish rendering hint requires unchanged canonical payload");
+  CHECK(fullModeDropsChangedMathIdentities(), "full mode invalidates cached identities when global math answers change");
   return ds_check_result();
 }

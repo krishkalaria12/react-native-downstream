@@ -540,6 +540,12 @@ struct Document {
   /// and the block storage stays shared.
   bool streaming{false};
 
+  /// A preceding snapshot with exactly equivalent immutable render payload.
+  /// Finalization may change settlement while keeping text/metrics unchanged.
+  /// Platforms may share its segments, but must build a new wrapper/state.
+  /// An ID avoids retaining a chain of preceding documents.
+  uint64_t renderReuseFrom{0};
+
   /// True when blocks [0, to) are all settled.
   bool isSettled(size_t to) const { return to <= settledBlocks; }
 };

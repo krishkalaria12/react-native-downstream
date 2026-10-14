@@ -3,6 +3,7 @@
 #include "CodeBlocks.h"
 #include "Compare.h"
 #include "MathBlocks.h"
+#include "RenderReuse.h"
 #include "Scan.h"
 #include "Unicode.h"
 
@@ -351,10 +352,14 @@ const DocumentHandle &IncrementalParser::publish(DocumentHandle document, uint32
   // earlier snapshot is copied here.
   const bool streaming = !finished_;
   const bool hideTables = streaming && preview_.options().has(remend::PreviewFeature::Tables);
-  if (document && (document->settledBlocks != settled || document->streaming != streaming || hideTables)) {
+  const uint64_t renderReuse = finished_ && document_ && document_->streaming && document &&
+      document_->id != document->id && canReuseRendering(*document_, *document) ? document_->id : 0;
+  if (document && (document->settledBlocks != settled || document->streaming != streaming || hideTables ||
+                   document->renderReuseFrom != renderReuse)) {
     auto copy = std::make_shared<Document>(*document);
     copy->settledBlocks = settled;
     copy->streaming = streaming;
+    copy->renderReuseFrom = renderReuse;
     if (hideTables) {
       hideIncompleteTable(copy.get());
     }
@@ -412,6 +417,10 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   // whose formula has not been laid out against one whose formula has would
   // find them different. A MathSpan's own identity excludes its layout, so a
   // block keeps its identity while the pass fills it in.
+  if (settled) {
+    result.document = withSettledBlocks(result.document,
+        static_cast<uint32_t>(std::min<size_t>(result.document->blocks.size(), UINT32_MAX)));
+  }
   MathLayoutStats mathStats;
   result.document = layoutMath(result.document, replaced_ ? nullptr : document_, &mathStats);
   noteMath(mathStats);
@@ -426,6 +435,10 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
     return result;
   }
 
+  // Global formula overflow changes already committed rendering too. Its
+  // canonical full parse must own those blocks instead of sharing old layouts.
+  if (settled && countFormulas(*result.document) > math_limits::kMaxFormulas) clearCommitted();
+
   // A fallback reparses everything, but committed blocks keep their shared
   // storage and identity when md4c still produces them unchanged.
   const size_t committed = committedCount();
@@ -437,7 +450,7 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
       parsed.links.size() >= committedLinks && parsed.images.size() >= committedImages &&
       parsed.tags.size() >= committedTags;
   for (size_t i = 0; confirmed && i < committed; i++) {
-    confirmed = sameBlock((*committedBlocks_)[i], parsed.blocks[i]);
+    confirmed = document_ && sameRenderBlock(*document_, (*committedBlocks_)[i], parsed, parsed.blocks[i]);
   }
   for (size_t i = 0; confirmed && i < committedLinks; i++) {
     const Link &link = (*committedLinks_)[i];
@@ -472,8 +485,13 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
     resetScan();
   }
   result.document = publish(result.document, settledCount);
-  watchOpenFence(source, committedBytes_, committedCount());
-  watchPlainParagraph();
+  if (!finished_) {
+    watchOpenFence(source, committedBytes_, committedCount());
+    watchPlainParagraph();
+  } else {
+    openFence_ = false;
+    plainParagraph_ = false;
+  }
   return result;
 }
 
@@ -518,12 +536,13 @@ void IncrementalParser::highlightTail(Document *document) {
         reuseCompletedCodeTokens(&block, document_->blocks[absolute])) {
       continue;
     }
-    if (i + 1 == last) {
+    if (i + 1 == last && !finished_) {
       highlightCodeBlock(lexillaHighlighter(), &block, &highlight_, kHighlightBudgetMs, &stats);
     } else {
       // Earlier blocks cannot grow. A budget cut must be finished now because
       // no later snapshot can otherwise complete their highlighting.
-      highlightSettledCodeBlock(lexillaHighlighter(), &block, &settled, kHighlightBudgetMs, &stats);
+      highlightSettledCodeBlock(lexillaHighlighter(), &block, i + 1 == last ? &highlight_ : &settled,
+                                kHighlightBudgetMs, &stats);
     }
   }
   noteHighlight(stats);
@@ -544,7 +563,11 @@ void IncrementalParser::layoutTail(Document *document) {
     return;
   }
   MathLayoutStats stats;
-  layoutMathTail(&document->blocks.tail(), document_.get(), &stats);
+  if (finished_) {
+    for (Block &block : document->blocks.tail()) layoutMathInBlock(&block, &stats);
+  } else {
+    layoutMathTail(&document->blocks.tail(), document_.get(), &stats);
+  }
   noteMath(stats);
 }
 
@@ -572,7 +595,7 @@ void IncrementalParser::carryIdentities(ParseResult &result) {
   // The last block may still grow, so it is never stable.
   const size_t limit = std::min(previous->blocks.size(), blocks.size() - 1);
   size_t stable = 0;
-  while (stable < limit && sameBlock(previous->blocks[stable], blocks[stable])) {
+  while (stable < limit && sameRenderBlock(*previous, previous->blocks[stable], *result.document, blocks[stable])) {
     stable++;
   }
   // Like a proven commit, the stable prefix ends after a top-level block that
@@ -611,7 +634,12 @@ ParseResult IncrementalParser::parseTail() {
   // the repair cannot reach, so no repair can restyle a block a reader has
   // already seen settled.
   ParseResult result;
-  if (committedDefinitions_.empty()) {
+  if (finished_) {
+    // The committed prefix is canonical. Finish only its raw tail, without
+    // provisional repairs or dependency replay changing the source grammar.
+    result = parseMarkdownAt(tail, committedBytes_, parse_);
+    counters_.bytesParsed += tail.size();
+  } else if (committedDefinitions_.empty()) {
     const remend::PreviewResult preview = preview_.apply(tail, committedBytes_, 0, parse_);
     notePreview(preview);
     result = preview.parsed;
@@ -662,15 +690,27 @@ ParseResult IncrementalParser::parseTail() {
   combined->tags = SharedList<Tag>(committedTags_, std::move(tags));
   // Only the strict prefix is settled. Shared provisional reference blocks
   // remain mutable and are never offered as settled text to controls.
-  combined->settledBlocks = static_cast<uint32_t>(std::min<size_t>(settledCount(), UINT32_MAX));
+  combined->settledBlocks = static_cast<uint32_t>(std::min<size_t>(
+      finished_ ? combined->blocks.size() : settledCount(), UINT32_MAX));
   combined->streaming = !finished_;
+  // The formula cap is global: an over-cap final document must clear layouts
+  // in the prefix too, so shared-prefix finalization cannot handle that case.
+  if (finished_ && countFormulas(*combined) > math_limits::kMaxFormulas) {
+    return fullParse(ParseFallback::Finished, false, true);
+  }
   counters_.cacheHits += committed;
   result.document = combined;
   highlightTail(combined.get());
   layoutTail(combined.get());
   result.document = publish(combined, combined->settledBlocks);
-  watchOpenFence(source, committedBytes_, committed);
-  watchPlainParagraph();
+  if (!finished_) {
+    watchOpenFence(source, committedBytes_, committed);
+    watchPlainParagraph();
+  } else {
+    openFence_ = false;
+    plainParagraph_ = false;
+    highlight_.clear();
+  }
   return result;
 }
 
@@ -1149,6 +1189,27 @@ bool IncrementalParser::appendPlainParagraph() {
   return true;
 }
 
+bool IncrementalParser::canFinishTail() const {
+  if (committedBytes_ == 0 || referencePrefix_ || !committedDefinitions_.empty() ||
+      referenceDependentSource_ || previousReferenceLimited_ || preview_.enabled() || previewDirty_ ||
+      source_.find("]:") != std::string::npos) return false;
+  if (committedTags_) {
+    for (size_t i = 0; i < committedTags_->size(); ++i) {
+      const Tag &tag = (*committedTags_)[i];
+      if (tag.block ? tag.bodyEnd == 0 : (tag.name != "a" && tag.range.end == 0)) return false;
+    }
+  }
+  if (committedBlocks_) {
+    for (size_t i = 0; i < committedBlocks_->size(); ++i) {
+      const Block &block = (*committedBlocks_)[i];
+      for (const Container &container : block.containers) {
+        if (container.open) return false;
+      }
+    }
+  }
+  return true;
+}
+
 ParseResult IncrementalParser::parse(bool finished) {
   counters_.updates++;
   finished_ = finished;
@@ -1156,6 +1217,12 @@ ParseResult IncrementalParser::parse(bool finished) {
     return fullParse(ParseFallback::InvalidSource, false, false);
   }
   scanReferenceDependencies();
+  if (finished && document_ && !document_->streaming && !replaced_ && parsedBytes_ == source_.size()) {
+    previewDirty_ = false;
+    ParseResult current;
+    current.document = document_;
+    return current;
+  }
   // Full mode takes this branch for a finished stream too, so it has to pass
   // the flag itself: the settled document is never previewed.
   if (mode_ == ParseMode::FullParse) {
@@ -1165,7 +1232,9 @@ ParseResult IncrementalParser::parse(bool finished) {
     return fullParse(ParseFallback::NonAppend, !finished, finished);
   }
   if (finished) {
-    return fullParse(ParseFallback::Finished, false, true);
+    const bool tail = canFinishTail();
+    previewDirty_ = false;
+    return tail ? parseTail() : fullParse(ParseFallback::Finished, false, true);
   }
   ParseResult current;
   // A pending policy change has to be applied to what the reader is looking at,

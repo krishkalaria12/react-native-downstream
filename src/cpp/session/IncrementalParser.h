@@ -119,8 +119,8 @@ public:
   void append(std::string_view chunk);
   /// Replaces the canonical source, as after a stream reset.
   void replace(std::string_view source);
-  /// Parses the source as it stands. A finished parse always renders the
-  /// complete document; otherwise only the active tail may be parsed.
+  /// Parses the source as it stands. Finish settles the complete canonical
+  /// document, reusing a proven dependency-free prefix when possible.
   ParseResult parse(bool finished);
   /// Clears the source, parser state, and counters.
   void reset();
@@ -169,6 +169,8 @@ private:
   /// Adds one set of highlighting passes to the counters.
   void noteHighlight(const HighlightStats &stats);
   ParseResult parseTail();
+  /// Strict dependency-free prefixes can finish from their canonical tail.
+  bool canFinishTail() const;
   /// Colors the tail code block, resuming from the last pass. A tail that is
   /// not code clears the state, which is what releases its lexer.
   void highlightTail(Document *document);

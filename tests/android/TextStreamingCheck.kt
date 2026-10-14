@@ -60,12 +60,15 @@ internal object DownstreamNative {
   fun isTracingDocument(id: Long) = id == tracedId
   fun traceDocument(id: Long, event: String) { traceEvents.add(event) }
   val plans = mutableMapOf<Long, List<PlannedSegment>>()
+  val documentTexts = mutableMapOf<Long, String>()
   var reads = 0
   var planReads = 0
+  val reuseFrom = mutableMapOf<Long, Long>()
+  fun readRenderReuseFrom(id: Long) = reuseFrom[id] ?: 0L
   fun readSegmentPlan(id: Long): List<PlannedSegment>? { planReads++; return plans[id] }
   fun readDocument(id: Long, from: Int, to: Int, theme: Long): NativeDocument? {
     reads++
-    return if (id == failedReadId) null else NativeDocument(text = "$id:$from:$to")
+    return if (id == failedReadId) null else NativeDocument(text = documentTexts[id] ?: "$id:$from:$to")
   }
   fun readImages(id: Long) = NativeImages.EMPTY
   fun readLinkUrls(id: Long) = emptyList<String>()
@@ -152,7 +155,12 @@ internal object PrecomputedTexts {
 internal class Locales { var language = "en-US"; fun toLanguageTags() = language }
 internal class TextSegment(val text: String) : Segment()
 internal class RenderedDocument(val id: Long, val segments: List<Segment>, val plan: List<PlannedSegment>,
-                                paint: Any, style: Style, val tracing: Boolean = false) {
+                                val paint: Any, val style: Style, val tracing: Boolean = false,
+                                private val minimumCacheCost: Long = 0) {
+  val documentId get() = id
+  // Use the production charge method with a fixture payload-cost estimator.
+  /* PRODUCTION_RENDER_COST */
+  fun retainedCostForCheck() = cacheCost()
   internal class Style(val scale: Float, val colors: Palette, val theme: NativeTheme, val themeId: Long) {
     val paint = TextPaint()
     val density = 1f
@@ -166,6 +174,7 @@ internal class RenderedDocument(val id: Long, val segments: List<Segment>, val p
     var builds = 0
     private val cache = RenderingCache<String, RenderedDocument>(128, 1024) { 1 }
     private val committedSegments = RenderingCache<String, Segment>(128, 1024) { 1 }
+    private fun segmentCost(segment: Segment): Long = if (segment is TextSegment) segment.text.length * 24L + 256 else 512
     private fun buildSegment(document: NativeDocument, images: NativeImages, style: Style, planned: PlannedSegment,
       ordinal: Int, tableOrdinal: Int, highlights: Boolean, bottom: Float, caret: PlacedCaret,
       variants: LinkVariants, urls: List<String>, traceId: Long, incrementalParagraphs: Boolean = false): Segment {
@@ -519,6 +528,42 @@ fun main() {
   tiny.put("key", "x".repeat(8192), "oversized")
   check(tiny.matching("key", "x".repeat(8193)) == null)
   println("production paragraph branches: 2 interleaved 33 KiB streams retain independent append seeds; metric mismatch, count eviction and oversized rejection passed")
+
+  // Exercise the actual production obtain() with a native-proven finish alias.
+  DownstreamNative.plans[9200] = listOf(PlannedSegment(0, 1, SEGMENT_TEXT, 0, false, 0))
+  DownstreamNative.plans[9201] = listOf(PlannedSegment(0, 1, SEGMENT_TEXT, 0, false, 1))
+  DownstreamNative.reuseFrom[9201] = 9200
+  val liveRendering = RenderedDocument.obtain(context, 9200, 1f)!!
+  val beforeFinishBuilds = RenderedDocument.builds
+  val beforeFinishReads = DownstreamNative.reads
+  val finalRendering = RenderedDocument.obtain(context, 9201, 1f)!!
+  check(finalRendering !== liveRendering && finalRendering.documentId == 9201L)
+  check(finalRendering.plan.single().settledBlocks == 1 && liveRendering.plan.single().settledBlocks == 0)
+  check(finalRendering.segments.single() === liveRendering.segments.single())
+  check(RenderedDocument.builds == beforeFinishBuilds && DownstreamNative.reads == beforeFinishReads)
+  check(RenderedDocument.obtain(context, 9201, 1f, caret = PlacedCaret(1, 1))!!.segments.single() !== liveRendering.segments.single())
+  check(RenderedDocument.obtain(context, 9201, 2f)!!.segments.single() !== liveRendering.segments.single())
+  check(RenderedDocument.obtain(context, 9201, 1f, themeId = 44)!!.segments.single() !== liveRendering.segments.single())
+  check(RenderedDocument.obtain(context, 9201, 1f, linkVariants = LinkVariants(7))!!.segments.single() !== liveRendering.segments.single())
+  check(RenderedDocument.obtain(context, 9201, 1f, incrementalParagraphs = true)!!.segments.single() !== liveRendering.segments.single())
+  DownstreamNative.plans[9202] = DownstreamNative.plans[9201]!!
+  DownstreamNative.reuseFrom[9202] = 999999
+  check(RenderedDocument.obtain(context, 9202, 1f)!!.segments.single() !== liveRendering.segments.single())
+  println("production finish reuse: final wrapper/settlement refreshed; identity-zero tail 0 JNI reads/builds; options, canonical paragraph lane and missing parent reject reuse")
+
+  DownstreamNative.plans[9300] = listOf(PlannedSegment(0, 1, SEGMENT_TEXT, 0, false, 0))
+  DownstreamNative.documentTexts[9300] = "x".repeat(100_000)
+  DownstreamNative.plans[9301] = listOf(PlannedSegment(0, 1, SEGMENT_TEXT, 9301, true, 1))
+  DownstreamNative.reuseFrom[9301] = 9300
+  val largeLive = RenderedDocument.obtain(context, 9300, 1f)!!
+  val largeFinal = RenderedDocument.obtain(context, 9301, 1f)!!
+  check(largeFinal.segments.single() === largeLive.segments.single())
+  check(largeFinal.retainedCostForCheck() == largeLive.retainedCostForCheck())
+  check(largeFinal.retainedCostForCheck() > 2_400_000)
+  val charged = RenderingCache<Long, RenderedDocument>(128, 8L * 1024 * 1024) { it.retainedCostForCheck() }
+  repeat(20) { charged.put(it.toLong(), largeFinal) }
+  check(charged.get(0) == null && charged.get(19) === largeFinal)
+  println("production finish retention: newly committed shared tail remains charged; 8 MiB cache evicts repeated aliases")
 
   check(DownstreamNative.traceEvents.isEmpty()) { "disabled tracing must emit no events" }
   DownstreamNative.tracedId = 9100

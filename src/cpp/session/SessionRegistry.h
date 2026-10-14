@@ -10,7 +10,7 @@
 
 namespace downstream {
 
-/// Published by a session's worker for the current generation and sequence.
+/// Published on a native frame tick after the worker prepares this version.
 struct SessionEvent {
   std::string sessionId;
   uint64_t generation{0};
@@ -30,12 +30,14 @@ struct PublishedSessionSnapshot {
   std::shared_ptr<const std::vector<TagSlotRange>> tagStructure;
 };
 
-/// Called on a worker pool thread, one event at a time per session.
+/// Called on the native frame driver thread, one event per session per tick.
+/// Headless callers use the WorkerPool fallback. Must not reenter the session.
 using SessionCallback = std::function<void(const SessionEvent &)>;
 
 // Native sessions survive view unmounts. Sessions share the WorkerPool: each
-// parse pass publishes an immutable document for the current generation, and
-// prepares its platform rendering first so Fabric finds it ready.
+// parse pass prepares an immutable document on a worker. A native frame tick
+// publishes it so Fabric finds rendering ready, coalescing pending input and
+// reducing the update rate when preparation or frame delivery falls behind.
 class SessionRegistry {
 public:
   static bool create(const std::string &id, ParseMode mode, SessionCallback callback);

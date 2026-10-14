@@ -622,6 +622,232 @@ static void checkCellBreakHeight() {
 #ifndef BASELINE
 #include "SnapshotStringChecks.mm"
 #include "RetirementChecks.mm"
+#import <QuartzCore/QuartzCore.h>
+#include "DownstreamSessionFrameClock.h"
+#include "FrameScheduler.h"
+
+static void runClockLoopUntil(const std::function<bool()> &done) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!done() && std::chrono::steady_clock::now() < deadline) {
+    [[NSRunLoop mainRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.002]];
+  }
+  require(done(), @"UIKit session clock did not make progress before timeout");
+}
+
+static void checkSessionFrameClock() {
+  require(NSThread.isMainThread, @"UIKit clock test must run on the main thread");
+  const BOOL wasActive = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
+  downstream::installSessionFrameClock();
+  id clock = [NSClassFromString(@"DownstreamSessionFrameClock") performSelector:@selector(shared)];
+  require(clock != nil, @"UIKit session clock was not linked into the harness");
+  NSNotificationCenter *notifications = NSNotificationCenter.defaultCenter;
+  [notifications postNotificationName:UIApplicationDidBecomeActiveNotification object:nil];
+
+  NSUInteger completed = 0;
+  double firstTimestamp = 0;
+  double secondTimestamp = 0;
+  double displayInterval = 0;
+  downstream::FrameScheduler::post([&](const downstream::FrameInfo &info) {
+    require(NSThread.isMainThread, @"display clock ran a frame callback off the main thread");
+    CADisplayLink *link = [clock valueForKey:@"displayLink"];
+    require(link != nil && link.paused, @"display clock did not pause its one-shot tick");
+    firstTimestamp = link.timestamp;
+    displayInterval = (link.targetTimestamp - link.timestamp) * 1000;
+    require(std::isfinite(info.intervalMs) && info.intervalMs > 0 &&
+            fabs(info.intervalMs - displayInterval) < 0.001,
+            @"UIKit frame callback did not receive the actual display interval");
+    completed++;
+    downstream::FrameScheduler::post([&](const downstream::FrameInfo &nextInfo) {
+      CADisplayLink *nextLink = [clock valueForKey:@"displayLink"];
+      secondTimestamp = nextLink.timestamp;
+      require(NSThread.isMainThread && nextInfo.intervalMs > 0 && secondTimestamp > firstTimestamp,
+              @"reentrant frame work ran before the following actual display tick");
+      completed++;
+    });
+    require(completed == 1, @"reentrant frame work ran inline");
+  });
+  require(completed == 0, @"UIKit frame requester ran posted work inline");
+  runClockLoopUntil([&] { return completed == 2; });
+  CADisplayLink *link = [clock valueForKey:@"displayLink"];
+  require(link.paused, @"empty UIKit session clock kept ticking");
+
+  NSUInteger pendingCompleted = 0;
+  downstream::FrameScheduler::post([&](const downstream::FrameInfo &) { pendingCompleted++; });
+  // Arm the real driver before yielding the run loop, so resigning active is
+  // guaranteed to interrupt a pending display tick rather than an idle link.
+  [clock performSelector:@selector(requestFrame)];
+  require(!link.paused && pendingCompleted == 0, @"pending display request did not arm asynchronously");
+  [notifications postNotificationName:UIApplicationWillResignActiveNotification object:nil];
+  require(link.paused, @"inactive transition left the pending display link running");
+  runClockLoopUntil([&] { return pendingCompleted == 1; });
+  require(link.paused, @"inactive fallback woke the display link");
+
+  NSUInteger inactiveCompleted = 0;
+  downstream::FrameScheduler::post([&](const downstream::FrameInfo &info) {
+    require(NSThread.isMainThread && std::isfinite(info.intervalMs) && info.intervalMs > 0,
+            @"inactive clock fallback lost its frame callback");
+    inactiveCompleted++;
+  });
+  runClockLoopUntil([&] { return inactiveCompleted == 1; });
+  require(link.paused, @"inactive post enabled display ticking");
+
+  NSUInteger resumedCompleted = 0;
+  [notifications postNotificationName:UIApplicationDidBecomeActiveNotification object:nil];
+  downstream::FrameScheduler::post([&](const downstream::FrameInfo &info) {
+    require(link.timestamp > secondTimestamp &&
+            fabs(info.intervalMs - (link.targetTimestamp - link.timestamp) * 1000) < 0.001,
+            @"resumed clock did not return to actual display ticks");
+    resumedCompleted++;
+  });
+  runClockLoopUntil([&] { return resumedCompleted == 1; });
+  require(link.paused && pendingCompleted == 1 && inactiveCompleted == 1 && completed == 2,
+          @"clock replayed work or kept running after queues drained");
+  if (!wasActive) [notifications postNotificationName:UIApplicationWillResignActiveNotification object:nil];
+  downstream::FrameScheduler::install({});
+  printf("ios_session_frame_clock display_interval_ms=%.3f next_tick_reentrant=1 idle_paused=1 pending_inactive_progress=1 inactive_post=1 resumed_display_tick=1\n",
+         displayInterval);
+}
+
+static std::shared_ptr<downstream::Document> finishReuseDocument(const downstream::DocumentHandle &live) {
+  static uint64_t nextId = 9860000;
+  auto finished = std::make_shared<downstream::Document>(*live);
+  finished->id = nextId++;
+  finished->streaming = false;
+  finished->settledBlocks = finished->blocks.size();
+  // The fixture changes only lifecycle metadata. The engine tests own proof
+  // that a real finish may publish this hint for equivalent render payload.
+  finished->renderReuseFrom = live->id;
+  return finished;
+}
+
+static void checkFinishRenderingReuse() {
+  [DSRenderedDocument invalidateCaches];
+  auto live = std::make_shared<downstream::Document>(*makeDocument(@"keyword\nlast line"));
+  live->streaming = true;
+  live->blocks.tail()[0].tokens.push_back({0, 7, downstream::TokenClass::Keyword});
+  downstream::Block header;
+  header.kind = downstream::BlockKind::TableRow;
+  header.table = 1;
+  header.tableHeader = true;
+  header.text = u"Name\tValue";
+  header.cells = {{0, 4}, {5, 10}};
+  live->blocks.push_back(header);
+  downstream::Block row;
+  row.kind = downstream::BlockKind::TableRow;
+  row.table = 1;
+  row.text = u"tail\t1";
+  row.cells = {{0, 4}, {5, 6}};
+  live->blocks.push_back(row);
+  require(live->settledBlocks == 0 && live->blocks[0].identity == 0 && live->blocks[2].identity == 0,
+          @"finish reuse fixture must have an uncommitted identity-zero tail");
+
+  const auto render = [](const downstream::DocumentHandle &document) {
+    return [DSRenderedDocument renderedDocumentFor:document fontScale:1 syntaxHighlighting:NO
+                                             theme:downstream::Theme::defaultTheme() caret:downstream::PlacedCaret{}];
+  };
+  DSRenderedDocument *before = render(live);
+  require(before.segments.count == 2 && [before.segments[0] isKindOfClass:DSCodeSegment.class] &&
+          [before.segments[1] isKindOfClass:DSTableSegment.class], @"finish reuse fixture lost its code/table segments");
+  const downstream::CodeLayout code;
+  const downstream::ImageStateLayout images;
+  const downstream::HostLayout hosts;
+  const downstream::TableLayout tables;
+  NSArray<NSValue *> *beforeFrames = [before segmentFramesForWidth:320 chrome:0 code:code images:images hosts:hosts tables:tables];
+  DSDocumentView *view = [[DSDocumentView alloc] initWithFrame:CGRectMake(0, 0, 320, 300)];
+  view.rendered = before;
+  NSArray *mounted = [view valueForKey:@"segmentViews"];
+  DSCodeSegmentView *codeView = mounted[0];
+  DSTableSegmentView *tableView = mounted[1];
+  require(!codeView.controlsEnabled && codeView.streaming && !tableView.controlsEnabled && tableView.streaming,
+          @"live identity-zero code/table did not keep controls disabled");
+
+  const auto finished = finishReuseDocument(live);
+  DSRenderedDocument *after = render(finished);
+  require(after != before && after.documentId == finished->id && before.documentId == live->id,
+          @"finish reuse aliased the wrapper or retained the old document id");
+  require(before.settledBlocks == 0 && after.settledBlocks == finished->blocks.size(),
+          @"finish reuse retained live settlement or changed the old wrapper");
+  require(after.segments == before.segments && after.segmentBlockIndexes == before.segmentBlockIndexes &&
+          after.theme == before.theme && after.caret == before.caret,
+          @"finish reuse rebuilt immutable segments or lost rendering metadata");
+  require([after valueForKey:@"lock"] != [before valueForKey:@"lock"], @"finish reuse shared a mutable geometry lock");
+  NSArray<NSValue *> *afterFrames = [after segmentFramesForWidth:320 chrome:0 code:code images:images hosts:hosts tables:tables];
+  require(afterFrames != beforeFrames && [afterFrames isEqualToArray:beforeFrames],
+          @"finish reuse shared the wrapper's geometry cache or changed its frames");
+  require(render(finished) == after, @"finished wrapper did not enter the document cache");
+  view.rendered = after;
+  mounted = [view valueForKey:@"segmentViews"];
+  require(mounted[0] == codeView && mounted[1] == tableView &&
+          codeView.controlsEnabled && !codeView.streaming && tableView.controlsEnabled && !tableView.streaming &&
+          codeView.blockOffset == 0 && tableView.blockOffset == 1,
+          @"shared finish segments skipped the document view's settled code/table state");
+  require(render(finished) == after, @"mount retirement evicted the finished wrapper");
+  view.rendered = nil;
+
+  // Retained owners stay valid, but cache misses must build from the finished
+  // document rather than treating its scalar hint as an owned parent.
+  DSRenderedDocument *retiredFallback = render(finishReuseDocument(live));
+  require(retiredFallback.segments[0] != before.segments[0] && retiredFallback.settledBlocks == live->blocks.size(),
+          @"retired parent was reused or fallback lost final settlement");
+  DSRenderedDocument *evictionParent = render(live);
+  NSCache *ordinaryCache = [[DSRenderedDocument cache] valueForKey:@"cache"];
+  [ordinaryCache removeAllObjects];
+  DSRenderedDocument *evictedFallback = render(finishReuseDocument(live));
+  require(evictedFallback.segments[0] != evictionParent.segments[0] &&
+          [((DSCodeSegment *)evictedFallback.segments[0]).text.attributedString
+              isEqualToAttributedString:((DSCodeSegment *)before.segments[0]).text.attributedString],
+          @"evicted parent fallback reused stale segments or changed code payload");
+  printf("ios_finish_rendering_reuse shared_segments=2 distinct_wrapper=1 settled_controls=1 own_geometry=1 retired_fallback=1 evicted_fallback=1\n");
+  [DSRenderedDocument invalidateCaches];
+}
+
+static void checkFinishReuseOptionMismatches() {
+  [DSRenderedDocument invalidateCaches];
+  const auto live = makeDocument(@"keyword");
+  const auto theme = downstream::Theme::defaultTheme();
+  const downstream::PlacedCaret none;
+  DSRenderedDocument *before = [DSRenderedDocument renderedDocumentFor:live fontScale:1 syntaxHighlighting:NO
+                                                                 theme:theme caret:none];
+  const auto check = [&](CGFloat scale, BOOL highlighting, const downstream::Theme::Handle &optionTheme,
+                         const downstream::PlacedCaret &caret, DSLinkVariants *variants, DSTagStyles *tagStyles) {
+    const auto finished = finishReuseDocument(live);
+    DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:finished fontScale:scale
+                                                       syntaxHighlighting:highlighting theme:optionTheme caret:caret
+                                                                  variants:variants tagStyles:tagStyles];
+    require(rendered.segments.firstObject != before.segments.firstObject &&
+            rendered.documentId == finished->id && rendered.settledBlocks == 1 && rendered.caret == caret,
+            @"finish reused a parent with different render options or lost final state");
+  };
+  check(1.25, NO, theme, none, nil, nil);
+  check(1, YES, theme, none, nil, nil);
+  const auto coloredTheme = downstream::Theme::create({downstream::theme::kSlotCodeBlockColor}, {0xff336699}, {}, 9861000, 9861000);
+  check(1, NO, coloredTheme, none, nil, nil);
+  check(1, NO, theme, {downstream::CaretKind::Block, downstream::CaretPlace::AfterText}, nil, nil);
+  const auto caretLive = makeDocument(@"caret tail");
+  const downstream::PlacedCaret inlineBlock{downstream::CaretKind::Block, downstream::CaretPlace::AfterText};
+  DSRenderedDocument *caretBefore = [DSRenderedDocument renderedDocumentFor:caretLive fontScale:1
+                                                        syntaxHighlighting:NO theme:theme caret:inlineBlock];
+  for (const downstream::PlacedCaret caret : {downstream::PlacedCaret{downstream::CaretKind::Circle, downstream::CaretPlace::AfterText},
+                                              downstream::PlacedCaret{downstream::CaretKind::Block, downstream::CaretPlace::OwnLine}}) {
+    DSRenderedDocument *caretAfter = [DSRenderedDocument renderedDocumentFor:finishReuseDocument(caretLive) fontScale:1
+                                                         syntaxHighlighting:NO theme:theme caret:caret];
+    require(caretAfter.segments.firstObject != caretBefore.segments.firstObject && caretAfter.caret == caret,
+            @"finish reused a parent across a caret kind-only or place-only change");
+  }
+  DSLinkVariants *variants = [DSLinkVariants new];
+  variants.prefixes = @[@"https://example.com/"];
+  variants.counts = @[@1];
+  variants.colors = @[@(0xff336699)];
+  variants.underlines = @[@YES];
+  check(1, NO, theme, none, variants, nil);
+  DSTagStyles *tagStyles = [DSTagStyles new];
+  tagStyles.names = @[@"mark"];
+  tagStyles.colors = @[@(0xff336699)];
+  tagStyles.flags = @[@1];
+  check(1, NO, theme, none, nil, tagStyles);
+  printf("ios_finish_reuse_options scale=1 highlighting=1 theme=1 caret_kind_and_place=1 variants=1 tag_styles=1\n");
+  [DSRenderedDocument invalidateCaches];
+}
 #endif
 
 int main() {
@@ -629,8 +855,11 @@ int main() {
     checkRenderingCacheBudget();
     checkHighlightVariants();
 #ifndef BASELINE
+    checkSessionFrameClock();
     checkTableCellReuse();
     checkRenderingRetirement();
+    checkFinishRenderingReuse();
+    checkFinishReuseOptionMismatches();
     checkSnapshotStrings();
     checkExactStackWidths();
     checkLazyHostedFallback();

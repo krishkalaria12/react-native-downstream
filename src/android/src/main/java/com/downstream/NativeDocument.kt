@@ -564,6 +564,14 @@ internal object DownstreamNative {
   @Volatile
   var preparationContext: WeakReference<Context>? = null
 
+  @JvmStatic
+  @DoNotStrip
+  fun requestSessionFrame() = SessionFrameClock.request()
+
+  internal fun sessionFrame(intervalMs: Double, late: Boolean) = nativeSessionFrame(intervalMs, late)
+
+  fun readRenderReuseFrom(documentId: Long): Long = nativeRenderReuseFrom(documentId)
+
   /**
    * Puts [text] on the system clipboard, for the link-safety confirmation's
    * "Copy link".
@@ -1133,4 +1141,10 @@ internal object DownstreamNative {
 
   @JvmStatic
   private external fun nativeInstallClipboard()
+
+  @JvmStatic
+  private external fun nativeSessionFrame(intervalMs: Double, late: Boolean)
+
+  @JvmStatic
+  private external fun nativeRenderReuseFrom(documentId: Long): Long
 }

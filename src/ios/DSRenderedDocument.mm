@@ -1911,6 +1911,7 @@ static NSUInteger addingRenderingCost(NSUInteger cost, size_t characters, NSUInt
 
 @interface DSRenderedDocument ()
 @property (nonatomic) DSThemeColors *theme;
+- (instancetype)initReusing:(DSRenderedDocument *)previous document:(const DocumentHandle &)document;
 @end
 
 @implementation DSRenderedDocument {
@@ -1995,12 +1996,14 @@ static NSString *committedVariantsKey(DSLinkVariants *variants) {
   // The plan's kind is in it for the same reason: a math block and an image-only
   // paragraph are their own segments, so the same identity can build a formula
   // and a paragraph and the two are not interchangeable.
-  // The caret is not in it because its placeholder is only ever in the last
-  // segment's measured text, and a committed segment is never the last one.
+  // A final matching prefix can reach the last block, so its caret reservation
+  // must also distinguish immutable payloads with different measured text.
   NSString *key =
-      [NSString stringWithFormat:@"%llu:%zu:%llu:%.4f:%d:%d:%@:%@", (unsigned long long)document.blocks[from].identity,
+      [NSString stringWithFormat:@"%llu:%zu:%zu:%llu:%.4f:%d:%d:%d:%d:%@:%@", (unsigned long long)document.blocks[from].identity,
+                                 from,
                                  to - from, (unsigned long long)theme.id(), scale, syntaxHighlighting,
-                                 static_cast<int>(kind), committedVariantsKey(variants), tagStylesKey(tagStyles)];
+                                 static_cast<int>(kind), static_cast<int>(caretAfter.kind),
+                                 static_cast<int>(caretAfter.place), committedVariantsKey(variants), tagStylesKey(tagStyles)];
   DSCommittedSegment *cached = [self.committedSegmentCache objectForKey:key];
   bool matches = cached != nil && cached->identities.size() == to - from;
   for (size_t index = from; matches && index < to; index++) {
@@ -2147,15 +2150,48 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
                                  variantsKey(variants), tagStylesKey(tagStyles)];
   DSRenderedDocument *rendered = [self.cache objectForKey:key];
   if (rendered == nil) {
-    rendered = [[self alloc] initWithDocument:document
+    DSRenderedDocument *previous = nil;
+    if (document->renderReuseFrom != 0) {
+      NSString *previousKey =
+          [NSString stringWithFormat:@"%llu:%.4f:%d:%llu:%d:%d:%@:%@", (unsigned long long)document->renderReuseFrom,
+                                     fontScale, syntaxHighlighting,
+                                     (unsigned long long)(themeHandle ? themeHandle->id() : Theme::defaultTheme()->id()),
+                                     static_cast<int>(caret.kind), static_cast<int>(caret.place),
+                                     variantsKey(variants), tagStylesKey(tagStyles)];
+      previous = [self.cache objectForKey:previousKey];
+    }
+    if (previous != nil) {
+      rendered = [[self alloc] initReusing:previous document:document];
+    } else {
+      rendered = [[self alloc] initWithDocument:document
                                      fontScale:fontScale
                             syntaxHighlighting:syntaxHighlighting
                                       theme:themeHandle ? themeHandle : Theme::defaultTheme()
                                        caret:caret
                                    variants:variants tagStyles:tagStyles];
+    }
     [self.cache setObject:rendered forKey:key cost:rendered->_cacheCost];
   }
   return rendered;
+}
+
+- (instancetype)initReusing:(DSRenderedDocument *)previous document:(const DocumentHandle &)document {
+  if (!(self = [super init])) return nil;
+  // The engine proves payload equivalence. Snapshot state and mutable stack
+  // caches stay owned by this wrapper, and settlement is reapplied by the view.
+  _documentId = document->id;
+  _settledBlocks = document->settledBlocks;
+  _lock = [NSLock new];
+  _caret = previous->_caret;
+  _segments = previous->_segments;
+  _segmentBlockIndexes = previous->_segmentBlockIndexes;
+  _gaps = previous->_gaps;
+  _variants = previous->_variants;
+  _tagStyles = previous->_tagStyles;
+  self.theme = previous.theme;
+  // Charge retained tail text too, even once the previous wrapper retires.
+  _cacheCost = previous->_cacheCost;
+  return self;
 }
 
 + (void)invalidateCaches {

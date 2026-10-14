@@ -19,6 +19,7 @@ function method(file, name, indentation) {
 }
 let fixture = readFileSync(join(here, 'TextStreamingCheck.kt'), 'utf8');
 for (const [marker, value] of [
+  ['PRODUCTION_RENDER_COST', method('RenderedDocument.kt', 'cacheCost', 2)],
   ['PRODUCTION_OBTAIN', method('RenderedDocument.kt', 'obtain', 4)],
   [
     'PRODUCTION_ELIGIBILITY',

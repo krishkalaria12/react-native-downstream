@@ -44,7 +44,16 @@ internal class RenderedDocument(
   /** Paints and sizes for one font scale and appearance, shared by the frames. */
   val style: Style,
   val tracing: Boolean = false,
+  /** Preserve charges for shared tail payload after its original wrapper retires. */
+  private val minimumCacheCost: Long = 0,
 ) {
+  private fun cacheCost(): Long {
+    var cost = 1024L + plan.size * 128L
+    plan.forEachIndexed { index, planned ->
+      if (!planned.isCommitted) cost += segmentCost(segments[index])
+    }
+    return maxOf(cost, minimumCacheCost)
+  }
   private var cachedWidth = -1
   private var cachedChrome = -1
   private var cachedCode: CodeLayout? = null
@@ -363,11 +372,7 @@ internal class RenderedDocument(
       // Plans, segment references and cached frames belong to each snapshot.
       // Omit shared committed payloads from this tail/metadata estimate. A
       // rendering can retain them after the separate segment cache evicts them.
-      var cost = 1024L + rendered.plan.size * 128L
-      rendered.plan.forEachIndexed { index, planned ->
-        if (!planned.isCommitted) cost += segmentCost(rendered.segments[index])
-      }
-      cost
+      rendered.cacheCost()
     }
 
     private fun segmentCost(value: Segment): Long = when (value) {
@@ -521,6 +526,20 @@ internal class RenderedDocument(
         if (it.tracing) DownstreamNative.traceDocument(documentId, "android_render_cache_hit")
         return it
       }
+      // Canonical finalization can leave every payload unchanged. Native code
+      // proves content, referents, formula answers and segment boundaries match.
+      // Keep new document/settlement state while sharing immutable segments.
+      // Incremental paragraphs must still rebuild into canonical final layout.
+      val reuseFrom = if (incrementalParagraphs) 0L else DownstreamNative.readRenderReuseFrom(documentId)
+      if (reuseFrom != 0L) {
+        val reuseKey = "$reuseFrom:$fontScale:$night:$highlights:$themeId:${caret.kind}:${caret.place}:${linkVariants.hashCode()}:$incrementalParagraphs"
+        cache.get(reuseKey)?.let { previous ->
+          val tracing = DownstreamNative.isTracingDocument(documentId)
+          if (tracing) DownstreamNative.traceDocument(documentId, "android_render_finish_reuse")
+          return RenderedDocument(documentId, previous.segments, plan, previous.paint, previous.style, tracing, previous.cacheCost())
+            .also { cache.put(key, it) }
+        }
+      }
       // Measurement prepares highlighted code even when the view hides colors.
       // Both variants can share this snapshot's provisional non-code segments,
       // which the committed-segment cache cannot reuse. Every other rendering
@@ -583,7 +602,7 @@ internal class RenderedDocument(
           val segmentParagraphs = incrementalParagraphs && planned.kind == SEGMENT_TEXT &&
             !planned.isCommitted && planned.from >= planned.settledBlocks
           val segmentKey =
-            "${planned.identity}:${planned.lastIdentity}:${planned.to - planned.from}:$ordinal:$scaled:$night:" +
+            "${planned.identity}:${planned.lastIdentity}:${planned.from}:${planned.to}:${planned.kind}:$ordinal:${planned.tableOrdinal}:${planned.imageOrdinal}:$scaled:$night:" +
               "${highlights && planned.kind == SEGMENT_CODE}:$themeId:$caretKey:${linkVariants.hashCode()}:$segmentParagraphs"
           val reused = (if (!planned.isCommitted && planned.kind != SEGMENT_CODE) opposite?.segments?.getOrNull(index) else null)
             ?: (if (planned.isCommitted) committedSegments.get(segmentKey) else null)
