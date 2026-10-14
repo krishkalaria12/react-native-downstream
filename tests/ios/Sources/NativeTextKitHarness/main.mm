@@ -623,9 +623,26 @@ static void checkCellBreakHeight() {
 #include "SnapshotStringChecks.mm"
 #include "RetirementChecks.mm"
 #endif
+#include <algorithm>
+#include "CodeCardChecks.mm"
 
 int main() {
   @autoreleasepool {
+    if (getenv("DOWNSTREAM_IOS_CARD_SCENES") != nullptr) {
+#ifdef BASELINE
+      dumpCodeCardScenes("baseline");
+#else
+      dumpCodeCardScenes("current");
+#endif
+      printf("native TextKit checks passed\n");
+      return 0;
+    }
+    if (getenv("DOWNSTREAM_IOS_CARD_BENCH_ONLY") != nullptr) {
+      benchmarkCodeCardStream();
+      benchmarkProseTailStream();
+      printf("native TextKit checks passed\n");
+      return 0;
+    }
     checkRenderingCacheBudget();
     checkHighlightVariants();
 #ifndef BASELINE
@@ -637,6 +654,7 @@ int main() {
     checkVisibleLineMarks();
     checkUnchangedSegmentAssignments();
     checkSegmentViewport();
+    checkCodeCardChrome();
 #endif
     if (getenv("DOWNSTREAM_IOS_HOST_BENCH_ONLY") != nullptr) {
       benchmarkHostedMeasurements();

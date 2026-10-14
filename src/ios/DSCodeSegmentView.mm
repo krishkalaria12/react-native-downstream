@@ -24,6 +24,8 @@ namespace {
 /// card draws inside the box the height reserved.
 constexpr CGFloat kCodePadding = 10;
 constexpr CGFloat kBottomFade = 24;
+/// Room around a marker's own size for ink that overhangs its advance.
+constexpr CGFloat kMarkerInk = 2;
 
 /// How far from the bottom a reader may scroll and still be "following" the
 /// newest line. Streamdown's `usePinnedScroll` uses 8 points; a reader who
@@ -56,6 +58,71 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
  * digit count of the last number, so a block crossing 99 widens by one digit
  * rather than wrapping onto a second row.
  */
+/// A chrome layer that never animates. The card sets its chrome's frames and
+/// colors on every snapshot, and an implicit animation would trail each change
+/// by a quarter of a second.
+@interface DSStaticLayer : CALayer
+@end
+
+@implementation DSStaticLayer
+- (id<CAAction>)actionForKey:(NSString *)event {
+  return (id<CAAction>)NSNull.null;
+}
+@end
+
+@interface DSStaticGradientLayer : CAGradientLayer
+@end
+
+@implementation DSStaticGradientLayer
+- (id<CAAction>)actionForKey:(NSString *)event {
+  return (id<CAAction>)NSNull.null;
+}
+@end
+
+/// A list marker in the margin beside a card, drawn into a bitmap the size of the
+/// marker rather than into one the size of the whole card.
+@interface DSCardMarkerView : UIView
+@property (nonatomic, copy, nullable) NSAttributedString *marker;
+/// Where the marker is drawn inside the view. The view sits on whole device
+/// pixels, so its bitmap is never resampled, and the marker keeps the fractional
+/// position it would have had drawn into the card.
+@property (nonatomic) CGPoint origin;
+@end
+
+@implementation DSCardMarkerView
+
+- (instancetype)initWithFrame:(CGRect)frame {
+  if (self = [super initWithFrame:frame]) {
+    self.opaque = NO;
+    self.backgroundColor = UIColor.clearColor;
+    self.userInteractionEnabled = NO;
+    self.isAccessibilityElement = NO;
+  }
+  return self;
+}
+
+- (void)setMarker:(NSAttributedString *)marker {
+  if (marker == _marker || [marker isEqualToAttributedString:_marker]) {
+    return;
+  }
+  _marker = [marker copy];
+  [self setNeedsDisplay];
+}
+
+- (void)setOrigin:(CGPoint)origin {
+  if (CGPointEqualToPoint(origin, _origin)) {
+    return;
+  }
+  _origin = origin;
+  [self setNeedsDisplay];
+}
+
+- (void)drawRect:(CGRect)rect {
+  [_marker drawAtPoint:_origin];
+}
+
+@end
+
 @interface DSCodeGutterView : UIView
 @property (nonatomic, weak, nullable) DSTextSegmentView *body;
 /// Retains the owner of the line starts so mounting a gutter needs no copy.
@@ -102,6 +169,9 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
 }
 
 - (void)setBody:(DSTextSegmentView *)body {
+  if (body == _body) {
+    return;
+  }
   _body = body;
   [self setNeedsDisplay];
 }
@@ -115,11 +185,17 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
 }
 
 - (void)setFont:(UIFont *)font {
+  if (font == _font || [font isEqual:_font]) {
+    return;
+  }
   _font = font;
   [self setNeedsDisplay];
 }
 
 - (void)setTextColor:(UIColor *)textColor {
+  if (textColor == _textColor || [textColor isEqual:_textColor]) {
+    return;
+  }
   _textColor = textColor;
   [self setNeedsDisplay];
 }
@@ -501,13 +577,46 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
   /// Whether the last button pass saw a capped card, so the layout that changes
   /// the answer can rebuild the header rather than doing it twice per snapshot.
   BOOL _lastCapped;
+  /// The buttons' tint, which a snapshot sets again only when the theme changed it.
+  UIColor *_buttonColor;
+  /// The code color the gutter's numbers were last dimmed from.
+  UIColor *_gutterColor;
+  /// The card's chrome, as layers rather than a drawing: a card grows with every
+  /// snapshot of an open fence, and a drawn card was a bitmap as large as itself
+  /// rasterized again each time. Layers are composited by the GPU at any size.
+  /// One clipping layer under every subview holds them all.
+  CALayer *_chrome;
+  CALayer *_card;
+  CALayer *_headerRule;
+  CAGradientLayer *_fade;
+  NSMutableArray<CALayer *> *_bars;
+  NSMutableArray<DSCardMarkerView *> *_markers;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
   if (self = [super initWithFrame:frame]) {
     self.opaque = NO;
     self.backgroundColor = UIColor.clearColor;
-    self.contentMode = UIViewContentModeRedraw;
+
+    _chrome = [DSStaticLayer layer];
+    // The card's border is centered on its edge, as a stroked path's is, so its
+    // outer half reaches past the card; the view's own bounds still clip it.
+    _chrome.masksToBounds = YES;
+    _card = [DSStaticLayer layer];
+    _card.cornerCurve = kCACornerCurveContinuous;
+    _headerRule = [DSStaticLayer layer];
+    _fade = [DSStaticGradientLayer layer];
+    _fade.cornerCurve = kCACornerCurveContinuous;
+    _fade.cornerRadius = 6;
+    _fade.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+    _fade.startPoint = CGPointMake(0.5, 0);
+    _fade.endPoint = CGPointMake(0.5, 1);
+    [_chrome addSublayer:_card];
+    [_chrome addSublayer:_headerRule];
+    [_chrome addSublayer:_fade];
+    _bars = [NSMutableArray new];
+    _markers = [NSMutableArray new];
+    [self.layer insertSublayer:_chrome atIndex:0];
 
     _header = [UIView new];
     _header.userInteractionEnabled = YES;
@@ -645,9 +754,8 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
     // The newest immutable segment is retained while the child owns this card.
     // Restore it immediately when the host suspends, fails or unmounts.
     [_body setSegment:_segmentStorage.text];
-    [self setNeedsLayout];
-    [self setNeedsDisplay];
   }
+  [self setNeedsLayout];
 }
 
 /// The document block this card's body starts at. Set on every render because a
@@ -660,6 +768,7 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
   _body.blockOffset = blockOffset;
   _gutter.blockOffset = blockOffset;
   [_gutter setNeedsDisplay];
+  [self applyChromeAlpha];
 }
 
 - (void)setRevealProvider:(id<DSRevealProvider>)provider {
@@ -669,6 +778,7 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
   _revealProvider = provider;
   _body.revealProvider = provider;
   [_gutter setNeedsDisplay];
+  [self applyChromeAlpha];
 }
 
 - (void)setSegment:(DSCodeSegment *)segment {
@@ -704,28 +814,56 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
   // The gutter draws in the code's own color, dimmed rather than re-themed: the
   // numbers annotate the code beside them, so a theme that restyles code restyles
   // its numbers in step. Streamdown's `muted-foreground/50` is the same idea.
-  _gutter.textColor = [[segment.theme colorForSlot:kSlotCodeBlockColor
-                                            fallback:UIColor.secondaryLabelColor]
-      colorWithAlphaComponent:kGutterAlpha];
+  // Compared before it is dimmed: a dimmed dynamic color is a new color every
+  // time, which would redraw every number on every snapshot.
+  UIColor *const codeColor = [segment.theme colorForSlot:kSlotCodeBlockColor fallback:UIColor.secondaryLabelColor];
+  if (![codeColor isEqual:_gutterColor]) {
+    _gutterColor = codeColor;
+    _gutter.textColor = [codeColor colorWithAlphaComponent:kGutterAlpha];
+  }
+  // An open fence is a new segment on every snapshot with the same header, and
+  // setting a label's text or a button's tint relays out or redraws it even when
+  // the value is the one it already has, so each is set only when it changed.
   // A fence's title replaces the language, and the spoken label keeps both plus
   // the start line, so a screen reader still hears what kind of code this is.
-  _language.text = segment.title.length > 0 ? segment.title : segment.language;
-  _language.accessibilityLabel = [self spokenLabel];
-  // The header row's own three colors, read once per block rather than per draw,
-  // because the card is redrawn whenever its bounds change.
-  _headerColor = [segment.theme colorForSlot:kSlotCodeBlockHeaderColor fallback:UIColor.secondaryLabelColor];
-  _language.textColor = _headerColor;
-  _language.font = segment.headerFont;
-  _header.backgroundColor = [segment.theme colorForSlot:kSlotCodeBlockHeaderBackgroundColor fallback:nil];
+  NSString *const name = segment.title.length > 0 ? segment.title : segment.language;
+  if (![_language.text isEqualToString:name]) {
+    _language.text = name;
+  }
+  NSString *const spoken = [self spokenLabel];
+  if (![_language.accessibilityLabel isEqualToString:spoken]) {
+    _language.accessibilityLabel = spoken;
+  }
+  // The header row's own three colors, read once per block rather than per draw.
+  UIColor *const headerColor = [segment.theme colorForSlot:kSlotCodeBlockHeaderColor
+                                                  fallback:UIColor.secondaryLabelColor];
+  if (![_headerColor isEqual:headerColor]) {
+    _headerColor = headerColor;
+    _language.textColor = headerColor;
+  }
+  if (![_language.font isEqual:segment.headerFont]) {
+    _language.font = segment.headerFont;
+  }
+  UIColor *const headerBackground = [segment.theme colorForSlot:kSlotCodeBlockHeaderBackgroundColor fallback:nil];
+  if (headerBackground != _header.backgroundColor && ![headerBackground isEqual:_header.backgroundColor]) {
+    _header.backgroundColor = headerBackground;
+  }
   // The buttons take their own color when the theme gave them one, so a header
   // row can have quiet controls and loud text, or the reverse.
-  UIColor *buttonColor = segment.headerButtonColor ?: _headerColor;
-  for (UIView *button in _buttons.arrangedSubviews) {
-    [(UIControl *)button setTintColor:buttonColor];
+  UIColor *const buttonColor = segment.headerButtonColor ?: _headerColor;
+  if (![_buttonColor isEqual:buttonColor]) {
+    _buttonColor = buttonColor;
+    for (UIView *button in _buttons.arrangedSubviews) {
+      [(UIControl *)button setTintColor:buttonColor];
+    }
   }
-  [self updateButtons];
+  // The buttons read the controls, the layout and the copied state, none of
+  // which a new snapshot of the same block changes; their own setters and the
+  // capped check in layout update them. The first segment builds them.
+  if (_buttons.arrangedSubviews.count == 0) {
+    [self updateButtons];
+  }
   [self setNeedsLayout];
-  [self setNeedsDisplay];
 }
 
 /// "src/app.ts, ts code, from line 10": both names, and the start line when it
@@ -824,6 +962,9 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
   download.tag = 2;
   copy.tag = 3;
   for (UIButton *button in @[expand, wrap, download, copy]) {
+    if (_buttonColor != nil) {
+      button.tintColor = _buttonColor;
+    }
     button.accessibilityIdentifier = [NSString stringWithFormat:@"ds.code.%@", button.accessibilityLabel];
     [button addTarget:self action:@selector(handleControl:) forControlEvents:UIControlEventTouchUpInside];
     [_buttons addArrangedSubview:button];
@@ -974,6 +1115,7 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
 - (void)layoutSubviews {
   [super layoutSubviews];
   if (_segmentStorage == nil || _hosted) {
+    [self layoutChrome];
     return;
   }
   const CGFloat headerHeight = self.showsHeader ? kChromeRowHeight : 0;
@@ -988,14 +1130,13 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
   // The gutter narrows the width a wrapped body wraps at, which is the only way
   // numbers change a block's height. An unwrapped body is laid out at its own
   // length either way, so it never lays code out again on a rotation.
-  const CGFloat bodyWidth =
-      [_segmentStorage.text usedWidthForWidth:[_segmentStorage layoutWidthForCard:card.size.width
-                                                                         wrapped:_layout.wraps
-                                                                    gutterWidth:gutterWidth]];
-  const CGFloat bodyHeight =
-      [_segmentStorage.text heightForWidth:[_segmentStorage layoutWidthForCard:card.size.width
-                                                                      wrapped:_layout.wraps
-                                                                 gutterWidth:gutterWidth]];
+  // The width the measurement wrapped at: the segment's whole width, from which
+  // the inset, the container margin included, is taken once.
+  const CGFloat wrapWidth = [_segmentStorage layoutWidthForCard:self.bounds.size.width
+                                                        wrapped:_layout.wraps
+                                                    gutterWidth:gutterWidth];
+  const CGFloat bodyWidth = [_segmentStorage.text usedWidthForWidth:wrapWidth];
+  const CGFloat bodyHeight = [_segmentStorage.text heightForWidth:wrapWidth];
   const CGRect viewport = CGRectInset(card, padding, padding);
   _viewport.frame = viewport;
   // The gutter sits inside the card's padding, at the leading edge, and the
@@ -1003,8 +1144,10 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
   _gutter.frame = CGRectMake(0, 0, gutterWidth, std::max<CGFloat>(bodyHeight, viewport.size.height));
   _scrollView.frame = CGRectMake(gutterWidth, 0, std::max<CGFloat>(0, viewport.size.width - gutterWidth),
                                  _gutter.frame.size.height);
-  _body.frame = CGRectMake(0, 0, std::max<CGFloat>(bodyWidth, 0), std::max<CGFloat>(bodyHeight, 0));
-  _scrollView.contentSize = _body.bounds.size;
+  // Framed in steps, so a growing fence redraws only its edited lines. The scroll
+  // views clip what is below the code and scroll only as far as the code reaches.
+  _body.frame = CGRectMake(0, 0, std::max<CGFloat>(bodyWidth, 0), DSSteppedTextHeight(bodyHeight));
+  _scrollView.contentSize = CGSizeMake(std::max<CGFloat>(bodyWidth, 0), std::max<CGFloat>(bodyHeight, 0));
   // A gutter is as tall as the code, and it scrolls vertically with it, so the
   // numbers beside the visible lines are the ones the reader sees.
   _viewport.contentSize = CGSizeMake(viewport.size.width, _gutter.frame.size.height);
@@ -1043,126 +1186,158 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
   if (capped && _streaming) {
     [_viewport requestPin];
   }
-  [self setNeedsDisplay];
+  [self layoutChrome];
+}
+
+/// A color for a layer, resolved against this view's appearance.
+- (CGColorRef)layerColor:(UIColor *)color {
+  return [color resolvedColorWithTraitCollection:self.traitCollection].CGColor;
+}
+
+/// The card's alpha: a card fades with its own first unit, so a new code block
+/// brings its background, its border, and its header with it rather than
+/// appearing behind text that is already there. Its body fades by its own units,
+/// so the card does not multiply them. A hosted block does not fade at all: the
+/// React child over it is not faded by the reveal, so its bars and marker arrive
+/// with the component rather than with code text the reader never sees.
+- (CGFloat)chromeAlpha {
+  return _revealProvider == nil || self.hosted
+             ? 1
+             : [_revealProvider revealAlphaAtBlock:_blockOffset offset:0 now:CACurrentMediaTime()];
+}
+
+- (void)applyChromeAlpha {
+  const CGFloat alpha = [self chromeAlpha];
+  _card.opacity = alpha;
+  _headerRule.opacity = alpha;
+  for (CALayer *bar in _bars) {
+    bar.opacity = alpha;
+  }
+  for (DSCardMarkerView *marker in _markers) {
+    marker.alpha = alpha;
+  }
 }
 
 /// The card's rounded code background, plus the container bars and the list
 /// marker, which live in the non-scrolling margin beside it, and a bottom fade
-/// while a capped block has more below.
-- (void)drawRect:(CGRect)rect {
-  if (_segmentStorage == nil) {
+/// while a capped block has more below. Set as layers whenever the card lays out.
+- (void)layoutChrome {
+  _chrome.frame = self.bounds;
+  DSCodeSegment *const segment = _segmentStorage;
+  const BOOL card = segment != nil && !self.hosted;
+  _card.hidden = !card;
+  _headerRule.hidden = YES;
+  _fade.hidden = YES;
+  if (segment == nil) {
+    for (CALayer *bar in _bars) {
+      bar.hidden = YES;
+    }
+    for (DSCardMarkerView *marker in _markers) {
+      marker.hidden = YES;
+    }
     return;
   }
-  const CGFloat leading = _segmentStorage.contentLeading;
+  const CGFloat width = CGRectGetWidth(self.bounds);
+  const CGFloat height = CGRectGetHeight(self.bounds);
+  const CGFloat leading = segment.contentLeading;
   // A host segment has no header, so its chrome starts at the top of its own
   // frame and spans the height the React component measured.
   const CGFloat headerHeight = self.hosted ? 0 : (self.showsHeader ? kChromeRowHeight : 0);
-  // A card fades with its own first unit, so a new code block brings its
-  // background, its border, and its header with it rather than appearing behind
-  // text that is already there. Its body fades by its own units, so the card does
-  // not multiply them. A hosted block does not fade at all: the React child over
-  // it is not faded by the reveal, so its bars and marker arrive with the
-  // component rather than with code text the reader never sees.
-  const CGFloat alpha = _revealProvider == nil || self.hosted
-      ? 1
-      : [_revealProvider revealAlphaAtBlock:_blockOffset offset:0 now:CACurrentMediaTime()];
-  CGContextRef alphaContext = UIGraphicsGetCurrentContext();
-  CGContextSaveGState(alphaContext);
-  CGContextSetAlpha(alphaContext, alpha);
-  // A hosted fence draws no card: the React child mounted over this view is what
-  // the reader sees, and a card behind it would be a second answer to the same
-  // block.
-  if (!self.hosted) {
+  const CGRect rect = CGRectMake(leading, headerHeight, width - leading, height - headerHeight);
+  if (card) {
     // A rule under the header row, when the theme asked for one. Its color
     // defaults to clear, so a theme that says nothing draws nothing.
-    UIColor *headerBorder = _segmentStorage.headerBorderColor;
+    UIColor *const headerBorder = segment.headerBorderColor;
     if (headerBorder != nil && self.showsHeader) {
-      [headerBorder setFill];
-      UIRectFill(CGRectMake(0, headerHeight - 1, self.bounds.size.width, 1));
+      _headerRule.hidden = NO;
+      _headerRule.frame = CGRectMake(0, headerHeight - 1, width, 1);
+      _headerRule.backgroundColor = [self layerColor:headerBorder];
     }
-    const CGRect card = CGRectMake(leading, headerHeight, self.bounds.size.width - leading,
-                                   self.bounds.size.height - headerHeight);
-    // The card's fill, radius and border are all the theme's, and the border is
-    // drawn rather than filled because it sits inside the card's bounds, which is
-    // what keeps a themed card the height the measurement gave it.
-    UIColor *fill = [_segmentStorage.theme colorForSlot:kSlotCodeBlockBackgroundColor
-                                             fallback:UIColor.tertiarySystemFillColor];
-    UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:card cornerRadius:_segmentStorage.borderRadius];
-    [fill setFill];
-    [path fill];
-    if (_segmentStorage.borderWidth > 0) {
-      [[_segmentStorage.theme colorForSlot:kSlotCodeBlockBorderColor fallback:nil] setStroke];
-      path.lineWidth = _segmentStorage.borderWidth;
-      [path stroke];
-    }
+    // The card's fill, radius and border are all the theme's. The border is
+    // centered on the card's edge, as a stroked path is, so the layer reaches half
+    // a border past the card and the fill under that half is covered by it.
+    const CGFloat border = std::max<CGFloat>(0, segment.borderWidth);
+    _card.frame = CGRectInset(rect, -border / 2, -border / 2);
+    _card.cornerRadius = segment.borderRadius + border / 2;
+    _card.backgroundColor = [self layerColor:[segment.theme colorForSlot:kSlotCodeBlockBackgroundColor
+                                                                 fallback:UIColor.tertiarySystemFillColor]];
+    _card.borderWidth = border;
+    // A border with no color of its own strokes in the context's default black.
+    _card.borderColor = border > 0
+                            ? [self layerColor:[segment.theme colorForSlot:kSlotCodeBlockBorderColor fallback:nil]
+                                                   ?: UIColor.blackColor]
+                            : nil;
   }
 
-  for (DSContainerInfo *container in _segmentStorage.containers) {
+  NSArray<DSContainerInfo *> *const containers = segment.containers;
+  NSUInteger barCount = 0;
+  NSUInteger markerCount = 0;
+  for (DSContainerInfo *container in containers) {
     if (container.barColor != nil && container.barWidth > 0) {
-      [container.barColor setFill];
+      if (barCount == _bars.count) {
+        CALayer *bar = [DSStaticLayer layer];
+        [_chrome addSublayer:bar];
+        [_bars addObject:bar];
+      }
+      CALayer *const bar = _bars[barCount++];
+      bar.hidden = NO;
       // Mirrored for a right-to-left block, the same way the marker is.
-      const CGFloat x = _segmentStorage.rightToLeft
-                            ? self.bounds.size.width - container.leading - container.barWidth - 2
-                            : container.leading + 2;
-      UIRectFill(CGRectMake(x, headerHeight, container.barWidth, self.bounds.size.height - headerHeight));
+      const CGFloat x = segment.rightToLeft ? width - container.leading - container.barWidth - 2
+                                            : container.leading + 2;
+      bar.frame = CGRectMake(x, headerHeight, container.barWidth, height - headerHeight);
+      bar.backgroundColor = [self layerColor:container.barColor];
     }
     if (container.marker.length > 0) {
-      UIFont *font = [container.marker attribute:NSFontAttributeName atIndex:0 effectiveRange:NULL];
+      if (markerCount == _markers.count) {
+        DSCardMarkerView *view = [DSCardMarkerView new];
+        view.contentScaleFactor = self.contentScaleFactor;
+        [self addSubview:view];
+        [_markers addObject:view];
+      }
+      DSCardMarkerView *const view = _markers[markerCount++];
+      view.hidden = NO;
+      view.marker = container.marker;
+      const CGSize size = container.marker.size;
       // A hosted block's marker sits at the top of its own height, beside the
       // component, rather than beside the first line of code that is not there.
-      const CGFloat top = self.hosted ? 0 : _segmentStorage.padding;
-      const CGFloat baseline = headerHeight + top + font.ascender;
-      const CGFloat x = _segmentStorage.rightToLeft
-                            ? container.leading + container.markerGap
-                            : container.leading + container.width - container.markerGap -
-                                  container.marker.size.width;
-      [container.marker drawAtPoint:CGPointMake(x, baseline - font.ascender)];
+      const CGFloat top = headerHeight + (self.hosted ? 0 : segment.padding);
+      const CGFloat x = segment.rightToLeft ? container.leading + container.markerGap
+                                            : container.leading + container.width - container.markerGap - size.width;
+      const CGFloat scale = std::max<CGFloat>(1, self.contentScaleFactor);
+      const CGPoint origin = CGPointMake(std::floor((x - kMarkerInk) * scale) / scale,
+                                         std::floor((top - kMarkerInk) * scale) / scale);
+      view.frame = CGRectMake(origin.x, origin.y, std::ceil(size.width) + 3 * kMarkerInk,
+                              std::ceil(size.height) + 3 * kMarkerInk);
+      view.origin = CGPointMake(x - origin.x, top - origin.y);
     }
   }
-  CGContextRestoreGState(alphaContext);
-  if (self.hosted) {
-    // Nothing else: a hosted block has no card to fade, no header row and no
-    // scrolling viewport.
-    return;
+  for (NSUInteger index = barCount; index < _bars.count; index++) {
+    _bars[index].hidden = YES;
   }
+  for (NSUInteger index = markerCount; index < _markers.count; index++) {
+    _markers[index].hidden = YES;
+  }
+  [self applyChromeAlpha];
 
   // The fade says there is more below without covering the last line's text: it
   // is short, and it sits inside the card's own bottom padding.
-  const CGRect card = CGRectMake(leading, headerHeight, self.bounds.size.width - leading,
-                                 self.bounds.size.height - headerHeight);
-  if (_viewport.scrollEnabled && _viewport.contentOffset.y < _viewport.contentSize.height - CGRectGetHeight(_viewport.bounds) - 0.5) {
-    const CGFloat height = std::min<CGFloat>(kBottomFade, CGRectGetHeight(card) / 2);
-    CGContextRef context = UIGraphicsGetCurrentContext();
-    CGContextSaveGState(context);
-    [[UIBezierPath bezierPathWithRoundedRect:card cornerRadius:6] addClip];
+  if (card && _viewport.scrollEnabled &&
+      _viewport.contentOffset.y < _viewport.contentSize.height - CGRectGetHeight(_viewport.bounds) - 0.5) {
+    const CGFloat fade = std::min<CGFloat>(kBottomFade, CGRectGetHeight(rect) / 2);
     // The card's own fill, fading to nothing, so the fade reads as more of the
-    // card rather than as a gray bar over it. The dynamic color resolves against
-    // the trait collection here, in the draw pass, so this is the appearance's
-    // fill rather than a fixed one.
-    CGFloat red = 0;
-    CGFloat green = 0;
-    CGFloat blue = 0;
-    CGFloat alpha = 0;
-    if ([UIColor.tertiarySystemFillColor getRed:&red green:&green blue:&blue alpha:&alpha]) {
-      CGFloat components[8] = {red, green, blue, alpha, red, green, blue, 0};
-      const CGFloat locations[2] = {0, 1};
-      CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
-      CGGradientRef gradient = CGGradientCreateWithColorComponents(space, components, locations, 2);
-      if (gradient != NULL) {
-        CGContextDrawLinearGradient(context, gradient, CGPointMake(CGRectGetMinX(card), CGRectGetMaxY(card) - height),
-                                    CGPointMake(CGRectGetMinX(card), CGRectGetMaxY(card)), 0);
-        CGGradientRelease(gradient);
-      }
-      CGColorSpaceRelease(space);
-    }
-    CGContextRestoreGState(context);
+    // card rather than as a gray bar over it.
+    UIColor *const fill = [UIColor.tertiarySystemFillColor resolvedColorWithTraitCollection:self.traitCollection];
+    _fade.hidden = NO;
+    _fade.frame = CGRectMake(CGRectGetMinX(rect), CGRectGetMaxY(rect) - fade, CGRectGetWidth(rect), fade);
+    _fade.colors = @[ (__bridge id)fill.CGColor, (__bridge id)[fill colorWithAlphaComponent:0].CGColor ];
   }
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
   [super traitCollectionDidChange:previousTraitCollection];
   if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
-    [self setNeedsDisplay];
+    // Layer colors are resolved, so a new appearance resolves them again.
+    [self layoutChrome];
   }
 }
 
@@ -1201,14 +1376,13 @@ constexpr NSTimeInterval kCopiedDuration = 2.0;
   return elements;
 }
 
-/// A card's chrome fades through the card's own alpha, its numbers through the
-/// gutter's, and its code through the body's text. Each is a view of its own
-/// that draws only when asked, so the card, the gutter and the body's fading
-/// lines are all invalidated.
+/// A card's chrome fades through its layers' opacity, its numbers through the
+/// gutter's drawing, and its code through the body's text, so the chrome takes
+/// this frame's alpha and the gutter and the body's fading lines are invalidated.
 - (void)invalidateRevealCharacterRange:(NSRange)range
                             blockOffset:(NSInteger)blockOffset
                                      now:(double)now {
-  [self setNeedsDisplay];
+  [self applyChromeAlpha];
   [_gutter setNeedsDisplay];
   [_body invalidateRevealCharacterRange:range blockOffset:blockOffset now:now];
 }

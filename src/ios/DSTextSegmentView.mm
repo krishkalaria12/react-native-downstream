@@ -69,7 +69,11 @@ NSString *const kPlaceholder = @"\u200b";
   _spoilersRevealed = NO;
   _segment = segment;
   ((DSLayoutManager *)self.layoutManager).blockRanges = segment.blockRanges;
-  [self applyDetailsState];
+  // The toggle and the reader's choices are this view's, so a new snapshot
+  // leaves them as they were. The storage edit below invalidates the lines whose
+  // text or attributes changed, and the fade invalidates its own runs, so the
+  // rest of a growing text keeps its drawing rather than all of it redrawing.
+  [self pushDetailsState];
   DSUpdateTextStorage(_stack.textStorage, segment.attributedString);
   self.selectedRange = NSMakeRange(0, 0);
   invalidateAccessibleLinks(_cachedAccessibilityElements);
@@ -229,10 +233,14 @@ NSString *const kPlaceholder = @"\u200b";
 /// Hands the chevron's two inputs to the layout manager, which is what draws the
 /// decoration beside the text rather than this view drawing over it.
 - (void)applyDetailsState {
+  [self pushDetailsState];
+  [self setNeedsDisplay];
+}
+
+- (void)pushDetailsState {
   DSLayoutManager *layout = (DSLayoutManager *)self.layoutManager;
   [layout setDetailsToggle:_detailsToggle];
   [layout setDetailsChoices:_detailsChoices];
-  [self setNeedsDisplay];
 }
 
 /// A press on hidden text reveals it; a press on shown text hides it again.

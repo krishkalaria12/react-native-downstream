@@ -410,7 +410,12 @@ static void checkSegmentViewport() {
     for (NSUInteger index = 0; index < slots.count; index++) {
       UIView *child = slots[index];
       if ([child isKindOfClass:DSTextSegmentView.class]) {
-        require(CGRectEqualToRect(child.frame, frames[index].CGRectValue), @"virtualized segment changed cold geometry");
+        CGRect expected = frames[index].CGRectValue;
+        // The last text view, which a stream grows, is framed in steps.
+#ifndef BASELINE
+        if (index + 1 == frames.count) expected.size.height = DSSteppedTextHeight(expected.size.height);
+#endif
+        require(CGRectEqualToRect(child.frame, expected), @"virtualized segment changed cold geometry");
         require([((DSTextSegmentView *)child).textStorage isEqualToAttributedString:
                  ((DSTextSegment *)rendered.segments[index]).attributedString], @"recycled segment displayed stale text");
       }
