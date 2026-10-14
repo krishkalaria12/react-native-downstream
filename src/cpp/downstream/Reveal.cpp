@@ -413,42 +413,46 @@ uint32_t overlapWith(const std::vector<AlignedRun> &ranges, uint32_t start, uint
   return covered;
 }
 
+double revealBacklog(const RevealOptions &options) {
+  if (options.staggerMs <= 0 || options.durationMs <= 0) return 0;
+  return std::max(0.0, static_cast<double>(options.maxBacklogMs));
+}
+
+// Existing future units can outlive a smaller budget, for example after Android
+// reduces its animator scale. Move them earlier in the same temporal order.
+// Started fades retain their timestamps and never lose progress.
+void compressFutureStarts(std::span<RevealUnit> units, double now, const RevealOptions &options) {
+  const double backlog = revealBacklog(options);
+  const double deadline = now + backlog;
+  double latest = now;
+  for (const RevealUnit &unit : units) latest = std::max(latest, unit.startAt);
+  if (latest <= deadline) return;
+  const double scale = backlog / (latest - now);
+  for (RevealUnit &unit : units) {
+    if (unit.startAt > now) {
+      unit.startAt = std::min(deadline, now + (unit.startAt - now) * scale);
+    }
+  }
+}
+
 } // namespace
 
 void RevealTimeline::schedule(std::span<RevealUnit> units, double now, const RevealOptions &options) {
   if (units.empty()) {
     return;
   }
-  const double stagger = std::max(0.0, static_cast<double>(options.staggerMs));
-  const double backlog = std::max(0.0, static_cast<double>(options.maxBacklogMs));
-  // A floor only applies when the reader asked for a cascade. `stagger: 0` means
-  // every unit starts together, and taking a floor there would put them back in
-  // sequence.
-  const double minStep = stagger == 0 ? 0 : std::min(stagger, kRevealMinStaggerStepMs);
-
-  // Resume from the last commit, but never more than the budget ahead of the
-  // clock. A pass that overshot — because a floor forced it — would otherwise
-  // leave the next snapshot a full second in arrears.
-  double cursor = std::min(std::max(committedNextStartAt_, now), now + backlog);
-  const double startAt = std::max(cursor, now);
+  const double stagger = options.durationMs <= 0 ? 0 : std::max(0.0, static_cast<double>(options.staggerMs));
+  const double backlog = revealBacklog(options);
   const double budgetEnd = now + backlog;
-  const double idealLast = startAt + static_cast<double>(units.size() - 1) * stagger;
-
-  double step = stagger;
-  if (idealLast > budgetEnd && units.size() > 1) {
-    if (startAt < budgetEnd) {
-      // Fit the batch into what is left of the budget, never below the floor.
-      step = std::max(minStep, (budgetEnd - startAt) / static_cast<double>(units.size() - 1));
-    } else {
-      // Earlier blocks in this pass already spent it. A minimum cascade keeps
-      // the words in order instead of firing them all at once.
-      step = minStep;
-    }
-  }
+  const double startAt = stagger == 0 ? now : std::clamp(committedNextStartAt_, now, budgetEnd);
+  // The budget wins over the requested spacing. An exhausted pass starts its
+  // remaining units together rather than accumulating invisible text debt.
+  const double step = units.size() > 1
+      ? std::min(stagger, (budgetEnd - startAt) / static_cast<double>(units.size() - 1)) : stagger;
   for (size_t index = 0; index < units.size(); index++) {
-    units[index].startAt = startAt + static_cast<double>(index) * step;
+    units[index].startAt = std::min(budgetEnd, startAt + static_cast<double>(index) * step);
   }
-  committedNextStartAt_ = startAt + static_cast<double>(units.size()) * step;
+  committedNextStartAt_ = std::min(budgetEnd, startAt + static_cast<double>(units.size()) * step);
 }
 
 void RevealTracker::seed(DocumentHandle shown) {
@@ -476,6 +480,7 @@ const std::vector<RevealUnit> &RevealTracker::apply(const DocumentHandle &next, 
     return active_;
   }
 
+  compressFutureStarts(std::span<RevealUnit>(active_), now, options);
   if (next == shown_) {
     return active_;
   }

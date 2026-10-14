@@ -385,24 +385,200 @@ void testTimeline() {
       CHECK(burst[index].startAt >= burst[index - 1].startAt, "compression keeps the order");
     }
   }
-  // Once the budget is spent the floor holds, so words do not all fire at once.
+  // Exhausted passes share the deadline instead of extending the backlog.
   {
     RevealTimeline timeline;
     std::vector<RevealUnit> first(40);
     timeline.schedule(first, 0, options);
     std::vector<RevealUnit> second(40);
     timeline.schedule(second, 0, options);
-    const double step = second[1].startAt - second[0].startAt;
-    CHECK(step >= kRevealMinStaggerStepMs - 1e-9, "an exhausted budget keeps a minimum cascade");
+    CHECK(second.front().startAt >= first.back().startAt, "later passes retain temporal order");
+    CHECK(second.back().startAt <= options.maxBacklogMs, "an exhausted pass stays inside the hard backlog");
+    CHECK(second.front().startAt == second.back().startAt, "an exhausted budget starts remaining units together");
+  }
+  {
+    RevealTimeline timeline;
+    std::vector<RevealUnit> burst(600);
+    timeline.schedule(burst, 1000, options);
+    CHECK(burst.back().startAt <= 1000 + options.maxBacklogMs,
+          "a 600-unit burst never exceeds the configured start-time backlog");
+    CHECK(timeline.cursor() <= 1000 + options.maxBacklogMs, "a large burst leaves no cursor debt beyond the budget");
+    for (size_t index = 1; index < burst.size(); ++index) {
+      CHECK(burst[index].startAt >= burst[index - 1].startAt, "a large burst preserves cascade order");
+    }
   }
   // `stagger: 0` means every unit at once, with no floor.
   {
-    options.staggerMs = 0;
     RevealTimeline timeline;
+    std::vector<RevealUnit> first(4);
+    timeline.schedule(first, 500, options);
+    options.staggerMs = 0;
     std::vector<RevealUnit> burst(40);
     timeline.schedule(burst, 500, options);
-    CHECK(burst.back().startAt == 500, "a zero stagger starts every unit together");
+    CHECK(burst.back().startAt == 500, "a zero stagger starts every unit now even with carried cursor debt");
     options.staggerMs = 40;
+  }
+  {
+    RevealTimeline timeline;
+    std::vector<RevealUnit> first(40);
+    timeline.schedule(first, 500, options);
+    options.maxBacklogMs = 0;
+    std::vector<RevealUnit> burst(600);
+    timeline.schedule(burst, 500, options);
+    CHECK(burst.front().startAt == 500 && burst.back().startAt == 500,
+          "a zero backlog starts every unit now even with carried cursor debt");
+    options.maxBacklogMs = static_cast<float>(kRevealMaxBacklogMs);
+    timeline.clear();
+    timeline.schedule(first, 100, options);
+    CHECK(first.front().startAt == 100, "clearing the timeline drops all previous generation debt");
+  }
+  {
+    RevealTimeline timeline;
+    std::vector<RevealUnit> first(40);
+    timeline.schedule(first, 500, options);
+    options.durationMs = 0;
+    std::vector<RevealUnit> instant(600);
+    timeline.schedule(instant, 500, options);
+    CHECK(instant.front().startAt == 500 && instant.back().startAt == 500,
+          "zero duration leaves no invisible animation debt with a nonzero stagger");
+  }
+}
+
+std::u16string repeatedWords(size_t count) {
+  std::u16string text;
+  for (size_t index = 0; index < count; ++index) text += u"word ";
+  return text;
+}
+
+void testRevealBacklog() {
+  RevealOptions options;
+  options.effect = RevealEffect::Fade;
+  // A native commit can reveal many blocks at once; the bound covers their
+  // combined cascade rather than allowing each block another full budget.
+  {
+    RevealTracker tracker;
+    const auto document = revealDocument({repeatedWords(150), repeatedWords(150),
+                                          repeatedWords(150), repeatedWords(150)});
+    const auto &batch = tracker.apply(document, 1000, options);
+    CHECK(batch.size() == 600, "a multi-block burst reveals all 600 words");
+    CHECK(batch.front().startAt == 1000 && batch.back().startAt <= 1320,
+          "all blocks share one bounded start-time budget");
+    CHECK(revealAlpha(batch.back(), 1321, options) > 0,
+          "the last word becomes visible immediately after the backlog deadline");
+    CHECK(revealAlpha(batch.back(), 1470, options) == 1,
+          "a large burst reaches full alpha within backlog plus fade duration");
+    CHECK(tracker.prune(1469, options) && !tracker.prune(1470, options),
+          "the ticker finishes at the bounded fade deadline");
+    tracker.apply(revealDocument({repeatedWords(150), repeatedWords(150),
+                                 repeatedWords(150), repeatedWords(150)}), 1500, options);
+    CHECK(!tracker.active() && tracker.reReveals() == 0,
+          "a settled large burst never fades again after reconciliation");
+  }
+  {
+    RevealTracker tracker;
+    options.split = RevealSplit::Char;
+    const auto &batch = tracker.apply(revealDocument({std::u16string(600, u'a'), std::u16string(600, u'b')}),
+                                      1000, options);
+    CHECK(batch.size() == 1200 && batch.back().startAt <= 1320,
+          "a 1200-character multi-block burst fits the same hard backlog");
+    CHECK(!tracker.prune(1470, options), "char-mode animation also finishes within backlog plus duration");
+    options.split = RevealSplit::Word;
+  }
+  // Continued input carries pending words without delaying their earlier starts.
+  {
+    RevealTracker tracker;
+    std::u16string source;
+    for (size_t pass = 0; pass < 12; ++pass) {
+      const double now = 1000 + static_cast<double>(pass) * 16;
+      const auto carried = tracker.units();
+      source += repeatedWords(100);
+      const auto &batch = tracker.apply(revealDocument({source}), now, options);
+      CHECK(batch.size() == (pass + 1) * 100, "repeated passes preserve each previously scheduled word");
+      for (size_t index = 0; index < batch.size(); ++index) {
+        CHECK(batch[index].startAt <= now + options.maxBacklogMs, "every repeated pass respects the start deadline");
+        if (index != 0) CHECK(batch[index].startAt >= batch[index - 1].startAt, "repeated passes keep temporal order");
+        if (index < carried.size()) {
+          CHECK(batch[index].startAt <= carried[index].startAt, "carried words never move to a later start");
+          CHECK(revealAlpha(batch[index], now, options) >= revealAlpha(carried[index], now, options),
+                "carried fades never lose alpha while snapshots arrive");
+        }
+      }
+    }
+    const double deadline = 1000 + 11 * 16 + options.maxBacklogMs + options.durationMs;
+    CHECK(!tracker.prune(deadline, options), "continued streaming leaves a bounded final animation tail");
+    CHECK(tracker.reReveals() == 0, "repeated bounded passes never reschedule settled text");
+  }
+  // A continued stream can have opaque words while later words still fade.
+  {
+    RevealTracker tracker;
+    const auto document = revealDocument({repeatedWords(200)});
+    tracker.apply(document, 1000, options);
+    tracker.prune(1200, options);
+    const uint32_t firstFadingCharacter = tracker.units().front().start;
+    CHECK(firstFadingCharacter != 0, "the early words of a cascade settle before its tail");
+    const auto &batch = tracker.apply(revealDocument({repeatedWords(300)}), 1220, options);
+    CHECK(batch.front().start == firstFadingCharacter,
+          "appending to a partly settled cascade never schedules its opaque prefix again");
+    CHECK(tracker.reReveals() == 0 && !tracker.prune(1690, options),
+          "the partly settled cascade drains within the last append's backlog plus duration");
+  }
+  // An option change can tighten a backlog on the exact same native snapshot.
+  {
+    RevealTracker tracker;
+    const auto document = revealDocument({repeatedWords(600)});
+    tracker.apply(document, 1000, options);
+    const auto before = tracker.units();
+    options.maxBacklogMs = 40;
+    const auto &batch = tracker.apply(document, 1050, options);
+    CHECK(batch.size() == before.size(), "compressing carried debt preserves all units");
+    for (size_t index = 0; index < batch.size(); ++index) {
+      CHECK(batch[index].startAt <= 1090, "a shorter backlog bounds carried future words");
+      CHECK(batch[index].startAt <= before[index].startAt, "compression only moves future words earlier");
+      if (before[index].startAt <= 1050) {
+        CHECK(batch[index].startAt == before[index].startAt, "an in-progress fade keeps its original start time");
+      }
+      CHECK(revealAlpha(batch[index], 1050, options) >= revealAlpha(before[index], 1050, options),
+            "tightening a backlog never resets fade progress");
+      if (index != 0) CHECK(batch[index].startAt >= batch[index - 1].startAt, "carried compression retains word order");
+    }
+    options.maxBacklogMs = 0;
+    const auto &immediate = tracker.apply(revealDocument({repeatedWords(700)}), 1060, options);
+    for (const auto &unit : immediate) CHECK(unit.startAt <= 1060, "zero backlog eliminates old and new future debt");
+    CHECK(!tracker.prune(1210, options), "zero-backlog carried words complete within one duration");
+    options.maxBacklogMs = static_cast<float>(kRevealMaxBacklogMs);
+  }
+  {
+    RevealTracker tracker;
+    const auto document = revealDocument({repeatedWords(600)});
+    tracker.apply(document, 1000, options);
+    options.staggerMs = 0;
+    const auto &batch = tracker.apply(document, 1020, options);
+    for (const auto &unit : batch) CHECK(unit.startAt <= 1020, "turning the cascade off clears carried future starts");
+    const auto &appended = tracker.apply(revealDocument({repeatedWords(700)}), 1030, options);
+    CHECK(appended.back().startAt == 1030, "zero stagger ignores the old cursor when more text arrives");
+    tracker.clear();
+    tracker.apply(document, 500, options);
+    CHECK(tracker.units().front().startAt == 500 && tracker.reReveals() == 0,
+          "reset starts a fresh generation without inherited reveal debt");
+    options.staggerMs = 40;
+  }
+  // Android multiplies duration, stagger and backlog by animator scale before
+  // passing them to C++; the hard bound follows those scaled values.
+  {
+    RevealTracker tracker;
+    options.durationMs *= 2;
+    options.staggerMs *= 2;
+    options.maxBacklogMs *= 2;
+    const auto document = revealDocument({repeatedWords(600)});
+    const auto &batch = tracker.apply(document, 1000, options);
+    CHECK(batch.back().startAt <= 1640 && revealAlpha(batch.back(), 1940, options) == 1,
+          "animator scaling preserves the scaled backlog plus duration deadline");
+    options.durationMs = 0;
+    options.staggerMs = 0;
+    options.maxBacklogMs = 0;
+    const auto &instant = tracker.apply(document, 1010, options);
+    for (const auto &unit : instant) CHECK(revealAlpha(unit, 1010, options) == 1, "animator scale zero is immediately opaque");
+    CHECK(!tracker.prune(1010, options), "animator scale zero stops the ticker without waiting for old future starts");
   }
 }
 
@@ -560,6 +736,7 @@ int main() {
   testTracker();
   testUnits();
   testTimeline();
+  testRevealBacklog();
   testEasing();
   testAlpha();
   testFenceOpen();

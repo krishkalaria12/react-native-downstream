@@ -21,16 +21,10 @@
 
 namespace downstream {
 
-/// Soft budget for how far ahead of wall-clock a cascade may be scheduled.
+/// Hard limit for how far ahead of wall-clock a cascade may start a unit.
 /// Fast streams compress their stagger to fit rather than queueing an unbounded
-/// run of invisible words. Ported from Streamdown's
-/// `MAX_ANIMATION_BACKLOG_MS`.
+/// run of invisible words. A unit's fade duration follows its start separately.
 constexpr double kRevealMaxBacklogMs = 320.0;
-
-/// Floor for the per-unit stagger under compression, so a multi-block pass does
-/// not collapse to a single step once earlier blocks have spent the budget.
-/// Ported from Streamdown's `MIN_STAGGER_STEP_MS`.
-constexpr double kRevealMinStaggerStepMs = 4.0;
 
 /// How far a `Rise` unit travels as it appears, in points. A placeholder, a
 /// marker and a table row all travel the same distance so a document's parts
@@ -138,13 +132,12 @@ std::vector<AlignedRun> alignVisibleText(std::u16string_view prev, std::u16strin
 void splitUnits(const Block &block, uint32_t blockIndex, uint32_t from, uint32_t to, RevealSplit split,
                 std::vector<RevealUnit> &out);
 
-/// A port of Streamdown's `createAnimateTimeline`: one cursor shared by every
-/// block and every applied snapshot, so a burst compresses into the budget
-/// rather than queueing seconds of invisible words.
+/// One cursor shared by every block and every applied snapshot. A burst
+/// compresses into the start-time budget even when no stagger remains.
 class RevealTimeline {
 public:
-  /// Gives every unit its start time. One call is one pass: Streamdown's
-  /// `beginPass`, `take` and `commitPass`, with no render to rewind for.
+  /// Gives every unit its start time, at most `maxBacklogMs` ahead of `now`.
+  /// A zero stagger or duration starts all new units immediately.
   void schedule(std::span<RevealUnit> units, double now, const RevealOptions &options);
   /// Forgets the cursor, for a new generation.
   void clear() { committedNextStartAt_ = 0; }
@@ -176,7 +169,8 @@ public:
 
   /// Aligns `next` against the shown document, keeps the timing of the units
   /// whose characters still align, schedules the new ones, and returns the active
-  /// set.
+  /// set. A shorter backlog compresses future starts, including on an unchanged
+  /// document. A fade that has already begun keeps its start time.
   ///
   /// With the fade off this still records the document as shown and schedules
   /// nothing, so turning the fade on later does not reveal a document that has

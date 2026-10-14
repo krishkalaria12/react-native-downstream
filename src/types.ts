@@ -1106,12 +1106,13 @@ export type MarkdownAnimateOptions = Readonly<{
   /** The delay between units, in ms. 40 by default; 0 turns the cascade off. */
   stagger?: number;
   /**
-   * How far ahead of now a burst of new text may be scheduled, in ms. 320 by
-   * default.
+   * Maximum delay before a new unit starts fading, in ms. 320 by default; 0
+   * starts every new unit immediately. Its `duration` follows this delay.
    *
    * A fast stream would otherwise queue seconds of invisible words; this
-   * compresses the cascade into the budget instead. A larger value favours a
-   * longer, stricter cascade, a smaller one keeps a fast stream caught up.
+   * compresses the cascade into the budget instead, even if that means units
+   * start together. Reducing the budget moves queued units earlier and preserves
+   * fades already in progress.
    */
   maxBacklogMs?: number;
 }>;
@@ -1351,8 +1352,9 @@ type MarkdownViewBaseProps = Readonly<{
    * It changes drawing only. The text is in the layout from the first frame, so
    * nothing reflows, and a copy, a selection, an export, and a screen reader all
    * see the whole message. Text that has not appeared yet stays in the
-   * accessibility tree, at most one backlog — about half a second — ahead of what
-   * is drawn.
+   * accessibility tree ahead of what is drawn. New units reach full alpha within
+   * `maxBacklogMs + duration`, 470 ms by default. Android's animator scale
+   * applies to both timings.
    *
    * Under Reduce Motion, and where Android's animator scale is 0, the text
    * appears at once instead.
