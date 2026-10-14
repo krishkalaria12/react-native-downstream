@@ -39,10 +39,24 @@ static bool sameDetailsVisibility(const Block &a, const Block &b) {
   }
 }
 
+/// Whether a committed text chunk may end between `before` and `after`: after a
+/// top-level block, or where a new item of a top-level list starts. An item
+/// draws only its own marker, so splitting a list between items changes
+/// nothing a reader sees, and a long list arriving item by item rebuilds only
+/// its last chunk. A quote's bar runs across its blocks, so a quote is never
+/// split.
+static bool endsCommittedChunk(const Block &before, const Block &after) {
+  if (before.containers.empty()) return true;
+  return before.containers[0].kind == ContainerKind::ListItem && !after.containers.empty() &&
+      after.containers[0].kind == ContainerKind::ListItem && after.containers[0].showsMarker &&
+      after.containers[0].id != before.containers[0].id;
+}
+
 std::vector<SegmentPlan> planSegments(const Document &document) {
   const auto &blocks = document.blocks;
   const size_t count = blocks.size();
-  // Committed blocks form a prefix that ends at a top-level block.
+  // Committed blocks form a prefix. It ends at a top-level block, or between
+  // two items of a list that is still arriving.
   size_t completed = 0;
   while (completed < count && blocks[completed].identity != 0) {
     completed++;
@@ -127,7 +141,7 @@ std::vector<SegmentPlan> planSegments(const Document &document) {
     while (to < limit && innermostCustom(blocks[to]) < 0 && sameDetailsVisibility(first, blocks[to]) &&
            blocks[to].kind != BlockKind::TableRow && blocks[to].kind != BlockKind::CodeBlock &&
            blocks[to].kind != BlockKind::MathBlock && blocks[to].kind != BlockKind::Image &&
-           !(committed && to - from >= kCommittedChunkBlocks && blocks[to - 1].containers.empty())) {
+           !(committed && to - from >= kCommittedChunkBlocks && endsCommittedChunk(blocks[to - 1], blocks[to]))) {
       to++;
     }
     plan.push_back({from, to, SegmentKind::Text, -1, -1, -1, -1, committed});
