@@ -438,7 +438,9 @@ private fun benchmarkStreaming(instrumentation: Instrumentation, paint: TextPain
     for ((index, end) in ends.withIndex()) {
       val text = highlighted(source, end)
       val started = SystemClock.elapsedRealtimeNanos()
-      val body = ChunkedTextLayout(text, codeLineStarts(text), paint, previous)
+      // As `RenderedDocument.codeBody` builds a card's body: its width is measured
+      // with the layout, off the UI thread that binds it.
+      val body = ChunkedTextLayout(text, codeLineStarts(text), paint, previous, extentAhead = true)
       val frame = body.frame(UNBOUNDED_CODE_WIDTH)!!
       chunkedMeasure[index] = SystemClock.elapsedRealtimeNanos() - started
       previous = body

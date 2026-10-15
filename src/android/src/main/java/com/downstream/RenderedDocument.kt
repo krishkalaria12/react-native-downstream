@@ -1840,12 +1840,18 @@ internal class RenderedDocument(
       StreamingParagraphSeeds<ChunkedTextLayout>(32, 4L * 1024 * 1024, CHUNKED_CHARACTER_COST)
 
     /** Chunked text seeded from the previous snapshot of the same growing text. */
-    private fun chunkedLayout(text: Spanned, lineStarts: IntArray, paint: TextPaint, seedKey: String): ChunkedTextLayout {
+    private fun chunkedLayout(
+      text: Spanned,
+      lineStarts: IntArray,
+      paint: TextPaint,
+      seedKey: String,
+      extentAhead: Boolean = false,
+    ): ChunkedTextLayout {
       val source = text.toString()
       // Only complete paragraphs are ever reused, so a caret placeholder or a line
       // still arriving at the end does not stop the next snapshot matching.
       val settled = source.substring(0, source.lastIndexOf('\n') + 1)
-      return ChunkedTextLayout(text, lineStarts, paint, chunkedLayouts.matching(seedKey, source)).also {
+      return ChunkedTextLayout(text, lineStarts, paint, chunkedLayouts.matching(seedKey, source), extentAhead).also {
         chunkedLayouts.put(seedKey, settled, it)
       }
     }
@@ -1863,8 +1869,8 @@ internal class RenderedDocument(
       seedKey: String?,
     ): ChunkedTextLayout? {
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
-      if (seedKey == null) return ChunkedTextLayout(text, lineStarts, style.paint)
-      return chunkedLayout(text, lineStarts, style.paint, seedKey)
+      if (seedKey == null) return ChunkedTextLayout(text, lineStarts, style.paint, extentAhead = true)
+      return chunkedLayout(text, lineStarts, style.paint, seedKey, extentAhead = true)
     }
 
     private fun buildTable(

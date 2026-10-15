@@ -68,6 +68,12 @@ internal class ChunkedTextLayout(
   private val lineStarts: IntArray,
   paint: TextPaint,
   previous: ChunkedTextLayout? = null,
+  /**
+   * Whether a frame measures its widest line as it is laid out. A code card reads
+   * that width when it binds on the UI thread, so it is measured on the thread
+   * that lays the body out; prose never reads it.
+   */
+  private val extentAhead: Boolean = false,
 ) : LiveTextLayout {
   private val paint = TextPaint(paint)
   private val metrics = ParagraphMetrics(this.paint)
@@ -94,6 +100,8 @@ internal class ChunkedTextLayout(
   override fun frame(width: Int): ChunkedTextFrame? {
     if (frames.containsKey(width)) return frames[width]
     val result = build(width, seeds[width])
+    // Read for its effect: the width is measured once, here, and kept.
+    if (extentAhead) result?.contentWidth
     // Two widths: the one a card draws at and the one a measurement may ask
     // about while a rotation or a wrap toggle settles.
     if (frames.size == 2) frames.remove(frames.keys.first())
@@ -146,20 +154,17 @@ internal class ChunkedTextLayout(
     val tail = buildChunk(tailStart, source.length, width, settled = false) ?: return null
     val parts = ArrayList<LayoutPart>(settled.size + 1)
     var height = 0
-    var extent = 0f
     for (chunk in settled) {
       parts.add(LayoutPart(chunk.layout, chunk.base, chunk.layout.lineCount, chunk.recording))
       height += chunk.layout.height
-      extent = maxOf(extent, chunk.extent)
     }
     parts.add(LayoutPart(tail.layout, tail.base, tail.layout.lineCount))
     height += tail.layout.height
-    extent = maxOf(extent, tail.extent)
     return ChunkedTextFrame(
       text = source,
       layout = CompositeLayout(source, paint, width, parts),
       height = height,
-      contentWidth = ceil(extent.toDouble()).coerceIn(1.0, UNBOUNDED_CODE_WIDTH.toDouble()).toInt(),
+      chunks = settled + tail,
       settled = settled,
       reusedChunks = reused,
       laidOutCharacters = laidOut + source.length - tailStart,
@@ -178,14 +183,13 @@ internal class ChunkedTextLayout(
     // keeping every word's shaped glyphs alive the way precomputed text does.
     if (copy.isNotEmpty()) copy.setSpan(NoNativeDecorations, 0, copy.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
     val layout = RenderedDocument.buildLayout(copy, paint, width, Layout.Alignment.ALIGN_NORMAL, start - base, copy.length)
-    var extent = 0f
-    for (line in 0 until layout.lineCount) {
-      // An unwrapped right-to-left line aligns to a layout edge no view can reach,
-      // and a card aligns it to the body's own width. That is the canonical
-      // `TextView`'s job, so such a body is not laid out here at all.
-      if (width == UNBOUNDED_CODE_WIDTH && layout.getParagraphDirection(line) == Layout.DIR_RIGHT_TO_LEFT) return null
-      // Includes trailing spaces and tabs, as the canonical measurement does.
-      extent = maxOf(extent, layout.getLineWidth(line))
+    // An unwrapped right-to-left line aligns to a layout edge no view can reach,
+    // and a card aligns it to the body's own width. That is the canonical
+    // `TextView`'s job, so such a body is not laid out here at all.
+    if (width == UNBOUNDED_CODE_WIDTH &&
+      (0 until layout.lineCount).any { layout.getParagraphDirection(it) == Layout.DIR_RIGHT_TO_LEFT }
+    ) {
+      return null
     }
     return TextChunk(
       text = copy,
@@ -193,7 +197,6 @@ internal class ChunkedTextLayout(
       start = start,
       end = end,
       layout = layout,
-      extent = extent,
       spans = spans,
       recording = if (settled) PartRecording() else null,
     )
@@ -214,14 +217,22 @@ internal class ChunkedTextFrame(
   val text: Spanned,
   override val layout: Layout,
   override val height: Int,
-  /** The widest line, rounded up: what an unwrapped body scrolls. */
-  val contentWidth: Int,
+  private val chunks: List<TextChunk>,
   internal val settled: List<TextChunk>,
   /** Settled chunks taken from the previous snapshot rather than laid out again. */
   val reusedChunks: Int,
   /** Characters this frame laid out itself. */
   val laidOutCharacters: Int,
-) : LiveTextFrame
+) : LiveTextFrame {
+  /**
+   * The widest line, rounded up: what an unwrapped body scrolls. Only a code
+   * card asks, so prose never measures its lines a second time.
+   */
+  val contentWidth: Int by lazy {
+    val extent = chunks.maxOfOrNull { it.extent } ?: 0f
+    ceil(extent.toDouble()).coerceIn(1.0, UNBOUNDED_CODE_WIDTH.toDouble()).toInt()
+  }
+}
 
 /**
  * Clears what a layout would draw as underline or strike, applied last on a
@@ -246,12 +257,21 @@ internal class TextChunk(
   /** The source offset the chunk stops at: its last newline, or the source end. */
   val end: Int,
   val layout: StaticLayout,
-  /** The widest line's width. */
-  val extent: Float,
   /** The spans the chunk was laid out under, or null when it is not reusable. */
   private val spans: SpanSignature?,
   val recording: PartRecording?,
 ) {
+  /**
+   * The widest line's width, including trailing spaces and tabs as the canonical
+   * measurement does. Measured only when a code card asks for its scroll width,
+   * because measuring every line again costs a third of laying the chunk out.
+   */
+  val extent: Float by lazy {
+    var widest = 0f
+    for (line in 0 until layout.lineCount) widest = maxOf(widest, layout.getLineWidth(line))
+    widest
+  }
+
   /** True when [source] holds this chunk's lines, under equal spans, at the same place. */
   fun matches(source: Spanned, start: Int, end: Int): Boolean {
     if (start != this.start || end != this.end || end > source.length) return false
