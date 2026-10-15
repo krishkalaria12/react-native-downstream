@@ -54,14 +54,25 @@ internal class RenderedDocument(
     }
     return maxOf(cost, minimumCacheCost)
   }
-  private var cachedWidth = -1
-  private var cachedChrome = -1
-  private var cachedCode: CodeLayout? = null
-  private var cachedImages: ImageLayout? = null
-  private var cachedHosts: HostLayout? = null
-  private var cachedTables: TableLayout? = null
-  private var cachedChoices: ReaderChoices? = null
-  private var cachedFrames = IntArray(0)
+  private data class FramesKey(
+    val width: Int,
+    val chrome: Int,
+    val code: CodeLayout,
+    val images: ImageStateLayout,
+    val hosts: HostLayout,
+    val tables: TableLayout,
+    val choices: ReaderChoices,
+  )
+
+  // Two stackings: the measurement's and the mounted view's describe the same
+  // layout through different maps, and with one entry each evicted the other on
+  // every snapshot, so the UI thread restacked every segment on each mount. An
+  // image's height is its state alone; the allowed prefixes only reach a
+  // measurement, which already turned them into that state.
+  private var stackedKey: FramesKey? = null
+  private var stacked = IntArray(0)
+  private var previousStackedKey: FramesKey? = null
+  private var previousStacked = IntArray(0)
 
   fun createTextLayout(segment: TextSegment, width: Int): StaticLayout =
     buildLayout(segment.text, paint, width.coerceAtLeast(1), Layout.Alignment.ALIGN_NORMAL)
@@ -182,13 +193,14 @@ internal class RenderedDocument(
     // fence's height is its component's, so a picture that loads or a chart that
     // changes size has to restack the frames or the text under it stays where the
     // old box was.
-    if (
-      width == cachedWidth && chrome == cachedChrome && code == cachedCode &&
-      images == cachedImages && hosts == cachedHosts && tables == cachedTables &&
-      choices == cachedChoices
-    ) {
+    val key = FramesKey(width, chrome, code, images.state, hosts, tables, choices)
+    if (key == stackedKey) {
       if (tracing) DownstreamNative.traceDocument(documentId, "android_frames_cache_hit")
-      return cachedFrames
+      return stacked
+    }
+    if (key == previousStackedKey) {
+      if (tracing) DownstreamNative.traceDocument(documentId, "android_frames_cache_hit")
+      return previousStacked
     }
     if (tracing) DownstreamNative.traceDocument(documentId, "android_frames_start")
     val frames = IntArray(segments.size * 2)
@@ -200,14 +212,10 @@ internal class RenderedDocument(
       frames[index * 2 + 1] = if (hidden) 0 else heightOf(segment, width, chrome, code, images, hosts, tables, choices)
       y += frames[index * 2 + 1]
     }
-    cachedWidth = width
-    cachedChrome = chrome
-    cachedCode = code
-    cachedImages = images
-    cachedHosts = hosts
-    cachedTables = tables
-    cachedChoices = choices
-    cachedFrames = frames
+    previousStackedKey = stackedKey
+    previousStacked = stacked
+    stackedKey = key
+    stacked = frames
     if (tracing) DownstreamNative.traceDocument(documentId, "android_frames_end")
     return frames
   }
