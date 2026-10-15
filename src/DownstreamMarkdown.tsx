@@ -451,6 +451,9 @@ function useStableResolved(resolved: ResolvedControls): ResolvedControls {
 function useStableTheme(resolved: ResolvedTheme): ResolvedTheme {
   const stable = useRef(resolved);
   const previous = stable.current;
+  // The memo above hands back the same object while the props are unchanged,
+  // which is every snapshot of a stream; only a new object needs comparing.
+  if (previous === resolved) return previous;
   if (
     previous.slots.length !== resolved.slots.length ||
     previous.values.length !== resolved.values.length ||
@@ -1245,6 +1248,8 @@ function ControlledMarkdown({
   const resolvedTheme = useStableTheme(
     useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
   );
+  // One array while the prop is unchanged, so a snapshot does not re-send it.
+  const controlIcons = useMemo(() => resolveIcons(icons), [icons]);
   const linkVariantProps = useLinkVariantProps(markdownStyle);
   const tagStyleProps = useTagStyleProps(markdownStyle);
   // A controlled view has to say whether text is arriving; the platform has
@@ -1313,7 +1318,7 @@ function ControlledMarkdown({
         imageFilename={resolved.imageFilename}
         csvSeparator={resolved.csvSeparator}
         controlLabels={resolved.labels}
-        controlIcons={resolveIcons(icons)}
+        controlIcons={controlIcons}
         linkVariantPrefixes={linkVariantProps.prefixes}
         linkVariantCounts={linkVariantProps.counts}
         linkVariantColors={linkVariantProps.colors}
@@ -1505,6 +1510,8 @@ function StreamMarkdown({
   const resolvedTheme = useStableTheme(
     useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
   );
+  // One array while the prop is unchanged, so a snapshot does not re-send it.
+  const controlIcons = useMemo(() => resolveIcons(icons), [icons]);
   const linkVariantProps = useLinkVariantProps(markdownStyle);
   const tagStyleProps = useTagStyleProps(markdownStyle);
   // A stream view follows its controller's own transitions, so the callbacks fire
@@ -1592,7 +1599,7 @@ function StreamMarkdown({
         imageFilename={resolved.imageFilename}
         csvSeparator={resolved.csvSeparator}
         controlLabels={resolved.labels}
-        controlIcons={resolveIcons(icons)}
+        controlIcons={controlIcons}
         linkVariantPrefixes={linkVariantProps.prefixes}
         linkVariantCounts={linkVariantProps.counts}
         linkVariantColors={linkVariantProps.colors}
