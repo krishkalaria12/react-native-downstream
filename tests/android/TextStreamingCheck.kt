@@ -336,21 +336,34 @@ fun main() {
   DownstreamNative.plans[9] = listOf(PlannedSegment(0, 1, 0, 41, lastIdentity = 41))
   check(RenderedDocument.obtain(context, 9, 1f, true)!!.segments[0] !== oneBlock) { "a grown chunk kept its smaller version" }
   println("production committed lanes: a grown chunk reuses its latest size and drops the smaller one; same-size replacements both stay")
-  // A stream's later snapshot retires the renderings of its earlier ones, which
-  // Fabric measured but will never mount; an earlier one arriving late retires
-  // nothing, and another stream is untouched.
-  DownstreamNative.plans[30] = listOf(PlannedSegment(0, 1, 0, 61), PlannedSegment(1, 2, 0, 0, false))
-  DownstreamNative.plans[31] = listOf(PlannedSegment(0, 1, 0, 61), PlannedSegment(1, 2, 0, 0, false))
-  DownstreamNative.plans[32] = listOf(PlannedSegment(0, 1, 0, 71), PlannedSegment(1, 2, 0, 0, false))
+  // A worker prepares a stream's next snapshot before the current one is measured
+  // and mounted, so a later rendering leaves the earlier ones cached. Mounting a
+  // snapshot retires the stream's earlier ones, which nothing asks for again; the
+  // lane also caps how many are kept, and another stream is untouched.
+  for (id in 30L..37L) {
+    DownstreamNative.plans[id] = listOf(PlannedSegment(0, 1, 0, 61), PlannedSegment(1, 2, 0, 0, false))
+  }
+  DownstreamNative.plans[40] = listOf(PlannedSegment(0, 1, 0, 71), PlannedSegment(1, 2, 0, 0, false))
   val earlier = RenderedDocument.obtain(context, 30, 1f, true)!!
-  val other = RenderedDocument.obtain(context, 32, 1f, true)!!
+  val other = RenderedDocument.obtain(context, 40, 1f, true)!!
   val later = RenderedDocument.obtain(context, 31, 1f, true)!!
-  check(RenderedDocument.obtain(context, 31, 1f, true) === later)
-  check(RenderedDocument.obtain(context, 32, 1f, true) === other) { "another stream's rendering was retired" }
-  val rebuilt = RenderedDocument.obtain(context, 30, 1f, true)!!
-  check(rebuilt !== earlier) { "a superseded snapshot's rendering stayed cached" }
-  check(RenderedDocument.obtain(context, 31, 1f, true) === later) { "a late earlier snapshot retired the newer one" }
-  println("production stream lanes: a later snapshot retires earlier renderings; late arrivals and other streams keep theirs")
+  check(RenderedDocument.obtain(context, 30, 1f, true) === earlier) { "preparing a later snapshot dropped the one about to mount" }
+  RenderedDocument.retireBefore(later)
+  check(RenderedDocument.obtain(context, 31, 1f, true) === later) { "mounting retired the mounted snapshot" }
+  check(RenderedDocument.obtain(context, 40, 1f, true) === other) { "another stream's rendering was retired" }
+  check(RenderedDocument.obtain(context, 30, 1f, true) !== earlier) { "a snapshot older than the mounted one stayed cached" }
+  // 30 came back as a late measurement, so the lane holds 30 and 31; four more
+  // push the oldest out without any mount.
+  val kept = (32L..35L).map { RenderedDocument.obtain(context, it, 1f, true)!! }
+  check(RenderedDocument.obtain(context, 35, 1f, true) === kept.last())
+  check(RenderedDocument.obtain(context, 32, 1f, true) === kept.first()) { "the lane dropped a snapshot inside its depth" }
+  check(RenderedDocument.obtain(context, 31, 1f, true) !== later) { "the lane kept more snapshots than its depth" }
+  // A mount also retires the snapshot the view showed before, in the same pass.
+  val shown = RenderedDocument.obtain(context, 40, 1f, true)!!
+  RenderedDocument.retireBefore(kept.last(), replaced = 40)
+  check(RenderedDocument.obtain(context, 40, 1f, true) !== shown) { "mounting kept the replaced snapshot cached" }
+  check(RenderedDocument.obtain(context, 35, 1f, true) === kept.last()) { "mounting retired the mounted snapshot" }
+  println("production stream lanes: later renderings keep earlier ones until a mount retires them; lanes are bounded and other streams keep theirs")
   val mixedLivePlan = listOf(
     PlannedSegment(0, 1, SEGMENT_TEXT, 0, false, 0),
     PlannedSegment(1, 2, SEGMENT_CODE, 0, false, 0),
@@ -632,8 +645,8 @@ fun main() {
   check(charged.get(0) == null && charged.get(19) === largeFinal)
   println("production finish retention: newly committed shared tail remains charged; 8 MiB cache evicts repeated aliases")
 
-  // A final alias still advances the stream's retirement lane. Its new wrapper
-  // must stay cached while the parent wrapper releases its growing tail.
+  // A final alias still joins the stream's retirement lane. Mounting its new
+  // wrapper releases the parent wrapper's growing tail, and the wrapper stays.
   DownstreamNative.plans[9400] = listOf(
     PlannedSegment(0, 1, SEGMENT_TEXT, 94000),
     PlannedSegment(1, 2, SEGMENT_TEXT, 0, false, 1),
@@ -644,13 +657,14 @@ fun main() {
   val aliasReads = DownstreamNative.reads
   val retiredAlias = RenderedDocument.obtain(context, 9401, 1f)!!
   check(retiredAlias.segments === parentRendering.segments && DownstreamNative.reads == aliasReads)
+  RenderedDocument.retireBefore(retiredAlias)
   check(RenderedDocument.obtain(context, 9400, 1f) !== parentRendering) {
     "a final alias kept its superseded parent cached"
   }
   check(RenderedDocument.obtain(context, 9401, 1f) === retiredAlias) {
     "rebuilding an earlier parent retired the final alias"
   }
-  println("production finish retirement: alias insertion retires parent; late parent rebuild preserves final wrapper")
+  println("production finish retirement: mounting the alias retires its parent; late parent rebuild preserves final wrapper")
 
   // Committed payloads also depend on absolute placement and native ordinals.
   // A lane can discard a smaller chunk only under the same rendering settings.

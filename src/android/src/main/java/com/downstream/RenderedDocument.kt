@@ -468,32 +468,81 @@ internal class RenderedDocument(
       cache.removeAll { it.startsWith(prefix) }
     }
 
-    // The newest snapshot rendered for each stream, by its first finished block,
-    // whose identity a stream keeps for its whole life and no other stream shares.
-    private val streamLanes = object : LinkedHashMap<Long, Long>(16, 0.75f, true) {
-      override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, Long>) = size > 256
+    /** As [retire] for several snapshots, in one pass over the cache. */
+    private fun retireAll(documentIds: Collection<Long>) {
+      when (documentIds.size) {
+        0 -> return
+        1 -> retire(documentIds.first())
+        else -> {
+          val prefixes = documentIds.map { "$it:" }
+          cache.removeAll { key -> prefixes.any { key.startsWith(it) } }
+        }
+      }
+    }
+
+    // The snapshots rendered for each stream, oldest first, by its first finished
+    // block, whose identity a stream keeps for its whole life and no other stream
+    // shares.
+    private val streamLanes = object : LinkedHashMap<Long, ArrayDeque<Long>>(16, 0.75f, true) {
+      override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, ArrayDeque<Long>>) = size > 256
     }
 
     /**
-     * Drops the renderings of a stream's earlier snapshots once a later one is
-     * rendered.
+     * Snapshots of one stream kept rendered at once. A snapshot is prepared on a
+     * worker, measured on the JavaScript thread a frame later and mounted on the
+     * UI thread after that, while the worker is already preparing the next ones;
+     * dropping a snapshot when a later one is rendered made measurement and mount
+     * build it again on their own threads.
+     */
+    private const val STREAM_LANE_DEPTH = 4
+
+    private fun streamLane(plan: List<PlannedSegment>): Long? =
+      plan.firstOrNull()?.takeIf { it.isCommitted }?.identity?.takeIf { it != 0L }
+
+    /**
+     * Records a stream's rendered snapshot, and drops the renderings of the ones
+     * that fell out of its lane.
      *
      * Fabric measures more snapshots than it mounts, and a view only retires the
      * snapshot it mounted, so the rest stayed until the cache's budget evicted
-     * them, each with its own copy of the growing tail. A later snapshot of the
-     * same stream is never followed by an earlier one, so those renderings are
-     * never asked for again; a view still showing one keeps its own reference.
+     * them, each with its own copy of the growing tail. The lane bounds them to
+     * the pipeline's depth; a view still showing one keeps its own reference.
      */
-    private fun retireSuperseded(plan: List<PlannedSegment>, documentId: Long) {
-      val lane = plan.firstOrNull()?.takeIf { it.isCommitted }?.identity ?: return
-      if (lane == 0L) return
-      val superseded = synchronized(streamLanes) {
-        val previous = streamLanes[lane]
-        if (previous != null && previous > documentId) return
-        streamLanes[lane] = documentId
-        previous?.takeIf { it != documentId }
+    private fun noteStreamSnapshot(plan: List<PlannedSegment>, documentId: Long) {
+      val lane = streamLane(plan) ?: return
+      val fallen = synchronized(streamLanes) {
+        val ids = streamLanes.getOrPut(lane) { ArrayDeque() }
+        if (ids.contains(documentId)) return
+        // Snapshots of a stream are numbered in order, but a late measurement of
+        // an earlier one can arrive after a later one was prepared.
+        val at = ids.indexOfFirst { it > documentId }
+        if (at < 0) ids.addLast(documentId) else ids.add(at, documentId)
+        val dropped = ArrayList<Long>()
+        while (ids.size > STREAM_LANE_DEPTH) dropped.add(ids.removeFirst())
+        dropped
       }
-      if (superseded != null) retire(superseded)
+      retireAll(fallen)
+    }
+
+    /**
+     * Drops the renderings of [replaced], the snapshot a view showed before it
+     * mounted [rendered], and of the stream's snapshots older than [rendered]. A
+     * stream never mounts an earlier snapshot again, so nothing measures or mounts
+     * those renderings after this. One pass over the cache for all of them, since
+     * this runs on every mount.
+     */
+    fun retireBefore(rendered: RenderedDocument, replaced: Long = 0L) {
+      val dropped = ArrayList<Long>()
+      streamLane(rendered.plan)?.let { lane ->
+        synchronized(streamLanes) {
+          streamLanes[lane]?.let { ids ->
+            ids.filterTo(dropped) { it < rendered.documentId }
+            ids.removeAll { it < rendered.documentId }
+          }
+        }
+      }
+      if (replaced != 0L && replaced != rendered.documentId && replaced !in dropped) dropped.add(replaced)
+      retireAll(dropped)
     }
 
     // Compatible append branches coexist for independently streaming messages.
@@ -612,7 +661,7 @@ internal class RenderedDocument(
           return RenderedDocument(documentId, previous.segments, plan, previous.paint, previous.style, tracing, previous.cacheCost())
             .also {
               cache.put(key, it)
-              retireSuperseded(plan, documentId)
+              noteStreamSnapshot(plan, documentId)
             }
         }
       }
@@ -715,7 +764,7 @@ internal class RenderedDocument(
         }
         return RenderedDocument(documentId, segments, plan, style.paint, style, traceId != 0L).also {
           cache.put(key, it)
-          retireSuperseded(plan, documentId)
+          noteStreamSnapshot(plan, documentId)
         }
       } finally {
         if (traceId != 0L) DownstreamNative.traceDocument(traceId, "android_render_build_end")

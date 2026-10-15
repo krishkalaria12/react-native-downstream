@@ -52,9 +52,7 @@ fixture = fixture.replace('/* PRODUCTION_PARAGRAPH_LOOKUP */', lookup);
 const streamLanes = readFileSync(
   join(sources, 'RenderedDocument.kt'),
   'utf8'
-).match(
-  /^    fun retire\([\s\S]*?^    private fun retireSuperseded\([\s\S]*?^    }/m
-)?.[0];
+).match(/^    fun retire\([\s\S]*?^    fun retireBefore\([\s\S]*?^    }/m)?.[0];
 if (!streamLanes) throw new Error('Missing production stream lanes');
 fixture = fixture.replace('/* PRODUCTION_STREAM_LANES */', streamLanes);
 const committedLanes = readFileSync(

@@ -19,6 +19,11 @@ internal class RenderedDocument(val id: Long, val scale: Float, val theme: Long,
     val obtains = mutableListOf<RenderedDocument>()
     val retired = mutableListOf<Long>()
     fun retire(id: Long) { retired.add(id) }
+    val retiredBefore = mutableListOf<Long>()
+    fun retireBefore(rendered: RenderedDocument, replaced: Long = 0L) {
+      retiredBefore.add(rendered.id)
+      if (replaced != 0L) retired.add(replaced)
+    }
     fun obtain(context: Any, id: Long, scale: Float, syntax: Boolean, theme: Long, caret: PlacedCaret,
                linkVariants: LinkVariants? = null, incrementalParagraphs: Boolean = false): RenderedDocument =
       RenderedDocument(id, scale, theme, caret, incrementalParagraphs).also { obtains.add(it) }

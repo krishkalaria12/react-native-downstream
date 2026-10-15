@@ -471,8 +471,15 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       } else {
         null
       }
-      // This view moved on, so the snapshot it showed is not mounted again.
-      if (previous != 0L && previous != documentId) RenderedDocument.retire(previous)
+      // This view moved on, so the snapshot it showed is not mounted again, and
+      // neither is any earlier snapshot of the same stream it never showed.
+      val replaced = if (previous != documentId) previous else 0L
+      val current = rendered
+      if (current != null) {
+        RenderedDocument.retireBefore(current, replaced)
+      } else if (replaced != 0L) {
+        RenderedDocument.retire(replaced)
+      }
     }
     syncSegmentViews()
     // The fade is decided after the rendering exists, because the tracker aligns
