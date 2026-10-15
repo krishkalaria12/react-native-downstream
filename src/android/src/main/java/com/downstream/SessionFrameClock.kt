@@ -17,13 +17,22 @@ internal object SessionFrameClock {
   private var frameQueued = false
   private var contextEpoch = 0
   private var installedContext: java.lang.ref.WeakReference<ReactApplicationContext>? = null
+  // The display's rate, read at most once a second: asking the window manager on
+  // every tick is a display-info query on the UI thread each frame.
+  private var refreshRate = 60f
+  private var refreshRateRead = false
+  private var refreshRateReadNanos = 0L
   private val frame = Choreographer.FrameCallback { frameTimeNanos ->
     if (!frameQueued) return@FrameCallback
     frameQueued = false
-    val context = DownstreamNative.preparationContext?.get()
-    @Suppress("DEPRECATION")
-    val refreshRate = (context?.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
-      ?.defaultDisplay?.refreshRate?.takeIf { it.isFinite() && it > 0f } ?: 60f
+    if (!refreshRateRead || frameTimeNanos - refreshRateReadNanos >= 1_000_000_000L) {
+      val context = DownstreamNative.preparationContext?.get()
+      @Suppress("DEPRECATION")
+      refreshRate = (context?.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
+        ?.defaultDisplay?.refreshRate?.takeIf { it.isFinite() && it > 0f } ?: 60f
+      refreshRateRead = true
+      refreshRateReadNanos = frameTimeNanos
+    }
     val intervalMs = 1000.0 / refreshRate
     val late = (System.nanoTime() - frameTimeNanos) / 1_000_000.0 > intervalMs * 0.75
     DownstreamNative.sessionFrame(intervalMs, late)
