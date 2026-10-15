@@ -702,8 +702,8 @@ private class TaskPress(val id: Int, val checked: Boolean)
     // different alphas costs eight layers rather than forty. A bucket's path holds
     // every unit whose alpha rounds to it, so the passes are disjoint and nothing
     // is drawn twice.
-    // `getSelectionPath` resets the path it fills, so each unit is drawn into a
-    // scratch path and added to its bucket's.
+    // Each unit keeps its own outline while the layout is the same, so a frame of
+    // the fade adds outlines to buckets rather than measuring them again.
     for (bucket in 1..MAX_ALPHA_BUCKETS) {
       if (buckets and (1 shl bucket) == 0) continue
       val path = paths.buckets[bucket - 1]

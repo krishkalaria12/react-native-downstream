@@ -82,8 +82,8 @@ fun main() {
   band.rises[0] = 2f
   val clips = RevealClipPaths()
   val layout = Layout()
-  val allocations = Path.constructions
   val mask = clips.build(layout, band, 3f, 7f)
+  val allocations = Path.constructions
   check(layout.selections == 2) { "one selection path per active unit" }
   check(mask == 1 shl alphaBucket(0.5f)) { "unstarted units produce no fading pass" }
   check(clips.hidden.rectangles.map { it.left to it.right } == listOf(7f to 9f, 13f to 15f))
@@ -95,6 +95,7 @@ fun main() {
   check(clips.buckets[alphaBucket(0.5f) - 1].rectangles.size == 1)
   repeat(100) { clips.build(layout, band, 3f, 7f) }
   check(Path.constructions == allocations) { "redraw must reuse every path" }
+  check(layout.selections == 2) { "redraw of the same layout must reuse each unit outline" }
   check(clips.hidden.rectangles.size == 2) { "old clips must not accumulate" }
   band.offsets[0] = 0; band.offsets[1] = 2
   clips.build(Layout(), band, 0f, 0f)

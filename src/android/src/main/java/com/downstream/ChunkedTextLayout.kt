@@ -158,7 +158,11 @@ internal class ChunkedTextLayout(
       parts.add(LayoutPart(chunk.layout, chunk.base, chunk.layout.lineCount, chunk.recording))
       height += chunk.layout.height
     }
-    parts.add(LayoutPart(tail.layout, tail.base, tail.layout.lineCount))
+    // The tail records on its second draw: the next snapshot replaces it, so a
+    // tail drawn once is drawn directly, but a fade redraws it in one pass per
+    // alpha every frame, and replaying is what keeps those passes from shaping
+    // the same lines again.
+    parts.add(LayoutPart(tail.layout, tail.base, tail.layout.lineCount, tail.recording))
     height += tail.layout.height
     return ChunkedTextFrame(
       text = source,
@@ -198,7 +202,7 @@ internal class ChunkedTextLayout(
       end = end,
       layout = layout,
       spans = spans,
-      recording = if (settled) PartRecording() else null,
+      recording = PartRecording(deferred = !settled),
     )
   }
 
@@ -259,7 +263,7 @@ internal class TextChunk(
   val layout: StaticLayout,
   /** The spans the chunk was laid out under, or null when it is not reusable. */
   private val spans: SpanSignature?,
-  val recording: PartRecording?,
+  val recording: PartRecording,
 ) {
   /**
    * The widest line's width, including trailing spaces and tabs as the canonical

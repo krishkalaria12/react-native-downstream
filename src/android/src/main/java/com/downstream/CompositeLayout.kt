@@ -38,16 +38,27 @@ internal class LayoutPart(
  * changes. The lines above the last one do not change, so their operations are
  * recorded into a render node the first time and the next frames only reference
  * it. Hardware canvases only: a software canvas draws the layout directly.
+ *
+ * [deferred] parts draw directly the first time and record on the second. A live
+ * tail is replaced by the next snapshot and usually drawn once, where a recording
+ * is only overhead; a fade draws it again in every pass of every frame, where the
+ * recording is what saves the work.
  */
-internal class PartRecording {
+internal class PartRecording(private val deferred: Boolean = false) {
   private var node: Any? = null
+  private var drawnDirectly = false
 
   /** Whether the part holds a recording a hardware canvas can replay. */
   val isRecorded: Boolean
     get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && (node as? RenderNode)?.hasDisplayList() == true
 
+  /** Draws the part, or returns false when the caller should draw it directly. */
   @RequiresApi(Build.VERSION_CODES.Q)
-  fun draw(canvas: Canvas, layout: Layout, lines: Int) {
+  fun draw(canvas: Canvas, layout: Layout, lines: Int): Boolean {
+    if (deferred && !drawnDirectly) {
+      drawnDirectly = true
+      return false
+    }
     var recorded = node as? RenderNode
     // The renderer drops every display list in a window's tree when it releases
     // its resources, on trim and when a window goes away, so a recording that is
@@ -57,6 +68,7 @@ internal class PartRecording {
       node = recorded
     }
     canvas.drawRenderNode(recorded)
+    return true
   }
 
   @RequiresApi(Build.VERSION_CODES.Q)
@@ -245,9 +257,7 @@ internal class CompositeLayout(
       val saved = canvas.save()
       canvas.translate(0f, part.top.toFloat())
       val recording = part.recording
-      if (recorded && recording != null) {
-        recording.draw(canvas, part.layout, part.lines)
-      } else {
+      if (!recorded || recording == null || !recording.draw(canvas, part.layout, part.lines)) {
         canvas.clipRect(0, 0, width, part.bottom - part.top)
         part.layout.draw(canvas)
       }

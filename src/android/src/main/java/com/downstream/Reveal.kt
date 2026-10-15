@@ -357,43 +357,34 @@ internal class RevealTargets {
 /** Reused selection clips for one segment's opaque and alpha passes. */
 internal class RevealClipPaths {
   val hidden = Path()
-  private val unit = Path()
   val buckets = Array(MAX_ALPHA_BUCKETS) { Path() }
   val rises = FloatArray(MAX_ALPHA_BUCKETS)
   val bounds = RectF()
 
+  // Each unit's outline in [shapedLayout], by its range. A fade redraws every
+  // frame but a unit's outline changes only with the layout, and measuring it
+  // again is most of the cost of building these clips. Units that leave the band
+  // are dropped, so the map stays the size of the band.
+  private var shapedLayout: Layout? = null
+  private var units = HashMap<Long, Path>()
+  private var spare = HashMap<Long, Path>()
+
   fun build(layout: Layout, band: RevealBand, paddingLeft: Float, paddingTop: Float): Int {
     hidden.rewind()
     for (path in buckets) path.rewind()
+    if (layout !== shapedLayout) {
+      units.clear()
+      shapedLayout = layout
+    }
+    val previous = units
+    val current = spare.also { it.clear() }
     var mask = 0
     for (index in 0 until band.count) {
       val start = band.offsets[index * 2]
       val end = band.offsets[index * 2 + 1]
-      val line = layout.getLineForOffset(start)
-      val lineEnd = layout.getLineEnd(line)
-      // JNI gives an empty block one U+200B so it occupies a line. Its selection
-      // has zero width, but rules and container decorations span that line.
-      val placeholder = end == start + 1 && layout.text[start] == '\u200B' &&
-        start == layout.getLineStart(line) && (end == lineEnd ||
-        (end + 1 == lineEnd && (layout.text[end] == '\n' || layout.text[end] == '\uFFFC')))
-      if (placeholder) {
-        unit.rewind()
-        unit.addRect(0f, layout.getLineTop(line).toFloat(), layout.width.toFloat(),
-          layout.getLineBottom(line).toFloat(), Path.Direction.CW)
-      } else {
-        layout.getSelectionPath(start, end, unit)
-      }
-      // Markers and task boxes share the first word's alpha.
-      if (start == layout.getLineStart(line)) {
-        val x = layout.getPrimaryHorizontal(start)
-        val top = layout.getLineTop(line).toFloat()
-        val bottom = layout.getLineBottom(line).toFloat()
-        if (layout.getParagraphDirection(line) == Layout.DIR_RIGHT_TO_LEFT) {
-          unit.addRect(x, top, layout.width.toFloat(), bottom, Path.Direction.CW)
-        } else {
-          unit.addRect(0f, top, x, bottom, Path.Direction.CW)
-        }
-      }
+      val key = (start.toLong() shl 32) or (end.toLong() and 0xffffffffL)
+      val unit = previous[key] ?: outline(layout, start, end)
+      current[key] = unit
       hidden.addPath(unit)
       val bucket = alphaBucket(band.alphas[index])
       if (bucket <= 0) continue
@@ -402,10 +393,43 @@ internal class RevealClipPaths {
       mask = mask or bit
       buckets[bucket - 1].addPath(unit)
     }
+    spare = previous
+    units = current
     hidden.offset(paddingLeft, paddingTop)
     for (bucket in 1..MAX_ALPHA_BUCKETS) {
       if (mask and (1 shl bucket) != 0) buckets[bucket - 1].offset(paddingLeft, paddingTop)
     }
     return mask
+  }
+
+  /** One unit's outline: its selection, and its line's marker when it starts one. */
+  private fun outline(layout: Layout, start: Int, end: Int): Path {
+    val unit = Path()
+    val line = layout.getLineForOffset(start)
+    val lineEnd = layout.getLineEnd(line)
+    // JNI gives an empty block one U+200B so it occupies a line. Its selection
+    // has zero width, but rules and container decorations span that line.
+    val placeholder = end == start + 1 && layout.text[start] == '\u200B' &&
+      start == layout.getLineStart(line) && (end == lineEnd ||
+      (end + 1 == lineEnd && (layout.text[end] == '\n' || layout.text[end] == '\uFFFC')))
+    if (placeholder) {
+      unit.rewind()
+      unit.addRect(0f, layout.getLineTop(line).toFloat(), layout.width.toFloat(),
+        layout.getLineBottom(line).toFloat(), Path.Direction.CW)
+    } else {
+      layout.getSelectionPath(start, end, unit)
+    }
+    // Markers and task boxes share the first word's alpha.
+    if (start == layout.getLineStart(line)) {
+      val x = layout.getPrimaryHorizontal(start)
+      val top = layout.getLineTop(line).toFloat()
+      val bottom = layout.getLineBottom(line).toFloat()
+      if (layout.getParagraphDirection(line) == Layout.DIR_RIGHT_TO_LEFT) {
+        unit.addRect(x, top, layout.width.toFloat(), bottom, Path.Direction.CW)
+      } else {
+        unit.addRect(0f, top, x, bottom, Path.Direction.CW)
+      }
+    }
+    return unit
   }
 }

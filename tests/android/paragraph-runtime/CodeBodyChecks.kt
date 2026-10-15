@@ -312,22 +312,22 @@ private fun checkHardwareRecording(paint: TextPaint): JSONObject {
   val expected = canonicalLayout(text, paint, UNBOUNDED_CODE_WIDTH)
   val width = minOf(frame.contentWidth + 16, 1400)
   val height = minOf(expected.height, 2400)
-  check(frame.settled.none { it.recording!!.isRecorded })
+  check(frame.settled.none { it.recording.isRecorded })
   val reference = hardwareRaster(width, height) { expected.draw(it) }
   val first = hardwareRaster(width, height) { frame.layout.draw(it) }
   // Destroying the renderer released every display list in its tree, as a trim
   // does in an app; the next hardware draw records the parts again.
-  check(frame.settled.none { it.recording!!.isRecorded })
+  check(frame.settled.none { it.recording.isRecorded })
   val replayed = hardwareRaster(width, height) { canvas ->
     frame.layout.draw(canvas)
-    check(frame.settled.all { it.recording!!.isRecorded })
+    check(frame.settled.all { it.recording.isRecorded })
   }
   check(first.contentEquals(reference)) { "recorded chunks differ from the whole layout" }
   check(replayed.contentEquals(reference)) { "replayed chunks differ from the whole layout" }
   // A software canvas never records.
   val fresh = ChunkedTextLayout(text, codeLineStarts(text), paint).frame(UNBOUNDED_CODE_WIDTH)!!
   raster(width, height) { fresh.layout.draw(it) }
-  check(fresh.settled.none { it.recording!!.isRecorded })
+  check(fresh.settled.none { it.recording.isRecorded })
   return JSONObject().put("recordedChunks", frame.settled.size).put("pixels", width * height)
 }
 
