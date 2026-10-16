@@ -3,6 +3,7 @@ package com.downstream
 import android.graphics.Path
 import android.graphics.RectF
 import android.text.Layout
+import android.util.LongSparseArray
 import android.view.animation.PathInterpolator
 
 /**
@@ -366,14 +367,17 @@ internal class RevealClipPaths {
   // again is most of the cost of building these clips. Units that leave the band
   // are dropped, so the map stays the size of the band.
   private var shapedLayout: Layout? = null
-  private var units = HashMap<Long, Path>()
-  private var spare = HashMap<Long, Path>()
+
+  /** Primitive-key caches are swapped each frame, so paths survive without boxed keys. */
+  private var units = LongSparseArray<Path>()
+  private var spare = LongSparseArray<Path>()
 
   fun build(layout: Layout, band: RevealBand, paddingLeft: Float, paddingTop: Float): Int {
     hidden.rewind()
     for (path in buckets) path.rewind()
     if (layout !== shapedLayout) {
       units.clear()
+      spare.clear()
       shapedLayout = layout
     }
     val previous = units
@@ -383,8 +387,13 @@ internal class RevealClipPaths {
       val start = band.offsets[index * 2]
       val end = band.offsets[index * 2 + 1]
       val key = (start.toLong() shl 32) or (end.toLong() and 0xffffffffL)
-      val unit = previous[key] ?: outline(layout, start, end)
-      current[key] = unit
+      // Check the current frame first so duplicate ranges share a newly built path.
+      val unit = current.get(key) ?: previous.get(key) ?: outline(layout, start, end)
+      if (current.size() > 0 && key > current.keyAt(current.size() - 1)) {
+        current.append(key, unit)
+      } else {
+        current.put(key, unit)
+      }
       hidden.addPath(unit)
       val bucket = alphaBucket(band.alphas[index])
       if (bucket <= 0) continue

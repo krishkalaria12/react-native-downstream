@@ -97,6 +97,26 @@ fun main() {
   check(Path.constructions == allocations) { "redraw must reuse every path" }
   check(layout.selections == 2) { "redraw of the same layout must reuse each unit outline" }
   check(clips.hidden.rectangles.size == 2) { "old clips must not accumulate" }
+
+  // Retiring a range and introducing a new one reuses the primitive table's
+  // stale slot without growing it; duplicate ranges still share one outline.
+  band.count = 1
+  band.offsets[0] = 2; band.offsets[1] = 4
+  val beforeNewRange = Path.constructions
+  clips.build(layout, band, 0f, 0f)
+  band.count = 2
+  band.offsets[0] = 20; band.offsets[1] = 22
+  band.offsets[2] = 20; band.offsets[3] = 22
+  clips.build(layout, band, 0f, 0f)
+  check(Path.constructions == beforeNewRange + 1) { "duplicate ranges must share one new outline" }
+  check(clips.hidden.rectangles.size == 2) { "duplicate ranges must not duplicate hidden geometry" }
+
+  // Equal starts with different ends are distinct shapes and must not alias.
+  band.offsets[0] = 20; band.offsets[1] = 23
+  band.offsets[2] = 20; band.offsets[3] = 24
+  clips.build(layout, band, 0f, 0f)
+  check(Path.constructions == beforeNewRange + 3) { "equal starts with different ends need separate outlines" }
+
   band.offsets[0] = 0; band.offsets[1] = 2
   clips.build(Layout(), band, 0f, 0f)
   check(clips.hidden.rectangles.any { it.left == 0f && it.right == 2f }) { "LTR marker margin fades with first word" }
