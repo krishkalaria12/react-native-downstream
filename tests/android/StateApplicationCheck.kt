@@ -57,6 +57,7 @@ internal class StateHost {
   var layoutRequests = 0
   var hostLayoutRequests = 0
   var frameRequests = 0
+  private var syncingSegmentViews = false
   private fun internProps(): Long = propTheme
   internal fun linkVariants(): LinkVariants = LinkVariants()
   private fun syncSegmentViews() {

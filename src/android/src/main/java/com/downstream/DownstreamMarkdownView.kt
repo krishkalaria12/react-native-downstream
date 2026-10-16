@@ -481,7 +481,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
         RenderedDocument.retire(replaced)
       }
     }
-    syncSegmentViews()
+    reconcileSegmentViews()
     // The fade is decided after the rendering exists, because the tracker aligns
     // the document it was given against the one this view last showed, and the
     // segment views have to be there for the tick to invalidate.
@@ -557,7 +557,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   fun setSelectable(selectable: Boolean) {
     if (this.selectable == selectable) return
     this.selectable = selectable
-    syncSegmentViews()
+    reconcileSegmentViews()
     applySettledState()
   }
 
@@ -617,7 +617,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   fun setImages(value: Boolean) {
     imagesEnabled = value
     imageLayout = if (value) imageLayout else imageLayout.copy(state = imageLayout.state.copy(enabled = false))
-    syncSegmentViews()
+    reconcileSegmentViews()
   }
 
   /**
@@ -795,7 +795,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     } else {
       null
     }
-    syncSegmentViews()
+    reconcileSegmentViews()
   }
 
   /**
@@ -804,9 +804,10 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
    * cleared, so a selection there would vanish mid-drag; earlier text is settled
    * and keeps its selection.
    */
-  private fun applySettledState() {
+  private fun applySettledState(indicesOverride: IntArray? = null) {
     val plan = rendered?.plan ?: return
-    val indices: Iterable<Int> = viewportOnlyIndices?.asIterable() ?: (0 until minOf(segmentViews.size, plan.size))
+    val indices: Iterable<Int> = viewportOnlyIndices?.asIterable() ?:
+      indicesOverride?.asIterable() ?: (0 until minOf(segmentViews.size, plan.size))
     for (index in indices) {
       val planned = plan[index]
       val settled = planned.from + 1 <= planned.settledBlocks
@@ -1176,7 +1177,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       syntaxHighlighting = enabled
       if (documentId != 0L) {
         rendered = RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, linkVariants = linkVariants(), incrementalParagraphs = incrementalParagraphs && direction != View.TEXT_DIRECTION_RTL)
-        syncSegmentViews()
+        reconcileSegmentViews()
       }
     }
   }
@@ -1453,7 +1454,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     if (documentId != 0L) {
       RenderedDocument.obtain(context, documentId, fontScale, syntaxHighlighting, themeId, linkVariants = linkVariants(), incrementalParagraphs = incrementalParagraphs && direction != View.TEXT_DIRECTION_RTL)?.let {
         rendered = it
-        syncSegmentViews()
+        reconcileSegmentViews()
       }
     }
   }
@@ -1526,6 +1527,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
   private var realizedDocument: RenderedDocument? = null
   private var virtualizedFrames: IntArray? = null
   private var virtualizedInterval = 0 until 0
+  private var virtualizedHostLayout: HostLayout? = null
   private var checkedFrameOrder: IntArray? = null
   private var virtualizedFramesOrdered = false
   private val segmentViewportListener = ViewTreeObserver.OnPreDrawListener {
@@ -1560,7 +1562,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       val next = viewportSegmentInterval(frames)
       viewportOnlyIndices = (virtualizedInterval.asSequence() + next.asSequence()).distinct().sorted().toList().toIntArray()
     }
-    try { syncSegmentViews() } finally { viewportOnlyIndices = null }
+    try { reconcileSegmentViews() } finally { viewportOnlyIndices = null }
   }
 
   private fun viewportSegmentInterval(frames: IntArray): IntRange {
@@ -1665,6 +1667,24 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   // Reuse views of the same kind in place, so unchanged segments keep their
   // selection and scroll position across updates.
+  private var syncingSegmentViews = false
+
+  /**
+   * Reconcile segment children as one transaction. Child views request layout
+   * while they are rebound, but [layoutSegments] below services those requests
+   * immediately; posting another full reconciliation from the parent would
+   * duplicate the work for every streaming delta.
+   */
+  private fun reconcileSegmentViews() {
+    if (syncingSegmentViews) return
+    syncingSegmentViews = true
+    try {
+      syncSegmentViews()
+    } finally {
+      syncingSegmentViews = false
+    }
+  }
+
   private fun syncSegmentViews() {
     val preserveScroll = segmentScrollEpoch == sourceEpoch
     if (!preserveScroll) {
@@ -1679,7 +1699,41 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       document?.frames(column, chrome, codeLayout, imageLayout, hostLayout, tableLayout, readerChoices)
     } else null
     val newlyRealized = mutableListOf<Int>()
-    val indices: Iterable<Int> = viewportOnlyIndices?.asIterable() ?: segments.indices
+    val orderedFrames = frames != null && checkViewportFrameOrder(frames)
+    val currentViewport = if (frames != null && orderedFrames) viewportSegmentInterval(frames) else 0 until 0
+    val previous = realizedDocument
+    val deltaIndices = if (
+      viewportOnlyIndices == null && frames != null && orderedFrames && preserveScroll &&
+      previous != null && virtualizedHostLayout == hostLayout && document != null &&
+      document.documentId != previous.documentId
+    ) {
+      val previousSegments = previous.segments
+      val previousSize = previousSegments.size
+      val currentSize = segments.size
+      // Keep this primitive and ordered: a plan comparison plus boxed sorting was
+      // more CPU than the segment walk it was meant to avoid on small blocks.
+      val capacity = minOf(currentSize, virtualizedInterval.count() + currentViewport.count() + 512)
+      val selected = IntArray(capacity)
+      var count = 0
+      var overflow = false
+      fun add(index: Int) {
+        if (count < selected.size) selected[count++] = index else overflow = true
+      }
+      for (index in 0 until currentSize) {
+        val segment = segments[index]
+        val visible = index in virtualizedInterval || index in currentViewport
+        val mounted = index < segmentViews.size && segmentViews[index] !is DeferredSegmentView
+        val changed = index >= previousSize || segment !== previousSegments[index] ||
+          !document.plan[index].isCommitted
+        if (visible || mounted || changed) add(index)
+        if (overflow) break
+      }
+      if (!overflow) selected.copyOf(count) else null
+    } else {
+      null
+    }
+    val indices: Iterable<Int> = viewportOnlyIndices?.asIterable() ?:
+      deltaIndices?.asIterable() ?: segments.indices
     if (viewportOnlyIndices == null) revealSegmentEnds = IntArray(document?.plan?.size ?: 0) { document!!.plan[it].to }
     val overscan = maxOf((64 * resources.displayMetrics.density).toInt(), segmentViewport.height() / 2)
     fun deferAt(index: Int): Boolean {
@@ -1807,15 +1861,16 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       recycleSegmentView(extra)
     }
     if (viewportOnlyIndices == null) revealTargets.build(revealRanges, revealSegmentEnds)
-    applySettledState()
+    applySettledState(deltaIndices)
     for (index in newlyRealized) {
       restoreSegmentScroll(segmentViews[index], segments[index], document!!.plan[index].from)
     }
-    layoutSegments()
+    layoutSegments(deltaIndices)
     realizedDocument = document
     virtualizedDocument = if (frames != null) document else null
     virtualizedFrames = frames
-    virtualizedInterval = if (frames != null && checkViewportFrameOrder(frames)) viewportSegmentInterval(frames) else 0 until 0
+    virtualizedHostLayout = if (frames != null && orderedFrames) hostLayout else null
+    virtualizedInterval = currentViewport
   }
 
   /**
@@ -1842,7 +1897,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       return
     }
     imageLayout = value
-    syncSegmentViews()
+    reconcileSegmentViews()
   }
 
   /**
@@ -1857,7 +1912,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
       return
     }
     hostLayout = value
-    syncSegmentViews()
+    reconcileSegmentViews()
     layoutHostChildren()
   }
 
@@ -1932,7 +1987,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
 
   // React Native does not relayout children that request it, so segments are
   // laid out here whenever the document or size changes.
-  private fun layoutSegments() {
+  private fun layoutSegments(indicesOverride: IntArray? = null) {
     val document = rendered ?: return
     val width = width - paddingLeft - paddingRight
     if (width <= 0) {
@@ -1941,7 +1996,8 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     val frames = document.frames(
       width, chrome, codeLayout, imageLayout, hostLayout, tableLayout, readerChoices,
     )
-    val indices: Iterable<Int> = viewportOnlyIndices?.asIterable() ?: (0 until minOf(segmentViews.size, frames.size / 2))
+    val indices: Iterable<Int> = viewportOnlyIndices?.asIterable() ?:
+      indicesOverride?.asIterable() ?: (0 until minOf(segmentViews.size, frames.size / 2))
     for (index in indices) {
       val child = segmentViews[index]
       if (child is DeferredSegmentView) continue
@@ -1993,7 +2049,7 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     // down rather than swallowing it.
     segmentLayer.layout(paddingLeft, paddingTop, right - paddingRight, bottom - paddingBottom)
     hostLayer.layout(0, 0, right - left, bottom - top)
-    syncSegmentViews()
+    reconcileSegmentViews()
 
   }
 
@@ -2003,11 +2059,11 @@ class DownstreamMarkdownView(context: Context) : ViewGroup(context), ControlHost
     super.requestLayout()
     // Children changing text or scroll range need a pass the host never runs.
     // Runs during the superclass constructor too, before fields initialize.
-    if (!layoutPosted) {
+    if (!syncingSegmentViews && !layoutPosted) {
       layoutPosted = true
       post {
         layoutPosted = false
-        syncSegmentViews()
+        reconcileSegmentViews()
       }
     }
   }

@@ -5,6 +5,7 @@ import java.util.WeakHashMap
 
 private class Context {
   val accessibility = AccessibilityManager()
+  var onChildRequestLayout: (() -> Unit)? = null
   fun getSystemService(key: String) = accessibility
   companion object { const val ACCESSIBILITY_SERVICE = "accessibility" }
 }
@@ -27,13 +28,13 @@ private class ViewTreeObserver {
   fun removeOnPreDrawListener(listener: OnPreDrawListener) { listeners.remove(listener) }
   fun draw() { listeners.toList().forEach { check(it.onPreDraw()) } }
 }
-private open class View(val context: Context) {
+private open class View(open val context: Context) {
   var measuredWidth = 0; var measuredHeight = 0
   var left = 0; var top = 0; var right = 0; var bottom = 0
   var isLayoutRequested = true
   var visibility = VISIBLE
   var measures = 0; var layouts = 0
-  fun requestLayout() { isLayoutRequested=true }
+  open fun requestLayout() { isLayoutRequested=true }
   fun measure(width: Int, height: Int) { measures++; measuredWidth = width; measuredHeight = height }
   fun layout(l: Int, t: Int, r: Int, b: Int) { layouts++; left=l; top=t; right=r; bottom=b; isLayoutRequested=false }
   companion object { const val VISIBLE=0; const val INVISIBLE=4; const val GONE=8 }
@@ -64,15 +65,29 @@ private class CodeSegment(val codeOrdinal: Int=0, val firstLine: String="line-$c
 private class TableSegment(val ordinal: Int=0, val rtl: Boolean=false, val accessibilityRows: List<String> = listOf("header-$ordinal"), val caretKind:Int=0, val tableWidth: Int=1000, val identity: Long=0): Segment()
 private class ImageSegment: Segment()
 private class MathSegment(val literal: String="formula"): Segment()
-private class Plan(val from: Int, val to: Int)
+private class Plan(
+  val from: Int,
+  val to: Int,
+  val isTable: Boolean = false,
+  val isCommitted: Boolean = true,
+  val isCode: Boolean = false,
+  val identity: Long = from.toLong(),
+  val lastIdentity: Long = identity,
+  val settledBlocks: Int = to,
+  val codeOrdinal: Int = -1,
+  val kind: Int = 0,
+  val imageOrdinal: Int = -1,
+  val tableOrdinal: Int = -1,
+)
 private class Style { val chromeRowHeight=20; val imageMetrics=0; val imageAltColor=0; val mathFontSize=0; val mathColor=0; val mathBackground=0; val mathErrorColor=0; val mathPadding=0; val mathRadius=0 }
-private class RenderedDocument(input: List<Segment>, val positions: IntArray, val tracing: Boolean = false, val documentId: Long = 42L) {
+private class RenderedDocument(input: List<Segment>, val positions: IntArray, val tracing: Boolean = false, val documentId: Long = 42L,
+  planInput: List<Plan>? = null, private val countSegmentReads: Boolean = true) {
   var segmentReads=0
   val segments: List<Segment> = object : AbstractList<Segment>() {
     override val size get()=input.size
-    override fun get(index:Int):Segment { segmentReads++; return input[index] }
+    override fun get(index:Int):Segment { if (countSegmentReads) segmentReads++; return input[index] }
   }
-  val plan=segments.indices.map { Plan(it,it+1) }; val style=Style()
+  val plan=planInput ?: segments.indices.map { Plan(it,it+1) }; val style=Style()
   fun frames(width: Int, chrome: Int, code: Int, images: Int, hosts: Hosts, tables: Int, choices: Int)=positions
 }
 private object DownstreamNative {
@@ -84,7 +99,7 @@ private class TextSegmentView(context: Context): View(context) {
   init { creations++ }
   fun setSegment(segment: TextSegment, document: RenderedDocument, from: Int) {
     if (shown === segment) return
-    bindings++; shown=segment; isLayoutRequested=true
+    bindings++; shown=segment; isLayoutRequested=true; context.onChildRequestLayout?.invoke()
   }
   fun clearContent() { shown=null }
   companion object { var creations=0; var bindings=0 }
@@ -154,6 +169,7 @@ private class MathSegmentView(context: Context): View(context) {
   companion object { var creations=0 }
 }
 private class Hosts { val ordinals=mutableSetOf<Int>(); fun hosts(index:Int)=index in ordinals }
+private typealias HostLayout = Hosts
 private class Targets { fun build(ranges:LongArray,ends:IntArray) {} }
 private const val LABEL_IMAGE_NOT_AVAILABLE=0
 private const val LABEL_IMAGE_BLOCKED=1
@@ -162,7 +178,7 @@ private class SegmentSlots: ArrayList<View>() {
   override fun add(index:Int, element:View) { if(index < size) shifts++; super.add(index,element) }
   override fun removeAt(index:Int):View { if(index < size-1) shifts++; return super.removeAt(index) }
 }
-private class MountedDocument(val context: Context, var rendered: RenderedDocument?) {
+private class MountedDocument(override val context: Context, var rendered: RenderedDocument?): View(context) {
   val resources=Resources(); val segmentLayer=Layer(); val segmentViews=SegmentSlots()
   val recycledTextViews=ArrayDeque<TextSegmentView>(); val segmentEligibility=WeakHashMap<TextSegment,Boolean>()
   private class DeferredSegmentView(context:Context): View(context)
@@ -179,15 +195,36 @@ private class MountedDocument(val context: Context, var rendered: RenderedDocume
   var virtualizedDocument: RenderedDocument?=null
   var virtualizedFrames: IntArray?=null
   var virtualizedInterval=0 until 0
+  var virtualizedHostLayout: HostLayout?=null
   var checkedFrameOrder: IntArray?=null
   var virtualizedFramesOrdered=false
+  var syncingSegmentViews=false
   var revealSegmentEnds=IntArray(0); val revealRanges=LongArray(0); val revealTargets=Targets()
   val chrome=0; val codeLayout=0; val imageLayout=0; val hostLayout=Hosts(); val tableLayout=0; val readerChoices=0
   var sourceEpoch=0; val controlLabels=listOf("none","blocked")
+  var layoutPosted=false
+  private val posted=java.util.ArrayDeque<() -> Unit>()
+  init { context.onChildRequestLayout = { requestLayout() } }
+  fun post(task: () -> Unit) { posted.addLast(task) }
+  fun runPosted() { while (posted.isNotEmpty()) posted.removeFirst().invoke() }
+  fun isDeferred(index: Int) = segmentViews[index] is DeferredSegmentView
   fun reportImageAnswer(url:String, answer:Int) {}; fun pressImage(url:String,alt:String,title:String,range:Int) {}; fun downloadImage(image:Int) {}
-  fun applySettledState() {}
+  fun applySettledState(indices: IntArray? = null) {}
   fun getLocalVisibleRect(out:Rect):Boolean { val rect=actualVisible ?: return false; out.set(rect); return true }
-  fun drive()=syncSegmentViews()
+  fun drive()=reconcileSegmentViews()
+  fun verifyReconcileGuard() {
+    val before = segmentReads()
+    drive()
+    check(posted.isEmpty()) { "child binding queued a redundant reconciliation" }
+    check(segmentReads() > before) { "initial reconciliation did not run" }
+    requestLayout()
+    requestLayout()
+    check(posted.size == 1) { "external requests were not coalesced" }
+    runPosted()
+    check(posted.isEmpty()) { "posted external reconciliation did not run" }
+    check(!syncingSegmentViews) { "reconciliation guard remained set" }
+  }
+  private fun segmentReads() = rendered?.segmentReads ?: 0
   fun attach()=observeSegmentViewport()
   /* PRODUCTION_METHODS */
 }
@@ -195,7 +232,10 @@ fun main() {
   CodeSegmentView(Context()).checkRecycle(RenderedDocument(emptyList(),IntArray(0)))
   val segments=List(10_000) { TextSegment(Text("original-$it")) }
   val positions=IntArray(20_000) { if(it%2==0) it/2*20 else 20 }
-  val context=Context(); val host=MountedDocument(context,RenderedDocument(segments,positions))
+  val context=Context(); val guardHost=MountedDocument(Context(),RenderedDocument(segments,positions))
+  guardHost.verifyReconcileGuard()
+  TextSegmentView.creations=0
+  val host=MountedDocument(context,RenderedDocument(segments,positions))
   host.attach()
   check(host.segmentLayer.children.size <= 10)
   check(host.segmentViews.size==10_000)
@@ -220,7 +260,13 @@ fun main() {
   host.actualVisible=Rect(0,0,200,100); host.viewTreeObserver.draw()
   check(host.segmentLayer.children.isNotEmpty())
   val revised=segments.toMutableList(); revised[0]=TextSegment(Text("newest revision"))
-  host.rendered=RenderedDocument(revised,positions); host.drive()
+  val previousRevision=host.rendered!!
+  val revisedBefore=previousRevision.segmentReads
+  val revisedPlan=segments.indices.map { index -> Plan(index, index + 1, identity=if (index == 0) 99L else index.toLong()) }
+  host.rendered=RenderedDocument(revised,positions,documentId=43L,planInput=revisedPlan); host.drive()
+  val snapshotReads=host.rendered!!.segmentReads + previousRevision.segmentReads-revisedBefore
+  check(snapshotReads in 20_000..20_100) { "snapshot repeated segment reads beyond its identity pass: $snapshotReads" }
+  println("android snapshot reconciliation: $snapshotReads segment reads, ${host.segmentLayer.children.size} mounted views across 10000 slots")
   check((host.segmentLayer.children.first { it.top==0 } as TextSegmentView).shown===revised[0])
   check(segments[0].text.value=="original-0") { "view recycling mutated a source snapshot" }
   context.accessibility.isEnabled=true; host.viewTreeObserver.draw()
@@ -332,5 +378,66 @@ fun main() {
   replacementHost.rendered=RenderedDocument(listOf(TableSegment(0, identity=22)),intArrayOf(0,20)); replacementHost.drive()
   replacementHost.actualVisible=Rect(0,0,200,100); replacementHost.viewTreeObserver.draw()
   check((replacementHost.segmentViews[0] as TableSegmentView).state.contentEquals(intArrayOf(0,0,1))) { "different table identity inherited stale scroll state" }
+  val tailSegments = List(1000) { TextSegment(Text("tail-$it")) }.toMutableList()
+  val tailPositions = IntArray(2000) { if (it % 2 == 0) it / 2 * 20 else 20 }
+  val tailPlans = tailSegments.indices.map { index -> Plan(index, index + 1) }
+  val tailHost = MountedDocument(Context(), RenderedDocument(tailSegments, tailPositions, documentId=10L, planInput=tailPlans))
+  tailHost.attach()
+  tailSegments[999] = TextSegment(Text("tail-stateful", listOf(SpoilerSpan())))
+  val mutableTailPlans = tailPlans.toMutableList()
+  mutableTailPlans[999] = Plan(999, 1000, isCommitted=false)
+  tailHost.rendered = RenderedDocument(tailSegments, tailPositions, documentId=11L, planInput=mutableTailPlans)
+  tailHost.drive()
+  check(!tailHost.isDeferred(999)) { "offscreen uncommitted stateful tail was deferred" }
+
+  val appearanceSegments = List(1000) { TextSegment(Text("appearance-$it")) }
+  val appearancePositions = tailPositions.copyOf()
+  val appearancePlans = appearanceSegments.indices.map { index -> Plan(index, index + 1) }
+  val appearanceHost = MountedDocument(Context(), RenderedDocument(appearanceSegments, appearancePositions, documentId=20L, planInput=appearancePlans))
+  appearanceHost.attach()
+  val changedAppearance = appearanceSegments.toMutableList()
+  changedAppearance[999] = TextSegment(Text("appearance-stateful", listOf(SpoilerSpan())))
+  appearanceHost.virtualizedHostLayout = null
+  appearanceHost.rendered = RenderedDocument(changedAppearance, appearancePositions, documentId=20L, planInput=appearancePlans)
+  appearanceHost.drive()
+  check(!appearanceHost.isDeferred(999)) { "same-document appearance update incorrectly used sparse reconciliation" }
+
+  val perfSegments = List(10_000) { TextSegment(Text("perf-$it")) }
+  val perfPositions = positions.copyOf()
+  val perfSnapshots = (0 until 200).map { pass ->
+    RenderedDocument(perfSegments, perfPositions, documentId=31L + pass, countSegmentReads=false)
+  }
+  fun warmedHost(): MountedDocument {
+    val host = MountedDocument(Context(), perfSnapshots[0])
+    host.attach()
+    repeat(200) { pass ->
+      host.rendered = perfSnapshots[pass % perfSnapshots.size]
+      host.drive()
+    }
+    return host
+  }
+  fun timed(host: MountedDocument, forceFull: Boolean, offset: Int): Long {
+    val started = System.nanoTime()
+    repeat(100) { pass ->
+      if (forceFull) host.virtualizedHostLayout = null
+      host.rendered = perfSnapshots[(offset + pass) % perfSnapshots.size]
+      host.drive()
+    }
+    return System.nanoTime() - started
+  }
+  val sparseSamples = mutableListOf<Long>()
+  val fullSamples = mutableListOf<Long>()
+  repeat(5) { round ->
+    val sparseFirst = warmedHost()
+    val fullFirst = warmedHost()
+    sparseSamples.add(timed(sparseFirst, false, (round * 37) % perfSnapshots.size))
+    fullSamples.add(timed(fullFirst, true, (round * 37) % perfSnapshots.size))
+    val fullSecond = warmedHost()
+    val sparseSecond = warmedHost()
+    fullSamples.add(timed(fullSecond, true, (round * 37 + 19) % perfSnapshots.size))
+    sparseSamples.add(timed(sparseSecond, false, (round * 37 + 19) % perfSnapshots.size))
+  }
+  fun median(values: List<Long>): Double = values.sorted()[values.size / 2] / 1_000_000.0
+  println("android segment viewport timing: sparse=${median(sparseSamples)}ms full=${median(fullSamples)}ms over 5 ABBA samples x100 warmed 10k snapshots")
   println("android segment viewport: 10000 plain and mixed slots <=13 mounted views, <120 segment reads per scroll; bounded reuse, exact geometry, latest snapshots, code/table/math scroll + pin retention, source reset, selection/accessibility and stateful fallback passed")
 }

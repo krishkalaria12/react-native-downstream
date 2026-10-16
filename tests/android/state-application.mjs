@@ -32,6 +32,7 @@ function member(name) {
 }
 
 const methods = [
+  'reconcileSegmentViews',
   'setDocument',
   'applyState',
   'applyDocumentState',

@@ -27,12 +27,14 @@ const names = [
   'saveSegmentScroll',
   'restoreSegmentScroll',
   'recycleSegmentView',
+  'reconcileSegmentViews',
   'syncSegmentViews',
   'layoutSegments',
+  'requestLayout',
 ];
 const methods = names.map((name) => {
   const result = source.match(
-    new RegExp(`  private fun ${name}\\([\\s\\S]*?\\n  }`)
+    new RegExp(`  (?:(?:private|override) )?fun ${name}\\([\\s\\S]*?\\n  }`)
   )?.[0];
   if (!result) throw new Error(`Missing production ${name}`);
   return result.replaceAll(

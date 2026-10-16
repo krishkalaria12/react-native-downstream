@@ -14,7 +14,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const sources = join(here, '../../src/android/src/main/java/com/downstream');
 const view = readFileSync(join(sources, 'DownstreamMarkdownView.kt'), 'utf8');
 const method = view.match(
-  /  private fun layoutSegments\(\) \{[\s\S]*?\n  }/
+  /  private fun layoutSegments\([^\n]*\) \{[\s\S]*?\n  }/
 )?.[0];
 if (!method) throw new Error('Missing production layout method');
 const fixture = readFileSync(
