@@ -98,7 +98,7 @@ private fun raster(width: Int, height: Int, draw: (Canvas) -> Unit): IntArray {
 }
 
 /** Renders through the GPU pipeline, where a hardware canvas replays recorded parts. */
-private fun hardwareRaster(width: Int, height: Int, draw: (Canvas) -> Unit): IntArray {
+internal fun hardwareRaster(width: Int, height: Int, draw: (Canvas) -> Unit): IntArray {
   val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 1,
     HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_GPU_COLOR_OUTPUT)
   val renderer = HardwareRenderer()

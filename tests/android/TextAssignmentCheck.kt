@@ -97,6 +97,7 @@ private class AssignmentView : PlatformView() {
   private var segment: TextSegment? = null
   private var traceDocumentId = 0L
   /* PRODUCTION_traceText */
+  private val decorationBounds = object { fun clear() {} }
   /* PRODUCTION_setTraceDocument */
   private var blockOffset = 0
   private var streamingFrame: StreamingParagraphFrame? = null

@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.RenderNode
 import android.os.Build
 import android.text.Layout
 import android.text.PrecomputedText
@@ -25,6 +26,8 @@ import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeProvider
 import android.widget.TextView
+import androidx.annotation.RequiresApi
+import kotlin.math.ceil
 
 /**
  * A text segment in a TextView configured like the measuring StaticLayout
@@ -113,6 +116,7 @@ internal class TextSegmentView(context: Context) : TextView(context) {
   private var detailsToggle = false
   private val codePaint = Paint()
   private val decorationPaint = TextPaint()
+  private val decorationBounds = TextDecorationBounds()
 
   /**
    * The caret's own paint.
@@ -417,6 +421,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
     contentWidth: Int,
   ) {
     if (layout === preparedLayout && text === preparedText) return
+    decorationBounds.clear()
     setTraceDocument(rendered)
     streamingFrame = null
     streamingRendered = null
@@ -494,6 +499,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
   }
 
   private fun clearPrepared() {
+    decorationBounds.clear()
     preparedLayout = null
     preparedText = null
     preparedRendered = null
@@ -671,6 +677,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
   private fun drawFrame(canvas: Canvas) {
     val band = findHost()?.revealFrame()?.let { bandFor(it) }
     if (band == null || band.count == 0) {
+      clearRevealRecording()
       drawContent(canvas)
       drawCaret(canvas, null)
       return
@@ -692,10 +699,15 @@ private class TaskPress(val id: Int, val checked: Boolean)
     val paths = revealPaths ?: RevealClipPaths().also { revealPaths = it }
     // Exclude only active ranges, preserving settled gaps and trailing text.
     val buckets = paths.build(layout, band, paddingLeft, paddingTop)
+    // Record content once for all alpha passes. Rebuild every frame so mutable
+    // spans, selection and pressed states never need a separate invalidation key.
+    val recording = if (buckets != 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && canvas.isHardwareAccelerated) {
+      recordRevealContent(canvas, paths, buckets)
+    } else null
     val hidden = paths.hidden
     canvas.save()
     clipOut(canvas, hidden)
-    drawContent(canvas)
+    drawRevealContent(canvas, recording)
     canvas.restore()
 
     // One layer per alpha bucket, so a compressed burst of forty words at forty
@@ -725,7 +737,7 @@ private class TaskPress(val id: Int, val checked: Boolean)
       if (rise != 0f) {
         canvas.translate(0f, rise)
       }
-      drawContent(canvas)
+      drawRevealContent(canvas, recording)
       canvas.restore()
       canvas.restoreToCount(checkpoint)
     }
@@ -736,8 +748,54 @@ private class TaskPress(val id: Int, val checked: Boolean)
   }
 
   private var revealPaths: RevealClipPaths? = null
+  // Any keeps the API 29 class out of the view's fields on older Android releases.
+  private var revealRecording: Any? = null
+  private val revealRecordingBounds = Rect()
 
-  /** Everything the segment draws: the one call the clipped passes repeat. */
+  @RequiresApi(Build.VERSION_CODES.Q)
+  private fun recordRevealContent(canvas: Canvas, paths: RevealClipPaths, buckets: Int): RenderNode? {
+    val source = revealRecordingBounds
+    if (!canvas.getClipBounds(source)) return null
+    var rise = 0f
+    for (bucket in 1..MAX_ALPHA_BUCKETS) {
+      if (buckets and (1 shl bucket) != 0) rise = maxOf(rise, paths.rises[bucket - 1])
+    }
+    // A rise moves ink down into the viewport. Include its source above the
+    // clip, while keeping tall composite layouts' offscreen parts culled.
+    source.top -= ceil(rise.toDouble()).toInt()
+    val node = (revealRecording as? RenderNode) ?: RenderNode("downstream-reveal").also { revealRecording = it }
+    node.setPosition(source.left, source.top, source.right, source.bottom)
+    node.setClipToBounds(false)
+    val recorded = node.beginRecording(source.width(), source.height())
+    try {
+      recorded.translate(-source.left.toFloat(), -source.top.toFloat())
+      recorded.clipRect(source)
+      drawContent(recorded)
+    } finally {
+      node.endRecording()
+    }
+    return node
+  }
+
+  private fun drawRevealContent(canvas: Canvas, recording: RenderNode?) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && recording != null) {
+      canvas.drawRenderNode(recording)
+    } else {
+      drawContent(canvas)
+    }
+  }
+
+  private fun clearRevealRecording() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) (revealRecording as? RenderNode)?.discardDisplayList()
+    revealRecording = null
+  }
+
+  override fun onDetachedFromWindow() {
+    clearRevealRecording()
+    super.onDetachedFromWindow()
+  }
+
+  /** Text and decorations shared by the opaque and fading passes. */
   private fun drawContent(canvas: Canvas) {
     drawInlineCodeBackgrounds(canvas)
     val direct = streamingFrame?.layout ?: preparedLayout
@@ -982,23 +1040,33 @@ private class TaskPress(val id: Int, val checked: Boolean)
   private fun drawDecorations(canvas: Canvas) {
     val layout = displayLayout() ?: return
     val text = layout.text as? Spanned ?: return
-    val links = text.getSpans(0, text.length, LinkSpan::class.java)
-    val strikes = text.getSpans(0, text.length, StrikethroughSpan::class.java)
-    if (links.isEmpty() && strikes.isEmpty()) {
-      return
-    }
-    canvas.save()
+    val checkpoint = canvas.save()
     canvas.translate(totalPaddingLeft.toFloat(), totalPaddingTop.toFloat())
-    for (link in links) {
-      drawDecoration(canvas, layout, text, link, link.color, strike = false)
+    try {
+      if (!decorationBounds.prepare(canvas, text) || !decorationBounds.hasTextDecorations) return
+      decorationPaint.set(paint)
+      decorationPaint.textSize = maxOf(paint.textSize, decorationBounds.maximumSize)
+      val underline = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) decorationPaint.underlinePosition else decorationPaint.textSize / 9f
+      val strike = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) decorationPaint.strikeThruPosition else -decorationPaint.textSize * 0.28f
+      val thickness = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) maxOf(decorationPaint.underlineThickness, decorationPaint.strikeThruThickness) else decorationPaint.textSize / 18f
+      if (!decorationBounds.lines(layout, 0, layout.lineCount - 1,
+          minOf(0f, underline, strike), maxOf(0f, underline, strike) + maxOf(1f, thickness))) return
+      val queryStart = layout.getLineStart(decorationBounds.firstLine)
+      val queryEnd = layout.getLineEnd(decorationBounds.lastLine)
+      val links = text.getSpans(queryStart, queryEnd, LinkSpan::class.java)
+      val strikes = text.getSpans(queryStart, queryEnd, StrikethroughSpan::class.java)
+      for (link in links) {
+        drawDecoration(canvas, layout, text, link, link.color, strike = false)
+      }
+      for (strike in strikes) {
+        val start = text.getSpanStart(strike)
+        val color = text.getSpans(start, start + 1, ForegroundColorSpan::class.java).lastOrNull()?.foregroundColor
+          ?: currentTextColor
+        drawDecoration(canvas, layout, text, strike, color, strike = true)
+      }
+    } finally {
+      canvas.restoreToCount(checkpoint)
     }
-    for (strike in strikes) {
-      val start = text.getSpanStart(strike)
-      val color = text.getSpans(start, start + 1, ForegroundColorSpan::class.java).lastOrNull()?.foregroundColor
-        ?: currentTextColor
-      drawDecoration(canvas, layout, text, strike, color, strike = true)
-    }
-    canvas.restore()
   }
 
   private fun drawDecoration(canvas: Canvas, layout: Layout, text: Spanned, span: Any, color: Int, strike: Boolean) {
@@ -1019,7 +1087,9 @@ private class TaskPress(val id: Int, val checked: Boolean)
     }
     decorationPaint.color = color
     decorationPaint.style = Paint.Style.FILL
-    for (line in layout.getLineForOffset(start)..layout.getLineForOffset(end - 1)) {
+    if (!decorationBounds.lines(layout, layout.getLineForOffset(start), layout.getLineForOffset(end - 1),
+        position, position + maxOf(1f, thickness))) return
+    for (line in decorationBounds.firstLine..decorationBounds.lastLine) {
       val from = maxOf(start, layout.getLineStart(line))
       val to = minOf(end, layout.getLineEnd(line))
       if (from >= to) continue
@@ -1037,29 +1107,34 @@ private class TaskPress(val id: Int, val checked: Boolean)
   private fun drawInlineCodeBackgrounds(canvas: Canvas) {
     val layout = displayLayout() ?: return
     val text = layout.text as? Spanned ?: return
-    val spans = text.getSpans(0, text.length, InlineCodeBackgroundSpan::class.java)
-    if (spans.isEmpty()) {
-      return
-    }
-    canvas.save()
+    val checkpoint = canvas.save()
     canvas.translate(totalPaddingLeft.toFloat(), totalPaddingTop.toFloat())
-    for (span in spans) {
-      val start = text.getSpanStart(span)
-      val end = text.getSpanEnd(span)
-      if (start >= end) continue
-      codePaint.color = span.color
-      for (line in layout.getLineForOffset(start)..layout.getLineForOffset(end - 1)) {
-        val from = maxOf(start, layout.getLineStart(line))
-        val to = minOf(end, layout.getLineEnd(line))
-        if (from >= to) continue
-        codePath.reset()
-        layout.getSelectionPath(from, to, codePath)
-        codePath.computeBounds(codeBounds, true)
-        val baseline = layout.getLineBaseline(line).toFloat()
-        canvas.drawRect(codeBounds.left, baseline + span.ascent, codeBounds.right, baseline + span.descent, codePaint)
+    try {
+      if (!decorationBounds.prepare(canvas, text) || !decorationBounds.hasBackgrounds || !decorationBounds.lines(layout, 0, layout.lineCount - 1,
+          decorationBounds.minimumAscent, decorationBounds.maximumDescent)) return
+      val spans = text.getSpans(layout.getLineStart(decorationBounds.firstLine),
+        layout.getLineEnd(decorationBounds.lastLine), InlineCodeBackgroundSpan::class.java)
+      for (span in spans) {
+        val start = text.getSpanStart(span)
+        val end = text.getSpanEnd(span)
+        if (start >= end) continue
+        codePaint.color = span.color
+        if (!decorationBounds.lines(layout, layout.getLineForOffset(start), layout.getLineForOffset(end - 1),
+            span.ascent.toFloat(), span.descent.toFloat())) continue
+        for (line in decorationBounds.firstLine..decorationBounds.lastLine) {
+          val from = maxOf(start, layout.getLineStart(line))
+          val to = minOf(end, layout.getLineEnd(line))
+          if (from >= to) continue
+          codePath.reset()
+          layout.getSelectionPath(from, to, codePath)
+          codePath.computeBounds(codeBounds, true)
+          val baseline = layout.getLineBaseline(line).toFloat()
+          canvas.drawRect(codeBounds.left, baseline + span.ascent, codeBounds.right, baseline + span.descent, codePaint)
+        }
       }
+    } finally {
+      canvas.restoreToCount(checkpoint)
     }
-    canvas.restore()
   }
 
   // A touch that starts on a link belongs to the link: the TextView never

@@ -111,6 +111,7 @@ try {
     'StreamingParagraphLayout.kt',
     'StreamingParagraphSeeds.kt',
     'TextSegmentView.kt',
+    'TextDecorationBounds.kt',
     'MarkdownAccessibility.kt',
     'Caret.kt',
     'Reveal.kt',
@@ -191,6 +192,8 @@ try {
     join(here, 'ParagraphChecks.kt'),
     join(here, 'CodeBodyChecks.kt'),
     join(here, 'ProseTailChecks.kt'),
+    join(here, 'RevealDrawingChecks.kt'),
+    join(here, 'DecorationDrawingChecks.kt'),
     join(here, 'ParagraphInstrumentation.kt'),
   ]);
   run(join(build, 'd8'), [
@@ -286,6 +289,12 @@ try {
         : []),
       ...(process.env.DOWNSTREAM_CODE_ONLY === '1'
         ? ['-e', 'codeOnly', 'true']
+        : []),
+      ...(process.env.DOWNSTREAM_REVEAL_ONLY === '1'
+        ? ['-e', 'revealOnly', 'true']
+        : []),
+      ...(process.env.DOWNSTREAM_DECORATION_ONLY === '1'
+        ? ['-e', 'decorationOnly', 'true']
         : []),
       'com.downstream.paragraphruntime/com.downstream.ParagraphInstrumentation',
     ],
