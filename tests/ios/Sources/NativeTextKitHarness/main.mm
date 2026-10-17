@@ -851,6 +851,9 @@ static void checkFinishReuseOptionMismatches() {
 #endif
 #include <algorithm>
 #include "CodeCardChecks.mm"
+#ifndef BASELINE
+#include "ImageLayoutPerfChecks.mm"
+#endif
 
 int main() {
   @autoreleasepool {
@@ -884,6 +887,7 @@ int main() {
     checkUnchangedSegmentAssignments();
     checkSegmentViewport();
     checkCodeCardChrome();
+    checkImageLayoutPerformance();
 #endif
     if (getenv("DOWNSTREAM_IOS_HOST_BENCH_ONLY") != nullptr) {
       benchmarkHostedMeasurements();

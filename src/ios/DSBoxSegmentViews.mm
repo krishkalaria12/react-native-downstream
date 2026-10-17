@@ -152,7 +152,14 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
 /// animation off still needs to see that something is loading, and a box that
 /// appears without ever having pulsed is a box that looks broken.
 - (void)startPulse {
-  if (self.placeholder == nil || self.placeholder.hidden || UIAccessibilityIsReduceMotionEnabled()) {
+  if (self.placeholder == nil || self.placeholder.hidden) {
+    return;
+  }
+  if (UIAccessibilityIsReduceMotionEnabled()) {
+    [self stopPulse];
+    return;
+  }
+  if ([self.placeholder.layer animationForKey:@"ds.placeholder"] != nil) {
     return;
   }
   CABasicAnimation *animation = [CABasicAnimation animationWithKeyPath:@"opacity"];
@@ -319,25 +326,32 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
 
 - (void)setSegment:(DSImageSegment *)segment {
   _segment = segment;
-  NSMutableArray<DSImageBoxView *> *boxes = [NSMutableArray arrayWithCapacity:segment.images.size()];
-  for (NSUInteger index = 0; index < segment.images.size(); index++) {
-    NSString *url = index < segment.urls.size() ? @(segment.urls[index].c_str()) : @"";
+  // These Objective-C properties return C++ values. Read each vector once,
+  // rather than copying every image and string again for each box.
+  const auto images = segment.images;
+  const auto urls = segment.urls;
+  const auto altTexts = segment.altTexts;
+  const auto titles = segment.titles;
+  const auto links = segment.links;
+  NSMutableArray<DSImageBoxView *> *boxes = [NSMutableArray arrayWithCapacity:images.size()];
+  for (NSUInteger index = 0; index < images.size(); index++) {
+    NSString *url = index < urls.size() ? @(urls[index].c_str()) : @"";
     // A box for the same picture is kept across snapshots, so a streaming message
     // does not cancel and restart a load every time a token arrives, and a loaded
     // picture does not flash back to its placeholder.
     DSImageBoxView *box = nil;
-    if (index < _boxes.count && _boxes[index].ordinal == segment.images[index] &&
+    if (index < _boxes.count && _boxes[index].ordinal == images[index] &&
         [_boxes[index].url isEqualToString:url]) {
       box = _boxes[index];
     } else {
       box = [DSImageBoxView new];
       [box buildForSize:CGSizeZero];
     }
-    box.ordinal = segment.images[index];
+    box.ordinal = images[index];
     box.url = url;
-    box.alt = index < segment.altTexts.size() ? @(segment.altTexts[index].c_str()) : @"";
-    box.title = index < segment.titles.size() ? @(segment.titles[index].c_str()) : @"";
-    box.linkIndex = index < segment.links.size() ? segment.links[index] : -1;
+    box.alt = index < altTexts.size() ? @(altTexts[index].c_str()) : @"";
+    box.title = index < titles.size() ? @(titles[index].c_str()) : @"";
+    box.linkIndex = index < links.size() ? links[index] : -1;
     box.isLink = box.linkIndex >= 0;
     box.loadable = url.length > 0;
     box.owner = self;
@@ -355,9 +369,11 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
       [self addSubview:box];
     }
   }
-  for (DSImageBoxView *old in _boxes) {
-    if (![boxes containsObject:old]) {
-      [old removeFromSuperview];
+  // Reuse above is restricted to the same index. A prior box can therefore
+  // survive only at that index, without a membership scan through the new list.
+  for (NSUInteger index = 0; index < _boxes.count; index++) {
+    if (index >= boxes.count || _boxes[index] != boxes[index]) {
+      [_boxes[index] removeFromSuperview];
     }
   }
   _boxes = boxes;
@@ -416,6 +432,7 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
     return;
   }
   const CGFloat column = std::max<CGFloat>(0, CGRectGetWidth(self.bounds) - segment.contentLeading);
+  const ImageMetrics metrics = segment.metrics;
   CGFloat y = 0;
   for (NSUInteger index = 0; index < self->_boxes.count; index++) {
     DSImageBoxView *box = self->_boxes[index];
@@ -423,17 +440,17 @@ typedef NS_ENUM(NSInteger, DSImageControlLabel) {
     // view that decided its own height would be free to disagree with the frame
     // it was given, and a picture drawn in the wrong box is the most visible bug
     // this library could have.
-    const ImageBox measured = [segment boxAtIndex:index column:column answers:self.state];
     // The ivar, not the property: the property returns a copy, and a pointer into
     // a temporary copy dangles before the next line reads it.
     const ImageEntry *entry = _state.find(box.ordinal);
+    const ImageBox measured = imageBox(entry, static_cast<float>(column), metrics);
     const ImageState state = entry != nullptr
         ? entry->state
         : (_state.enabled ? ImageState::Pending : ImageState::Disabled);
     box.frame = CGRectMake(segment.contentLeading, y, measured.width, measured.height);
     [box applyState:state];
     [self startLoadFor:box at:state size:measured column:column];
-    y += measured.height + segment.metrics.marginTop;
+    y += measured.height + metrics.marginTop;
   }
 }
 
