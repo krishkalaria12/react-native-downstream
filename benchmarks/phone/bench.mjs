@@ -2681,7 +2681,10 @@ async function main() {
     allowPositionals: true,
     options: {
       'device': { type: 'string' },
-      'profiles': { type: 'string', default: 'highlighted,highlighted-animated' },
+      'profiles': {
+        type: 'string',
+        default: 'highlighted,highlighted-animated',
+      },
       'repeats': { type: 'string', default: '5' },
       'seed': { type: 'string', default: '1' },
       'workloads': {
