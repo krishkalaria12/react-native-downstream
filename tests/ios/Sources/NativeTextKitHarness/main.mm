@@ -852,6 +852,8 @@ static void checkFinishReuseOptionMismatches() {
 #include <algorithm>
 #include "CodeCardChecks.mm"
 #ifndef BASELINE
+#include "StyleKeyPerfChecks.mm"
+#include "PrefixComparePerfChecks.mm"
 #include "ImageLayoutPerfChecks.mm"
 #endif
 
@@ -887,6 +889,8 @@ int main() {
     checkUnchangedSegmentAssignments();
     checkSegmentViewport();
     checkCodeCardChrome();
+    checkStyleKeyPreparationWork();
+    checkPrefixComparisonPerformance();
     checkImageLayoutPerformance();
 #endif
     if (getenv("DOWNSTREAM_IOS_HOST_BENCH_ONLY") != nullptr) {

@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 
 using namespace downstream;
 using namespace downstream::theme;
@@ -632,6 +633,10 @@ static NSUInteger unchangedPrefix(NSAttributedString *before, NSAttributedString
     const NSUInteger count = MIN((NSUInteger)512, limit - prefix);
     [oldText getCharacters:oldCharacters range:NSMakeRange(prefix, count)];
     [newText getCharacters:newCharacters range:NSMakeRange(prefix, count)];
+    if (std::memcmp(oldCharacters, newCharacters, count * sizeof(unichar)) == 0) {
+      prefix += count;
+      continue;
+    }
     NSUInteger matching = 0;
     while (matching < count && oldCharacters[matching] == newCharacters[matching]) {
       matching++;
@@ -1976,14 +1981,6 @@ static NSUInteger addingRenderingCost(NSUInteger cost, size_t characters, NSUInt
   return cache;
 }
 
-/// The variants folded into a committed segment's cache key.
-///
-/// Link colors are baked into a segment's text, so two variant sets are two
-/// different segments even when everything else is the same.
-static NSString *committedVariantsKey(DSLinkVariants *variants) {
-  return variantsKey(variants);
-}
-
 + (id)committedSegmentFor:(const Document &)document
                      kind:(SegmentKind)kind
                      from:(size_t)from
@@ -1994,7 +1991,9 @@ static NSString *committedVariantsKey(DSLinkVariants *variants) {
         syntaxHighlighting:(BOOL)syntaxHighlighting
                   caretAfter:(const PlacedCaret &)caretAfter
                   variants:(DSLinkVariants *)variants
-                 tagStyles:(DSTagStyles *)tagStyles {
+                 tagStyles:(DSTagStyles *)tagStyles
+                variantsKey:(NSString *)variantKey
+               tagStylesKey:(NSString *)tagStyleKey {
   // Token colors only affect code. Keep shared prose/table/image segments
   // reusable when a view toggles highlighting on a document containing code.
   syntaxHighlighting = kind == SegmentKind::Code ? syntaxHighlighting : NO;
@@ -2010,7 +2009,7 @@ static NSString *committedVariantsKey(DSLinkVariants *variants) {
       [NSString stringWithFormat:@"%llu:%zu:%llu:%.4f:%d:%d:%d:%d:%@:%@", (unsigned long long)document.blocks[from].identity,
                                  from, (unsigned long long)theme.id(), scale, syntaxHighlighting,
                                  static_cast<int>(kind), static_cast<int>(caretAfter.kind),
-                                 static_cast<int>(caretAfter.place), committedVariantsKey(variants), tagStylesKey(tagStyles)];
+                                 static_cast<int>(caretAfter.place), variantKey, tagStyleKey];
   NSString *key = [NSString stringWithFormat:@"%zu:%@", to - from, lane];
   DSCommittedSegment *cached = [self.committedSegmentCache objectForKey:key];
   bool matches = cached != nil && cached->identities.size() == to - from;
@@ -2166,13 +2165,18 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
                              caret:(const PlacedCaret &)caret
                           variants:(DSLinkVariants *)variants
                          tagStyles:(DSTagStyles *)tagStyles {
+  // These exact style values are shared by every segment and by the optional
+  // previous snapshot lookup. Serialize once per request, including cache hits.
+  NSString *variantKey = variantsKey(variants);
+  NSString *tagStyleKey = tagStylesKey(tagStyles);
   if (!document) {
     return [[self alloc] initWithDocument:document
                                fontScale:fontScale
                       syntaxHighlighting:syntaxHighlighting
                                    theme:themeHandle ? themeHandle : Theme::defaultTheme()
                                   caret:caret
-                               variants:variants tagStyles:tagStyles];
+                               variants:variants tagStyles:tagStyles
+                            variantsKey:variantKey tagStylesKey:tagStyleKey];
   }
   // A code-free document paints identically under either setting, so both
   // policies share the prepared rendering and its exact-width measurements.
@@ -2191,7 +2195,7 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
                                  (unsigned long long)(themeHandle ? themeHandle->id()
                                                                   : Theme::defaultTheme()->id()),
                                  static_cast<int>(caret.kind), static_cast<int>(caret.place),
-                                 variantsKey(variants), tagStylesKey(tagStyles)];
+                                 variantKey, tagStyleKey];
   DSRenderedDocument *rendered = [self.cache objectForKey:key];
   if (rendered == nil) {
     DSRenderedDocument *previous = nil;
@@ -2201,7 +2205,7 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
                                      fontScale, syntaxHighlighting,
                                      (unsigned long long)(themeHandle ? themeHandle->id() : Theme::defaultTheme()->id()),
                                      static_cast<int>(caret.kind), static_cast<int>(caret.place),
-                                     variantsKey(variants), tagStylesKey(tagStyles)];
+                                     variantKey, tagStyleKey];
       previous = [self.cache objectForKey:previousKey];
     }
     if (previous != nil) {
@@ -2212,7 +2216,8 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
                             syntaxHighlighting:syntaxHighlighting
                                       theme:themeHandle ? themeHandle : Theme::defaultTheme()
                                        caret:caret
-                                   variants:variants tagStyles:tagStyles];
+                                       variants:variants tagStyles:tagStyles
+                                    variantsKey:variantKey tagStylesKey:tagStyleKey];
     }
     [self.cache setObject:rendered forKey:key cost:rendered->_cacheCost];
   }
@@ -2254,7 +2259,9 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
                             theme:(const Theme::Handle &)themeHandle
                            caret:(const PlacedCaret &)caret
                         variants:(DSLinkVariants *)variants
-                       tagStyles:(DSTagStyles *)tagStyles {
+                       tagStyles:(DSTagStyles *)tagStyles
+                      variantsKey:(NSString *)variantKey
+                     tagStylesKey:(NSString *)tagStyleKey {
   if (!(self = [super init])) {
     return nil;
   }
@@ -2307,7 +2314,8 @@ static NSString *tagStylesKey(DSTagStyles *styles) {
                                            markerFont:markerFont
                                     syntaxHighlighting:syntaxHighlighting
                                            caretAfter:here
-                                             variants:_variants tagStyles:_tagStyles];
+                                             variants:_variants tagStyles:_tagStyles
+                                          variantsKey:variantKey tagStylesKey:tagStyleKey];
     } else if (segment.isCode()) {
       built = [DSCodeSegment segmentWithDocument:document
                                            index:segment.from
