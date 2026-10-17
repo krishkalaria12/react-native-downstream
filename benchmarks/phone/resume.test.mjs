@@ -118,3 +118,26 @@ test('a completed session has no remaining runs and does not need an APK', (t) =
   rmSync(join(output, 'builds', 'highlighted.apk'));
   assert.deepEqual(loadResumeState(output).pending, []);
 });
+
+test('resume allows a later profile that has not built or run yet', (t) => {
+  const { output, save } = fixture(t);
+  save(0, 'ok');
+  const path = join(output, 'session.json');
+  const session = JSON.parse(readFileSync(path, 'utf8'));
+  const animated = {
+    ...session.order[0],
+    index: 3,
+    profile: 'highlighted-animated',
+  };
+  session.order.push(animated);
+  writeFileSync(path, JSON.stringify(session));
+  const state = loadResumeState(output);
+  assert.deepEqual([...state.completed], [0]);
+  assert.deepEqual(state.pending, session.order.slice(1));
+
+  writeFileSync(
+    join(output, 'runs', 'animated-failed.json'),
+    JSON.stringify({ config: animated, status: 'failed', metrics: {} })
+  );
+  assert.throws(() => loadResumeState(output), /APK is missing or changed/);
+});

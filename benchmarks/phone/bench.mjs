@@ -1730,6 +1730,12 @@ export function loadResumeState(output) {
     const buildRecord = session.builds.find(
       (savedBuild) => savedBuild.profile === profile
     );
+    // A later profile may not have reached its build step before interruption.
+    if (
+      !buildRecord &&
+      !savedRuns.some(({ record }) => record.config.profile === profile)
+    )
+      continue;
     const apkPath = join(output, 'builds', `${profile}.apk`);
     if (
       !buildRecord ||
@@ -2265,9 +2271,12 @@ async function runSession(options) {
     for (const profile of options.profiles) {
       if (resumed && !resumed.pending.some((item) => item.profile === profile))
         continue;
-      const buildRecord = resumed
+      const savedBuild = resumed
         ? session.builds.find((savedBuild) => savedBuild.profile === profile)
-        : options.skipBuild
+        : null;
+      const buildRecord = savedBuild
+        ? savedBuild
+        : options.skipBuild && !resumed
           ? JSON.parse(
               readFileSync(
                 join(options.output, 'builds', `${profile}.json`),
@@ -2275,7 +2284,7 @@ async function runSession(options) {
               )
             )
           : await build(profile, options.output);
-      if (!resumed) session.builds.push(buildRecord);
+      if (!savedBuild) session.builds.push(buildRecord);
       log(`Installing ${profile} APK`);
       await device.adb(
         ['install', '-r', join(options.output, 'builds', `${profile}.apk`)],
