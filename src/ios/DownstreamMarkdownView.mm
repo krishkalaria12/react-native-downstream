@@ -206,6 +206,8 @@ NSString *nameForFormat(NSString *format) {
   /// The fade's options, resolved from the props and from the platform's own
   /// animation scale.
   downstream::RevealOptions _revealOptions;
+  /// Advances before each tracker/options change and display-link frame.
+  uint64_t _revealRevision;
   /// Runs only while something is still fading, and in the common run loop modes
   /// so it keeps going while a list scrolls.
   CADisplayLink *_revealDisplayLink;
@@ -328,6 +330,10 @@ NSString *nameForFormat(NSString *format) {
 }
 
 #pragma mark - DSRevealProvider
+
+- (uint64_t)revealRevision {
+  return _revealRevision;
+}
 
 /// The runs of `range` whose alpha is below 1, in the asking layout's own text.
 ///
@@ -746,6 +752,7 @@ NSString *nameForFormat(NSString *format) {
   // leaves the next document to fade from its first word rather than to resume
   // this one's timing.
   [self stopReveal];
+  ++_revealRevision;
   _reveal.clear();
   [super prepareForRecycle];
   _state.reset();
@@ -853,6 +860,7 @@ NSString *nameForFormat(NSString *format) {
 /// Aligns the document this view was just given against the one it last showed,
 /// schedules what is new, and starts the ticker if anything is still fading.
 - (void)applyReveal {
+  ++_revealRevision;
   _revealOptions = [self resolveRevealOptions:*std::static_pointer_cast<const DownstreamMarkdownViewProps>(_props)];
   _documentView.revealProvider =
       _revealOptions.effect == downstream::RevealEffect::None ? nil : (id<DSRevealProvider>)self;
@@ -883,6 +891,7 @@ NSString *nameForFormat(NSString *format) {
   if (_revealDisplayLink != link) {
     return;
   }
+  ++_revealRevision;
   [self invalidateReveals];
   // `prune` drops what has finished, and the frame after that is the one that
   // draws it at full alpha, so it is dropped here rather than the moment its fade
@@ -923,6 +932,7 @@ NSString *nameForFormat(NSString *format) {
 /// mid-fade, and a view leaving its window. All three want the text at once
 /// rather than a fade nobody is watching finish.
 - (void)finishReveal {
+  ++_revealRevision;
   const bool hadUnits = _reveal.active();
   // A parent view redraw does not dirty TextKit child views. Invalidate the
   // affected ranges while they are still available, then draw them at full alpha.

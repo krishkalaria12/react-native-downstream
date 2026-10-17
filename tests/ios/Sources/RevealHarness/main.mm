@@ -16,8 +16,15 @@ static void require(BOOL condition, NSString *message) {
 @property(nonatomic, copy) NSArray<DSRevealRun *> *runs;
 @property(nonatomic) NSUInteger queries;
 @property(nonatomic) NSUInteger frontierQueries;
+@property(nonatomic) uint64_t revision;
 @end
 @implementation HarnessRevealProvider
+@synthesize runs = _runs;
+- (void)setRuns:(NSArray<DSRevealRun *> *)runs {
+  _runs = [runs copy];
+  self.revision++;
+}
+- (uint64_t)revealRevision { return self.revision; }
 - (NSArray<DSRevealRun *> *)revealRunsForCharacterRange:(NSRange)range
                                             blockOffset:(NSInteger)blockOffset
                                             blockRanges:(NSArray<NSValue *> *)blockRanges
@@ -37,6 +44,14 @@ static void require(BOOL condition, NSString *message) {
   return NSNotFound;
 }
 - (CGFloat)revealAlphaAtBlock:(NSInteger)block offset:(NSUInteger)offset now:(double)now { return 0; }
+@end
+
+@interface HarnessUncachedRevealProvider : HarnessRevealProvider
+@end
+@implementation HarnessUncachedRevealProvider
+- (BOOL)respondsToSelector:(SEL)selector {
+  return selector == @selector(revealRevision) ? NO : [super respondsToSelector:selector];
+}
 @end
 
 static NSUInteger glyphConversions = 0;
@@ -75,6 +90,7 @@ static void checkHiddenDraws() {
   UIGraphicsBeginImageContextWithOptions(CGSizeMake(320, 200), NO, 1);
   const auto start = std::chrono::steady_clock::now();
   for (NSUInteger frame = 0; frame < 5; frame++) {
+    provider.revision++;
     [manager drawBackgroundForGlyphRange:glyphs atPoint:CGPointZero];
     [manager drawGlyphsForGlyphRange:glyphs atPoint:CGPointZero];
   }
@@ -87,8 +103,121 @@ static void checkHiddenDraws() {
   require(glyphConversions == runs.count * 10, @"baseline hidden glyph conversion count changed");
 #else
   require(glyphConversions == 0, @"hidden units still convert or draw glyphs");
+  require(provider.queries == 5, @"background and glyph passes did not reuse reveal runs");
+#endif
+
+  // Background-only and glyph-only draws must observe a new provider revision.
+#ifndef BASELINE
+  UIGraphicsBeginImageContextWithOptions(CGSizeMake(320, 200), NO, 1);
+  [manager drawBackgroundForGlyphRange:glyphs atPoint:CGPointZero];
+  const NSUInteger afterBackgroundOnly = provider.queries;
+  provider.runs = @[];
+  [manager drawGlyphsForGlyphRange:glyphs atPoint:CGPointZero];
+  UIGraphicsEndImageContext();
+  require(provider.queries == afterBackgroundOnly + 1, @"background-only cache leaked into the next draw");
 #endif
 }
+
+#ifndef BASELINE
+static void checkRevealCacheKeys() {
+  NSTextStorage *storage = [[NSTextStorage alloc] initWithString:@"cache keys"
+      attributes:@{NSFontAttributeName: [UIFont systemFontOfSize:14]}];
+  DSLayoutManager *manager = [DSLayoutManager new];
+  NSTextContainer *container = [[NSTextContainer alloc] initWithSize:CGSizeMake(320, CGFLOAT_MAX)];
+  [manager addTextContainer:container];
+  [storage addLayoutManager:manager];
+  [manager ensureLayoutForTextContainer:container];
+  const NSRange glyphs = [manager glyphRangeForTextContainer:container];
+  HarnessRevealProvider *provider = [HarnessRevealProvider new];
+  provider.runs = @[[[DSRevealRun alloc] initWithRange:NSMakeRange(0, storage.length) alpha:0 rise:0]];
+  manager.revealProvider = provider;
+  UIGraphicsBeginImageContextWithOptions(CGSizeMake(320, 80), NO, 1);
+  const auto draw = [&] { [manager drawGlyphsForGlyphRange:glyphs atPoint:CGPointZero]; };
+  draw();
+  draw();
+  require(provider.queries == 1, @"same-frame glyph-only draws did not reuse runs");
+  provider.revision++;
+  draw();
+  require(provider.queries == 2, @"frame revision did not invalidate runs");
+  manager.blockOffset = 1;
+  draw();
+  require(provider.queries == 3, @"block offset did not invalidate runs");
+  manager.blockRanges = @[[NSValue valueWithRange:NSMakeRange(0, storage.length)]];
+  draw();
+  require(provider.queries == 4, @"block range identity did not invalidate runs");
+  manager.blockRanges = @[[NSValue valueWithRange:NSMakeRange(1, storage.length - 1)]];
+  draw();
+  require(provider.queries == 5, @"replacement block ranges did not invalidate runs");
+  [manager drawGlyphsForGlyphRange:NSMakeRange(0, 3) atPoint:CGPointZero];
+  require(provider.queries == 6, @"character range did not invalidate runs");
+  HarnessRevealProvider *replacement = [HarnessRevealProvider new];
+  replacement.runs = provider.runs;
+  replacement.revision = provider.revision;
+  manager.revealProvider = replacement;
+  draw();
+  require(replacement.queries == 1, @"provider identity did not invalidate runs");
+  manager.revealProvider = nil;
+  draw();
+  manager.revealProvider = replacement;
+  draw();
+  require(replacement.queries == 2, @"disabled provider retained cached runs");
+  UIGraphicsEndImageContext();
+}
+
+static NSData *renderTextView(DSTextSegmentView *view) {
+  DSLayoutManager *manager = (DSLayoutManager *)view.layoutManager;
+  [manager invalidateDisplayForCharacterRange:NSMakeRange(0, view.textStorage.length)];
+  [view layoutIfNeeded];
+  UIGraphicsBeginImageContextWithOptions(view.bounds.size, NO, 1);
+  [view.layer renderInContext:UIGraphicsGetCurrentContext()];
+  NSData *pixels = UIImagePNGRepresentation(UIGraphicsGetImageFromCurrentImageContext());
+  UIGraphicsEndImageContext();
+  return pixels;
+}
+
+static void checkMountedTextViewDrawLifecycle() {
+  auto document = std::make_shared<downstream::Document>();
+  document->id = 92340;
+  downstream::Block block;
+  block.kind = downstream::BlockKind::Paragraph;
+  block.text = u"mounted text draw lifecycle";
+  document->blocks.push_back(std::move(block));
+  DSRenderedDocument *rendered = [DSRenderedDocument renderedDocumentFor:document
+                                                                  fontScale:1
+                                                         syntaxHighlighting:NO
+                                                                     theme:downstream::Theme::defaultTheme()
+                                                                     caret:downstream::PlacedCaret{}];
+  require(rendered.segments.count == 1 && [rendered.segments.firstObject isKindOfClass:DSTextSegment.class],
+          @"mounted lifecycle did not create a text segment");
+  DSTextSegmentView *view = [DSTextSegmentView new];
+  view.frame = CGRectMake(0, 0, 320, 80);
+  [view setSegment:(DSTextSegment *)rendered.segments.firstObject];
+  view.blockOffset = 0;
+  HarnessRevealProvider *provider = [HarnessRevealProvider new];
+  provider.runs = @[[[DSRevealRun alloc] initWithRange:NSMakeRange(0, 7) alpha:0.5 rise:3]];
+  view.revealProvider = provider;
+  [view layoutIfNeeded];
+  NSData *fadingPixels = renderTextView(view);
+  require(provider.queries == 1, @"mounted text draw did not pair background and glyph reveal queries");
+  const NSUInteger afterFirst = provider.queries;
+  provider.revision++;
+  require([fadingPixels isEqual:renderTextView(view)], @"unchanged reveal revision altered mounted pixels");
+  require(provider.queries == afterFirst + 1, @"mounted text draw retained runs across frames");
+  HarnessUncachedRevealProvider *uncached = [HarnessUncachedRevealProvider new];
+  uncached.runs = provider.runs;
+  view.revealProvider = uncached;
+  require([fadingPixels isEqual:renderTextView(view)], @"cached mounted draw changed fading/rise pixels");
+  require(uncached.queries == 2, @"mounted baseline did not query both TextKit passes");
+  view.revealProvider = provider;
+  provider.runs = @[];
+  NSData *settledPixels = renderTextView(view);
+  require(![fadingPixels isEqual:settledPixels], @"provider revision did not finish the mounted fade");
+  uncached.runs = @[];
+  view.revealProvider = uncached;
+  require([settledPixels isEqual:renderTextView(view)], @"cached mounted draw changed settled pixels");
+  printf("ios_mounted_reveal_queries_cached=1 uncached=2 pixel_parity=passed\n");
+}
+#endif
 
 static void checkSegmentLookup() {
   auto document = std::make_shared<downstream::Document>();
@@ -247,13 +376,22 @@ static void checkCoalescedInvalidationAndTables() {
 }
 #endif
 
+#ifndef BASELINE
+#include "TableDirtyChecks.mm"
+#endif
+
 int main() {
   @autoreleasepool {
     checkHiddenDraws();
+#ifndef BASELINE
+    checkRevealCacheKeys();
+    checkMountedTextViewDrawLifecycle();
+#endif
     checkSegmentLookup();
 #ifndef BASELINE
     checkSettledGapsAndCaret();
     checkCoalescedInvalidationAndTables();
+    checkTableDirtyReveal();
 #endif
     printf("native reveal checks passed\n");
   }

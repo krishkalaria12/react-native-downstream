@@ -60,6 +60,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// before the code.
 - (CGFloat)revealAlphaAtBlock:(NSInteger)block offset:(NSUInteger)offset now:(double)now;
 
+@optional
+/// Identifies one frame of reveal state. Providers that implement this advance
+/// it before changing runs, options, or animation time. Layouts can then reuse
+/// mapped runs between TextKit's background and glyph passes in that frame.
+- (uint64_t)revealRevision;
+
 @end
 
 /// Metrics of one block's text, in text container coordinates.

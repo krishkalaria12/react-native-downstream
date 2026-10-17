@@ -34,6 +34,7 @@ static const CGFloat kTablePinThreshold = 8;
 /// The document block this table's first row is.
 @property (nonatomic) NSInteger blockOffset;
 - (NSInteger)linkIndexAtPoint:(CGPoint)point;
+- (void)invalidateRevealRow:(NSUInteger)row visibleRect:(CGRect)visibleRect;
 @end
 
 @implementation DSTableGridView {
@@ -88,8 +89,20 @@ static const CGFloat kTablePinThreshold = 8;
                     _segment.rowHeights[row].doubleValue - padding.top - padding.bottom);
 }
 
+- (void)invalidateRevealRow:(NSUInteger)row visibleRect:(CGRect)visibleRect {
+  if (row >= _segment.rows.count || row + 1 >= _rowOffsets.size()) {
+    return;
+  }
+  const CGRect rowRect = CGRectMake(0, _rowOffsets[row], _segment.tableSize.width,
+                                    _rowOffsets[row + 1] - _rowOffsets[row]);
+  const CGRect dirty = CGRectIntersection(rowRect, visibleRect);
+  if (!CGRectIsNull(dirty) && !CGRectIsEmpty(dirty)) {
+    [self setNeedsDisplayInRect:dirty];
+  }
+}
+
 - (void)drawRect:(CGRect)rect {
-  if (_segment == nil) {
+  if (_segment == nil || _rowOffsets.empty()) {
     return;
   }
   const CGSize size = _segment.tableSize;
@@ -116,7 +129,11 @@ static const CGFloat kTablePinThreshold = 8;
   // one code path draws the cells, so the header and the row it covers cannot
   // disagree about a column's width.
   const NSUInteger lastRow = self.headerOnly ? 1 : _segment.rows.count;
-  for (NSUInteger rowIndex = 0; rowIndex < MIN(lastRow, _segment.rows.count); rowIndex++) {
+  // Seek to the dirty row rather than walking a long table's settled prefix on
+  // every reveal tick or scroll redraw.
+  const NSUInteger firstRow = std::lower_bound(_rowOffsets.begin() + 1, _rowOffsets.end(),
+                                               CGRectGetMinY(rect)) - _rowOffsets.begin() - 1;
+  for (NSUInteger rowIndex = firstRow; rowIndex < MIN(lastRow, _segment.rows.count); rowIndex++) {
     const CGFloat rowTop = _rowOffsets[rowIndex];
     const CGFloat rowBottom = _rowOffsets[rowIndex + 1];
     if (rowTop > CGRectGetMaxY(rect)) {
@@ -127,8 +144,8 @@ static const CGFloat kTablePinThreshold = 8;
     }
     const CGFloat alpha = self.revealProvider == nil
         ? 1
-        : [self.revealProvider revealAlphaAtBlock:self.blockOffset
-                                            offset:rowIndex
+        : [self.revealProvider revealAlphaAtBlock:self.blockOffset + rowIndex
+                                            offset:0
                                                now:CACurrentMediaTime()];
     if (alpha <= 0) {
       continue;
@@ -160,11 +177,15 @@ static const CGFloat kTablePinThreshold = 8;
   // header would appear to have lines running through it.
   const NSUInteger lineRows = self.headerOnly ? MIN(2u, _segment.rowHeights.count) : _segment.rowHeights.count;
   [[_segment.theme colorForSlot:kSlotTableBorderColor fallback:UIColor.separatorColor] setFill];
-  CGFloat y = 0;
-  UIRectFill(CGRectMake(0, 0, size.width - hairline, hairline));
-  for (NSUInteger index = 0; index < lineRows; index++) {
-    y += _segment.rowHeights[index].doubleValue;
-    UIRectFill(CGRectMake(0, y - hairline, size.width - hairline, hairline));
+  const CGFloat y = _rowOffsets[lineRows];
+  const CGRect topLine = CGRectMake(0, 0, size.width - hairline, hairline);
+  if (CGRectIntersectsRect(topLine, rect)) {
+    UIRectFill(topLine);
+  }
+  auto line = std::lower_bound(_rowOffsets.begin() + 1, _rowOffsets.begin() + lineRows + 1,
+                               CGRectGetMinY(rect));
+  for (; line != _rowOffsets.begin() + lineRows + 1 && *line - hairline < CGRectGetMaxY(rect); ++line) {
+    UIRectFill(CGRectMake(0, *line - hairline, size.width - hairline, hairline));
   }
   CGFloat x = 0;
   UIRectFill(CGRectMake(_segment.rightToLeft ? size.width - hairline : 0, 0, hairline, y));
@@ -755,19 +776,26 @@ static const CGFloat kTablePinThreshold = 8;
   }
   _blockOffset = blockOffset;
   _grid.blockOffset = blockOffset;
+  _header.blockOffset = blockOffset;
   [_grid setNeedsDisplay];
+  [_header setNeedsDisplay];
 }
 
-/// A table row is one reveal unit and the grid draws every row from its own
-/// offsets, so a tick has nothing to invalidate here: the grid redraws from the
-/// alphas the provider gives it.
+/// Each block is one row. Only that row's visible pixels change during reveal;
+/// the pinned header has its own backing store and needs the same invalidation.
 - (void)invalidateRevealCharacterRange:(NSRange)range
                             blockOffset:(NSInteger)blockOffset
                                      now:(double)now {
   (void)range;
-  (void)blockOffset;
   (void)now;
-  [_grid setNeedsDisplay];
+  if (blockOffset < _blockOffset || static_cast<NSUInteger>(blockOffset - _blockOffset) >= _segment.rows.count) {
+    return;
+  }
+  const NSUInteger row = static_cast<NSUInteger>(blockOffset - _blockOffset);
+  [_grid invalidateRevealRow:row visibleRect:[_grid convertRect:_scrollView.bounds fromView:_scrollView]];
+  if (row == 0 && !_header.hidden) {
+    [_header invalidateRevealRow:row visibleRect:_header.bounds];
+  }
 }
 
 - (void)setRevealProvider:(id<DSRevealProvider>)provider {
@@ -776,7 +804,9 @@ static const CGFloat kTablePinThreshold = 8;
   }
   _revealProvider = provider;
   _grid.revealProvider = provider;
+  _header.revealProvider = provider;
   [_grid setNeedsDisplay];
+  [_header setNeedsDisplay];
 }
 
 - (void)layoutSubviews {

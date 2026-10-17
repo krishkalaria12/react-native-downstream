@@ -24,6 +24,22 @@ using namespace downstream;
 @implementation DSLayoutManager {
   BOOL _detailsToggle;
   downstream::ReaderChoices _detailsChoices;
+  NSArray<DSRevealRun *> *_cachedRevealRuns;
+  NSRange _cachedRevealCharacters;
+  __weak id<DSRevealProvider> _cachedRevealProvider;
+  uint64_t _cachedRevealRevision;
+  NSInteger _cachedRevealBlockOffset;
+  NSArray<NSValue *> *_cachedRevealBlockRanges;
+  BOOL _revealProviderHasRevision;
+}
+
+@synthesize revealProvider = _revealProvider;
+
+- (void)setRevealProvider:(id<DSRevealProvider>)revealProvider {
+  _revealProvider = revealProvider;
+  _revealProviderHasRevision = [revealProvider respondsToSelector:@selector(revealRevision)];
+  _cachedRevealRuns = nil;
+  _cachedRevealBlockRanges = nil;
 }
 
 - (BOOL)textBoundsForCharacterRange:(NSRange)range bounds:(DSBlockTextBounds *)bounds {
@@ -53,13 +69,32 @@ using namespace downstream;
 /// prefix, a short band of runs, and a hidden suffix. An empty answer means the
 /// whole range is opaque and the caller draws it exactly as it always has.
 - (NSArray<DSRevealRun *> *)fadingRunsFor:(NSRange)characters {
-  if (self.revealProvider == nil || characters.length == 0) {
+  id<DSRevealProvider> provider = self.revealProvider;
+  if (provider == nil || characters.length == 0) {
+    _cachedRevealRuns = nil;
+    _cachedRevealBlockRanges = nil;
     return nil;
   }
-  return [self.revealProvider revealRunsForCharacterRange:characters
-                                              blockOffset:self.blockOffset
-                                              blockRanges:self.blockRanges
-                                                       now:CACurrentMediaTime()];
+  const BOOL cacheable = _revealProviderHasRevision;
+  const uint64_t revision = cacheable ? [provider revealRevision] : 0;
+  if (cacheable && _cachedRevealRuns != nil && _cachedRevealProvider == provider &&
+      _cachedRevealRevision == revision && _cachedRevealBlockOffset == self.blockOffset &&
+      _cachedRevealBlockRanges == self.blockRanges && NSEqualRanges(_cachedRevealCharacters, characters)) {
+    return _cachedRevealRuns;
+  }
+  NSArray<DSRevealRun *> *runs = [provider revealRunsForCharacterRange:characters
+                                                        blockOffset:self.blockOffset
+                                                        blockRanges:self.blockRanges
+                                                                 now:CACurrentMediaTime()];
+  // One entry per layout bounds retained memory even when TextKit draws many
+  // separate dirty ranges. Providers without a frame revision remain uncached.
+  _cachedRevealRuns = cacheable ? (runs ?: @[]) : nil;
+  _cachedRevealProvider = provider;
+  _cachedRevealRevision = revision;
+  _cachedRevealCharacters = characters;
+  _cachedRevealBlockOffset = self.blockOffset;
+  _cachedRevealBlockRanges = cacheable ? self.blockRanges : nil;
+  return runs;
 }
 
 /// Draws one range of glyphs at an alpha and an offset.
