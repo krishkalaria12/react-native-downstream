@@ -11,6 +11,10 @@
 //   node benchmarks/phone/bench.mjs selftest        check the statistics and workload code
 //   node benchmarks/phone/tail-compare.mjs <dir>    compare saved matrix/huge tails without a phone
 //
+// Defaults: highlighted and highlighted-animated, with 5 measured repeats plus
+// one warmup per regular workload. Animated runs include Downstream, Streamdown
+// and Enriched; huge workloads still run once per candidate and profile.
+//
 // Animation comparison, identical replay inputs with traces retained:
 //   node benchmarks/phone/bench.mjs all --replay <recording-dir> --output <new-result-dir> \
 //     --profiles highlighted,highlighted-animated --candidates downstream-default,streamdown,enriched \
@@ -22,7 +26,7 @@
 //     --candidates downstream-default --workloads ai-feature-matrix,ai-huge-concurrent-5 \
 //     --diagnostic-trace --finish-delay-ms 1000 --keep-traces
 //
-// Options: --device <serial> --profiles highlighted[,plain,highlighted-animated,plain-animated] --repeats 10 --seed 1
+// Options: --device <serial> --profiles highlighted,highlighted-animated[,plain,plain-animated] --repeats 5 --seed 1
 //          --workloads ai-single,ai-code-heavy,ai-concurrent-5 --candidates <ids>
 //          --model gpt-6-luna --reasoning medium --output <dir> --keep-traces --skip-build --no-device-setup
 //          --settle-ms 2000 (same observation budget for every selected profile)
@@ -2677,8 +2681,8 @@ async function main() {
     allowPositionals: true,
     options: {
       'device': { type: 'string' },
-      'profiles': { type: 'string', default: 'highlighted' },
-      'repeats': { type: 'string', default: '10' },
+      'profiles': { type: 'string', default: 'highlighted,highlighted-animated' },
+      'repeats': { type: 'string', default: '5' },
       'seed': { type: 'string', default: '1' },
       'workloads': {
         type: 'string',
