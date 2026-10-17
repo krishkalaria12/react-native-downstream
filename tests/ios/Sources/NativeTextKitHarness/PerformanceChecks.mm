@@ -301,13 +301,19 @@ static void checkUnchangedSegmentAssignments() {
 static NSUInteger viewportAssignments;
 static NSUInteger viewportSegmentReads;
 static id viewportSegments;
+static id viewportPreviousSegments;
 static id viewportSlots;
 static NSUInteger viewportSlotReads;
 static IMP originalViewportSubscript;
+static IMP originalViewportObjects;
 static id countedViewportSubscript(id array, SEL selector, NSUInteger index) {
-  if (array == viewportSegments) viewportSegmentReads++;
+  if (array == viewportSegments || array == viewportPreviousSegments) viewportSegmentReads++;
   if (array == viewportSlots) viewportSlotReads++;
   return reinterpret_cast<id (*)(id, SEL, NSUInteger)>(originalViewportSubscript)(array, selector, index);
+}
+static void countedViewportObjects(id array, SEL selector, id __unsafe_unretained *objects, NSRange range) {
+  if (array == viewportSegments || array == viewportPreviousSegments) viewportSegmentReads += range.length;
+  reinterpret_cast<void (*)(id, SEL, id __unsafe_unretained *, NSRange)>(originalViewportObjects)(array, selector, objects, range);
 }
 static IMP originalViewportAssignment;
 static void countedViewportAssignment(id object, SEL selector, DSTextSegment *segment) {
@@ -421,6 +427,125 @@ static void checkSegmentViewport() {
       }
     }
   }
+#if !defined(BASELINE) || defined(IOS_STREAM_PERF_BASELINE)
+  // An append-only snapshot shares the committed segment objects. The fast
+  // reconciliation path must retain the visible prefix while leaving its new
+  // offscreen tail deferred.
+  auto appendDocument = std::make_shared<downstream::Document>(*document);
+  appendDocument->id++;
+  downstream::Block appended;
+  appended.kind = downstream::BlockKind::Paragraph;
+  appended.identity = 9900001;
+  appended.text = u"appended tail";
+  appendDocument->blocks.push_back(std::move(appended));
+  appendDocument->settledBlocks = appendDocument->blocks.size();
+  DSRenderedDocument *appendedRendered = [DSRenderedDocument renderedDocumentFor:appendDocument fontScale:1
+      syntaxHighlighting:NO theme:downstream::Theme::defaultTheme() caret:downstream::PlacedCaret{}];
+  view.rendered = appendedRendered;
+  refreshViewport(view); [view layoutIfNeeded];
+  NSArray *appendedSlots = [view valueForKey:@"segmentViews"];
+  require(appendedSlots.count == appendedRendered.segments.count,
+      @"append snapshot did not retain the new segment slot");
+  require(mountedTextViews(view) <= 3,
+      @"append snapshot mounted an offscreen tail text view");
+
+  // Warm a same-length tail replacement sequence before timing reconciliation.
+  // The committed prefix is shared; only the final segment identity changes.
+  std::vector<DSRenderedDocument *> streamSnapshots;
+  constexpr NSUInteger streamPasses = 120;
+  streamSnapshots.reserve(streamPasses);
+  for (NSUInteger pass = 0; pass < streamPasses; pass++) {
+    auto next = std::make_shared<downstream::Document>(*document);
+    next->id = 9910000 + pass;
+    next->blocks.tail().back().identity += 100000 + pass;
+    next->blocks.tail().back().text = u"streaming tail replacement";
+    next->settledBlocks = next->blocks.size();
+    DSRenderedDocument *snapshot = [DSRenderedDocument renderedDocumentFor:next fontScale:1 syntaxHighlighting:NO
+        theme:downstream::Theme::defaultTheme() caret:downstream::PlacedCaret{}];
+    require(snapshot.segments.count == rendered.segments.count && snapshot.segments.firstObject == rendered.segments.firstObject &&
+        snapshot.segments[snapshot.segments.count - 2] == rendered.segments[rendered.segments.count - 2],
+        @"stream fixture did not share its committed prefix");
+    (void)[snapshot segmentFramesForWidth:320 chrome:0 code:downstream::CodeLayout{} images:downstream::ImageStateLayout{}
+        hosts:downstream::HostLayout{} tables:downstream::TableLayout{}];
+    streamSnapshots.push_back(snapshot);
+  }
+  view.rendered = streamSnapshots[0];
+  refreshViewport(view); [view layoutIfNeeded];
+  for (NSUInteger warm = 0; warm < 20; warm++) {
+    viewportSegments = streamSnapshots[warm % streamPasses].segments;
+    view.rendered = streamSnapshots[warm % streamPasses];
+  }
+  viewportSlots = [view valueForKey:@"segmentViews"];
+  IMP streamSlotCounter = imp_implementationWithBlock(^id(id array, NSUInteger index) {
+    if (array == viewportSlots) viewportSlotReads++;
+    return [array objectAtIndex:index];
+  });
+  IMP streamOriginalSlot = method_setImplementation(slotSubscript, streamSlotCounter);
+  Method streamObjects = class_getInstanceMethod(object_getClass(rendered.segments), @selector(getObjects:range:));
+  originalViewportObjects = method_setImplementation(streamObjects, (IMP)countedViewportObjects);
+  viewportSegmentReads = 0;
+  viewportSlotReads = 0;
+  DSRenderedDocument *previousStreamSnapshot = streamSnapshots[19];
+  const auto streamStart = std::chrono::steady_clock::now();
+  for (DSRenderedDocument *snapshot : streamSnapshots) {
+    viewportPreviousSegments = previousStreamSnapshot.segments;
+    viewportSegments = snapshot.segments;
+    view.rendered = snapshot;
+    previousStreamSnapshot = snapshot;
+  }
+  const double streamMilliseconds = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - streamStart).count();
+#ifdef IOS_STREAM_PERF_BASELINE
+  const char *streamMode = "baseline";
+#else
+  const char *streamMode = "sparse";
+  require(viewportSlotReads > 0 && viewportSlotReads < streamPasses * 16,
+      @"sparse snapshot reconciliation still traversed the full slot array");
+#endif
+  printf("ios_stream_reconcile mode=%s snapshots=%lu segment_reads=%lu slot_reads=%lu elapsed_ms=%.3f\n",
+      streamMode, (unsigned long)streamPasses, (unsigned long)viewportSegmentReads,
+      (unsigned long)viewportSlotReads, streamMilliseconds);
+  method_setImplementation(slotSubscript, streamOriginalSlot);
+  method_setImplementation(streamObjects, originalViewportObjects);
+  imp_removeBlock(streamSlotCounter);
+  viewportSlots = nil;
+  viewportPreviousSegments = nil;
+
+  // Shrinking the segment list must retire slots; a changed prefix must update
+  // the mounted text even when later segments still share their payloads.
+  auto removedDocument = std::make_shared<downstream::Document>(*document);
+  removedDocument->id = 9920001;
+  removedDocument->blocks.tail().resize(removedDocument->blocks.size() - 17);
+  removedDocument->settledBlocks = removedDocument->blocks.size();
+  DSRenderedDocument *removedRendered = [DSRenderedDocument renderedDocumentFor:removedDocument fontScale:1
+      syntaxHighlighting:NO theme:downstream::Theme::defaultTheme() caret:downstream::PlacedCaret{}];
+  require(removedRendered.segments.count < rendered.segments.count, @"removal fixture did not shrink segment count");
+  view.rendered = removedRendered;
+  require(((NSArray *)[view valueForKey:@"segmentViews"]).count == removedRendered.segments.count,
+      @"removal did not retire segment slots");
+  auto reorderedDocument = std::make_shared<downstream::Document>(*document);
+  reorderedDocument->id = 9920002;
+  std::swap(reorderedDocument->blocks.tail()[0], reorderedDocument->blocks.tail()[1]);
+  DSRenderedDocument *reorderedRendered = [DSRenderedDocument renderedDocumentFor:reorderedDocument fontScale:1
+      syntaxHighlighting:NO theme:downstream::Theme::defaultTheme() caret:downstream::PlacedCaret{}];
+  view.rendered = reorderedRendered;
+  require(((NSArray *)[view valueForKey:@"segmentViews"]).count == reorderedRendered.segments.count,
+      @"reorder did not retain segment slots");
+  [view layoutIfNeeded];
+  DSTextSegmentView *reorderedText = ((NSArray *)[view valueForKey:@"segmentViews"]).firstObject;
+  require([reorderedText isKindOfClass:DSTextSegmentView.class] &&
+      [reorderedText.textStorage isEqualToAttributedString:((DSTextSegment *)reorderedRendered.segments.firstObject).attributedString],
+      @"reordered prefix retained stale mounted text");
+  auto unsettledDocument = std::make_shared<downstream::Document>(*document);
+  unsettledDocument->id = 9920003;
+  unsettledDocument->settledBlocks = 0;
+  DSRenderedDocument *unsettledRendered = [DSRenderedDocument renderedDocumentFor:unsettledDocument fontScale:1
+      syntaxHighlighting:NO theme:downstream::Theme::defaultTheme() caret:downstream::PlacedCaret{}];
+  view.rendered = unsettledRendered;
+  require(((NSArray *)[view valueForKey:@"segmentViews"]).count == unsettledRendered.segments.count,
+      @"settlement-only snapshot dropped segment slots");
+  view.rendered = rendered;
+#endif
   method_setImplementation(subscript, originalViewportSubscript);
   viewportSegments = nil;
   view.frame = CGRectMake(0, 0, 240, size.height);

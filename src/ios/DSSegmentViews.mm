@@ -508,22 +508,90 @@ static Class segmentViewClassFor(id segment) {
 - (void)reconcileSegmentViews:(DSRenderedDocument *)previous {
   DSRenderedDocument *rendered = _rendered;
   NSArray *segments = rendered.segments ?: @[];
+  NSArray *previousSegments = previous.segments;
+  NSArray<NSNumber *> *blockIndexes = rendered.segmentBlockIndexes;
+  NSArray<NSNumber *> *previousBlockIndexes = previous.segmentBlockIndexes;
   NSArray<NSValue *> *frames = _hasDeferrableText && segments.count > 8 && !_selectable && !_segmentAccessibilityExpanded && !_segmentAccessibilityActive &&
       _segmentViewportKnown && self.bounds.size.width > 0
       ? [rendered segmentFramesForWidth:self.bounds.size.width chrome:_chrome code:_codeLayout images:_imageState
                                  hosts:_hostLayout tables:_tableLayout] : nil;
+  const BOOL framesOrdered = frames != nil &&
+      (frames == _virtualizedFrames ? _virtualizedFramesOrdered : DSSegmentFramesAreOrdered(frames));
+  NSMutableIndexSet *snapshotOnlyIndices = nil;
+  NSUInteger sharedPrefix = 0;
+  // A streamed snapshot normally retains the immutable committed segment
+  // objects and appends/replaces only its tail. Match payloads and block offsets
+  // exactly, then reconcile everything from the first mismatch onward along
+  // with mounted and newly visible views. Unknown or unordered geometry uses
+  // the complete path.
+  const BOOL canUseSnapshotDelta = framesOrdered && previous != nil && previous.documentId != rendered.documentId &&
+      previousSegments.count <= segments.count;
+  if (canUseSnapshotDelta) {
+    const NSUInteger common = previousSegments.count;
+    if (previousSegments == segments && previousBlockIndexes == blockIndexes) {
+      sharedPrefix = common;
+    } else {
+      const NSUInteger blockCount = MIN(common, MIN(previousBlockIndexes.count, blockIndexes.count));
+      while (sharedPrefix < blockCount) {
+        const NSUInteger count = MIN((NSUInteger)128, blockCount - sharedPrefix);
+        __unsafe_unretained id oldSegments[128];
+        __unsafe_unretained id newSegments[128];
+        __unsafe_unretained id oldBlocks[128];
+        __unsafe_unretained id newBlocks[128];
+        [previousSegments getObjects:oldSegments range:NSMakeRange(sharedPrefix, count)];
+        [segments getObjects:newSegments range:NSMakeRange(sharedPrefix, count)];
+        [previousBlockIndexes getObjects:oldBlocks range:NSMakeRange(sharedPrefix, count)];
+        [blockIndexes getObjects:newBlocks range:NSMakeRange(sharedPrefix, count)];
+        NSUInteger matching = 0;
+        while (matching < count && oldSegments[matching] == newSegments[matching]) {
+          id oldBlock = oldBlocks[matching];
+          id newBlock = newBlocks[matching];
+          if (oldBlock != newBlock && ![oldBlock isEqual:newBlock]) break;
+          matching++;
+        }
+        sharedPrefix += matching;
+        if (matching != count) break;
+      }
+    }
+    if (sharedPrefix > 0 && _codeOrdinals.count >= sharedPrefix) {
+      NSMutableIndexSet *changed = [NSMutableIndexSet indexSet];
+      [changed addIndexes:_mountedSegmentIndices];
+      if (sharedPrefix < segments.count) {
+        [changed addIndexesInRange:NSMakeRange(sharedPrefix, segments.count - sharedPrefix)];
+      }
+      snapshotOnlyIndices = changed;
+    }
+  }
   const CGFloat overscan = std::max(CGFloat(64), _segmentViewport.size.height / 2);
   // Ordinals first: a code card's wrap state is looked up by ordinal, and the
   // view loop below is where the cards are created.
   if (_viewportOnlyIndices == nil) {
-    NSMutableArray<NSNumber *> *ordinals = [NSMutableArray arrayWithCapacity:segments.count];
-    for (id segment in segments) {
-      [ordinals addObject:[segment isKindOfClass:DSCodeSegment.class] ? @(((DSCodeSegment *)segment).codeOrdinal) : @(-1)];
+    const NSUInteger ordinalStart = snapshotOnlyIndices != nil ? sharedPrefix : 0;
+    if (snapshotOnlyIndices == nil) {
+      NSMutableArray<NSNumber *> *ordinals = [NSMutableArray arrayWithCapacity:segments.count];
+      for (id segment in segments) {
+        [ordinals addObject:[segment isKindOfClass:DSCodeSegment.class] ? @(((DSCodeSegment *)segment).codeOrdinal) : @(-1)];
+      }
+      _codeOrdinals = ordinals;
+    } else if (_codeOrdinals.count > segments.count) {
+      [_codeOrdinals removeObjectsInRange:NSMakeRange(segments.count, _codeOrdinals.count - segments.count)];
     }
-    _codeOrdinals = ordinals;
+    if (snapshotOnlyIndices != nil && _codeOrdinals.count > sharedPrefix) {
+      [_codeOrdinals removeObjectsInRange:NSMakeRange(sharedPrefix, _codeOrdinals.count - sharedPrefix)];
+    }
+    if (snapshotOnlyIndices != nil) {
+      for (NSUInteger index = ordinalStart; index < segments.count; index++) {
+        id segment = segments[index];
+        [_codeOrdinals addObject:[segment isKindOfClass:DSCodeSegment.class] ? @(((DSCodeSegment *)segment).codeOrdinal) : @(-1)];
+      }
+    }
   }
-  for (NSUInteger index = _viewportOnlyIndices != nil ? _viewportOnlyIndices.firstIndex : 0; index < segments.count;
-       index = _viewportOnlyIndices != nil ? [_viewportOnlyIndices indexGreaterThanIndex:index] : index + 1) {
+  if (snapshotOnlyIndices != nil && _segmentViewportKnown && framesOrdered) {
+    [snapshotOnlyIndices addIndexesInRange:DSSegmentVisibleRange(frames, _segmentViewport)];
+  }
+  NSIndexSet *indices = _viewportOnlyIndices ?: snapshotOnlyIndices;
+  for (NSUInteger index = indices != nil ? indices.firstIndex : 0; index < segments.count;
+       index = indices != nil ? [indices indexGreaterThanIndex:index] : index + 1) {
     id segment = segments[index];
     UIView<DSSegmentView> *view = index < _segmentViews.count ? _segmentViews[index] : nil;
     const CGRect frame = index < frames.count ? frames[index].CGRectValue : CGRectZero;
@@ -583,11 +651,11 @@ static Class segmentViewClassFor(id segment) {
     // Shared committed segments retain their view state and selection. Only a
     // settlement transition needs state reapplied; other setters propagate
     // changed choices, chrome and hosting independently.
-    const BOOL unchanged = reusable && index < previous.segments.count && previous.segments[index] == segment &&
-        index < previous.segmentBlockIndexes.count && index < rendered.segmentBlockIndexes.count &&
-        [previous.segmentBlockIndexes[index] isEqual:rendered.segmentBlockIndexes[index]] &&
-        (([previous.segmentBlockIndexes[index] unsignedIntegerValue] + 1 <= previous.settledBlocks) ==
-         ([rendered.segmentBlockIndexes[index] unsignedIntegerValue] + 1 <= rendered.settledBlocks));
+    const BOOL unchanged = reusable && index < previousSegments.count && previousSegments[index] == segment &&
+        index < previousBlockIndexes.count && index < blockIndexes.count &&
+        [previousBlockIndexes[index] isEqual:blockIndexes[index]] &&
+        (([previousBlockIndexes[index] unsignedIntegerValue] + 1 <= previous.settledBlocks) ==
+         ([blockIndexes[index] unsignedIntegerValue] + 1 <= rendered.settledBlocks));
     if (unchanged) {
       continue;
     }
@@ -611,8 +679,8 @@ static Class segmentViewClassFor(id segment) {
     // segment it holds is a different range each time. The offset is set even
     // with no provider, because one can arrive after the segments do.
     {
-      NSNumber *from = index < _rendered.segmentBlockIndexes.count
-          ? _rendered.segmentBlockIndexes[index]
+      NSNumber *from = index < blockIndexes.count
+          ? blockIndexes[index]
           : nil;
       if ([view isKindOfClass:DSTextSegmentView.class]) {
         DSTextSegmentView *text = (DSTextSegmentView *)view;
@@ -649,7 +717,7 @@ static Class segmentViewClassFor(id segment) {
     [_codeOrdinals removeLastObject];
   }
   _virtualizedDocument = frames != nil ? rendered : nil;
-  if (frames != _virtualizedFrames) _virtualizedFramesOrdered = frames != nil && DSSegmentFramesAreOrdered(frames);
+  if (frames != _virtualizedFrames) _virtualizedFramesOrdered = framesOrdered;
   _virtualizedFrames = frames;
   _virtualizedInterval = frames != nil && _virtualizedFramesOrdered ? DSSegmentVisibleRange(frames, _segmentViewport) : NSMakeRange(0, 0);
   if (!_segmentLayoutSync) [self setNeedsLayout];
