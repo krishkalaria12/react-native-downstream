@@ -165,6 +165,7 @@ function useDiagram(code: string, isIncomplete: boolean): Diagram {
 function hash(text: string): number {
   let value = 0;
   for (let index = 0; index < text.length; index++) {
+    // eslint-disable-next-line no-bitwise -- wraps the hash to 32 bits
     value = (value * 31 + text.charCodeAt(index)) | 0;
   }
   return Math.abs(value);

@@ -1,3 +1,4 @@
+/* eslint-disable no-bitwise -- parse options are a bitmask */
 /**
  * The CJK parse option, held to its own contract.
  *

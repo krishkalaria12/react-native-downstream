@@ -48,7 +48,8 @@ const target = arg('out', out);
 function isKey(key) {
   return (
     Buffer.byteLength(key, 'utf8') <= 32 &&
-    !/[\s"\\\x00-\x1f\x7f]/.test(key) &&
+    !/[\s"\\]/.test(key) &&
+    ![...key].some((c) => c.charCodeAt(0) < 0x20 || c === '\u007f') &&
     !/[A-Z]/.test(key)
   );
 }

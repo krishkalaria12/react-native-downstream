@@ -1,3 +1,4 @@
+/* eslint-disable no-bitwise -- `processColor` packs a color into one integer */
 /**
  * Minimal React Native stand-in for unit tests.
  *

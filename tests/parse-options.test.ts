@@ -1,3 +1,4 @@
+/* eslint-disable no-bitwise -- the native `parseFlags` prop is a bitmask */
 import { describe, expect, it } from 'vitest';
 
 import {

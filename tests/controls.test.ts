@@ -147,9 +147,9 @@ describe('resolveControls', () => {
   });
 
   it('labels every key in the fixed order, and a partial list still works', () => {
-    expect(resolveControls().labels).toEqual([
-      ...CONTROL_LABEL_KEYS.map((key) => defaultTranslations[key]),
-    ]);
+    expect(resolveControls().labels).toEqual(
+      CONTROL_LABEL_KEYS.map((key) => defaultTranslations[key])
+    );
     // A caller that sent nothing still gets readable labels rather than blanks.
     expect(
       resolveControls(true, {}).labels.every((label) => label.length > 0)

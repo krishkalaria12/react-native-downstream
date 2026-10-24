@@ -1,3 +1,4 @@
+/* eslint-disable no-bitwise -- inline styles, parse options, and preview features are native bitmasks */
 // Host tests for the shared C++ Markdown engine.
 //
 // Builds the vendored md4c and the render-model engine with the system C/C++
@@ -1916,7 +1917,7 @@ describe('fence slots', () => {
   });
 
   test('completeness follows the fence, not the document', () => {
-    const cases = [
+    const fences = [
       ['```mermaid\ngraph;\n', true, 'open at the end of the source'],
       ['```mermaid\ngraph;\n```\n', false, 'closed by its own fence'],
       ['```mermaid\ngraph;\n````\n', false, 'closed by a longer fence'],
@@ -1937,7 +1938,7 @@ describe('fence slots', () => {
         'a fence ended by its list item is closed',
       ],
     ];
-    for (const [source, incomplete, label] of cases) {
+    for (const [source, incomplete, label] of fences) {
       const slots = slotsFor(source, ['mermaid']);
       assert.equal(slots.length, 1, label);
       assert.equal(slots[0].incomplete, incomplete, label);

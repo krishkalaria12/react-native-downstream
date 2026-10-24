@@ -264,6 +264,7 @@ describe('syntaxColorsFromTheme', () => {
 
 /** An engine ARGB integer as the `#rrggbb` or `#rrggbbaa` a theme would write. */
 function hex(argb: number): string {
+  // eslint-disable-next-line no-bitwise -- reads the signed integer as unsigned
   const value = (argb >>> 0).toString(16).padStart(8, '0');
   return `#${value.slice(2)}`;
 }

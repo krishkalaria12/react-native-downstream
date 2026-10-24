@@ -26,11 +26,11 @@ const viewportMethods = [
   'applyDrawViewport',
 ]
   .map((name) => {
-    const method = grid.match(
+    const body = grid.match(
       new RegExp(`  (?:private )?fun ${name}\\([\\s\\S]*?\\n  }`)
     )?.[0];
-    if (!method) throw new Error(`Missing production ${name} method`);
-    return method;
+    if (!body) throw new Error(`Missing production ${name} method`);
+    return body;
   })
   .join('\n');
 const clipListener = view.match(
@@ -38,11 +38,11 @@ const clipListener = view.match(
 )?.[0];
 const lifecycle = ['onAttachedToWindow', 'onDetachedFromWindow']
   .map((name) => {
-    const method = view.match(
+    const body = view.match(
       new RegExp(`  override fun ${name}\\(\\) \\{[\\s\\S]*?\\n  }`)
     )?.[0];
-    if (!method) throw new Error(`Missing production ${name}`);
-    return method;
+    if (!body) throw new Error(`Missing production ${name}`);
+    return body;
   })
   .join('\n');
 if (!clipListener) throw new Error('Missing production ancestor clip listener');

@@ -1244,7 +1244,7 @@ export const adversarialCases = [
     description: 'An HTML comment stays open across blank lines',
     // Inline HTML is on, because this case is about what the HTML subset does
     // with a comment: an unclosed `<!--` is text, and a closed one is nothing.
-    parseFlags: 1 << 3,
+    parseFlags: 2 ** 3,
     chunks: [
       'Streaming answers arrive in small pieces, so the renderer must never trust a boundary it has not proven. This paragraph is long enough to commit first.\n\n',
       '<!--\n',

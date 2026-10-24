@@ -134,10 +134,8 @@ describe('streaming', () => {
     const steps: SessionOp[] = [];
     for (let at = 1; at < source.length; at += 9) {
       steps.push(
-        ...[
-          { op: 'append' as const, chunk: source.slice(at - 1, at + 8) },
-          { op: 'parse' as const, finished: false },
-        ]
+        { op: 'append' as const, chunk: source.slice(at - 1, at + 8) },
+        { op: 'parse' as const, finished: false }
       );
     }
     const streamed = replaySession('incremental', [

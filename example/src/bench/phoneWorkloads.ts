@@ -1,3 +1,4 @@
+/* eslint-disable no-bitwise -- UTF-8 byte counts and the seeded random schedule are integer bit arithmetic */
 /** Deterministic sources and arrival schedules shared by every phone renderer. */
 export interface PhoneChunk {
   text: string;

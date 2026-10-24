@@ -1,3 +1,4 @@
+/* eslint-disable no-bitwise -- tag styles are a bitmask the native views read */
 import { processColor as rnProcessColor } from 'react-native';
 
 import type { MarkdownStyle } from './types';

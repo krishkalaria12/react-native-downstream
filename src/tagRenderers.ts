@@ -365,12 +365,15 @@ export function TagSlots(props: {
 }): ReactNode {
   const { slots, scope } = props;
   return slots.map((slot) =>
-    createElement(DownstreamFenceSlot, {
-      // A new session or generation mounts fresh renderer state.
-      key: `${scope}\u0000tag\u0000${slot.container}`,
-      ordinal: -1,
-      containerId: slot.container,
-      children: createElement(TagRendererView, { slot }),
-    })
+    createElement(
+      DownstreamFenceSlot,
+      {
+        // A new session or generation mounts fresh renderer state.
+        key: `${scope}\u0000tag\u0000${slot.container}`,
+        ordinal: -1,
+        containerId: slot.container,
+      },
+      createElement(TagRendererView, { slot })
+    )
   );
 }

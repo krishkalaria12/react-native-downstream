@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable no-bitwise -- the seeded random number generator is integer bit arithmetic */
 // Phone benchmark for React Native Markdown renderers, in one file.
 //
 //   node benchmarks/phone/bench.mjs                 build, install, run live and report
@@ -2276,7 +2277,7 @@ async function runSession(options) {
       if (resumed && !resumed.pending.some((item) => item.profile === profile))
         continue;
       const savedBuild = resumed
-        ? session.builds.find((savedBuild) => savedBuild.profile === profile)
+        ? session.builds.find((record) => record.profile === profile)
         : null;
       const buildRecord = savedBuild
         ? savedBuild

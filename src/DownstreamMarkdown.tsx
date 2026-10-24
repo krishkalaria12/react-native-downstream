@@ -1189,8 +1189,8 @@ function ControlledMarkdown({
   const handleTagPress = useCallback(
     (native: NativeSyntheticEvent<NativeTagPress>) => {
       const payload = native.nativeEvent;
-      const current = tagPressLatest.current;
-      if (payload.generation !== current.generationRef.current) return;
+      const latest = tagPressLatest.current;
+      if (payload.generation !== latest.generationRef.current) return;
       // Attributes cross as JSON `[[name, value], …]` because codegen events
       // carry no arrays; an app that never reads them never pays to parse.
       let attributes: Record<string, string> = {};
@@ -1210,7 +1210,7 @@ function ControlledMarkdown({
       } catch {
         attributes = {};
       }
-      current.onTagPress?.({
+      latest.onTagPress?.({
         tag: payload.tag,
         attributes,
         text: payload.text,
