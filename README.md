@@ -441,6 +441,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and pull req
 [MIT](LICENSE). Vendored dependencies retain their own licenses:
 
 - [md4c](src/cpp/md4c/LICENSE.md) uses the BSD license.
-- [Lexilla](src/cpp/lexilla/License.txt) uses HPND; its copyright and permission notice must accompany copies.
+- The [syntax highlighting lexers](src/cpp/wasm/LICENSE.md) and the [wasm2c runtime](src/cpp/wasm/wasm-rt/LICENSE) use Apache-2.0, and [SIMDe](src/cpp/wasm/simde/COPYING) uses MIT; their notices must accompany copies.
 - The [language extension map](src/cpp/downstream/export-extensions.json) includes attribution to Streamdown under Apache-2.0.
 - The optional math package includes the [RaTeX license](math/licenses/RaTeX-LICENSE.txt) and [font license notices](math/licenses/THIRD_PARTY_NOTICES.txt).

@@ -145,7 +145,6 @@ function includes(generatedRoot, platform) {
     'downstream',
     'fabric',
     'highlight',
-    'lexilla',
     'math',
     'md4c',
     'remend',
