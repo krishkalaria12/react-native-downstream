@@ -773,14 +773,16 @@ describe('syntax highlighting', () => {
           slice,
           `${testCase.id}: the slice matches its offsets`
         );
-        const before = start > 0 ? text.codePointAt(start - 2) : undefined;
-        const after = end < text.length ? text.codePointAt(end) : undefined;
+        // The units on either side of the run, not code points: a split pair
+        // leaves a high surrogate just before it or a low one just after.
+        const unitBefore = start > 0 ? text.charCodeAt(start - 1) : undefined;
+        const unitAfter = end < text.length ? text.charCodeAt(end) : undefined;
         assert.ok(
-          !(before >= 0xd800 && before <= 0xdbff),
+          !(unitBefore >= 0xd800 && unitBefore <= 0xdbff),
           `${testCase.id}: a run does not start between a surrogate pair`
         );
         assert.ok(
-          !(after >= 0xdc00 && after <= 0xdfff),
+          !(unitAfter >= 0xdc00 && unitAfter <= 0xdfff),
           `${testCase.id}: a run does not end between a surrogate pair`
         );
         previous = end;
