@@ -122,6 +122,7 @@ before(async () => {
     ['test_snapshot_text', []],
     ['test_snapshot_vector', []],
     ['dump_tokens', [downstream('Unicode.cpp')]],
+    ['dump_records', []],
     ['test_theme', theme],
     ['test_images', [downstream('ImageLayout.cpp')]],
     ['test_tags', []],
@@ -784,6 +785,73 @@ describe('syntax highlighting', () => {
         );
         previous = end;
       }
+    }
+  });
+});
+
+describe('language cases', () => {
+  // Inputs from the lexers' own test suites, a handful per language, with the
+  // records the lexer module gave for each when it was vendored. A mismatch
+  // means the translated module, its runtime, the compiler, or the resume path
+  // changed what a lexer produces. Each case runs whole, then a line at a time
+  // through a saved and restored state, which is how the highlighter feeds it.
+  const FAMILIES = ['web', 'systems', 'scripting', 'data'];
+  const casesOf = (family) =>
+    JSON.parse(
+      readFileSync(join(CPP, 'tests', 'lexer_cases', `${family}.json`), 'utf8')
+    );
+  // The generated alias table, read the way a reader of Languages.cpp sees it.
+  const aliases = new Map(
+    [
+      ...readFileSync(join(CPP, 'highlight', 'Languages.cpp'), 'utf8').matchAll(
+        /\{"([^"]+)", (\d+)\}/g
+      ),
+    ].map(([, alias, id]) => [alias, Number(id)])
+  );
+
+  for (const family of FAMILIES) {
+    test(`${family} languages match their recorded records`, async (t) => {
+      const recorded = casesOf(family);
+      const input = Buffer.concat(
+        recorded.flatMap(({ language, source }) => {
+          const bytes = Buffer.from(source, 'utf8');
+          return [Buffer.from(`${language} ${bytes.length}\n`), bytes];
+        })
+      );
+      const output = execFileSync(binary('dump_records'), {
+        input,
+        maxBuffer: 256 << 20,
+      })
+        .toString('utf8')
+        .split('\n');
+      const byLanguage = Map.groupBy(
+        recorded.map((testCase, index) => ({ ...testCase, index })),
+        ({ language }) => language
+      );
+      for (const [language, group] of byLanguage) {
+        await t.test(language, () => {
+          for (const { source, whole, lines, index } of group) {
+            const label = `${language}: ${JSON.stringify(source.slice(0, 60))}`;
+            assert.equal(output[2 * index], `W ${whole}`.trimEnd(), label);
+            assert.equal(
+              output[2 * index + 1],
+              `L ${lines ?? whole}`.trimEnd(),
+              label
+            );
+          }
+        });
+      }
+    });
+  }
+
+  test('every language has cases', () => {
+    // A lexer with no case could change without any test noticing.
+    const covered = new Set(
+      FAMILIES.flatMap(casesOf).map(({ language }) => aliases.get(language))
+    );
+    assert.ok(aliases.size > 200, 'the alias table was read');
+    for (const [alias, id] of aliases) {
+      assert.ok(covered.has(id), `${alias} (language ${id}) has cases`);
     }
   });
 });
