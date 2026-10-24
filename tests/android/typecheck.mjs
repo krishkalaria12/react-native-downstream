@@ -421,8 +421,8 @@ import java.lang.annotation.*;
     join(cpp, 'theme'),
     join(cpp, 'math'),
     join(cpp, 'md4c'),
-    join(cpp, 'lexilla'),
-    join(cpp, 'lexilla', 'lexlib'),
+    join(cpp, 'wasm'),
+    join(cpp, 'wasm', 'wasm-rt'),
     jniSources,
   ]
     .filter(existsSync)
@@ -434,8 +434,6 @@ import java.lang.annotation.*;
     '-DMD4C_USE_UTF8=1',
     '-Dmd_parse=downstream_md_parse',
     '-Dentity_lookup=downstream_entity_lookup',
-    '-DLexilla=downstream_lexilla',
-    '-DScintilla=downstream_scintilla',
     '-std=c++20',
   ];
   // Every directory under `src/cpp` has to be one both native builds compile and
@@ -445,14 +443,14 @@ import java.lang.annotation.*;
   // missing source. Comparing the two lists is what makes that a one-line failure
   // here instead.
   //
-  // `lexilla`, `md4c` and `tests` are excluded: the first two are vendored and built
+  // `md4c`, `wasm` and `tests` are excluded: the first two are vendored and built
   // by their own rules, and the third is not shipped at all.
   const cmake = readFileSync(join(jniSources, 'CMakeLists.txt'), 'utf8');
   const podspec = readFileSync(join(repo, 'Downstream.podspec'), 'utf8');
   // The literal text CMake uses, written with concatenation so a template literal
   // does not try to interpolate it.
   const cmakeDir = '$' + '{LIB_CPP_DIR}';
-  const excluded = ['lexilla', 'md4c', 'tests'];
+  const excluded = ['md4c', 'tests', 'wasm'];
   const engineDirs = readdirSync(cpp, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && !excluded.includes(entry.name))
     .map((entry) => entry.name);

@@ -17,7 +17,10 @@ file(GLOB LIB_ENGINE_SRCS CONFIGURE_DEPENDS
   ${LIB_CPP_DIR}/session/*.cpp
   ${LIB_CPP_DIR}/fabric/*.cpp
   ${LIB_CPP_DIR}/remend/*.cpp)
+# HighlightsModule.c compiles the vendored lexer module in cpp/wasm as one
+# translation unit, so none of that directory is a source of its own.
 file(GLOB LIB_HIGHLIGHT_SRCS CONFIGURE_DEPENDS
+  ${LIB_CPP_DIR}/highlight/*.c
   ${LIB_CPP_DIR}/highlight/*.cpp)
 file(GLOB LIB_THEME_SRCS CONFIGURE_DEPENDS
   ${LIB_CPP_DIR}/theme/*.cpp)
@@ -27,19 +30,11 @@ file(GLOB LIB_THEME_SRCS CONFIGURE_DEPENDS
 # platform problem rather than a missing source.
 file(GLOB LIB_MATH_SRCS CONFIGURE_DEPENDS
   ${LIB_CPP_DIR}/math/*.cpp)
-file(GLOB LIB_LEXILLA_SRCS CONFIGURE_DEPENDS
-  ${LIB_CPP_DIR}/lexilla/lexers/*.cxx
-  ${LIB_CPP_DIR}/lexilla/lexlib/*.cxx)
 file(GLOB LIB_JNI_SRCS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
 
 # Other libraries, such as Enriched Markdown, link their own md4c. Prefixed,
 # hidden symbols keep the linker from binding our calls to theirs.
 set(MD4C_SYMBOL_PREFIXES md_parse=downstream_md_parse entity_lookup=downstream_entity_lookup)
-
-# An app may link its own Scintilla or Lexilla, and both projects rename their
-# namespaces with a preprocessor define, so ours does too. Private to the two
-# targets below; nothing else in the library may use them without the defines.
-set(LEXILLA_SYMBOL_PREFIXES Lexilla=downstream_lexilla Scintilla=downstream_scintilla)
 
 add_library(downstream_md4c STATIC
   ${LIB_CPP_DIR}/md4c/md4c.c
@@ -51,30 +46,26 @@ set_target_properties(downstream_md4c PROPERTIES
   C_VISIBILITY_PRESET hidden
   POSITION_INDEPENDENT_CODE ON)
 
-add_library(downstream_lexilla STATIC ${LIB_LEXILLA_SRCS})
-target_include_directories(downstream_lexilla PUBLIC
-  ${LIB_CPP_DIR}/lexilla
-  ${LIB_CPP_DIR}/lexilla/lexlib)
-target_compile_definitions(downstream_lexilla PUBLIC ${LEXILLA_SYMBOL_PREFIXES})
-set_target_properties(downstream_lexilla PROPERTIES
-  CXX_STANDARD 20
-  CXX_STANDARD_REQUIRED ON
-  CXX_VISIBILITY_PRESET hidden
-  POSITION_INDEPENDENT_CODE ON)
-
-# The highlighter wraps Lexilla, so it is built apart from the rest of the
-# engine to keep the namespace renames out of every other source.
+# The highlighter and the vendored lexer module are built apart from the rest
+# of the engine, so the module's include paths stay private to them. The
+# module renames its own runtime symbols in HighlightsModule.h, and they are
+# hidden as well, so another wasm2c runtime in the app cannot bind to them.
 add_library(downstream_highlight STATIC ${LIB_HIGHLIGHT_SRCS})
 target_include_directories(downstream_highlight PUBLIC
   # The engine's root, because `Document.h` spells `math/MathLayout.h`.
   ${LIB_CPP_DIR}
   ${LIB_CPP_DIR}/downstream
   ${LIB_CPP_DIR}/highlight)
-target_compile_definitions(downstream_highlight PUBLIC ${LEXILLA_SYMBOL_PREFIXES})
-target_link_libraries(downstream_highlight PUBLIC downstream_lexilla)
+target_include_directories(downstream_highlight PRIVATE
+  ${LIB_CPP_DIR}/wasm
+  ${LIB_CPP_DIR}/wasm/wasm-rt
+  ${LIB_CPP_DIR}/wasm/simde)
 set_target_properties(downstream_highlight PROPERTIES
+  C_STANDARD 11
+  C_VISIBILITY_PRESET hidden
   CXX_STANDARD 20
   CXX_STANDARD_REQUIRED ON
+  CXX_VISIBILITY_PRESET hidden
   POSITION_INDEPENDENT_CODE ON)
 
 add_library(${LIB_TARGET_NAME} OBJECT
