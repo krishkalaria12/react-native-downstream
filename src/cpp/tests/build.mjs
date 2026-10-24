@@ -136,7 +136,10 @@ function headerKey() {
     )) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) visit(path);
-      else if (/\.(h|hpp|hxx|inc)$/.test(entry.name)) {
+      else if (
+        /\.(h|hpp|hxx|inc)$/.test(entry.name) ||
+        (path.startsWith(`${WASM}/`) && entry.name.endsWith('.c'))
+      ) {
         hash.update(path).update(readFileSync(path));
       }
     }
