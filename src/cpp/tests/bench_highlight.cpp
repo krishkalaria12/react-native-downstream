@@ -99,8 +99,9 @@ int main() {
     std::vector<TokenRun> runs;
     for (size_t at = 16; at < text.size() + 16; at += 16) {
       downstreamHighlighter().tokenize("ts", std::u16string_view(text).substr(0, std::min(at, text.size())),
-                                       &state, &runs, 1e9);
+                                       &state, &runs, 1e9, false);
     }
+    downstreamHighlighter().tokenize("ts", text, &state, &runs, 1e9);
     return runs.size();
   });
   measure("parser_stream_16", [&] {

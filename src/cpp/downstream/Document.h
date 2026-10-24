@@ -306,6 +306,9 @@ struct Block {
   /// True when highlighting finished or deliberately skipped this exact text.
   /// A later full parse may reuse its tokens; a budget-cut pass must retry.
   bool highlightComplete{false};
+  /// Complete live output can still depend on how lines arrived. Only a
+  /// whole-input pass can be reused by a settled block.
+  bool highlightCanonical{false};
   /// Paragraph, heading, table row: the inline formulas, sorted by `start`.
   /// A MathBlock holds exactly one, display style, covering the whole text.
   ///

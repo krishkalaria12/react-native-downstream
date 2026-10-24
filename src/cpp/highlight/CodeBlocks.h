@@ -43,7 +43,8 @@ void highlightCodeBlock(CodeHighlighter &highlighter, Block *block, HighlightSta
 /// block that is too large for one pass still ends up fully colored instead of
 /// staying part-colored with no way to recover. Retrying resumes where the last
 /// pass stopped, so the passes together cost one lex of the block. Retrying is
-/// bounded by time and by forward progress, and a block that still cannot be
+/// bounded by time and by forward progress. Completion includes one whole-input
+/// pass for cross-line lookahead. A block that still cannot be
 /// finished is left with whatever it reached rather than spun on.
 ///
 /// The block is counted once however many passes it takes.

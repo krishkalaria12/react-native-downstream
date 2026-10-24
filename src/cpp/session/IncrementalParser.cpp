@@ -570,7 +570,7 @@ void IncrementalParser::highlightTail(Document *document) {
         reuseCompletedCodeTokens(&block, document_->blocks[absolute])) {
       continue;
     }
-    if (i + 1 == last && !finished_) {
+    if (i + 1 == last && absolute + 1 == document->blocks.size() && !finished_) {
       highlightCodeBlock(downstreamHighlighter(), &block, &highlight_, kHighlightBudgetMs, &stats);
     } else {
       // Earlier blocks cannot grow. A budget cut must be finished now because
@@ -1250,6 +1250,7 @@ bool IncrementalParser::appendOpenFence() {
                                        kHighlightBudgetMs, document_->id, document_->blocks.back().text.size(), next->id, !finished_, fencePendingNewline_);
     block.highlightComplete = highlight_.lastStop != HighlightStop::Budget &&
         highlight_.lastStop != HighlightStop::Deferred;
+    block.highlightCanonical = highlight_.canonical || highlight_.lastStop == HighlightStop::Skipped;
     stats.blocks = 1;
     stats.resumes = highlight_.resumed ? 1 : 0;
     stats.bytesLexed = highlight_.bytesLexed;

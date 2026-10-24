@@ -103,6 +103,9 @@ struct HighlightState {
   /// A verified append cannot bring an oversized UTF-8 block back below the
   /// byte limit, even when its UTF-16 length is still below that limit.
   bool overByteLimit{false};
+  /// Whole-input output, which may differ from provisional line-stream output
+  /// when a lexer looks across a newline. Its runs have no resume checkpoint.
+  bool canonical{false};
 
 private:
   friend class CodeHighlighter;
@@ -124,12 +127,14 @@ public:
   /// block's UTF-16 text. Leaves `runs` empty and clears `state` when the
   /// language is unknown or the block is over the highlight limit.
   ///
-  /// Stops early when `budgetMs` is spent, which leaves the rest of the block
-  /// plain and resumes on the next call. A block whose text has ended in a
-  /// newline is lexed whole, so a settled document's tokens are the same
-  /// whether it arrived in one piece or a thousand.
+  /// Live calls stop between line windows when budgetMs is spent. Settled
+  /// calls use one whole-input operation so lookahead can cross newlines;
+  /// that operation can exceed the budget. A zero budget first makes bounded
+  /// progress over lines, then performs the whole-input pass on completion.
+  /// Live callers pass false and finish with a settled call; completed live
+  /// lines can still change color when the block settles.
   virtual void tokenize(std::string_view info, std::u16string_view text, HighlightState *state,
-                        std::vector<TokenRun> *runs, double budgetMs) = 0;
+                        std::vector<TokenRun> *runs, double budgetMs, bool settled = true) = 0;
 
   /// Lexer instances created since the process started. There is at most one
   /// per thread that has colored a block, and a document with no code block

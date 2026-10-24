@@ -100,14 +100,77 @@ void appendRecords(const std::vector<uint32_t> &records, std::u16string_view tex
 class Highlighter final : public CodeHighlighter {
 public:
   void tokenize(std::string_view info, std::u16string_view text, HighlightState *state, std::vector<TokenRun> *runs,
-                double budgetMs) override {
+                double budgetMs, bool settled) override {
     invalidateLineage(state);
+    if (settled && budgetMs > 0) {
+      tokenizeWhole(info, text, state, runs);
+      return;
+    }
     tokenizeImpl(info, text, state, runs, budgetMs, false, false, false);
+    if (settled && state->lastStop == HighlightStop::Complete) {
+      const uint64_t bytes = state->bytesLexed;
+      const uint64_t built = state->runsBuilt;
+      const uint64_t copied = state->textBytesCopied;
+      tokenizeWhole(info, text, state, runs);
+      state->bytesLexed += bytes;
+      state->runsBuilt += built;
+      state->textBytesCopied += copied;
+    }
   }
 
   uint64_t lexersCreated() const override { return StreamLexer::created(); }
 
 private:
+  void tokenizeWhole(std::string_view info, std::u16string_view text, HighlightState *state,
+                     std::vector<TokenRun> *runs) {
+    const Language *language = findLanguage(info);
+    if (language == nullptr || text.empty() || text.size() > kMaxHighlightBytes) {
+      skip(state, runs, nullptr);
+      return;
+    }
+    const bool applies = state->applies(language->alias, text);
+    if (applies && state->canonical && state->text.size() == text.size()) {
+      state->resumed = true;
+      state->bytesLexed = state->runsBuilt = state->textBytesCopied = 0;
+      *runs = state->runs;
+      state->tokenBytesCopied = runs->size() * sizeof(TokenRun);
+      return;
+    }
+    const std::string bytes = utf16ToUtf8(text);
+    if (bytes.size() > kMaxHighlightBytes) {
+      skip(state, runs, nullptr);
+      state->overByteLimit = true;
+      return;
+    }
+    // Whole output replaces every run and starts from an empty lexer. A saved
+    // line-stream checkpoint cannot reproduce lookahead across its boundary.
+    StreamLexer *lexer = StreamLexer::current();
+    auto &records = scratch();
+    if (lexer == nullptr || !lexer->start(language->id, nullptr) || !lexer->lex(bytes, &records)) {
+      fail(state, runs, nullptr);
+      return;
+    }
+    // text can view state->text during a budgeted completion. Copy it before
+    // clear invalidates that view.
+    std::u16string owned(text);
+    state->clear();
+    state->language = language->alias;
+    state->languageId = language->id;
+    state->text = std::move(owned);
+    state->utf8Length = bytes.size();
+    const size_t newline = state->text.rfind(u'\n');
+    state->lineStartUtf16 = newline == std::u16string::npos ? 0 : newline + 1;
+    appendRecords(records, state->text, 0, &state->runs);
+    state->resumed = applies;
+    state->canonical = true;
+    state->lastStop = HighlightStop::Complete;
+    state->bytesLexed = bytes.size();
+    state->runsBuilt = state->runs.size();
+    state->textBytesCopied = bytes.size() + state->text.size() * sizeof(char16_t);
+    *runs = state->runs;
+    state->tokenBytesCopied = runs->size() * sizeof(TokenRun);
+  }
+
   void tokenizeTrustedAppend(std::string_view info, std::u16string_view text, HighlightState *state,
                              std::vector<TokenRun> *runs, double budgetMs, bool live,
                              bool terminalLineComplete) override {
@@ -131,6 +194,7 @@ private:
                     bool terminalLineComplete, const std::u16string_view *delta = nullptr,
                     SnapshotVector<TokenRun> *publication = nullptr) {
     state->resumed = false;
+    state->canonical = false;
     state->bytesLexed = state->runsBuilt = state->tokenBytesCopied = state->textBytesCopied = 0;
     const HighlightStop previousStop = state->lastStop;
     const Language *language = findLanguage(info);
@@ -340,6 +404,7 @@ void HighlightState::clear() {
   bytesLexed = runsBuilt = tokenBytesCopied = textBytesCopied = 0;
   nextLiveLineRefresh = liveLineStart = 0;
   overByteLimit = false;
+  canonical = false;
   runs.clear();
   resume.clear();
 }
@@ -362,11 +427,11 @@ void CodeHighlighter::tokenizeAppend(std::string_view info, const SnapshotText &
   const bool lineage = previousDocumentId != 0 && state->sourceDocumentId_ == previousDocumentId &&
       state->text.size() == previousLength && previousLength + delta.size() == text.size();
   invalidateLineage(state);
-  if (lineage) {
+  if (lineage && live) {
     tokenizeTrustedDelta(info, text, delta, state, runs, budgetMs, live, terminalLineComplete);
   } else {
     std::vector<TokenRun> next;
-    tokenize(info, text, state, &next, budgetMs);
+    tokenize(info, text, state, &next, budgetMs, !live);
     *runs = std::move(next);
   }
   state->sourceDocumentId_ = nextDocumentId;

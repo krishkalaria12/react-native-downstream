@@ -38,7 +38,7 @@ void note(const HighlightState &state, HighlightStats *stats) {
 
 /// One highlighting pass over a block, without counting it. Both the streaming
 /// and the settling entry points are built on this.
-void colorOnce(CodeHighlighter &highlighter, Block *block, HighlightState *state, double budgetMs) {
+void colorOnce(CodeHighlighter &highlighter, Block *block, HighlightState *state, double budgetMs, bool settled) {
   if (block->kind != BlockKind::CodeBlock || block->language.empty()) {
     // A block with no language and one whose language has no lexer are both
     // plain, and neither creates a lexer.
@@ -46,25 +46,27 @@ void colorOnce(CodeHighlighter &highlighter, Block *block, HighlightState *state
     state->clear();
     state->lastStop = HighlightStop::Skipped;
     block->highlightComplete = true;
+    block->highlightCanonical = true;
     return;
   }
   std::vector<TokenRun> tokens;
-  highlighter.tokenize(block->language, block->text, state, &tokens, budgetMs);
+  highlighter.tokenize(block->language, block->text, state, &tokens, budgetMs, settled);
   block->tokens = std::move(tokens);
   block->highlightComplete = state->lastStop != HighlightStop::Budget && state->lastStop != HighlightStop::Deferred;
+  block->highlightCanonical = state->canonical || state->lastStop == HighlightStop::Skipped;
 }
 
 } // namespace
 
 void highlightCodeBlock(CodeHighlighter &highlighter, Block *block, HighlightState *state, double budgetMs,
                         HighlightStats *stats) {
-  colorOnce(highlighter, block, state, budgetMs);
+  colorOnce(highlighter, block, state, budgetMs, false);
   note(*state, stats);
 }
 
 void highlightSettledCodeBlock(CodeHighlighter &highlighter, Block *block, HighlightState *state, double budgetMs,
                                HighlightStats *stats) {
-  colorOnce(highlighter, block, state, budgetMs);
+  colorOnce(highlighter, block, state, budgetMs, true);
   noteWork(*state, stats);
   // A pass that ran out of budget leaves the rest of the block plain. For a
   // streaming tail that is fine, because the next snapshot resumes from where
@@ -74,12 +76,13 @@ void highlightSettledCodeBlock(CodeHighlighter &highlighter, Block *block, Highl
   //
   // Resuming is monotone: the state's text is only ever the same text, and each
   // pass lexes forward from the last byte it settled. The retries together
-  // therefore cost one full lex of the block, not one lex each.
+  // therefore cost one line-stream traversal, followed by one whole-input
+  // pass for lookahead that crosses line boundaries.
   uint64_t retries = 0;
   const auto started = std::chrono::steady_clock::now();
   while (state->lastStop == HighlightStop::Budget) {
     const size_t reached = state->finalEnd;
-    colorOnce(highlighter, block, state, budgetMs);
+    colorOnce(highlighter, block, state, budgetMs, true);
     noteWork(*state, stats);
     retries++;
     const double spent =
@@ -101,12 +104,13 @@ void highlightSettledCodeBlock(CodeHighlighter &highlighter, Block *block, Highl
 }
 
 bool reuseCompletedCodeTokens(Block *block, const Block &cached) {
-  if (!cached.highlightComplete || cached.kind != BlockKind::CodeBlock || block->kind != BlockKind::CodeBlock ||
+  if (!cached.highlightComplete || !cached.highlightCanonical || cached.kind != BlockKind::CodeBlock || block->kind != BlockKind::CodeBlock ||
       cached.language != block->language || cached.text != block->text) {
     return false;
   }
   block->tokens = cached.tokens;
   block->highlightComplete = true;
+  block->highlightCanonical = true;
   return true;
 }
 

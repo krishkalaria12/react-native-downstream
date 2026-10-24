@@ -78,6 +78,24 @@ bool equal(const Document &a, const Document &b) {
   return true;
 }
 
+// A growing fence has provisional line-stream colors. Compare those against a
+// fresh line stream; settled blocks must still equal canonical whole input.
+bool equalLive(const Document &actual, const Document &whole) {
+  auto expected = std::make_shared<Document>(whole);
+  expected->blocks = SharedList<Block>(nullptr, std::vector<Block>(whole.blocks.begin(), whole.blocks.end()));
+  auto &blocks = expected->blocks.tail();
+  for (size_t index = 0; index < actual.blocks.size() && index < blocks.size(); index++) {
+    const Block &block = actual.blocks[index];
+    if (block.kind == BlockKind::CodeBlock && !block.highlightCanonical) {
+      HighlightState state;
+      std::vector<TokenRun> runs;
+      downstreamHighlighter().tokenize(block.language, blocks[index].text, &state, &runs, 1e9, false);
+      blocks[index].tokens = std::move(runs);
+    }
+  }
+  return equal(actual, *expected);
+}
+
 /// Where an identity was first seen, what it named, and whether any snapshot
 /// showing it had settled that block.
 struct SeenIdentity {
@@ -185,7 +203,7 @@ bool check(const std::vector<std::string> &chunks, const char *label, ParseOptio
     const ParseResult actual = feed(incremental, source, false);
     const ParseResult expected = feed(full, source, false);
     if (actual.status != expected.status ||
-        (actual.status == ParseStatus::Ok && !equal(*actual.document, *expected.document))) {
+        (actual.status == ParseStatus::Ok && !equalLive(*actual.document, *expected.document))) {
       std::cerr << "Mismatch in " << label << " at " << source.size() << " bytes\n";
       return false;
     }

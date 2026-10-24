@@ -116,13 +116,13 @@ before(async () => {
         ...engine,
       ],
     ],
-    ['test_highlight', engine],
+    ['test_highlight', [incremental, ...engine]],
     ['test_highlight_streaming', [incremental, ...engine]],
     ['test_shared_list', []],
     ['test_snapshot_text', []],
     ['test_snapshot_vector', []],
     ['dump_tokens', [downstream('Unicode.cpp')]],
-    ['dump_records', []],
+    ['dump_records', [downstream('Unicode.cpp')]],
     ['test_theme', theme],
     ['test_images', [downstream('ImageLayout.cpp')]],
     ['test_tags', []],
@@ -794,7 +794,8 @@ describe('language cases', () => {
   // records the lexer module gave for each when it was vendored. A mismatch
   // means the translated module, its runtime, the compiler, or the resume path
   // changed what a lexer produces. Each case runs whole, then a line at a time
-  // through a saved and restored state, which is how the highlighter feeds it.
+  // through a saved and restored state. Mapped runs are checked both directly
+  // and after provisional appends followed by canonical completion.
   const FAMILIES = ['web', 'systems', 'scripting', 'data'];
   const casesOf = (family) =>
     JSON.parse(
@@ -808,22 +809,85 @@ describe('language cases', () => {
       ),
     ].map(([, alias, id]) => [alias, Number(id)])
   );
+  // Stable numeric order of TokenClass in downstream/Document.h.
+  const tokenClasses = Object.fromEntries(
+    [
+      'Plain',
+      'Comment',
+      'Keyword',
+      'Type',
+      'String',
+      'Number',
+      'Constant',
+      'Regex',
+      'Function',
+      'Property',
+      'Operator',
+      'Preprocessor',
+      'Tag',
+      'Attribute',
+      'Inserted',
+      'Deleted',
+      'Heading',
+    ].map((name, index) => [name, index])
+  );
+  const tokenMapping = [
+    ...readFileSync(join(CPP, 'highlight', 'Tokens.h'), 'utf8')
+      .match(/kTokenClasses\[\]\s*=\s*\{([\s\S]*?)\};/)[1]
+      .matchAll(/TokenClass::(\w+)/g),
+  ].map(([, name]) => {
+    assert.ok(Object.hasOwn(tokenClasses, name), `known token class ${name}`);
+    return tokenClasses[name];
+  });
+
+  function mappedRuns(source, records) {
+    const runs = [];
+    let start = 0;
+    for (const record of records.split(/\s+/).filter(Boolean)) {
+      const [offset, id] = record.split(':').map(Number);
+      const end = Math.min(source.length, offset);
+      if (end <= start) continue;
+      const token = tokenMapping[id] ?? tokenClasses.Plain;
+      if (token !== tokenClasses.Plain) {
+        const text = source.slice(start, end);
+        const first = start + text.match(/^[ \t\r\n\f]*/)[0].length;
+        const last = end - text.match(/[ \t\r\n\f]*$/)[0].length;
+        if (first < last) {
+          const previous = runs.at(-1);
+          if (previous?.[1] === first && previous[2] === token) {
+            previous[1] = last;
+          } else {
+            runs.push([first, last, token]);
+          }
+        }
+      }
+      start = end;
+    }
+    return runs.map((run) => run.join(':')).join(' ');
+  }
+
+  function recordsFor(recorded) {
+    const input = Buffer.concat(
+      recorded.flatMap(({ language, source }) => {
+        const bytes = Buffer.from(source, 'utf8');
+        return [Buffer.from(`${language} ${bytes.length}\n`), bytes];
+      })
+    );
+    const output = execFileSync(binary('dump_records'), {
+      input,
+      maxBuffer: 256 << 20,
+    })
+      .toString('utf8')
+      .split('\n');
+    assert.equal(output.pop(), '', 'the driver ends with a newline');
+    assert.equal(output.length, 4 * recorded.length, 'four lines per case');
+    return output;
+  }
 
   for (const family of FAMILIES) {
     test(`${family} languages match their recorded records`, async (t) => {
       const recorded = casesOf(family);
-      const input = Buffer.concat(
-        recorded.flatMap(({ language, source }) => {
-          const bytes = Buffer.from(source, 'utf8');
-          return [Buffer.from(`${language} ${bytes.length}\n`), bytes];
-        })
-      );
-      const output = execFileSync(binary('dump_records'), {
-        input,
-        maxBuffer: 256 << 20,
-      })
-        .toString('utf8')
-        .split('\n');
+      const output = recordsFor(recorded);
       const byLanguage = Map.groupBy(
         recorded.map((testCase, index) => ({ ...testCase, index })),
         ({ language }) => language
@@ -832,10 +896,21 @@ describe('language cases', () => {
         await t.test(language, () => {
           for (const { source, whole, lines, index } of group) {
             const label = `${language}: ${JSON.stringify(source.slice(0, 60))}`;
-            assert.equal(output[2 * index], `W ${whole}`.trimEnd(), label);
+            assert.equal(output[4 * index], `W ${whole}`.trimEnd(), label);
             assert.equal(
-              output[2 * index + 1],
+              output[4 * index + 1],
               `L ${lines ?? whole}`.trimEnd(),
+              label
+            );
+            const expected = mappedRuns(source, whole);
+            assert.equal(
+              output[4 * index + 2],
+              `H ${expected}`.trimEnd(),
+              label
+            );
+            assert.equal(
+              output[4 * index + 3],
+              `S ${expected}`.trimEnd(),
               label
             );
           }
@@ -843,6 +918,23 @@ describe('language cases', () => {
       }
     });
   }
+
+  test('canonical completion recognizes function calls across newlines', () => {
+    const targeted = ['js', 'ts'].flatMap((language) => [
+      { language, source: 'foo\n()\n', expected: '0:3:8' },
+      {
+        language,
+        source: 'const foo=bar\n(1)',
+        expected: '0:5:2 9:10:10 10:13:8 15:16:5',
+      },
+    ]);
+    const output = recordsFor(targeted);
+    for (const [index, { language, source, expected }] of targeted.entries()) {
+      const label = `${language}: ${JSON.stringify(source)}`;
+      assert.equal(output[4 * index + 2], `H ${expected}`, label);
+      assert.equal(output[4 * index + 3], `S ${expected}`, label);
+    }
+  });
 
   test('every language has cases', () => {
     // A lexer with no case could change without any test noticing.

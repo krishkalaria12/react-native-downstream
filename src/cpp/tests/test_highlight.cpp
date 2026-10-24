@@ -5,6 +5,7 @@
 #include "CodeBlocks.h"
 #include "CodeHighlighter.h"
 #include "Languages.h"
+#include "IncrementalParser.h"
 #include "MarkdownParser.h"
 #include "StreamLexer.h"
 #include "Unicode.h"
@@ -40,8 +41,9 @@ std::vector<TokenRun> stream(std::string_view info, const std::u16string &code, 
   std::vector<TokenRun> runs;
   for (size_t at = 0; at < code.size(); at += chunk) {
     const size_t take = chunk < code.size() - at ? chunk : code.size() - at;
-    downstreamHighlighter().tokenize(info, code.substr(0, at + take), &state, &runs, kHighlightBudgetMs);
+    downstreamHighlighter().tokenize(info, code.substr(0, at + take), &state, &runs, kHighlightBudgetMs, false);
   }
+  downstreamHighlighter().tokenize(info, code, &state, &runs, 1e9);
   return runs;
 }
 
@@ -489,12 +491,13 @@ void testCrossThreadResume() {
   std::vector<TokenRun> runs;
   for (size_t at = 1; at <= text.size(); at++) {
     std::thread([&] {
-      downstreamHighlighter().tokenize("html", std::u16string_view(text).substr(0, at), &state, &runs, 1e9);
+      downstreamHighlighter().tokenize("html", std::u16string_view(text).substr(0, at), &state, &runs, 1e9, false);
     }).join();
     // A stream on this thread in between must not leak into the block.
     tokenize("ts", "const a = `open\n");
   }
   CHECK(state.resumed, "a block resumes on another thread");
+  downstreamHighlighter().tokenize("html", text, &state, &runs, 1e9);
   CHECK(sameTokens(runs, want), "a block streamed across threads equals a whole pass");
 }
 
@@ -593,12 +596,62 @@ void testWorkCounters() {
   HighlightState settled;
   HighlightStats settledStats;
   highlightSettledCodeBlock(downstreamHighlighter(), &longBlock, &settled, 0.0, &settledStats);
-  CHECK(settledStats.bytesLexed == utf16ToUtf8(longBlock.text).size(), "settling includes work from the first pass and retries");
+  CHECK(settledStats.bytesLexed == 2 * utf16ToUtf8(longBlock.text).size(),
+        "budgeted settling counts line traversal and the final whole-input pass");
+}
+
+void testCrossLineLookahead() {
+  for (const std::string code : {"foo\n()\n", "const foo = bar\n(1)\n"}) {
+    const std::vector<TokenRun> expected = tokenize("js", code, 1e9);
+    const size_t start = code.starts_with("foo") ? 0 : code.find("bar");
+    CHECK(std::any_of(expected.begin(), expected.end(), [&](const TokenRun &run) {
+      return run.start == start && run.end == start + 3 && run.token == TokenClass::Function;
+    }), "whole-input lookahead recognizes a call across a newline");
+    for (const ParseMode mode : {ParseMode::IncrementalTail, ParseMode::FullParse}) {
+      IncrementalParser parser(mode);
+      parser.append("```js\n" + code);
+      parser.parse(false);
+      parser.append(" ");
+      const auto live = parser.parse(false);
+      const auto finished = parser.parse(true);
+      CHECK(finished.document->blocks[0].highlightCanonical,
+            "finish canonicalizes unchanged live text before it can be cached");
+      CHECK(sameTokens(finished.document->blocks[0].tokens, tokenize("js", code + " ", 1e9)),
+            "finish uses whole-input lookahead even without new bytes");
+      // Previously published provisional runs remain immutable after finish.
+      CHECK(live.document->blocks[0].text == finished.document->blocks[0].text,
+            "canonicalization changes colors without changing the text");
+
+      parser.reset();
+      const std::string source = "```js\n" + code + "```\n\nnext paragraph";
+      for (const char byte : source) {
+        parser.append(std::string_view(&byte, 1));
+        parser.parse(false);
+      }
+      const auto closed = parser.parse(false);
+      CHECK(closed.document->blocks[0].highlightCanonical &&
+            sameTokens(closed.document->blocks[0].tokens, tokenize("js", code.substr(0, code.size() - 1), 1e9)),
+            "a committed fence uses canonical colors before finish");
+    }
+  }
+  const std::string code = [] {
+    std::string text;
+    for (int line = 0; line < 100; line++) text += "foo\n()\n";
+    return text;
+  }();
+  HighlightState state;
+  std::vector<TokenRun> runs;
+  for (int pass = 0; pass < 20 && !state.canonical; pass++) {
+    downstreamHighlighter().tokenize("js", utf8ToUtf16(code), &state, &runs, 0.0);
+  }
+  CHECK(state.canonical && sameTokens(runs, tokenize("js", code, 1e9)),
+        "zero-budget retries finish with whole-input lookahead");
 }
 
 } // namespace
 
 int main() {
+  testCrossLineLookahead();
   testLanguages();
   testTokens();
   testBoundaries();
