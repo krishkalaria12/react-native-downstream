@@ -180,7 +180,99 @@ export async function load(url: string) {
 
 Downstream also accepts `filename=`, `lang:path`, `showLineNumbers=N`, `showLineNumbers{N}`, and `noLineNumbers` for individual blocks.
 
-Supported language identifiers include `ts`, `tsx`, `js`, `java`, `c`, `cpp`, `cs`, `go`, `swift`, `kt`, `dart`, `scala`, `objc`, `py`, `sh`, `json`, `html`, `xml`, `css`, `sql`, `rs`, `yaml`, `toml`, `rb`, `lua`, `diff`, and `md`. Blocks with an unknown language, no language, or more than 64 KiB of code render as plain code. Set `syntaxHighlighting={false}` to disable coloring throughout the view.
+Code is colored natively in 84 languages, including languages embedded in others: script and style blocks in HTML, Vue, Svelte, and Astro, and fenced code inside Markdown and MDX. Identifiers are case-insensitive, and only the first word of the info string counts, so the info strings `TypeScript title="app.ts"` and `js:src/app.js` both resolve. Blocks with an unknown language, no language, or more than 64 KiB of code render as plain code. Set `syntaxHighlighting={false}` to disable coloring throughout the view.
+
+<details>
+<summary>Languages and identifiers</summary>
+
+| Language             | Identifiers                                                                           |
+| -------------------- | ------------------------------------------------------------------------------------- |
+| Angular HTML         | `angular-html`                                                                        |
+| Assembly             | `asm`, `assembly`, `s`                                                                |
+| Astro                | `astro`                                                                               |
+| Bash                 | `bash`, `console`, `sh`, `shell`, `shellscript`, `shellsession`, `zsh`                |
+| Batch                | `bat`, `batch`, `batchfile`, `cmd`, `dos`                                             |
+| C                    | `c`, `h`                                                                              |
+| C#                   | `c#`, `cs`, `csharp`                                                                  |
+| C++                  | `c++`, `cc`, `cpp`, `cxx`, `h++`, `hh`, `hpp`, `hxx`                                  |
+| C3                   | `c3`                                                                                  |
+| Clojure              | `clj`, `cljc`, `cljs`, `clojure`, `edn`                                               |
+| CMake                | `cmake`                                                                               |
+| CSS                  | `css`                                                                                 |
+| CSV                  | `csv`                                                                                 |
+| CUDA                 | `cu`, `cuda`, `cuh`                                                                   |
+| Dart                 | `dart`                                                                                |
+| Diff                 | `diff`, `git-commit`, `git-rebase`, `patch`                                           |
+| Dockerfile           | `containerfile`, `docker`, `dockerfile`                                               |
+| Elixir               | `elixir`, `ex`, `exs`                                                                 |
+| Elm                  | `elm`                                                                                 |
+| Erlang               | `erl`, `erlang`, `hrl`                                                                |
+| F#                   | `f#`, `fs`, `fsharp`, `fsi`, `fsx`                                                    |
+| Fortran              | `f03`, `f08`, `f90`, `f95`, `fortran`, `fortran-free-form`                            |
+| Fortran (fixed form) | `f`, `f77`, `for`, `fortran-fixed-form`                                               |
+| GDScript             | `gd`, `gdscript`                                                                      |
+| Gleam                | `gleam`                                                                               |
+| GLSL                 | `comp`, `frag`, `geom`, `glsl`, `vert`                                                |
+| Go                   | `go`, `golang`                                                                        |
+| Godot resource       | `gdresource`, `godot-resource`, `tres`, `tscn`                                        |
+| Godot shader         | `gdshader`, `gdshaderinc`, `godot-shader`                                             |
+| GraphQL              | `gql`, `graphql`                                                                      |
+| Groovy               | `gradle`, `groovy`, `gsh`, `gvy`, `gy`                                                |
+| GROQ                 | `groq`                                                                                |
+| Haskell              | `haskell`, `hs`                                                                       |
+| HLSL                 | `hlsl`                                                                                |
+| HTML                 | `htm`, `html`                                                                         |
+| Java                 | `java`                                                                                |
+| JavaScript           | `cjs`, `javascript`, `js`, `mjs`                                                      |
+| JSON                 | `json`, `jsonc`                                                                       |
+| JSON Lines           | `jsonl`                                                                               |
+| JSON5                | `json5`                                                                               |
+| JSX                  | `jsx`                                                                                 |
+| Julia                | `jl`, `julia`                                                                         |
+| Kotlin               | `kotlin`, `kt`, `kts`                                                                 |
+| LaTeX                | `latex`, `tex`                                                                        |
+| Less                 | `less`                                                                                |
+| Lisp                 | `cl`, `el`, `elisp`, `emacs-lisp`, `lisp`, `lsp`, `scheme`, `scm`                     |
+| Lua                  | `lua`                                                                                 |
+| Makefile             | `make`, `makefile`, `mk`                                                              |
+| Markdown             | `markdown`, `md`                                                                      |
+| MATLAB               | `matlab`, `octave`                                                                    |
+| MDX                  | `mdx`                                                                                 |
+| Nim                  | `nim`                                                                                 |
+| Nix                  | `nix`                                                                                 |
+| Objective-C          | `m`, `mm`, `obj-c`, `objc`, `objcpp`, `objective-c`, `objective-cpp`, `objectivec`    |
+| OCaml                | `ml`, `mli`, `ocaml`                                                                  |
+| Odin                 | `odin`                                                                                |
+| Pascal               | `delphi`, `dpk`, `dpr`, `lpr`, `object-pascal`, `objectpascal`, `pas`, `pascal`, `pp` |
+| Perl                 | `perl`, `pl`, `pm`                                                                    |
+| PHP                  | `php`                                                                                 |
+| PowerShell           | `powershell`, `ps`, `ps1`, `psd1`, `psm1`, `pwsh`                                     |
+| Protocol Buffers     | `proto`, `protobuf`                                                                   |
+| Python               | `py`, `python`, `python3`                                                             |
+| R                    | `r`, `rscript`                                                                        |
+| Ruby                 | `rb`, `ruby`                                                                          |
+| Rust                 | `rs`, `rust`                                                                          |
+| Sass                 | `sass`                                                                                |
+| Scala                | `sbt`, `sc`, `scala`                                                                  |
+| SCSS                 | `scss`                                                                                |
+| Solidity             | `sol`, `solidity`                                                                     |
+| SQL                  | `mysql`, `postgres`, `postgresql`, `sql`, `sqlite`                                    |
+| Svelte               | `svelte`                                                                              |
+| Swift                | `swift`                                                                               |
+| Terraform            | `hcl`, `terraform`, `tf`, `tfvars`                                                    |
+| TOML                 | `toml`                                                                                |
+| TSRX                 | `tsrx`                                                                                |
+| TSV                  | `tsv`                                                                                 |
+| TSX                  | `tsx`                                                                                 |
+| TypeScript           | `angular-ts`, `cts`, `mts`, `ts`, `typescript`                                        |
+| Vue                  | `vue`                                                                                 |
+| WebAssembly text     | `wasm`, `wat`                                                                         |
+| WGSL                 | `wgsl`                                                                                |
+| XML                  | `svg`, `xml`, `xsd`                                                                   |
+| YAML                 | `yaml`, `yml`                                                                         |
+| Zig                  | `zig`, `zon`                                                                          |
+
+</details>
 
 ## Tables, copy, and downloads
 
