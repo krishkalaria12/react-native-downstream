@@ -22,7 +22,7 @@ namespace {
 std::vector<TokenRun> tokenize(std::string_view info, std::string_view code, double budgetMs = kHighlightBudgetMs) {
   HighlightState state;
   std::vector<TokenRun> runs;
-  lexillaHighlighter().tokenize(info, utf8ToUtf16(code), &state, &runs, budgetMs);
+  downstreamHighlighter().tokenize(info, utf8ToUtf16(code), &state, &runs, budgetMs);
   return runs;
 }
 
@@ -38,7 +38,7 @@ std::vector<TokenRun> stream(std::string_view info, const std::u16string &code, 
   std::vector<TokenRun> runs;
   for (size_t at = 0; at < code.size(); at += chunk) {
     const size_t take = chunk < code.size() - at ? chunk : code.size() - at;
-    lexillaHighlighter().tokenize(info, code.substr(0, at + take), &state, &runs, kHighlightBudgetMs);
+    downstreamHighlighter().tokenize(info, code.substr(0, at + take), &state, &runs, kHighlightBudgetMs);
   }
   return runs;
 }
@@ -223,31 +223,31 @@ void testBoundaries() {
   // A state left over from another block must not color the next one.
   HighlightState state;
   std::vector<TokenRun> out;
-  lexillaHighlighter().tokenize("ts", utf8ToUtf16("const a = 1;\n"), &state, &out, kHighlightBudgetMs);
+  downstreamHighlighter().tokenize("ts", utf8ToUtf16("const a = 1;\n"), &state, &out, kHighlightBudgetMs);
   const size_t before = out.size();
   CHECK(before > 0, "the first block colored");
-  lexillaHighlighter().tokenize("brainfuck", utf8ToUtf16("const a = 1;\n"), &state, &out, kHighlightBudgetMs);
+  downstreamHighlighter().tokenize("brainfuck", utf8ToUtf16("const a = 1;\n"), &state, &out, kHighlightBudgetMs);
   CHECK(out.empty(), "an unknown language clears the previous block's tokens");
-  lexillaHighlighter().tokenize("ts", utf8ToUtf16("const b"), &state, &out, kHighlightBudgetMs);
+  downstreamHighlighter().tokenize("ts", utf8ToUtf16("const b"), &state, &out, kHighlightBudgetMs);
   CHECK(!out.empty(), "the same language starts a new block rather than resuming");
   // A shorter text is not a prefix, so it starts over too.
-  lexillaHighlighter().tokenize("ts", utf8ToUtf16("const b"), &state, &out, kHighlightBudgetMs);
+  downstreamHighlighter().tokenize("ts", utf8ToUtf16("const b"), &state, &out, kHighlightBudgetMs);
   CHECK(state.resumed, "an unchanged text resumes");
-  lexillaHighlighter().tokenize("ts", utf8ToUtf16("const bc"), &state, &out, kHighlightBudgetMs);
+  downstreamHighlighter().tokenize("ts", utf8ToUtf16("const bc"), &state, &out, kHighlightBudgetMs);
   CHECK(state.resumed, "a grown text resumes");
-  lexillaHighlighter().tokenize("ts", utf8ToUtf16("const bd"), &state, &out, kHighlightBudgetMs);
+  downstreamHighlighter().tokenize("ts", utf8ToUtf16("const bd"), &state, &out, kHighlightBudgetMs);
   CHECK(!state.resumed, "a same-length rewrite starts over");
-  lexillaHighlighter().tokenize("ts", utf8ToUtf16("const bd\n"), &state, &out, kHighlightBudgetMs);
+  downstreamHighlighter().tokenize("ts", utf8ToUtf16("const bd\n"), &state, &out, kHighlightBudgetMs);
   CHECK(state.resumed, "a completed line still resumes");
-  lexillaHighlighter().tokenize("ts", utf8ToUtf16("other\n"), &state, &out, kHighlightBudgetMs);
+  downstreamHighlighter().tokenize("ts", utf8ToUtf16("other\n"), &state, &out, kHighlightBudgetMs);
   CHECK(!state.resumed, "text that is not an extension starts over");
 
   // A chunk may end halfway through a UTF-16 surrogate pair. Encoding the
   // two halves separately would leave two replacements in the UTF-8 cache.
   const std::u16string wide = u"const value = \"\U0001F44D\";\n";
   const size_t high = wide.find(static_cast<char16_t>(0xd83d));
-  lexillaHighlighter().tokenize("ts", std::u16string_view(wide).substr(0, high + 1), &state, &out, 1e9);
-  lexillaHighlighter().tokenize("ts", wide, &state, &out, 1e9);
+  downstreamHighlighter().tokenize("ts", std::u16string_view(wide).substr(0, high + 1), &state, &out, 1e9);
+  downstreamHighlighter().tokenize("ts", wide, &state, &out, 1e9);
   CHECK(state.document.text() == utf16ToUtf8(wide), "a split surrogate pair rebuilds the correct UTF-8 cache");
   CHECK(sameTokens(out, tokenize("ts", utf16ToUtf8(wide), 1e9)), "split surrogate tokens equal a whole pass");
 }
@@ -264,13 +264,13 @@ void testBudget() {
   const std::u16string text = utf8ToUtf16(block);
   HighlightState state;
   std::vector<TokenRun> runs;
-  lexillaHighlighter().tokenize("ts", text, &state, &runs, 0.0);
+  downstreamHighlighter().tokenize("ts", text, &state, &runs, 0.0);
   CHECK(state.lastStop == HighlightStop::Budget, "a zero budget stops the pass early");
   const size_t firstPass = state.finalEnd;
   CHECK(firstPass > 0, "a stopped pass still colors its first window");
   CHECK(firstPass < text.size(), "a stopped pass leaves the rest of the block plain");
   for (int pass = 0; pass < 40; pass++) {
-    lexillaHighlighter().tokenize("ts", text, &state, &runs, 0.0);
+    downstreamHighlighter().tokenize("ts", text, &state, &runs, 0.0);
   }
   CHECK(state.finalEnd > firstPass, "later passes make progress");
   CHECK(state.lastStop != HighlightStop::Complete, "a block this long does not finish within 40 passes");
@@ -278,7 +278,7 @@ void testBudget() {
   // one-shot pass's.
   HighlightState whole;
   std::vector<TokenRun> wholeRuns;
-  lexillaHighlighter().tokenize("ts", text, &whole, &wholeRuns, 1e9);
+  downstreamHighlighter().tokenize("ts", text, &whole, &wholeRuns, 1e9);
   CHECK(whole.lastStop == HighlightStop::Complete, "an unbounded pass colors the whole block");
   CHECK(sameTokens(wholeRuns, tokenize("ts", block, 1e9)), "a resumed block equals a one-shot pass");
 }
@@ -305,14 +305,14 @@ void testSettled() {
   streaming.language = "ts";
   streaming.text = utf8ToUtf16(block);
   HighlightState streamingState;
-  highlightCodeBlock(lexillaHighlighter(), &streaming, &streamingState, 0.0, nullptr);
+  highlightCodeBlock(downstreamHighlighter(), &streaming, &streamingState, 0.0, nullptr);
   CHECK(streamingState.lastStop == HighlightStop::Budget, "one zero-budget pass stops early");
   CHECK(streaming.tokens.size() < wholeRunCount(block), "one pass leaves the block part-colored");
 
   // The settled entry point finishes it.
   HighlightState settledState;
   HighlightStats stats;
-  highlightSettledCodeBlock(lexillaHighlighter(), &parsed, &settledState, 0.0, &stats);
+  highlightSettledCodeBlock(downstreamHighlighter(), &parsed, &settledState, 0.0, &stats);
   CHECK(parsed.tokens.size() == wholeRunCount(block), "a settled block is colored whole");
   CHECK(settledState.lastStop == HighlightStop::Complete, "a settled block reports Complete");
   CHECK(sameTokens(parsed.tokens, wholeRuns(block)), "a settled block equals a one-shot pass");
@@ -328,19 +328,19 @@ void testSettled() {
   small.text = utf8ToUtf16("const a = 1;\n");
   HighlightState smallState;
   HighlightStats smallStats;
-  highlightSettledCodeBlock(lexillaHighlighter(), &small, &smallState, kHighlightBudgetMs, &smallStats);
+  highlightSettledCodeBlock(downstreamHighlighter(), &small, &smallState, kHighlightBudgetMs, &smallStats);
   CHECK(smallState.lastStop == HighlightStop::Complete, "a small settled block completes in one pass");
   CHECK(smallStats.resumes == 0, "a small settled block needs no retry");
 
   // A block with no language is still plain, and costs no lexer.
-  const uint64_t before = lexillaHighlighter().lexersCreated();
+  const uint64_t before = downstreamHighlighter().lexersCreated();
   Block plain;
   plain.kind = BlockKind::CodeBlock;
   plain.text = utf8ToUtf16(block);
   HighlightState plainState;
-  highlightSettledCodeBlock(lexillaHighlighter(), &plain, &plainState, 0.0, nullptr);
+  highlightSettledCodeBlock(downstreamHighlighter(), &plain, &plainState, 0.0, nullptr);
   CHECK(plain.tokens.empty(), "a settled block with no language stays plain");
-  CHECK(lexillaHighlighter().lexersCreated() == before, "settling a plain block creates no lexer");
+  CHECK(downstreamHighlighter().lexersCreated() == before, "settling a plain block creates no lexer");
 
   // An unknown language is skipped rather than retried forever, which is the
   // case where a resume could never make progress.
@@ -350,7 +350,7 @@ void testSettled() {
   unknown.text = utf8ToUtf16(block);
   HighlightState unknownState;
   HighlightStats unknownStats;
-  highlightSettledCodeBlock(lexillaHighlighter(), &unknown, &unknownState, 0.0, &unknownStats);
+  highlightSettledCodeBlock(downstreamHighlighter(), &unknown, &unknownState, 0.0, &unknownStats);
   CHECK(unknown.tokens.empty(), "a settled block with an unknown language stays plain");
   CHECK(unknownState.lastStop == HighlightStop::Skipped, "an unknown language is skipped, not retried");
   CHECK(unknownStats.blocks == 1, "a skipped block is counted once");
@@ -359,7 +359,7 @@ void testSettled() {
   // a controlled document and a committed chunk both need.
   const ParseResult parsedDoc = parseMarkdown("```ts\n" + block + "```\n\nsome prose\n");
   HighlightStats docStats;
-  const DocumentHandle settledDoc = highlightSettledCodeBlocks(lexillaHighlighter(), parsedDoc.document, 0.0, &docStats);
+  const DocumentHandle settledDoc = highlightSettledCodeBlocks(downstreamHighlighter(), parsedDoc.document, 0.0, &docStats);
   CHECK(settledDoc->blocks[0].tokens.size() == wholeRunCount(block),
         "a settled document colors its code block whole");
 }
@@ -407,40 +407,40 @@ void testStreaming() {
 void testIsolation() {
   // A document with no code block must never create a lexer, which is what
   // keeps prose off the highlighting path entirely.
-  const uint64_t before = lexillaHighlighter().lexersCreated();
+  const uint64_t before = downstreamHighlighter().lexersCreated();
   const ParseResult prose = parseMarkdown("# Title\n\nSome prose with `inline code` and a [link](https://x).\n");
   CHECK(prose.status == ParseStatus::Ok, "the prose sample parses");
   for (const Block &block : prose.document->blocks) {
     CHECK(block.tokens.empty(), "prose blocks carry no tokens");
   }
-  CHECK(lexillaHighlighter().lexersCreated() == before, "prose creates no lexer");
+  CHECK(downstreamHighlighter().lexersCreated() == before, "prose creates no lexer");
 
   // A parse does not color: the controlled path and the stream path each do it
   // on their own job, so a parse stays free of lexer work.
   const ParseResult code = parseMarkdown("```ts\nconst a = 1;\n```\n");
   CHECK(code.status == ParseStatus::Ok, "the code sample parses");
-  CHECK(lexillaHighlighter().lexersCreated() == before, "a parse creates no lexer");
+  CHECK(downstreamHighlighter().lexersCreated() == before, "a parse creates no lexer");
   CHECK(code.document->blocks[0].tokens.empty(), "a parse carries no tokens");
-  const DocumentHandle colored = highlightCodeBlocks(lexillaHighlighter(), code.document, kHighlightBudgetMs, nullptr);
-  CHECK(lexillaHighlighter().lexersCreated() == before + 1, "coloring a fenced block creates one lexer");
+  const DocumentHandle colored = highlightCodeBlocks(downstreamHighlighter(), code.document, kHighlightBudgetMs, nullptr);
+  CHECK(downstreamHighlighter().lexersCreated() == before + 1, "coloring a fenced block creates one lexer");
   CHECK(!colored->blocks[0].tokens.empty(), "coloring fills the block's tokens");
 }
 
 void testDocuments() {
   // The controlled path: highlighting reaches the document a parse produced.
   const ParseResult parsed = parseMarkdown("```ts\nconst a = 1;\n```\n");
-  const DocumentHandle colored = highlightCodeBlocks(lexillaHighlighter(), parsed.document, kHighlightBudgetMs, nullptr);
+  const DocumentHandle colored = highlightCodeBlocks(downstreamHighlighter(), parsed.document, kHighlightBudgetMs, nullptr);
   CHECK(!colored->blocks[0].tokens.empty(), "coloring a document fills its code block");
   CHECK(parsed.document->blocks[0].tokens.empty(), "coloring leaves the parse result it was given alone");
   // Coloring the same text twice must give the same runs, or a committed
   // snapshot and a fresh parse of it would differ.
-  const DocumentHandle again = highlightCodeBlocks(lexillaHighlighter(), parsed.document, kHighlightBudgetMs, nullptr);
+  const DocumentHandle again = highlightCodeBlocks(downstreamHighlighter(), parsed.document, kHighlightBudgetMs, nullptr);
   CHECK(again->blocks[0].tokens.size() == colored->blocks[0].tokens.size(), "coloring is deterministic");
 
   // A document with no code block is returned as it stands, so a prose-only
   // source shares one prepared result instead of copying it.
   const ParseResult plain = parseMarkdown("Just prose.\n");
-  CHECK(highlightCodeBlocks(lexillaHighlighter(), plain.document, kHighlightBudgetMs, nullptr).get() == plain.document.get(),
+  CHECK(highlightCodeBlocks(downstreamHighlighter(), plain.document, kHighlightBudgetMs, nullptr).get() == plain.document.get(),
         "a prose document is not copied");
 
   // An indented code block has no language, so it stays plain.
@@ -452,27 +452,27 @@ void testDocuments() {
   // parser builds a committed chunk in.
   std::vector<Block> blocks(parsed.document->blocks.begin(), parsed.document->blocks.end());
   HighlightStats stats;
-  highlightCodeBlocks(lexillaHighlighter(), &blocks, kHighlightBudgetMs, &stats);
+  highlightCodeBlocks(downstreamHighlighter(), &blocks, kHighlightBudgetMs, &stats);
   CHECK(stats.blocks == 1, "one code block is counted");
   CHECK(!blocks[0].tokens.empty(), "the mutable list is colored");
 }
 
 void testHighlightCache() {
   const auto parsed = parseMarkdown("```ts\nconst original = compute(1);\n```\n\nprose");
-  const auto colored = highlightSettledCodeBlocks(lexillaHighlighter(), parsed.document, 1e9, nullptr);
-  const uint64_t before = lexillaHighlighter().lexersCreated();
+  const auto colored = highlightSettledCodeBlocks(downstreamHighlighter(), parsed.document, 1e9, nullptr);
+  const uint64_t before = downstreamHighlighter().lexersCreated();
   const auto same = parseMarkdown("```ts\nconst original = compute(1);\n```\n\nlonger prose");
   HighlightStats cachedStats;
-  const auto reused = highlightSettledCodeBlocks(lexillaHighlighter(), same.document, 1e9, &cachedStats, colored);
-  CHECK(cachedStats.blocks == 0 && lexillaHighlighter().lexersCreated() == before,
+  const auto reused = highlightSettledCodeBlocks(downstreamHighlighter(), same.document, 1e9, &cachedStats, colored);
+  CHECK(cachedStats.blocks == 0 && downstreamHighlighter().lexersCreated() == before,
         "unchanged complete code reuses tokens without creating a lexer");
   CHECK(sameTokens(reused->blocks[0].tokens, colored->blocks[0].tokens), "cached code keeps every token");
   CHECK(same.document->blocks[0].tokens.empty(), "cache reuse leaves the original parse immutable");
   for (const char *changed : {"```ts\nconst rewritten = 'text';\n```", "```py\nconst original = compute(1);\n```"}) {
     const auto next = parseMarkdown(changed);
     HighlightStats changedStats;
-    const auto actual = highlightSettledCodeBlocks(lexillaHighlighter(), next.document, 1e9, &changedStats, colored);
-    const auto expected = highlightSettledCodeBlocks(lexillaHighlighter(), next.document, 1e9, nullptr);
+    const auto actual = highlightSettledCodeBlocks(downstreamHighlighter(), next.document, 1e9, &changedStats, colored);
+    const auto expected = highlightSettledCodeBlocks(downstreamHighlighter(), next.document, 1e9, nullptr);
     CHECK(changedStats.blocks == 1, "rewritten text or changed language is highlighted again");
     CHECK(sameTokens(actual->blocks[0].tokens, expected->blocks[0].tokens), "cache misses equal a fresh highlight");
   }
@@ -480,10 +480,10 @@ void testHighlightCache() {
   for (int line = 0; line < 100; line++) longSource += "const value = compute(1);\n";
   longSource += "```";
   const auto longParsed = parseMarkdown(longSource);
-  const auto partial = highlightCodeBlocks(lexillaHighlighter(), longParsed.document, 0.0, nullptr);
+  const auto partial = highlightCodeBlocks(downstreamHighlighter(), longParsed.document, 0.0, nullptr);
   CHECK(!partial->blocks[0].highlightComplete, "a budget-cut pass cannot be cached as complete");
   HighlightStats retryStats;
-  const auto completed = highlightSettledCodeBlocks(lexillaHighlighter(), longParsed.document, 1e9, &retryStats, partial);
+  const auto completed = highlightSettledCodeBlocks(downstreamHighlighter(), longParsed.document, 1e9, &retryStats, partial);
   CHECK(retryStats.blocks == 1 && completed->blocks[0].highlightComplete, "incomplete cached tokens are finished");
 }
 
@@ -516,7 +516,7 @@ void testConcurrentPasses() {
       HighlightState state;
       std::vector<TokenRun> runs;
       for (int repeat = 0; repeat < 8; repeat++) {
-        lexillaHighlighter().tokenize(info, code, &state, &runs, kHighlightBudgetMs);
+        downstreamHighlighter().tokenize(info, code, &state, &runs, kHighlightBudgetMs);
       }
       results[index] = runs;
       if (!sameTokens(expected[index], runs)) {
@@ -541,7 +541,7 @@ void testWorkCounters() {
   block.language = "ts";
   block.text = u"const first = 1;\n";
   HighlightStats stats;
-  highlightCodeBlock(lexillaHighlighter(), &block, &state, 1e9, &stats);
+  highlightCodeBlock(downstreamHighlighter(), &block, &state, 1e9, &stats);
   CHECK(stats.bytesLexed == state.document.length() && stats.runsBuilt == block.tokens.size(),
         "work counters record requested lexer input and fresh runs");
   CHECK(stats.tokenBytesCopied == block.tokens.size() * sizeof(TokenRun) &&
@@ -549,7 +549,7 @@ void testWorkCounters() {
         "owned initial conversion avoids another UTF-8 text copy");
   block.text.append(u"const second = 2;\n");
   const auto before = stats;
-  highlightCodeBlock(lexillaHighlighter(), &block, &state, 1e9, &stats);
+  highlightCodeBlock(downstreamHighlighter(), &block, &state, 1e9, &stats);
   CHECK(stats.bytesLexed - before.bytesLexed == 18 && stats.textBytesCopied - before.textBytesCopied == 54,
         "append counters include new text without the settled prefix");
 
@@ -559,7 +559,7 @@ void testWorkCounters() {
   for (int i = 0; i < 128; i++) longBlock.text.append(u"const next = 1;\n");
   HighlightState settled;
   HighlightStats settledStats;
-  highlightSettledCodeBlock(lexillaHighlighter(), &longBlock, &settled, 0.0, &settledStats);
+  highlightSettledCodeBlock(downstreamHighlighter(), &longBlock, &settled, 0.0, &settledStats);
   CHECK(settledStats.bytesLexed == settled.document.length(), "settling includes work from the first pass and retries");
 }
 

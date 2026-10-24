@@ -443,7 +443,7 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   // mismatch alone would drop the shared prefix on the next parse.
   highlight_.clear();
   HighlightStats stats;
-  result.document = highlightSettledCodeBlocks(lexillaHighlighter(), result.document, kHighlightBudgetMs, &stats,
+  result.document = highlightSettledCodeBlocks(downstreamHighlighter(), result.document, kHighlightBudgetMs, &stats,
                                                replaced_ ? nullptr : document_);
   noteHighlight(stats);
   // Math runs after highlighting and before anything compares blocks, for the
@@ -571,11 +571,11 @@ void IncrementalParser::highlightTail(Document *document) {
       continue;
     }
     if (i + 1 == last && !finished_) {
-      highlightCodeBlock(lexillaHighlighter(), &block, &highlight_, kHighlightBudgetMs, &stats);
+      highlightCodeBlock(downstreamHighlighter(), &block, &highlight_, kHighlightBudgetMs, &stats);
     } else {
       // Earlier blocks cannot grow. A budget cut must be finished now because
       // no later snapshot can otherwise complete their highlighting.
-      highlightSettledCodeBlock(lexillaHighlighter(), &block, i + 1 == last ? &highlight_ : &settled,
+      highlightSettledCodeBlock(downstreamHighlighter(), &block, i + 1 == last ? &highlight_ : &settled,
                                 kHighlightBudgetMs, &stats);
     }
   }
@@ -995,7 +995,7 @@ bool IncrementalParser::commitRegion(size_t boundary) {
     // leave the rest of the shared block plain forever.
     // A local state keeps this away from the tail's.
     if (block.kind == BlockKind::CodeBlock && !block.language.empty()) {
-      highlightSettledCodeBlock(lexillaHighlighter(), &block, &committedHighlight, kHighlightBudgetMs, &stats);
+      highlightSettledCodeBlock(downstreamHighlighter(), &block, &committedHighlight, kHighlightBudgetMs, &stats);
     }
     // A committed formula is closed, inline or display, so it is laid out here
     // from its whole TeX and then shared, unchanged, by every later snapshot. The
@@ -1246,7 +1246,7 @@ bool IncrementalParser::appendOpenFence() {
   counters_.fenceSnapshotStorageBytesCopied += block.text.appendSnapshot(delta);
   if (block.kind == BlockKind::CodeBlock && !block.language.empty()) {
     HighlightStats stats;
-    lexillaHighlighter().tokenizeAppend(block.language, block.text, delta, &highlight_, &block.tokens,
+    downstreamHighlighter().tokenizeAppend(block.language, block.text, delta, &highlight_, &block.tokens,
                                        kHighlightBudgetMs, document_->id, document_->blocks.back().text.size(), next->id, !finished_, fencePendingNewline_);
     block.highlightComplete = highlight_.lastStop != HighlightStop::Budget &&
         highlight_.lastStop != HighlightStop::Deferred;

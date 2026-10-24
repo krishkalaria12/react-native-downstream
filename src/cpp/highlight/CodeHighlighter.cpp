@@ -499,7 +499,7 @@ void CodeHighlighter::tokenizeAppend(std::string_view info, const SnapshotText &
   state->sourceDocumentId_ = nextDocumentId;
 }
 
-CodeHighlighter &lexillaHighlighter() {
+CodeHighlighter &downstreamHighlighter() {
   static LexillaHighlighter highlighter;
   return highlighter;
 }

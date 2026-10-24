@@ -152,7 +152,7 @@ DocumentHandle colored(ParseResult result, double budgetMs = kHighlightBudgetMs)
   // Full-mode and controlled documents settle their code before publishing.
   // A single budgeted pass is an oracle for an unfinished streaming tail,
   // whose tokens may still be partial under CPU load.
-  return highlightSettledCodeBlocks(lexillaHighlighter(), result.document, budgetMs, nullptr);
+  return highlightSettledCodeBlocks(downstreamHighlighter(), result.document, budgetMs, nullptr);
 }
 
 bool fullParseOracleSettles() {
@@ -167,7 +167,7 @@ bool fullParseOracleSettles() {
   const ParseResult actual = parser.parse(false);
   // A zero budget guarantees a stop after the first window, even on a fast
   // host. A raw full-parse oracle must settle its tokens just as full mode does.
-  const DocumentHandle partial = highlightCodeBlocks(lexillaHighlighter(), parsed.document, 0.0, nullptr);
+  const DocumentHandle partial = highlightCodeBlocks(downstreamHighlighter(), parsed.document, 0.0, nullptr);
   return actual.status == ParseStatus::Ok && !equal(*partial, *actual.document) &&
       equal(*colored(parsed, 0.0), *actual.document);
 }
@@ -350,7 +350,7 @@ bool fenceAppendTokensAndSnapshots() {
         const auto result = feed(parser, source, false);
         CHECK(result.status == ParseStatus::Ok, "the streaming fence parses");
         const auto parsedFull = parseMarkdown(source);
-        const auto full = highlightSettledCodeBlocks(lexillaHighlighter(), parsedFull.document, 1e9, nullptr);
+        const auto full = highlightSettledCodeBlocks(downstreamHighlighter(), parsedFull.document, 1e9, nullptr);
         CHECK(full != nullptr, "the full-parse oracle accepts the UTF-8 fence");
         if (!full || !result.document) return false;
         CHECK(equal(*result.document, *full), "every growing fence matches fresh text and tokens");
@@ -362,7 +362,7 @@ bool fenceAppendTokensAndSnapshots() {
       CHECK(feed(parser, source, false).status == ParseStatus::Ok, "closing and changing language reparses");
       source += "2\nreturn 3";
       const auto after = feed(parser, source, false);
-      const auto full = highlightSettledCodeBlocks(lexillaHighlighter(), parseMarkdown(source).document, 1e9, nullptr);
+      const auto full = highlightSettledCodeBlocks(downstreamHighlighter(), parseMarkdown(source).document, 1e9, nullptr);
       CHECK(equal(*after.document, *full), "a different fence cannot inherit an earlier fence's lineage");
       for (size_t i = 0; i < retained.size(); i++) {
         CHECK(equalBlock(retained[i]->blocks.back(), copies[i]), "later appends cannot mutate retained text or tokens");
@@ -374,7 +374,7 @@ bool fenceAppendTokensAndSnapshots() {
       CHECK(parser.parse(false).status == ParseStatus::Ok, "a reset fence resumes safely");
       parser.append("2;");
       const auto reset = parser.parse(false);
-      const auto resetFull = highlightSettledCodeBlocks(lexillaHighlighter(), parseMarkdown(parser.source()).document, 1e9, nullptr);
+      const auto resetFull = highlightSettledCodeBlocks(downstreamHighlighter(), parseMarkdown(parser.source()).document, 1e9, nullptr);
       CHECK(equal(*reset.document, *resetFull), "reset append tokens match a fresh pass");
     }
   }

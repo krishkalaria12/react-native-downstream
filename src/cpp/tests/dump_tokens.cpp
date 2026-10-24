@@ -48,7 +48,7 @@ int main() {
 
   HighlightState state;
   std::vector<TokenRun> runs;
-  lexillaHighlighter().tokenize(utf16ToUtf8(info), text, &state, &runs, kHighlightBudgetMs);
+  downstreamHighlighter().tokenize(utf16ToUtf8(info), text, &state, &runs, kHighlightBudgetMs);
 
   std::string out = "{\"info\":";
   out += quoted(info);

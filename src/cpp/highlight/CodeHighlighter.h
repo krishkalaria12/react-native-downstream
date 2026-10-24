@@ -167,6 +167,6 @@ protected:
 
 /// The process-wide Lexilla highlighter. One per process is enough: a lexer
 /// holds no document state, and a `HighlightState` owns the one lexer it needs.
-CodeHighlighter &lexillaHighlighter();
+CodeHighlighter &downstreamHighlighter();
 
 } // namespace downstream

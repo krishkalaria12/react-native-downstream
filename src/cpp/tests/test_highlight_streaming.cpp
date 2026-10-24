@@ -32,7 +32,7 @@ bool validTokens(const Block &block) {
 void checkComplete(const Block &block) {
   HighlightState state;
   std::vector<TokenRun> expected;
-  lexillaHighlighter().tokenize(block.language, block.text, &state, &expected, 1e9);
+  downstreamHighlighter().tokenize(block.language, block.text, &state, &expected, 1e9);
   CHECK(sameTokens(block.tokens, expected), "a complete live refresh matches the checked highlighter");
 }
 
@@ -158,18 +158,18 @@ void testCheckedCallAlwaysRefreshes() {
   std::vector<TokenRun> runs;
   std::u16string text = u"const value = '";
   text.append(6000, u'x');
-  lexillaHighlighter().tokenize("ts", text, &state, &runs, 1e9);
+  downstreamHighlighter().tokenize("ts", text, &state, &runs, 1e9);
   text.append(u"';");
-  lexillaHighlighter().tokenize("ts", text, &state, &runs, 1e9);
+  downstreamHighlighter().tokenize("ts", text, &state, &runs, 1e9);
   CHECK(state.lastStop == HighlightStop::Complete && state.bytesLexed == state.document.length(),
         "arbitrary checked calls always relex an unfinished line");
   text.push_back(0xd83d);
-  lexillaHighlighter().tokenize("ts", text, &state, &runs, 1e9);
+  downstreamHighlighter().tokenize("ts", text, &state, &runs, 1e9);
   text.push_back(0xde00);
-  lexillaHighlighter().tokenize("ts", text, &state, &runs, 1e9);
+  downstreamHighlighter().tokenize("ts", text, &state, &runs, 1e9);
   HighlightState whole;
   std::vector<TokenRun> expected;
-  lexillaHighlighter().tokenize("ts", text, &whole, &expected, 1e9);
+  downstreamHighlighter().tokenize("ts", text, &whole, &expected, 1e9);
   CHECK(!state.resumed && sameTokens(runs, expected), "a split surrogate rebuilds the UTF-8 prefix");
 }
 

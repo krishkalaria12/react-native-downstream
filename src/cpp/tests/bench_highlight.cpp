@@ -80,7 +80,7 @@ int main() {
     for (int repeat = 0; repeat < 20; repeat++) {
       HighlightState state;
       std::vector<TokenRun> runs;
-      lexillaHighlighter().tokenize("ts", text, &state, &runs, 1e9);
+      downstreamHighlighter().tokenize("ts", text, &state, &runs, 1e9);
       count += runs.size();
     }
     return count;
@@ -89,8 +89,8 @@ int main() {
     HighlightState state;
     std::vector<TokenRun> runs;
     for (size_t at = 16; at < text.size() + 16; at += 16) {
-      lexillaHighlighter().tokenize("ts", std::u16string_view(text).substr(0, std::min(at, text.size())),
-                                   &state, &runs, 1e9);
+      downstreamHighlighter().tokenize("ts", std::u16string_view(text).substr(0, std::min(at, text.size())),
+                                       &state, &runs, 1e9);
     }
     return runs.size();
   });

@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
   }
   // The controlled path colors after the parse, so the model an export reads is
   // the one a view holds.
-  result.document = highlightSettledCodeBlocks(lexillaHighlighter(), result.document, kHighlightBudgetMs, nullptr);
+  result.document = highlightSettledCodeBlocks(downstreamHighlighter(), result.document, kHighlightBudgetMs, nullptr);
   const auto settled = static_cast<uint32_t>(
       std::min<size_t>(result.document->blocks.size(), std::numeric_limits<uint32_t>::max()));
   result.document = withSettledBlocks(result.document, settled);
