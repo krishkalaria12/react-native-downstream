@@ -261,9 +261,7 @@ public:
             // Record the fence's own run so `fenceClosed` can be decided when
             // the block finishes. The backward scan works because the info
             // string sits right after the run on the opener line.
-            const size_t infoAt = code->info.text != nullptr
-                ? static_cast<size_t>(code->info.text - parse_.data())
-                : 0;
+            const size_t infoAt = fenceInfoOffset(*code);
             size_t runEnd = infoAt;
             while (runEnd > 0 && source_[runEnd - 1] == ' ') {
               runEnd--;
@@ -2393,6 +2391,50 @@ private:
       }
     }
     block.runs.push_back({start, end, styles, link, tag});
+  }
+
+  /// Where a fence opener's info string starts in the source, or 0 when it has
+  /// none.
+  ///
+  /// md4c points the info attribute into the source unless the string has a
+  /// backslash escape or an entity, which it decodes into a buffer of its own.
+  /// The opener is then the first line since the last leaf that holds a run of
+  /// the fence character with text after it: a closing fence carries no info
+  /// string, and anything else between two leaves is blank, a container
+  /// marker, or a link reference definition.
+  size_t fenceInfoOffset(const MD_BLOCK_CODE_DETAIL &code) const {
+    const MD_CHAR *text = code.info.text;
+    if (text == nullptr) {
+      return 0;
+    }
+    if (text >= parse_.data() && text <= parse_.data() + parse_.size()) {
+      return static_cast<size_t>(text - parse_.data());
+    }
+    const auto containerSyntax = [](char c) {
+      return c == ' ' || c == '\t' || c == '>' || c == '-' || c == '+' || c == '*' || c == '.' || c == ')' ||
+          (c >= '0' && c <= '9');
+    };
+    for (size_t line = std::min(lastLeafEnd_, source_.size()); line < source_.size();) {
+      const size_t newline = source_.find('\n', line);
+      const size_t lineEnd = newline == std::string_view::npos ? source_.size() : newline;
+      size_t runStart = line;
+      while (runStart < lineEnd && containerSyntax(source_[runStart])) {
+        runStart++;
+      }
+      size_t runEnd = runStart;
+      while (runEnd < lineEnd && source_[runEnd] == code.fence_char) {
+        runEnd++;
+      }
+      size_t infoStart = runEnd;
+      while (infoStart < lineEnd && (source_[infoStart] == ' ' || source_[infoStart] == '\t')) {
+        infoStart++;
+      }
+      if (runEnd - runStart >= 3 && infoStart < lineEnd && source_[infoStart] != '\r') {
+        return infoStart;
+      }
+      line = lineEnd + 1;
+    }
+    return 0;
   }
 
   /// The UTF-8 offset of an `MD_TEXT_HTML` piece, read off md4c's pointer.

@@ -315,6 +315,26 @@ void testIdentity() {
   CHECK(first.document->blocks[0].info == "ts title=\"a.ts\"", "the raw info string is kept");
 }
 
+/// md4c decodes an info string with a backslash escape or an entity into a
+/// buffer of its own, so the decoded text says nothing about where the opener
+/// sits in the source. The fence's own run still has to be read off the
+/// opener line, or a shorter run inside the block would close it.
+void testEscapedInfo() {
+  const char *infos[] = {"j&amp;s", "j\\*s", "mer&#x61;id"};
+  for (const char *info : infos) {
+    const std::string open = std::string("Intro paragraph.\n\n````") + info + "\ncode\n```\nstill code\n";
+    ParseResult parsed = parseMarkdown(open);
+    CHECK(parsed.status == ParseStatus::Ok && parsed.document->blocks.size() == 2, "an escaped fence parses");
+    const Block &block = parsed.document->blocks[1];
+    CHECK(block.fenceMarker == '`' && block.fenceLength == 4, "an escaped info string keeps the fence's length");
+    CHECK(!block.fenceClosed, "a shorter run inside the block does not close it");
+
+    ParseResult closed = parseMarkdown(open + "````\n\nAfter.\n");
+    CHECK(closed.status == ParseStatus::Ok && closed.document->blocks.size() == 3, "a closed escaped fence parses");
+    CHECK(closed.document->blocks[1].fenceClosed, "a run as long as the opener closes it");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -324,5 +344,6 @@ int main() {
   testLineMarks();
   testPrefixes();
   testIdentity();
+  testEscapedInfo();
   return ds_check_result();
 }
