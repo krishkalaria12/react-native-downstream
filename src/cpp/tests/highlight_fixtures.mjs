@@ -1,8 +1,8 @@
 // Samples the golden token fixtures are taken from.
 //
-// One case per alias group, plus the cases a Lexilla upgrade is most likely to
+// One case per alias group, plus the cases a lexer update is most likely to
 // change: template literals, preprocessor regions, a block that spans lines,
-// and the one language where Lexilla is weakest. The expected runs live in
+// and languages embedded in one another. The expected runs live in
 // engine.test.mjs.snapshot, which `node --test --test-update-snapshots` writes.
 //
 //   node --test --test-update-snapshots src/cpp/tests/engine.test.mjs
@@ -46,8 +46,7 @@ export const highlightCases = [
   },
   {
     id: 'ts-jsx',
-    // The one case Lexilla is weakest at: JSX tags render as operators and
-    // identifiers. Recorded so that gap stays visible rather than surprising.
+    // Tags, attributes, and an expression inside a type-checked file.
     info: 'tsx',
     source:
       'export const App = () => <View style={s}><Text>hi</Text></View>;\n',
@@ -267,6 +266,81 @@ export const highlightCases = [
     info: 'cs',
     source:
       'public sealed class Greeter {\n  public static string Greet(string name) => $"hi {name}";\n}\n',
+  },
+  {
+    id: 'php',
+    info: 'php',
+    source:
+      '<?php\nfunction greet(string $name): string {\n  return "hi {$name}";\n}\n',
+  },
+  {
+    id: 'haskell',
+    info: 'hs',
+    source:
+      'module Main where\n\n-- | Greets.\ngreet :: String -> String\ngreet name = "hi " ++ name\n',
+  },
+  {
+    id: 'elixir',
+    info: 'elixir',
+    source:
+      'defmodule Greeter do\n  def greet(name), do: "hi #{name}" |> String.trim()\nend\n',
+  },
+  {
+    id: 'zig',
+    info: 'zig',
+    source:
+      'const std = @import("std");\npub fn main() !void {\n    std.debug.print("{d}\\n", .{42});\n}\n',
+  },
+  {
+    id: 'graphql',
+    info: 'graphql',
+    source:
+      'query User($id: ID!) {\n  user(id: $id) { name @include(if: true) }\n}\n',
+  },
+  {
+    id: 'dockerfile',
+    info: 'dockerfile',
+    source:
+      'FROM node:22 AS build\n# Install\nRUN npm ci && npm run build\nENV PORT=3000\n',
+  },
+  {
+    id: 'vue',
+    // A template, a script, and a style in one file, each lexed as its own
+    // language.
+    info: 'vue',
+    source: [
+      '<template>',
+      '  <p :class="cls">{{ msg }}</p>',
+      '</template>',
+      '<script setup lang="ts">',
+      'const msg: string = "hi";',
+      '</script>',
+      '<style>',
+      'p { color: red; }',
+      '</style>',
+      '',
+    ].join('\n'),
+  },
+  {
+    id: 'scss',
+    info: 'scss',
+    source: '$gap: 4px;\n.card {\n  &:hover { margin: $gap * 2; }\n}\n',
+  },
+  {
+    id: 'powershell',
+    info: 'ps1',
+    source: '$name = "world"\nWrite-Host "hi $name" -ForegroundColor Green\n',
+  },
+  {
+    id: 'terraform',
+    info: 'tf',
+    source:
+      'resource "aws_s3_bucket" "logs" {\n  bucket = "logs-${var.env}"\n  count  = 2\n}\n',
+  },
+  {
+    id: 'makefile',
+    info: 'makefile',
+    source: 'CC ?= cc\nall: main.o\n\t$(CC) -o app $^\n',
   },
   {
     id: 'wide-characters',

@@ -18,12 +18,6 @@ exports[`syntax highlighting > a parse colors the fenced blocks in the document 
       11,
       "number",
       "1"
-    ],
-    [
-      11,
-      12,
-      "operator",
-      ";"
     ]
   ]
 ]
@@ -39,10 +33,10 @@ exports[`syntax highlighting > a parse colors the fenced blocks in the document 
       "const"
     ],
     [
-      7,
-      8,
-      "operator",
-      ":"
+      9,
+      15,
+      "type",
+      "number"
     ],
     [
       16,
@@ -55,12 +49,6 @@ exports[`syntax highlighting > a parse colors the fenced blocks in the document 
       19,
       "number",
       "1"
-    ],
-    [
-      19,
-      20,
-      "operator",
-      ";"
     ]
   ]
 ]
@@ -86,7 +74,7 @@ exports[`syntax highlighting > a parse colors the fenced blocks in the document 
     [
       0,
       4,
-      "keyword",
+      "function",
       "echo"
     ]
   ]
@@ -123,7 +111,7 @@ exports[`syntax highlighting > golden tokens > bash 1`] = `
   [
     20,
     23,
-    "keyword",
+    "function",
     "set"
   ],
   [
@@ -137,12 +125,6 @@ exports[`syntax highlighting > golden tokens > bash 1`] = `
     50,
     "keyword",
     "in"
-  ],
-  [
-    51,
-    53,
-    "operator",
-    "*."
   ],
   [
     56,
@@ -163,28 +145,22 @@ exports[`syntax highlighting > golden tokens > bash 1`] = `
     "if"
   ],
   [
-    66,
-    67,
-    "operator",
-    "["
-  ],
-  [
-    68,
-    70,
-    "keyword",
-    "-f"
-  ],
-  [
     71,
+    72,
+    "string",
+    "\\""
+  ],
+  [
+    77,
     78,
     "string",
-    "\\"$file\\""
+    "\\""
   ],
   [
-    79,
+    80,
     81,
     "operator",
-    "];"
+    ";"
   ],
   [
     82,
@@ -195,14 +171,20 @@ exports[`syntax highlighting > golden tokens > bash 1`] = `
   [
     91,
     95,
-    "keyword",
+    "function",
     "echo"
   ],
   [
     96,
+    102,
+    "string",
+    "\\"found"
+  ],
+  [
+    108,
     109,
     "string",
-    "\\"found $file\\""
+    "\\""
   ],
   [
     112,
@@ -223,14 +205,32 @@ exports[`syntax highlighting > golden tokens > c-preprocessor 1`] = `
 [
   [
     0,
-    63,
+    8,
     "preprocessor",
-    "#include <stdio.h>\\n#define MAX 10\\n#if defined(UNIX) && MAX > 1\\n"
+    "#include"
+  ],
+  [
+    9,
+    18,
+    "string",
+    "<stdio.h>"
+  ],
+  [
+    19,
+    33,
+    "preprocessor",
+    "#define MAX 10"
+  ],
+  [
+    34,
+    62,
+    "preprocessor",
+    "#if defined(UNIX) && MAX > 1"
   ],
   [
     63,
     66,
-    "keyword",
+    "type",
     "int"
   ],
   [
@@ -240,28 +240,10 @@ exports[`syntax highlighting > golden tokens > c-preprocessor 1`] = `
     "main"
   ],
   [
-    71,
-    72,
-    "operator",
-    "("
-  ],
-  [
     72,
     76,
-    "keyword",
+    "type",
     "void"
-  ],
-  [
-    76,
-    77,
-    "operator",
-    ")"
-  ],
-  [
-    78,
-    79,
-    "operator",
-    "{"
   ],
   [
     80,
@@ -276,27 +258,15 @@ exports[`syntax highlighting > golden tokens > c-preprocessor 1`] = `
     "0"
   ],
   [
-    88,
-    89,
-    "operator",
-    ";"
-  ],
-  [
-    90,
-    91,
-    "operator",
-    "}"
-  ],
-  [
     92,
-    98,
+    97,
     "preprocessor",
-    "#else\\n"
+    "#else"
   ],
   [
     98,
     101,
-    "keyword",
+    "type",
     "int"
   ],
   [
@@ -306,28 +276,10 @@ exports[`syntax highlighting > golden tokens > c-preprocessor 1`] = `
     "main"
   ],
   [
-    106,
-    107,
-    "operator",
-    "("
-  ],
-  [
     107,
     111,
-    "keyword",
+    "type",
     "void"
-  ],
-  [
-    111,
-    112,
-    "operator",
-    ")"
-  ],
-  [
-    113,
-    114,
-    "operator",
-    "{"
   ],
   [
     115,
@@ -342,22 +294,10 @@ exports[`syntax highlighting > golden tokens > c-preprocessor 1`] = `
     "1"
   ],
   [
-    123,
-    124,
-    "operator",
-    ";"
-  ],
-  [
-    125,
-    126,
-    "operator",
-    "}"
-  ],
-  [
     127,
-    134,
+    133,
     "preprocessor",
-    "#endif\\n"
+    "#endif"
   ]
 ]
 `;
@@ -366,21 +306,9 @@ exports[`syntax highlighting > golden tokens > csharp 1`] = `
 [
   [
     0,
-    6,
-    "keyword",
-    "public"
-  ],
-  [
-    7,
-    13,
-    "keyword",
-    "sealed"
-  ],
-  [
-    14,
     19,
     "keyword",
-    "class"
+    "public sealed class"
   ],
   [
     20,
@@ -389,27 +317,15 @@ exports[`syntax highlighting > golden tokens > csharp 1`] = `
     "Greeter"
   ],
   [
-    28,
-    29,
-    "operator",
-    "{"
-  ],
-  [
     32,
-    38,
-    "keyword",
-    "public"
-  ],
-  [
-    39,
     45,
     "keyword",
-    "static"
+    "public static"
   ],
   [
     46,
     52,
-    "keyword",
+    "type",
     "string"
   ],
   [
@@ -419,22 +335,10 @@ exports[`syntax highlighting > golden tokens > csharp 1`] = `
     "Greet"
   ],
   [
-    58,
-    59,
-    "operator",
-    "("
-  ],
-  [
     59,
     65,
-    "keyword",
+    "type",
     "string"
-  ],
-  [
-    70,
-    71,
-    "operator",
-    ")"
   ],
   [
     72,
@@ -443,22 +347,16 @@ exports[`syntax highlighting > golden tokens > csharp 1`] = `
     "=>"
   ],
   [
-    76,
+    75,
+    79,
+    "string",
+    "$\\"hi"
+  ],
+  [
+    86,
     87,
     "string",
-    "\\"hi {name}\\""
-  ],
-  [
-    87,
-    88,
-    "operator",
-    ";"
-  ],
-  [
-    89,
-    90,
-    "operator",
-    "}"
+    "\\""
   ]
 ]
 `;
@@ -467,21 +365,9 @@ exports[`syntax highlighting > golden tokens > css 1`] = `
 [
   [
     0,
-    1,
-    "operator",
-    "."
-  ],
-  [
-    1,
     5,
-    "type",
-    "card"
-  ],
-  [
-    5,
-    6,
-    "tag",
-    " "
+    "attribute",
+    ".card"
   ],
   [
     6,
@@ -491,159 +377,75 @@ exports[`syntax highlighting > golden tokens > css 1`] = `
   ],
   [
     8,
-    9,
-    "operator",
-    "."
-  ],
-  [
-    9,
     14,
-    "type",
-    "title"
-  ],
-  [
-    14,
-    15,
-    "operator",
-    ","
+    "attribute",
+    ".title"
   ],
   [
     16,
-    17,
-    "operator",
-    "#"
-  ],
-  [
-    17,
     19,
-    "type",
-    "id"
-  ],
-  [
-    19,
-    20,
-    "tag",
-    " "
-  ],
-  [
-    20,
-    21,
-    "operator",
-    "{"
-  ],
-  [
-    21,
-    29,
     "attribute",
-    "\\n  color"
+    "#id"
   ],
   [
+    24,
     29,
-    30,
-    "operator",
-    ":"
+    "property",
+    "color"
   ],
   [
+    31,
     38,
-    39,
-    "operator",
-    ";"
+    "string",
+    "#ff0000"
   ],
   [
-    39,
+    42,
     48,
-    "attribute",
-    "\\n  margin"
+    "property",
+    "margin"
   ],
   [
-    48,
-    49,
-    "operator",
-    ":"
+    50,
+    51,
+    "number",
+    "0"
   ],
   [
+    52,
     56,
-    57,
-    "operator",
-    ";"
-  ],
-  [
-    57,
-    58,
-    "attribute",
-    "\\n"
-  ],
-  [
-    58,
-    59,
-    "operator",
-    "}"
+    "constant",
+    "auto"
   ],
   [
     60,
-    61,
-    "operator",
-    "@"
+    66,
+    "keyword",
+    "@media"
   ],
   [
-    61,
-    73,
-    "tag",
-    "media print "
-  ],
-  [
-    73,
-    74,
-    "operator",
-    "{"
+    67,
+    72,
+    "constant",
+    "print"
   ],
   [
     75,
-    77,
+    76,
     "tag",
-    "a "
+    "a"
   ],
   [
-    77,
-    78,
-    "operator",
-    "{"
-  ],
-  [
-    78,
+    79,
     86,
-    "attribute",
-    " display"
+    "property",
+    "display"
   ],
   [
-    86,
-    87,
-    "operator",
-    ":"
-  ],
-  [
+    88,
     92,
-    93,
-    "operator",
-    ";"
-  ],
-  [
-    93,
-    94,
-    "attribute",
-    " "
-  ],
-  [
-    94,
-    95,
-    "operator",
-    "}"
-  ],
-  [
-    96,
-    97,
-    "operator",
-    "}"
+    "constant",
+    "none"
   ]
 ]
 `;
@@ -663,12 +465,6 @@ exports[`syntax highlighting > golden tokens > dart 1`] = `
     "Greeter"
   ],
   [
-    14,
-    15,
-    "operator",
-    "{"
-  ],
-  [
     18,
     24,
     "type",
@@ -681,22 +477,10 @@ exports[`syntax highlighting > golden tokens > dart 1`] = `
     "greet"
   ],
   [
-    30,
-    31,
-    "operator",
-    "("
-  ],
-  [
     31,
     37,
     "type",
     "String"
-  ],
-  [
-    42,
-    43,
-    "operator",
-    ")"
   ],
   [
     44,
@@ -706,21 +490,15 @@ exports[`syntax highlighting > golden tokens > dart 1`] = `
   ],
   [
     47,
+    50,
+    "string",
+    "\\"hi"
+  ],
+  [
+    56,
     57,
     "string",
-    "\\"hi $name\\""
-  ],
-  [
-    57,
-    58,
-    "operator",
-    ";"
-  ],
-  [
-    59,
-    60,
-    "operator",
-    "}"
+    "\\""
   ]
 ]
 `;
@@ -728,28 +506,170 @@ exports[`syntax highlighting > golden tokens > dart 1`] = `
 exports[`syntax highlighting > golden tokens > diff 1`] = `
 [
   [
-    0,
-    28,
-    "heading",
-    "--- a/old.txt\\n+++ b/new.txt\\n"
-  ],
-  [
-    28,
-    44,
-    "constant",
-    "@@ -1,3 +1,3 @@\\n"
-  ],
-  [
-    53,
-    62,
+    4,
+    13,
     "deleted",
-    "-removed\\n"
+    "a/old.txt"
   ],
   [
-    62,
-    69,
+    18,
+    27,
     "inserted",
-    "+added\\n"
+    "b/new.txt"
+  ],
+  [
+    28,
+    43,
+    "attribute",
+    "@@ -1,3 +1,3 @@"
+  ],
+  [
+    54,
+    61,
+    "deleted",
+    "removed"
+  ],
+  [
+    63,
+    68,
+    "inserted",
+    "added"
+  ]
+]
+`;
+
+exports[`syntax highlighting > golden tokens > dockerfile 1`] = `
+[
+  [
+    0,
+    4,
+    "keyword",
+    "FROM"
+  ],
+  [
+    13,
+    15,
+    "keyword",
+    "AS"
+  ],
+  [
+    22,
+    31,
+    "comment",
+    "# Install"
+  ],
+  [
+    32,
+    35,
+    "keyword",
+    "RUN"
+  ],
+  [
+    36,
+    39,
+    "function",
+    "npm"
+  ],
+  [
+    43,
+    45,
+    "operator",
+    "&&"
+  ],
+  [
+    46,
+    49,
+    "function",
+    "npm"
+  ],
+  [
+    60,
+    63,
+    "keyword",
+    "ENV"
+  ],
+  [
+    68,
+    69,
+    "operator",
+    "="
+  ]
+]
+`;
+
+exports[`syntax highlighting > golden tokens > elixir 1`] = `
+[
+  [
+    0,
+    9,
+    "keyword",
+    "defmodule"
+  ],
+  [
+    10,
+    17,
+    "type",
+    "Greeter"
+  ],
+  [
+    18,
+    20,
+    "keyword",
+    "do"
+  ],
+  [
+    23,
+    26,
+    "keyword",
+    "def"
+  ],
+  [
+    27,
+    32,
+    "function",
+    "greet"
+  ],
+  [
+    40,
+    43,
+    "constant",
+    "do:"
+  ],
+  [
+    44,
+    47,
+    "string",
+    "\\"hi"
+  ],
+  [
+    55,
+    56,
+    "string",
+    "\\""
+  ],
+  [
+    57,
+    59,
+    "operator",
+    "|>"
+  ],
+  [
+    60,
+    66,
+    "type",
+    "String"
+  ],
+  [
+    67,
+    71,
+    "function",
+    "trim"
+  ],
+  [
+    74,
+    77,
+    "keyword",
+    "end"
   ]
 ]
 `;
@@ -761,6 +681,12 @@ exports[`syntax highlighting > golden tokens > go 1`] = `
     7,
     "keyword",
     "package"
+  ],
+  [
+    8,
+    12,
+    "type",
+    "main"
   ],
   [
     14,
@@ -787,28 +713,10 @@ exports[`syntax highlighting > golden tokens > go 1`] = `
     "main"
   ],
   [
-    37,
-    39,
-    "operator",
-    "()"
-  ],
-  [
-    40,
-    41,
-    "operator",
-    "{"
-  ],
-  [
     43,
     48,
     "keyword",
     "defer"
-  ],
-  [
-    52,
-    53,
-    "operator",
-    "."
   ],
   [
     53,
@@ -817,22 +725,10 @@ exports[`syntax highlighting > golden tokens > go 1`] = `
     "Println"
   ],
   [
-    60,
-    61,
-    "operator",
-    "("
-  ],
-  [
     61,
     67,
     "string",
     "\\"done\\""
-  ],
-  [
-    67,
-    68,
-    "operator",
-    ")"
   ],
   [
     70,
@@ -843,7 +739,7 @@ exports[`syntax highlighting > golden tokens > go 1`] = `
   [
     80,
     85,
-    "keyword",
+    "type",
     "int64"
   ],
   [
@@ -853,22 +749,16 @@ exports[`syntax highlighting > golden tokens > go 1`] = `
     "for"
   ],
   [
-    93,
+    94,
     95,
     "operator",
-    ":="
+    "="
   ],
   [
     96,
     97,
     "number",
     "0"
-  ],
-  [
-    97,
-    98,
-    "operator",
-    ";"
   ],
   [
     101,
@@ -883,22 +773,10 @@ exports[`syntax highlighting > golden tokens > go 1`] = `
     "10"
   ],
   [
-    105,
-    106,
-    "operator",
-    ";"
-  ],
-  [
     108,
     110,
     "operator",
     "++"
-  ],
-  [
-    111,
-    112,
-    "operator",
-    "{"
   ],
   [
     121,
@@ -909,32 +787,8 @@ exports[`syntax highlighting > golden tokens > go 1`] = `
   [
     124,
     129,
-    "keyword",
+    "type",
     "int64"
-  ],
-  [
-    129,
-    130,
-    "operator",
-    "("
-  ],
-  [
-    131,
-    132,
-    "operator",
-    ")"
-  ],
-  [
-    134,
-    135,
-    "operator",
-    "}"
-  ],
-  [
-    140,
-    141,
-    "operator",
-    "."
   ],
   [
     141,
@@ -943,34 +797,10 @@ exports[`syntax highlighting > golden tokens > go 1`] = `
     "Printf"
   ],
   [
-    147,
-    148,
-    "operator",
-    "("
-  ],
-  [
     148,
     154,
     "string",
     "\\"%d\\\\n\\""
-  ],
-  [
-    154,
-    155,
-    "operator",
-    ","
-  ],
-  [
-    161,
-    162,
-    "operator",
-    ")"
-  ],
-  [
-    163,
-    164,
-    "operator",
-    "}"
   ]
 ]
 `;
@@ -991,9 +821,15 @@ exports[`syntax highlighting > golden tokens > go-raw-string 1`] = `
   ],
   [
     12,
+    21,
+    "string",
+    "\`SELECT *"
+  ],
+  [
+    22,
     33,
     "string",
-    "\`SELECT *\\nFROM users\`"
+    "FROM users\`"
   ],
   [
     34,
@@ -1016,13 +852,149 @@ exports[`syntax highlighting > golden tokens > go-raw-string 1`] = `
 ]
 `;
 
-exports[`syntax highlighting > golden tokens > html 1`] = `
+exports[`syntax highlighting > golden tokens > graphql 1`] = `
 [
   [
     0,
+    5,
+    "keyword",
+    "query"
+  ],
+  [
+    6,
+    10,
+    "function",
+    "User"
+  ],
+  [
+    16,
+    18,
+    "type",
+    "ID"
+  ],
+  [
+    18,
+    19,
+    "operator",
+    "!"
+  ],
+  [
+    25,
+    29,
+    "function",
+    "user"
+  ],
+  [
+    41,
+    45,
+    "property",
+    "name"
+  ],
+  [
+    46,
+    54,
+    "attribute",
+    "@include"
+  ],
+  [
+    59,
+    63,
+    "constant",
+    "true"
+  ]
+]
+`;
+
+exports[`syntax highlighting > golden tokens > haskell 1`] = `
+[
+  [
+    0,
+    6,
+    "keyword",
+    "module"
+  ],
+  [
+    7,
+    11,
+    "type",
+    "Main"
+  ],
+  [
+    12,
+    17,
+    "keyword",
+    "where"
+  ],
+  [
+    19,
+    31,
+    "comment",
+    "-- | Greets."
+  ],
+  [
+    32,
+    37,
+    "function",
+    "greet"
+  ],
+  [
+    38,
+    40,
+    "operator",
+    "::"
+  ],
+  [
+    41,
+    47,
+    "type",
+    "String"
+  ],
+  [
+    48,
+    50,
+    "operator",
+    "->"
+  ],
+  [
+    51,
+    57,
+    "type",
+    "String"
+  ],
+  [
+    58,
+    63,
+    "function",
+    "greet"
+  ],
+  [
+    69,
+    70,
+    "operator",
+    "="
+  ],
+  [
+    71,
+    76,
+    "string",
+    "\\"hi \\""
+  ],
+  [
+    77,
+    79,
+    "operator",
+    "++"
+  ]
+]
+`;
+
+exports[`syntax highlighting > golden tokens > html 1`] = `
+[
+  [
+    1,
     8,
     "tag",
-    "<section"
+    "section"
   ],
   [
     9,
@@ -1049,22 +1021,16 @@ exports[`syntax highlighting > golden tokens > html 1`] = `
     "\\"main\\""
   ],
   [
-    31,
-    32,
-    "tag",
-    ">"
-  ],
-  [
     35,
     53,
     "comment",
     "<!-- a comment -->"
   ],
   [
-    56,
+    57,
     58,
     "tag",
-    "<p"
+    "p"
   ],
   [
     59,
@@ -1079,40 +1045,52 @@ exports[`syntax highlighting > golden tokens > html 1`] = `
     "\\"hi\\""
   ],
   [
-    69,
-    70,
-    "tag",
-    ">"
-  ],
-  [
     75,
     80,
-    "constant",
+    "string",
     "&amp;"
   ],
   [
-    85,
-    89,
+    87,
+    88,
     "tag",
-    "</p>"
+    "p"
   ],
   [
-    92,
+    93,
+    99,
+    "tag",
+    "script"
+  ],
+  [
     100,
-    "tag",
-    "<script>"
+    105,
+    "keyword",
+    "const"
   ],
   [
-    112,
-    121,
-    "tag",
-    "</script>"
+    108,
+    109,
+    "operator",
+    "="
   ],
   [
-    122,
-    132,
+    110,
+    111,
+    "number",
+    "1"
+  ],
+  [
+    114,
+    120,
     "tag",
-    "</section>"
+    "script"
+  ],
+  [
+    124,
+    131,
+    "tag",
+    "section"
   ]
 ]
 `;
@@ -1126,40 +1104,22 @@ exports[`syntax highlighting > golden tokens > java 1`] = `
     "package"
   ],
   [
+    8,
     11,
-    12,
-    "operator",
-    "."
+    "type",
+    "com"
   ],
   [
     12,
     19,
-    "property",
+    "type",
     "example"
   ],
   [
-    19,
-    20,
-    "operator",
-    ";"
-  ],
-  [
     22,
-    28,
-    "keyword",
-    "public"
-  ],
-  [
-    29,
-    34,
-    "keyword",
-    "final"
-  ],
-  [
-    35,
     40,
     "keyword",
-    "class"
+    "public final class"
   ],
   [
     41,
@@ -1168,22 +1128,10 @@ exports[`syntax highlighting > golden tokens > java 1`] = `
     "Greeter"
   ],
   [
-    49,
-    50,
-    "operator",
-    "{"
-  ],
-  [
     53,
-    59,
-    "keyword",
-    "public"
-  ],
-  [
-    60,
     66,
     "keyword",
-    "static"
+    "public static"
   ],
   [
     67,
@@ -1198,28 +1146,10 @@ exports[`syntax highlighting > golden tokens > java 1`] = `
     "greet"
   ],
   [
-    79,
-    80,
-    "operator",
-    "("
-  ],
-  [
     80,
     86,
     "type",
     "String"
-  ],
-  [
-    91,
-    92,
-    "operator",
-    ")"
-  ],
-  [
-    93,
-    94,
-    "operator",
-    "{"
   ],
   [
     99,
@@ -1238,24 +1168,6 @@ exports[`syntax highlighting > golden tokens > java 1`] = `
     116,
     "operator",
     "+"
-  ],
-  [
-    121,
-    122,
-    "operator",
-    ";"
-  ],
-  [
-    125,
-    126,
-    "operator",
-    "}"
-  ],
-  [
-    127,
-    128,
-    "operator",
-    "}"
   ]
 ]
 `;
@@ -1263,22 +1175,10 @@ exports[`syntax highlighting > golden tokens > java 1`] = `
 exports[`syntax highlighting > golden tokens > json 1`] = `
 [
   [
-    0,
-    1,
-    "operator",
-    "{"
-  ],
-  [
     4,
     10,
     "property",
     "\\"name\\""
-  ],
-  [
-    10,
-    11,
-    "operator",
-    ":"
   ],
   [
     12,
@@ -1287,22 +1187,10 @@ exports[`syntax highlighting > golden tokens > json 1`] = `
     "\\"downstream\\""
   ],
   [
-    24,
-    25,
-    "operator",
-    ","
-  ],
-  [
     28,
     35,
     "property",
     "\\"count\\""
-  ],
-  [
-    35,
-    36,
-    "operator",
-    ":"
   ],
   [
     37,
@@ -1311,22 +1199,10 @@ exports[`syntax highlighting > golden tokens > json 1`] = `
     "3"
   ],
   [
-    38,
-    39,
-    "operator",
-    ","
-  ],
-  [
     42,
     46,
     "property",
     "\\"ok\\""
-  ],
-  [
-    46,
-    47,
-    "operator",
-    ":"
   ],
   [
     48,
@@ -1335,34 +1211,16 @@ exports[`syntax highlighting > golden tokens > json 1`] = `
     "true"
   ],
   [
-    52,
-    53,
-    "operator",
-    ","
-  ],
-  [
     56,
     62,
     "property",
     "\\"tags\\""
   ],
   [
-    62,
-    63,
-    "operator",
-    ":"
-  ],
-  [
     64,
     68,
     "constant",
     "null"
-  ],
-  [
-    69,
-    70,
-    "operator",
-    "}"
   ]
 ]
 `;
@@ -1384,14 +1242,8 @@ exports[`syntax highlighting > golden tokens > kotlin 1`] = `
   [
     11,
     15,
-    "function",
+    "type",
     "User"
-  ],
-  [
-    15,
-    16,
-    "operator",
-    "("
   ],
   [
     16,
@@ -1400,22 +1252,10 @@ exports[`syntax highlighting > golden tokens > kotlin 1`] = `
     "val"
   ],
   [
-    22,
-    23,
-    "operator",
-    ":"
-  ],
-  [
     24,
     27,
     "type",
     "Int"
-  ],
-  [
-    27,
-    28,
-    "operator",
-    ","
   ],
   [
     29,
@@ -1424,22 +1264,10 @@ exports[`syntax highlighting > golden tokens > kotlin 1`] = `
     "val"
   ],
   [
-    37,
-    38,
-    "operator",
-    ":"
-  ],
-  [
     39,
     45,
     "type",
     "String"
-  ],
-  [
-    45,
-    46,
-    "operator",
-    ")"
   ],
   [
     48,
@@ -1454,40 +1282,16 @@ exports[`syntax highlighting > golden tokens > kotlin 1`] = `
     "greet"
   ],
   [
-    57,
-    58,
-    "operator",
-    "("
-  ],
-  [
-    62,
-    63,
-    "operator",
-    ":"
-  ],
-  [
     64,
     68,
     "type",
     "User"
   ],
   [
-    68,
-    70,
-    "operator",
-    "):"
-  ],
-  [
     71,
     77,
     "type",
     "String"
-  ],
-  [
-    78,
-    79,
-    "operator",
-    "{"
   ],
   [
     82,
@@ -1515,15 +1319,27 @@ exports[`syntax highlighting > golden tokens > kotlin 1`] = `
   ],
   [
     109,
-    132,
+    110,
     "string",
-    "\\"$prefix, \${user.name}\\""
+    "\\""
   ],
   [
-    133,
-    134,
-    "operator",
-    "}"
+    117,
+    118,
+    "string",
+    ","
+  ],
+  [
+    126,
+    130,
+    "property",
+    "name"
+  ],
+  [
+    131,
+    132,
+    "string",
+    "\\""
   ]
 ]
 `;
@@ -1537,22 +1353,10 @@ exports[`syntax highlighting > golden tokens > lua 1`] = `
     "local"
   ],
   [
-    6,
-    7,
-    "type",
-    "M"
-  ],
-  [
     8,
     9,
     "operator",
     "="
-  ],
-  [
-    10,
-    12,
-    "operator",
-    "{}"
   ],
   [
     14,
@@ -1562,27 +1366,15 @@ exports[`syntax highlighting > golden tokens > lua 1`] = `
   ],
   [
     23,
+    24,
+    "function",
+    "M"
+  ],
+  [
+    25,
     28,
     "function",
-    "M.add"
-  ],
-  [
-    28,
-    29,
-    "operator",
-    "("
-  ],
-  [
-    30,
-    31,
-    "operator",
-    ","
-  ],
-  [
-    33,
-    34,
-    "operator",
-    ")"
+    "add"
   ],
   [
     37,
@@ -1607,12 +1399,29 @@ exports[`syntax highlighting > golden tokens > lua 1`] = `
     61,
     "keyword",
     "return"
+  ]
+]
+`;
+
+exports[`syntax highlighting > golden tokens > makefile 1`] = `
+[
+  [
+    3,
+    5,
+    "operator",
+    "?="
   ],
   [
-    62,
-    63,
-    "type",
-    "M"
+    9,
+    12,
+    "function",
+    "all"
+  ],
+  [
+    35,
+    37,
+    "constant",
+    "$^"
   ]
 ]
 `;
@@ -1621,27 +1430,15 @@ exports[`syntax highlighting > golden tokens > markdown 1`] = `
 [
   [
     0,
-    1,
+    7,
     "heading",
-    "#"
+    "# Title"
   ],
   [
-    14,
-    24,
-    "keyword",
-    "*emphasis*"
-  ],
-  [
-    38,
-    39,
-    "operator",
-    "-"
-  ],
-  [
-    44,
-    45,
-    "operator",
-    "-"
+    29,
+    35,
+    "string",
+    "\`code\`"
   ]
 ]
 `;
@@ -1651,7 +1448,162 @@ exports[`syntax highlighting > golden tokens > no-language 1`] = `
 `;
 
 exports[`syntax highlighting > golden tokens > objc 1`] = `
-[]
+[
+  [
+    0,
+    15,
+    "keyword",
+    "@implementation"
+  ],
+  [
+    16,
+    23,
+    "type",
+    "Greeter"
+  ],
+  [
+    24,
+    25,
+    "operator",
+    "-"
+  ],
+  [
+    27,
+    35,
+    "type",
+    "NSString"
+  ],
+  [
+    36,
+    37,
+    "operator",
+    "*"
+  ],
+  [
+    38,
+    43,
+    "function",
+    "greet"
+  ],
+  [
+    45,
+    53,
+    "type",
+    "NSString"
+  ],
+  [
+    54,
+    55,
+    "operator",
+    "*"
+  ],
+  [
+    65,
+    71,
+    "keyword",
+    "return"
+  ],
+  [
+    73,
+    79,
+    "string",
+    "@\\"hi \\""
+  ],
+  [
+    80,
+    103,
+    "function",
+    "stringByAppendingString"
+  ],
+  [
+    113,
+    117,
+    "keyword",
+    "@end"
+  ]
+]
+`;
+
+exports[`syntax highlighting > golden tokens > php 1`] = `
+[
+  [
+    0,
+    5,
+    "preprocessor",
+    "<?php"
+  ],
+  [
+    6,
+    14,
+    "keyword",
+    "function"
+  ],
+  [
+    15,
+    20,
+    "function",
+    "greet"
+  ],
+  [
+    21,
+    27,
+    "type",
+    "string"
+  ],
+  [
+    36,
+    42,
+    "type",
+    "string"
+  ],
+  [
+    47,
+    53,
+    "keyword",
+    "return"
+  ],
+  [
+    54,
+    66,
+    "string",
+    "\\"hi {$name}\\""
+  ]
+]
+`;
+
+exports[`syntax highlighting > golden tokens > powershell 1`] = `
+[
+  [
+    6,
+    7,
+    "operator",
+    "="
+  ],
+  [
+    8,
+    15,
+    "string",
+    "\\"world\\""
+  ],
+  [
+    16,
+    26,
+    "function",
+    "Write-Host"
+  ],
+  [
+    27,
+    30,
+    "string",
+    "\\"hi"
+  ],
+  [
+    36,
+    37,
+    "string",
+    "\\""
+  ]
+]
 `;
 
 exports[`syntax highlighting > golden tokens > python 1`] = `
@@ -1671,7 +1623,7 @@ exports[`syntax highlighting > golden tokens > python 1`] = `
   [
     35,
     45,
-    "preprocessor",
+    "attribute",
     "@dataclass"
   ],
   [
@@ -1685,12 +1637,6 @@ exports[`syntax highlighting > golden tokens > python 1`] = `
     56,
     "type",
     "User"
-  ],
-  [
-    56,
-    57,
-    "operator",
-    ":"
   ],
   [
     62,
@@ -1711,28 +1657,16 @@ exports[`syntax highlighting > golden tokens > python 1`] = `
     "greet"
   ],
   [
-    90,
     91,
-    "operator",
-    "("
-  ],
-  [
     95,
-    96,
-    "operator",
-    ","
+    "constant",
+    "self"
   ],
   [
-    101,
-    102,
-    "operator",
-    ":"
-  ],
-  [
+    103,
     106,
-    107,
-    "operator",
-    ")"
+    "type",
+    "str"
   ],
   [
     108,
@@ -1741,10 +1675,10 @@ exports[`syntax highlighting > golden tokens > python 1`] = `
     "->"
   ],
   [
+    111,
     114,
-    115,
-    "operator",
-    ":"
+    "type",
+    "str"
   ],
   [
     124,
@@ -1754,15 +1688,21 @@ exports[`syntax highlighting > golden tokens > python 1`] = `
   ],
   [
     131,
-    140,
+    138,
     "string",
-    "f\\"hello {"
+    "f\\"hello"
   ],
   [
+    140,
     144,
+    "string",
+    "name"
+  ],
+  [
+    145,
     146,
     "string",
-    "}\\""
+    "\\""
   ]
 ]
 `;
@@ -1777,27 +1717,33 @@ exports[`syntax highlighting > golden tokens > python-triple-quoted 1`] = `
   ],
   [
     7,
+    10,
+    "string",
+    "'''"
+  ],
+  [
+    11,
+    19,
+    "string",
+    "line one"
+  ],
+  [
+    20,
+    28,
+    "string",
+    "line two"
+  ],
+  [
+    29,
     32,
     "string",
-    "'''\\nline one\\nline two\\n'''"
+    "'''"
   ],
   [
     33,
     38,
     "function",
     "print"
-  ],
-  [
-    38,
-    39,
-    "operator",
-    "("
-  ],
-  [
-    43,
-    44,
-    "operator",
-    ")"
   ]
 ]
 `;
@@ -1829,34 +1775,16 @@ exports[`syntax highlighting > golden tokens > ruby 1`] = `
     "greet"
   ],
   [
-    25,
-    26,
-    "operator",
-    "("
-  ],
-  [
-    30,
-    31,
-    "operator",
-    ")"
+    36,
+    40,
+    "function",
+    "puts"
   ],
   [
     41,
-    45,
+    44,
     "string",
-    "\\"hi "
-  ],
-  [
-    45,
-    47,
-    "operator",
-    "#{"
-  ],
-  [
-    51,
-    52,
-    "operator",
-    "}"
+    "\\"hi"
   ],
   [
     52,
@@ -1888,28 +1816,22 @@ exports[`syntax highlighting > golden tokens > rust 1`] = `
     "use"
   ],
   [
+    4,
     7,
-    9,
-    "operator",
-    "::"
+    "type",
+    "std"
   ],
   [
+    9,
     20,
-    22,
-    "operator",
-    "::"
+    "type",
+    "collections"
   ],
   [
     22,
     29,
     "type",
     "HashMap"
-  ],
-  [
-    29,
-    30,
-    "operator",
-    ";"
   ],
   [
     32,
@@ -1928,18 +1850,6 @@ exports[`syntax highlighting > golden tokens > rust 1`] = `
     44,
     "function",
     "count"
-  ],
-  [
-    44,
-    45,
-    "operator",
-    "("
-  ],
-  [
-    48,
-    49,
-    "operator",
-    ":"
   ],
   [
     50,
@@ -1966,12 +1876,6 @@ exports[`syntax highlighting > golden tokens > rust 1`] = `
     "String"
   ],
   [
-    65,
-    66,
-    "operator",
-    ","
-  ],
-  [
     67,
     70,
     "type",
@@ -1979,9 +1883,9 @@ exports[`syntax highlighting > golden tokens > rust 1`] = `
   ],
   [
     70,
-    72,
+    71,
     "operator",
-    ">)"
+    ">"
   ],
   [
     73,
@@ -1990,16 +1894,10 @@ exports[`syntax highlighting > golden tokens > rust 1`] = `
     "->"
   ],
   [
-    82,
-    83,
-    "operator",
-    "{"
-  ],
-  [
-    91,
-    92,
-    "operator",
-    "."
+    76,
+    81,
+    "type",
+    "usize"
   ],
   [
     92,
@@ -2008,34 +1906,22 @@ exports[`syntax highlighting > golden tokens > rust 1`] = `
     "values"
   ],
   [
-    98,
-    101,
-    "operator",
-    "()."
-  ],
-  [
     101,
     107,
     "function",
     "filter"
   ],
   [
-    107,
+    108,
     109,
-    "operator",
-    "(|"
-  ],
-  [
-    110,
-    111,
     "operator",
     "|"
   ],
   [
-    112,
+    110,
     114,
     "operator",
-    "**"
+    "| **"
   ],
   [
     116,
@@ -2050,28 +1936,10 @@ exports[`syntax highlighting > golden tokens > rust 1`] = `
     "0"
   ],
   [
-    119,
-    121,
-    "operator",
-    ")."
-  ],
-  [
     121,
     126,
     "function",
     "count"
-  ],
-  [
-    126,
-    128,
-    "operator",
-    "()"
-  ],
-  [
-    129,
-    130,
-    "operator",
-    "}"
   ]
 ]
 `;
@@ -2091,12 +1959,6 @@ exports[`syntax highlighting > golden tokens > scala 1`] = `
     "Main"
   ],
   [
-    12,
-    13,
-    "operator",
-    "{"
-  ],
-  [
     16,
     19,
     "keyword",
@@ -2109,40 +1971,16 @@ exports[`syntax highlighting > golden tokens > scala 1`] = `
     "main"
   ],
   [
-    24,
-    25,
-    "operator",
-    "("
-  ],
-  [
-    29,
-    30,
-    "operator",
-    ":"
-  ],
-  [
     31,
     36,
     "type",
     "Array"
   ],
   [
-    36,
-    37,
-    "operator",
-    "["
-  ],
-  [
     37,
     43,
     "type",
     "String"
-  ],
-  [
-    43,
-    46,
-    "operator",
-    "]):"
   ],
   [
     47,
@@ -2163,28 +2001,57 @@ exports[`syntax highlighting > golden tokens > scala 1`] = `
     "println"
   ],
   [
-    61,
-    62,
-    "operator",
-    "("
-  ],
-  [
     62,
     66,
     "string",
     "\\"hi\\""
+  ]
+]
+`;
+
+exports[`syntax highlighting > golden tokens > scss 1`] = `
+[
+  [
+    6,
+    9,
+    "number",
+    "4px"
   ],
   [
-    66,
-    67,
-    "operator",
-    ")"
+    11,
+    16,
+    "attribute",
+    ".card"
   ],
   [
-    68,
-    69,
+    21,
+    22,
     "operator",
-    "}"
+    "&"
+  ],
+  [
+    22,
+    28,
+    "attribute",
+    ":hover"
+  ],
+  [
+    31,
+    37,
+    "property",
+    "margin"
+  ],
+  [
+    44,
+    45,
+    "operator",
+    "*"
+  ],
+  [
+    46,
+    47,
+    "number",
+    "2"
   ]
 ]
 `;
@@ -2193,21 +2060,15 @@ exports[`syntax highlighting > golden tokens > sql 1`] = `
 [
   [
     0,
-    19,
+    18,
     "comment",
-    "-- pick the newest\\n"
+    "-- pick the newest"
   ],
   [
     19,
     25,
     "keyword",
     "SELECT"
-  ],
-  [
-    28,
-    29,
-    "operator",
-    ","
   ],
   [
     35,
@@ -2235,27 +2096,15 @@ exports[`syntax highlighting > golden tokens > sql 1`] = `
   ],
   [
     63,
-    68,
-    "keyword",
-    "ORDER"
-  ],
-  [
-    69,
     71,
     "keyword",
-    "BY"
+    "ORDER BY"
   ],
   [
     80,
     84,
     "keyword",
     "DESC"
-  ],
-  [
-    84,
-    85,
-    "operator",
-    ";"
   ]
 ]
 `;
@@ -2275,22 +2124,10 @@ exports[`syntax highlighting > golden tokens > swift 1`] = `
     "Point"
   ],
   [
-    13,
-    14,
-    "operator",
-    "{"
-  ],
-  [
     15,
     18,
     "keyword",
     "let"
-  ],
-  [
-    20,
-    21,
-    "operator",
-    ":"
   ],
   [
     22,
@@ -2299,34 +2136,16 @@ exports[`syntax highlighting > golden tokens > swift 1`] = `
     "Int"
   ],
   [
-    25,
-    26,
-    "operator",
-    ";"
-  ],
-  [
     27,
     30,
     "keyword",
     "let"
   ],
   [
-    32,
-    33,
-    "operator",
-    ":"
-  ],
-  [
     34,
     37,
     "type",
     "Int"
-  ],
-  [
-    38,
-    39,
-    "operator",
-    "}"
   ],
   [
     41,
@@ -2341,46 +2160,16 @@ exports[`syntax highlighting > golden tokens > swift 1`] = `
     "distance"
   ],
   [
-    54,
-    55,
-    "operator",
-    "("
-  ],
-  [
-    61,
-    62,
-    "operator",
-    ":"
-  ],
-  [
     63,
     68,
     "type",
     "Point"
   ],
   [
-    68,
-    69,
-    "operator",
-    ","
-  ],
-  [
-    74,
-    75,
-    "operator",
-    ":"
-  ],
-  [
     76,
     81,
     "type",
     "Point"
-  ],
-  [
-    81,
-    82,
-    "operator",
-    ")"
   ],
   [
     83,
@@ -2393,12 +2182,6 @@ exports[`syntax highlighting > golden tokens > swift 1`] = `
     92,
     "type",
     "Double"
-  ],
-  [
-    93,
-    94,
-    "operator",
-    "{"
   ],
   [
     97,
@@ -2415,20 +2198,8 @@ exports[`syntax highlighting > golden tokens > swift 1`] = `
   [
     106,
     112,
-    "function",
+    "type",
     "Double"
-  ],
-  [
-    112,
-    113,
-    "operator",
-    "("
-  ],
-  [
-    114,
-    115,
-    "operator",
-    "."
   ],
   [
     115,
@@ -2443,22 +2214,10 @@ exports[`syntax highlighting > golden tokens > swift 1`] = `
     "-"
   ],
   [
-    120,
-    121,
-    "operator",
-    "."
-  ],
-  [
     121,
     122,
     "property",
     "x"
-  ],
-  [
-    122,
-    123,
-    "operator",
-    ")"
   ],
   [
     126,
@@ -2467,40 +2226,87 @@ exports[`syntax highlighting > golden tokens > swift 1`] = `
     "return"
   ],
   [
-    133,
-    134,
-    "operator",
-    "("
-  ],
-  [
     137,
     138,
     "operator",
     "*"
   ],
   [
-    141,
-    143,
-    "operator",
-    ")."
-  ],
-  [
     143,
     153,
     "function",
     "squareRoot"
+  ]
+]
+`;
+
+exports[`syntax highlighting > golden tokens > terraform 1`] = `
+[
+  [
+    0,
+    8,
+    "keyword",
+    "resource"
   ],
   [
-    153,
-    155,
-    "operator",
-    "()"
+    9,
+    31,
+    "string",
+    "\\"aws_s3_bucket\\" \\"logs\\""
   ],
   [
-    156,
-    157,
+    36,
+    42,
+    "property",
+    "bucket"
+  ],
+  [
+    43,
+    44,
     "operator",
-    "}"
+    "="
+  ],
+  [
+    45,
+    51,
+    "string",
+    "\\"logs-"
+  ],
+  [
+    53,
+    56,
+    "constant",
+    "var"
+  ],
+  [
+    57,
+    60,
+    "property",
+    "env"
+  ],
+  [
+    61,
+    62,
+    "string",
+    "\\""
+  ],
+  [
+    65,
+    70,
+    "property",
+    "count"
+  ],
+  [
+    72,
+    73,
+    "operator",
+    "="
+  ],
+  [
+    74,
+    75,
+    "number",
+    "2"
   ]
 ]
 `;
@@ -2508,10 +2314,10 @@ exports[`syntax highlighting > golden tokens > swift 1`] = `
 exports[`syntax highlighting > golden tokens > toml 1`] = `
 [
   [
-    0,
-    10,
-    "type",
-    "[package]\\n"
+    1,
+    8,
+    "property",
+    "package"
   ],
   [
     10,
@@ -2561,18 +2367,6 @@ exports[`syntax highlighting > golden tokens > ts-imports 1`] = `
     "import"
   ],
   [
-    7,
-    8,
-    "operator",
-    "{"
-  ],
-  [
-    18,
-    19,
-    "operator",
-    "}"
-  ],
-  [
     20,
     24,
     "keyword",
@@ -2585,34 +2379,16 @@ exports[`syntax highlighting > golden tokens > ts-imports 1`] = `
     "'node:fs/promises'"
   ],
   [
-    43,
-    44,
-    "operator",
-    ";"
-  ],
-  [
     45,
     51,
     "keyword",
     "import"
   ],
   [
-    57,
-    58,
-    "operator",
-    "{"
-  ],
-  [
     59,
     62,
     "type",
     "Foo"
-  ],
-  [
-    63,
-    64,
-    "operator",
-    "}"
   ],
   [
     65,
@@ -2625,12 +2401,6 @@ exports[`syntax highlighting > golden tokens > ts-imports 1`] = `
     77,
     "string",
     "'./foo'"
-  ],
-  [
-    77,
-    78,
-    "operator",
-    ";"
   ]
 ]
 `;
@@ -2662,82 +2432,40 @@ exports[`syntax highlighting > golden tokens > ts-jsx 1`] = `
     "="
   ],
   [
-    19,
-    21,
-    "operator",
-    "()"
-  ],
-  [
     22,
     24,
     "operator",
     "=>"
   ],
   [
-    25,
-    26,
-    "operator",
-    "<"
-  ],
-  [
     26,
     30,
-    "type",
+    "tag",
     "View"
   ],
   [
+    31,
     36,
-    38,
-    "operator",
-    "={"
-  ],
-  [
-    39,
-    42,
-    "operator",
-    "}><"
+    "attribute",
+    "style"
   ],
   [
     42,
     46,
-    "type",
+    "tag",
     "Text"
-  ],
-  [
-    46,
-    47,
-    "operator",
-    ">"
-  ],
-  [
-    49,
-    51,
-    "operator",
-    "</"
   ],
   [
     51,
     55,
-    "type",
+    "tag",
     "Text"
-  ],
-  [
-    55,
-    58,
-    "operator",
-    "></"
   ],
   [
     58,
     62,
-    "type",
+    "tag",
     "View"
-  ],
-  [
-    62,
-    64,
-    "operator",
-    ">;"
   ]
 ]
 `;
@@ -2763,12 +2491,6 @@ exports[`syntax highlighting > golden tokens > ts-regex-and-numbers 1`] = `
     "/^[a-z]+\\\\d{2,}$/gi"
   ],
   [
-    34,
-    35,
-    "operator",
-    ";"
-  ],
-  [
     36,
     41,
     "keyword",
@@ -2781,22 +2503,10 @@ exports[`syntax highlighting > golden tokens > ts-regex-and-numbers 1`] = `
     "="
   ],
   [
-    50,
-    51,
-    "operator",
-    "["
-  ],
-  [
     51,
     55,
     "number",
     "0x10"
-  ],
-  [
-    55,
-    56,
-    "operator",
-    ","
   ],
   [
     57,
@@ -2805,34 +2515,16 @@ exports[`syntax highlighting > golden tokens > ts-regex-and-numbers 1`] = `
     "1e6"
   ],
   [
-    60,
-    61,
-    "operator",
-    ","
-  ],
-  [
     62,
     68,
     "number",
     "0b1010"
   ],
   [
-    68,
-    69,
-    "operator",
-    ","
-  ],
-  [
     70,
     76,
-    "constant",
+    "number",
     "12_345"
-  ],
-  [
-    76,
-    78,
-    "operator",
-    "];"
   ]
 ]
 `;
@@ -2853,51 +2545,21 @@ exports[`syntax highlighting > golden tokens > ts-template 1`] = `
   ],
   [
     17,
-    24,
+    23,
     "string",
-    "\`hello "
-  ],
-  [
-    24,
-    26,
-    "operator",
-    "\${"
-  ],
-  [
-    30,
-    31,
-    "operator",
-    "}"
+    "\`hello"
   ],
   [
     31,
-    41,
+    40,
     "string",
-    ", you are "
+    ", you are"
   ],
   [
-    41,
-    43,
-    "operator",
-    "\${"
-  ],
-  [
-    46,
-    47,
-    "operator",
-    "}"
-  ],
-  [
-    47,
+    48,
     58,
     "string",
-    " years old\`"
-  ],
-  [
-    58,
-    59,
-    "operator",
-    ";"
+    "years old\`"
   ]
 ]
 `;
@@ -2929,22 +2591,10 @@ exports[`syntax highlighting > golden tokens > ts-types 1`] = `
     "loadUser"
   ],
   [
-    30,
-    31,
-    "operator",
-    "("
-  ],
-  [
-    33,
-    34,
-    "operator",
-    ":"
-  ],
-  [
+    35,
     41,
-    43,
-    "operator",
-    "):"
+    "type",
+    "number"
   ],
   [
     44,
@@ -2973,7 +2623,7 @@ exports[`syntax highlighting > golden tokens > ts-types 1`] = `
   [
     59,
     63,
-    "keyword",
+    "constant",
     "null"
   ],
   [
@@ -2981,12 +2631,6 @@ exports[`syntax highlighting > golden tokens > ts-types 1`] = `
     64,
     "operator",
     ">"
-  ],
-  [
-    65,
-    66,
-    "operator",
-    "{"
   ],
   [
     69,
@@ -3013,28 +2657,10 @@ exports[`syntax highlighting > golden tokens > ts-types 1`] = `
     "fetch"
   ],
   [
-    92,
-    93,
-    "operator",
-    "("
-  ],
-  [
     93,
     105,
     "string",
     "\`/api/users/"
-  ],
-  [
-    105,
-    107,
-    "operator",
-    "\${"
-  ],
-  [
-    109,
-    110,
-    "operator",
-    "}"
   ],
   [
     110,
@@ -3043,22 +2669,10 @@ exports[`syntax highlighting > golden tokens > ts-types 1`] = `
     "?v="
   ],
   [
-    113,
-    115,
-    "operator",
-    "\${"
-  ],
-  [
     115,
     122,
-    "type",
+    "constant",
     "VERSION"
-  ],
-  [
-    122,
-    123,
-    "operator",
-    "}"
   ],
   [
     123,
@@ -3067,46 +2681,22 @@ exports[`syntax highlighting > golden tokens > ts-types 1`] = `
     "\`"
   ],
   [
-    124,
-    126,
-    "operator",
-    ");"
-  ],
-  [
     129,
     131,
     "keyword",
     "if"
   ],
   [
-    132,
+    133,
     134,
     "operator",
-    "(!"
-  ],
-  [
-    137,
-    138,
-    "operator",
-    "."
+    "!"
   ],
   [
     138,
     140,
     "property",
     "ok"
-  ],
-  [
-    140,
-    141,
-    "operator",
-    ")"
-  ],
-  [
-    142,
-    143,
-    "operator",
-    "{"
   ],
   [
     148,
@@ -3123,14 +2713,8 @@ exports[`syntax highlighting > golden tokens > ts-types 1`] = `
   [
     158,
     163,
-    "function",
+    "type",
     "Error"
-  ],
-  [
-    163,
-    164,
-    "operator",
-    "("
   ],
   [
     164,
@@ -3145,28 +2729,10 @@ exports[`syntax highlighting > golden tokens > ts-types 1`] = `
     "+"
   ],
   [
-    180,
-    181,
-    "operator",
-    "."
-  ],
-  [
     181,
     187,
     "property",
     "status"
-  ],
-  [
-    187,
-    189,
-    "operator",
-    ");"
-  ],
-  [
-    192,
-    193,
-    "operator",
-    "}"
   ],
   [
     196,
@@ -3175,34 +2741,135 @@ exports[`syntax highlighting > golden tokens > ts-types 1`] = `
     "return"
   ],
   [
-    206,
-    207,
-    "operator",
-    "."
-  ],
-  [
     207,
     211,
     "function",
     "json"
-  ],
-  [
-    211,
-    214,
-    "operator",
-    "();"
-  ],
-  [
-    215,
-    216,
-    "operator",
-    "}"
   ]
 ]
 `;
 
 exports[`syntax highlighting > golden tokens > unknown-language 1`] = `
 []
+`;
+
+exports[`syntax highlighting > golden tokens > vue 1`] = `
+[
+  [
+    1,
+    9,
+    "tag",
+    "template"
+  ],
+  [
+    14,
+    15,
+    "tag",
+    "p"
+  ],
+  [
+    16,
+    22,
+    "attribute",
+    ":class"
+  ],
+  [
+    23,
+    24,
+    "string",
+    "\\""
+  ],
+  [
+    27,
+    28,
+    "string",
+    "\\""
+  ],
+  [
+    40,
+    41,
+    "tag",
+    "p"
+  ],
+  [
+    45,
+    53,
+    "tag",
+    "template"
+  ],
+  [
+    56,
+    62,
+    "tag",
+    "script"
+  ],
+  [
+    63,
+    73,
+    "attribute",
+    "setup lang"
+  ],
+  [
+    74,
+    78,
+    "string",
+    "\\"ts\\""
+  ],
+  [
+    80,
+    85,
+    "keyword",
+    "const"
+  ],
+  [
+    98,
+    99,
+    "operator",
+    "="
+  ],
+  [
+    100,
+    104,
+    "string",
+    "\\"hi\\""
+  ],
+  [
+    108,
+    114,
+    "tag",
+    "script"
+  ],
+  [
+    117,
+    122,
+    "tag",
+    "style"
+  ],
+  [
+    124,
+    125,
+    "tag",
+    "p"
+  ],
+  [
+    128,
+    133,
+    "property",
+    "color"
+  ],
+  [
+    135,
+    138,
+    "constant",
+    "red"
+  ],
+  [
+    144,
+    149,
+    "tag",
+    "style"
+  ]
+]
 `;
 
 exports[`syntax highlighting > golden tokens > wide-characters 1`] = `
@@ -3226,12 +2893,6 @@ exports[`syntax highlighting > golden tokens > wide-characters 1`] = `
     "\\"漢字\\""
   ],
   [
-    15,
-    16,
-    "operator",
-    ";"
-  ],
-  [
     17,
     22,
     "keyword",
@@ -3250,16 +2911,10 @@ exports[`syntax highlighting > golden tokens > wide-characters 1`] = `
     "1"
   ],
   [
-    28,
-    29,
-    "operator",
-    ";"
-  ],
-  [
     30,
-    38,
+    37,
     "comment",
-    "// שלום\\n"
+    "// שלום"
   ]
 ]
 `;
@@ -3268,33 +2923,15 @@ exports[`syntax highlighting > golden tokens > xml 1`] = `
 [
   [
     0,
-    5,
-    "tag",
-    "<?xml"
-  ],
-  [
-    6,
-    13,
-    "attribute",
-    "version"
-  ],
-  [
-    14,
-    19,
-    "string",
-    "\\"1.0\\""
-  ],
-  [
-    19,
     21,
-    "tag",
-    "?>"
+    "preprocessor",
+    "<?xml version=\\"1.0\\"?>"
   ],
   [
-    22,
+    23,
     27,
     "tag",
-    "<root"
+    "root"
   ],
   [
     28,
@@ -3309,10 +2946,16 @@ exports[`syntax highlighting > golden tokens > xml 1`] = `
     "\\"1\\""
   ],
   [
-    36,
-    52,
+    38,
+    43,
     "tag",
-    "><child/></root>"
+    "child"
+  ],
+  [
+    47,
+    51,
+    "tag",
+    "root"
   ]
 ]
 `;
@@ -3326,10 +2969,10 @@ exports[`syntax highlighting > golden tokens > yaml 1`] = `
     "name"
   ],
   [
-    4,
-    5,
-    "operator",
-    ":"
+    6,
+    16,
+    "string",
+    "downstream"
   ],
   [
     17,
@@ -3338,16 +2981,10 @@ exports[`syntax highlighting > golden tokens > yaml 1`] = `
     "version"
   ],
   [
-    24,
-    25,
-    "operator",
-    ":"
-  ],
-  [
-    25,
-    28,
+    26,
+    27,
     "number",
-    " 1\\n"
+    "1"
   ],
   [
     28,
@@ -3356,10 +2993,99 @@ exports[`syntax highlighting > golden tokens > yaml 1`] = `
     "items"
   ],
   [
-    33,
-    34,
+    39,
+    42,
+    "string",
+    "one"
+  ],
+  [
+    47,
+    50,
+    "string",
+    "two"
+  ]
+]
+`;
+
+exports[`syntax highlighting > golden tokens > zig 1`] = `
+[
+  [
+    0,
+    5,
+    "keyword",
+    "const"
+  ],
+  [
+    10,
+    11,
     "operator",
-    ":"
+    "="
+  ],
+  [
+    12,
+    19,
+    "keyword",
+    "@import"
+  ],
+  [
+    20,
+    25,
+    "string",
+    "\\"std\\""
+  ],
+  [
+    28,
+    31,
+    "keyword",
+    "pub"
+  ],
+  [
+    32,
+    34,
+    "keyword",
+    "fn"
+  ],
+  [
+    35,
+    39,
+    "function",
+    "main"
+  ],
+  [
+    42,
+    43,
+    "operator",
+    "!"
+  ],
+  [
+    43,
+    47,
+    "type",
+    "void"
+  ],
+  [
+    58,
+    63,
+    "property",
+    "debug"
+  ],
+  [
+    64,
+    69,
+    "function",
+    "print"
+  ],
+  [
+    70,
+    77,
+    "string",
+    "\\"{d}\\\\n\\""
+  ],
+  [
+    81,
+    83,
+    "number",
+    "42"
   ]
 ]
 `;

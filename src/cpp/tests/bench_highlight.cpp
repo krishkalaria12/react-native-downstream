@@ -1,9 +1,10 @@
 // Build with the host engine's sources and -O3 -DNDEBUG. Each result is the
 // median of seven samples; token counts keep the workload observable.
-#include "CodeDocument.h"
 #include "CodeHighlighter.h"
 #include "IncrementalParser.h"
 #include "Export.h"
+#include "Languages.h"
+#include "StreamLexer.h"
 #include "Unicode.h"
 
 #include <algorithm>
@@ -63,15 +64,23 @@ int main() {
     code += "const value = compute(user.id, 42); // next value\n";
   }
   const std::u16string text = utf8ToUtf16(code);
-  measure("document_append_16", [&] {
+  // What a stream costs the lexer per settled line: restore the saved state,
+  // lex one line, save it again.
+  measure("lexer_resume_line", [&] {
+    StreamLexer *lexer = StreamLexer::current();
+    const uint8_t language = findLanguage("ts")->id;
+    std::vector<uint8_t> image;
+    std::vector<uint32_t> records;
     size_t count = 0;
-    for (int repeat = 0; repeat < 20; repeat++) {
-      CodeDocument document;
-      document.reset("");
-      for (size_t at = 0; at < code.size(); at += 16) {
-        document.append(std::string_view(code).substr(at, 16));
-      }
-      count += document.lineCount();
+    bool first = true;
+    for (size_t at = 0; at < code.size();) {
+      const size_t end = code.find('\n', at) + 1;
+      lexer->start(language, first ? nullptr : &image);
+      lexer->lex(std::string_view(code).substr(at, end - at), &records);
+      lexer->capture(&image);
+      count += records.size() / 2;
+      first = false;
+      at = end;
     }
     return count;
   });

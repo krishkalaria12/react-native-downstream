@@ -161,7 +161,7 @@ void testCheckedCallAlwaysRefreshes() {
   downstreamHighlighter().tokenize("ts", text, &state, &runs, 1e9);
   text.append(u"';");
   downstreamHighlighter().tokenize("ts", text, &state, &runs, 1e9);
-  CHECK(state.lastStop == HighlightStop::Complete && state.bytesLexed == state.document.length(),
+  CHECK(state.lastStop == HighlightStop::Complete && state.bytesLexed == utf16ToUtf8(text).size(),
         "arbitrary checked calls always relex an unfinished line");
   text.push_back(0xd83d);
   downstreamHighlighter().tokenize("ts", text, &state, &runs, 1e9);
@@ -170,7 +170,7 @@ void testCheckedCallAlwaysRefreshes() {
   HighlightState whole;
   std::vector<TokenRun> expected;
   downstreamHighlighter().tokenize("ts", text, &whole, &expected, 1e9);
-  CHECK(!state.resumed && sameTokens(runs, expected), "a split surrogate rebuilds the UTF-8 prefix");
+  CHECK(state.resumed && sameTokens(runs, expected), "a split surrogate pair resumes and equals a whole pass");
 }
 
 

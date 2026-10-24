@@ -31,7 +31,6 @@ import { fencedCases, highlightCases } from './highlight_fixtures.mjs';
 import { adversarialCases, cases } from './oracle.mjs';
 
 const MD4C = join(CPP, 'md4c');
-const LEXILLA = join(CPP, 'lexilla');
 
 const KIND = { paragraph: 0, heading: 1, code: 2, html: 3, hr: 4, table: 5 };
 const LIST_ITEM = 1;
@@ -266,62 +265,6 @@ describe('vendored md4c', () => {
     // md4c-html existed only to produce the deleted HTML oracle.
     assert.equal(existsSync(join(MD4C, 'md4c-html.c')), false);
     assert.equal(existsSync(join(MD4C, 'md4c-html.h')), false);
-  });
-});
-
-describe('vendored Lexilla', () => {
-  // The token colors a reader sees come out of these lexers, so a local edit is
-  // either a deliberate upstream merge, which must be recorded here on purpose,
-  // or an accident. The golden token fixtures above catch a change that alters
-  // output; this catches one that does not.
-  //
-  // One digest over the whole tree rather than a hash per file: there are ~40
-  // files, and a per-file table is a list nobody reads carefully. The digest is
-  // taken over the sorted "path sha256" manifest, so it changes when a file is
-  // edited, added, removed, or renamed. Regenerate with:
-  //
-  //   node -e 'const{createHash}=require("crypto"),{readdirSync,readFileSync}=require("fs");\
-  //   const files=[];const walk=d=>{for(const n of readdirSync(d,{withFileTypes:true})){\
-  //   const p=d+"/"+n.name;n.isDirectory()?walk(p):/\.(cxx|h)$/.test(n.name)&&files.push(p)}};\
-  //   walk("src/cpp/lexilla");files.sort();\
-  //   console.log(createHash("sha256").update(files.map(f=>f+" "+createHash("sha256")\
-  //   .update(readFileSync(f)).digest("hex")+"\n").join("")).digest("hex"))'
-  const LEXILLA_DIGEST =
-    'f1da780dd34638a8933eb0f6924d337119efac15db7218ddb89c9c998f5526e8';
-
-  function lexillaManifest() {
-    const files = [];
-    const walk = (dir) => {
-      for (const entry of readdirSync(dir, { withFileTypes: true }).sort(
-        (a, b) => a.name.localeCompare(b.name)
-      )) {
-        const path = join(dir, entry.name);
-        if (entry.isDirectory()) {
-          walk(path);
-        } else if (/\.(cxx|h)$/.test(entry.name)) {
-          files.push(path);
-        }
-      }
-    };
-    walk(LEXILLA);
-    return files
-      .map(
-        (path) =>
-          `${path.slice(LEXILLA.length + 1)} ${createHash('sha256').update(readFileSync(path)).digest('hex')}`
-      )
-      .join('\n');
-  }
-
-  test('the vendored lexers are unmodified', () => {
-    assert.equal(
-      createHash('sha256').update(lexillaManifest()).digest('hex'),
-      LEXILLA_DIGEST
-    );
-  });
-
-  test('the manifest is not empty', () => {
-    // A digest over nothing would be stable while proving nothing.
-    assert.ok(lexillaManifest().split('\n').length > 30);
   });
 });
 

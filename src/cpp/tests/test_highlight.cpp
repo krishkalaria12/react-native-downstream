@@ -4,11 +4,13 @@
 
 #include "CodeBlocks.h"
 #include "CodeHighlighter.h"
-#include "LanguageRegistry.h"
+#include "Languages.h"
 #include "MarkdownParser.h"
+#include "StreamLexer.h"
 #include "Unicode.h"
 #include "tests/check.h"
 
+#include <cctype>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -78,63 +80,41 @@ bool validAgainst(const std::vector<TokenRun> &runs, const std::u16string &text)
   return true;
 }
 
-void testRegistry() {
-  CHECK(LanguageRegistry::count() > 40, "the table covers the languages chat models emit");
+void testLanguages() {
+  CHECK(kLanguageCount > 200, "the table covers the languages chat models emit");
   // An info string is trimmed, lower-cased, cut at the first space, and cut at
   // a colon, so the shapes a fence actually takes all resolve.
-  CHECK(LanguageRegistry::find("ts") != nullptr, "ts resolves");
-  CHECK(LanguageRegistry::find("TypeScript") != nullptr, "a mixed-case alias resolves");
-  CHECK(LanguageRegistry::find("  TS  ") != nullptr, "a padded alias resolves");
-  CHECK(LanguageRegistry::find("ts title=\"a.ts\"") != nullptr, "a meta string is ignored");
-  CHECK(LanguageRegistry::find("js:src/app.js") != nullptr, "a colon suffix is ignored");
-  CHECK(LanguageRegistry::find("C++") != nullptr, "a punctuation alias resolves");
-  CHECK(LanguageRegistry::find("") == nullptr, "no language resolves to plain");
-  CHECK(LanguageRegistry::find("   ") == nullptr, "a blank info string resolves to plain");
-  CHECK(LanguageRegistry::find("brainfuck") == nullptr, "an unknown language resolves to plain");
-  CHECK(LanguageRegistry::find("typescriptx") == nullptr, "a longer unknown word resolves to plain");
+  CHECK(findLanguage("ts") != nullptr, "ts resolves");
+  CHECK(findLanguage("TypeScript") != nullptr, "a mixed-case alias resolves");
+  CHECK(findLanguage("  TS  ") != nullptr, "a padded alias resolves");
+  CHECK(findLanguage("ts title=\"a.ts\"") != nullptr, "a meta string is ignored");
+  CHECK(findLanguage("js:src/app.js") != nullptr, "a colon suffix is ignored");
+  CHECK(findLanguage("C++") != nullptr, "a punctuation alias resolves");
+  CHECK(findLanguage("C#") != nullptr && findLanguage("F#") != nullptr, "a sharp alias resolves");
+  CHECK(findLanguage("") == nullptr, "no language resolves to plain");
+  CHECK(findLanguage("   ") == nullptr, "a blank info string resolves to plain");
+  CHECK(findLanguage("brainfuck") == nullptr, "an unknown language resolves to plain");
+  CHECK(findLanguage("typescriptx") == nullptr, "a longer unknown word resolves to plain");
+  CHECK(findLanguage("text") == nullptr && findLanguage("plaintext") == nullptr, "plain text has nothing to color");
+  CHECK(findLanguage(std::string(64, 'a')) == nullptr, "an over-long word resolves to plain");
+  // Aliases of one language share its lexer, so a reader sees the same colors
+  // whichever name the writer used.
+  CHECK(findLanguage("ts")->id == findLanguage("typescript")->id, "ts and typescript share a lexer");
+  CHECK(findLanguage("sh")->id == findLanguage("zsh")->id, "sh and zsh share a lexer");
+  CHECK(findLanguage("postgres")->id == findLanguage("sql")->id, "a SQL dialect resolves to SQL");
+  CHECK(findLanguage("ts")->id != findLanguage("tsx")->id, "tsx has its own lexer");
 
-  // Every row must resolve by its own alias and carry the tables the highlighter
-  // reads, or a language would silently render plain.
-  for (size_t index = 0; index < LanguageRegistry::count(); index++) {
-    const std::string_view alias = LanguageRegistry::aliasAt(index);
-    const LanguageTable *language = LanguageRegistry::find(alias);
-    CHECK(language != nullptr, "every table row resolves by its own alias");
-    CHECK(language->lexer != nullptr && language->lexer[0] != '\0', "every language names a lexer");
-    CHECK(language->styles != nullptr && language->styles[0] >= 0, "every language has a style map");
-    CHECK(language->words != nullptr, "every language has a word list table");
+  // Every row must resolve by its own alias, or a language would silently
+  // render plain, and the binary search needs the table sorted and unique.
+  for (size_t index = 0; index < kLanguageCount; index++) {
+    const Language &row = kLanguages[index];
+    const Language *found = findLanguage(row.alias);
+    CHECK(found == &row, "every table row resolves by its own alias");
+    CHECK(row.id != 0, "every row names a lexer");
+    if (index > 0) {
+      CHECK(std::string_view(kLanguages[index - 1].alias) < std::string_view(row.alias), "the table is sorted and unique");
+    }
   }
-}
-
-void testDocumentAppends() {
-  CodeDocument owned;
-  owned.resetOwned(std::string("first\nsecond"));
-  CHECK(owned.text() == "first\nsecond" && owned.lineCount() == 2,
-        "owned conversion buffers rebuild text and line starts");
-  owned.fillStyles(0, owned.length(), 7);
-  owned.setLineState(0, 123);
-  owned.resetOwned(std::string("replacement\n"));
-  CHECK(owned.styleAt(0) == 0 && owned.lineState(0) == 0 && owned.lineCount() == 2,
-        "owned reset clears old styles and lexer state");
-  CodeDocument document;
-  document.append("first\r");
-  CHECK(document.lineCount() == 1, "an initial append indexes the first line");
-  document.fillStyles(0, document.length(), 7);
-  document.setLineState(0, 42);
-  document.append("\nsecond\nthird");
-  CHECK(document.lineCount() == 3, "only appended newline positions add lines");
-  CHECK(document.lineStart(1) == 7 && document.lineStart(2) == 14, "split CRLF keeps byte line offsets");
-  CHECK(document.lineState(0) == 42 && document.lineState(1) == 0, "appends preserve existing lexer states");
-  CHECK(document.styleAt(5) == 7 && document.styleAt(6) == 0, "only appended bytes begin without styles");
-  CHECK(document.unstableStart() == 14, "the unfinished final line stays mutable");
-  document.setLineState(2, 99);
-  document.append("\n");
-  document.append("");
-  CHECK(document.lineCount() == 4 && document.lineState(2) == 99, "completing a line keeps its lexer state");
-  CHECK(document.unstableStart() == document.length(), "a terminal newline settles every line");
-  document.reset("new");
-  document.append("\ntext");
-  CHECK(document.lineCount() == 2 && document.lineStart(1) == 4, "reset discards the previous line index");
-  CHECK(document.lineState(0) == 0, "reset clears the previous lexer states");
 }
 
 void testTokens() {
@@ -150,40 +130,29 @@ void testTokens() {
           "adjacent runs of one class are merged");
   }
 
-  // The post-pass is what tells a call, a property, and a type apart. A call
-  // wins over a property, which wins over a type, and Function and Type share a
-  // color anyway, so the visible difference is a call against a plain access.
+  // The lexer tells a call, a property, and a type apart. A method call after
+  // a dot is a call, so it takes the function color rather than the property
+  // one.
   const std::string calls = "loadUser(id);\nres.status;\nconst value: User = x;\nobj.method();\n";
-  const std::vector<TokenRun> marked = tokenize("ts", calls);
-  bool function = false;
-  bool property = false;
-  bool type = false;
-  for (const TokenRun &run : marked) {
-    if (run.token == TokenClass::Function) {
-      function = true;
-    }
-    if (run.token == TokenClass::Property) {
-      property = true;
-    }
-    if (run.token == TokenClass::Type) {
-      type = true;
-    }
-  }
-  CHECK(function, "an identifier before ( becomes a function");
-  CHECK(property, "an identifier after . becomes a property");
-  CHECK(type, "an upper-case identifier becomes a type");
-  // A method call after a dot is a call, not a property access, so it takes the
-  // function color rather than the property one.
   const std::u16string callsText = utf8ToUtf16(calls);
-  for (const TokenRun &run : marked) {
-    if (run.token == TokenClass::Function) {
-      CHECK(callsText.substr(run.start, run.end - run.start) != u"status",
-            "a method call is a function rather than a property");
+  const auto classOf = [&](std::u16string_view word) {
+    // The first whole-word occurrence, so User does not match loadUser.
+    size_t at = callsText.find(word);
+    while (at > 0 && at != std::u16string::npos && std::isalnum(callsText[at - 1])) {
+      at = callsText.find(word, at + 1);
     }
-  }
+    for (const TokenRun &run : tokenize("ts", calls)) {
+      if (run.start <= at && at + word.size() <= run.end) {
+        return run.token;
+      }
+    }
+    return TokenClass::Plain;
+  };
+  CHECK(classOf(u"loadUser") == TokenClass::Function, "an identifier before ( is a function");
+  CHECK(classOf(u"status") == TokenClass::Property, "an identifier after . is a property");
+  CHECK(classOf(u"User") == TokenClass::Type, "an annotation names a type");
+  CHECK(classOf(u"method") == TokenClass::Function, "a method call is a function rather than a property");
 
-  // Python's own lexer tells a definition name from a call, so the post-pass
-  // has nothing to add there.
   const std::vector<TokenRun> python = tokenize("py", "def greet(name):\n    return name\n");
   bool sawDefinition = false;
   for (const TokenRun &run : python) {
@@ -241,6 +210,10 @@ void testBoundaries() {
   CHECK(state.resumed, "a completed line still resumes");
   downstreamHighlighter().tokenize("ts", utf8ToUtf16("other\n"), &state, &out, kHighlightBudgetMs);
   CHECK(!state.resumed, "text that is not an extension starts over");
+  // A fence whose language changes mid-stream keeps its text but not its lexer.
+  downstreamHighlighter().tokenize("py", utf8ToUtf16("other\n# note\n"), &state, &out, kHighlightBudgetMs);
+  CHECK(!state.resumed && sameTokens(out, tokenize("py", "other\n# note\n", 1e9)),
+        "a language change starts over in the new language");
 
   // A chunk may end halfway through a UTF-16 surrogate pair. Encoding the
   // two halves separately would leave two replacements in the UTF-8 cache.
@@ -248,7 +221,7 @@ void testBoundaries() {
   const size_t high = wide.find(static_cast<char16_t>(0xd83d));
   downstreamHighlighter().tokenize("ts", std::u16string_view(wide).substr(0, high + 1), &state, &out, 1e9);
   downstreamHighlighter().tokenize("ts", wide, &state, &out, 1e9);
-  CHECK(state.document.text() == utf16ToUtf8(wide), "a split surrogate pair rebuilds the correct UTF-8 cache");
+  CHECK(state.resumed, "the second half of a split surrogate pair resumes");
   CHECK(sameTokens(out, tokenize("ts", utf16ToUtf8(wide), 1e9)), "split surrogate tokens equal a whole pass");
 }
 
@@ -389,6 +362,16 @@ const StreamingCase streamingCases[] = {
     {"diff-hunk", "diff", "--- a\n+++ b\n@@ -1 +1 @@\n-a\n+b\n"},
     {"yaml-nested", "yaml", "a: 1\nb:\n  - c\n"},
     {"ts-wide", "ts", "const \xF0\x9F\x91\x8D = \"\xE6\xBC\xA2\xE5\xAD\x97\";\nconst \xD7\xA9 = 1;\n"},
+    // Embedded languages: the stream carries which language is open, and a
+    // resumed pass has to come back inside the right one.
+    {"html-script-style", "html", "<style>\np { color: red; }\n</style>\n<script>\nconst a = `x\ny`;\n</script>\n<p>done</p>\n"},
+    {"vue-sfc", "vue", "<template>\n  <p>{{ msg }}</p>\n</template>\n<script setup lang=\"ts\">\nconst msg: string = 'hi';\n</script>\n"},
+    {"svelte", "svelte", "<script>\n  let count = 0;\n</script>\n<button on:click={() => count++}>\n  {count}\n</button>\n"},
+    {"astro", "astro", "---\nconst title = 'x';\n---\n<h1>{title}</h1>\n<style>\nh1 { margin: 0; }\n</style>\n"},
+    {"md-code-fence", "md", "# Title\n\n```ts\nconst a = /* open\n   comment */ 1;\n```\n\nafter\n"},
+    {"php-in-html", "php", "<p><?php\necho \"hi\";\n?></p>\n"},
+    {"rust-nested-comment", "rs", "/* outer /* inner\n */ still */\nfn main() {}\n"},
+    {"sql-block-comment", "sql", "SELECT /* a\nb */ 1;\n"},
     {"unknown", "brainfuck", "+++++[>++++<-].\n"},
 };
 
@@ -404,7 +387,7 @@ void testStreaming() {
   }
 }
 
-void testIsolation() {
+void isolationOnThisThread() {
   // A document with no code block must never create a lexer, which is what
   // keeps prose off the highlighting path entirely.
   const uint64_t before = downstreamHighlighter().lexersCreated();
@@ -424,7 +407,12 @@ void testIsolation() {
   const DocumentHandle colored = highlightCodeBlocks(downstreamHighlighter(), code.document, kHighlightBudgetMs, nullptr);
   CHECK(downstreamHighlighter().lexersCreated() == before + 1, "coloring a fenced block creates one lexer");
   CHECK(!colored->blocks[0].tokens.empty(), "coloring fills the block's tokens");
+  highlightCodeBlocks(downstreamHighlighter(), code.document, kHighlightBudgetMs, nullptr);
+  CHECK(downstreamHighlighter().lexersCreated() == before + 1, "a thread reuses its lexer for the next block");
 }
+
+/// On a fresh thread, because a thread keeps its lexer for later blocks.
+void testIsolation() { std::thread(isolationOnThisThread).join(); }
 
 void testDocuments() {
   // The controlled path: highlighting reaches the document a parse produced.
@@ -490,6 +478,51 @@ void testHighlightCache() {
 /// The controlled path colors on the shared worker pool, so two documents can
 /// be colored at once. Each thread has its own block and its own resume state,
 /// and they must not see each other's tokens.
+/// A block's resume state is not tied to a thread: the pool colors a stream's
+/// snapshots on whichever worker is free, so a block started on one thread
+/// carries on from its saved state on another.
+void testCrossThreadResume() {
+  const std::string code = "<script>\nconst t = `open\n${a}\n`;\n</script>\n<style>\np { color: red; }\n</style>\n";
+  const std::u16string text = utf8ToUtf16(code);
+  const std::vector<TokenRun> want = tokenize("html", code, 1e9);
+  HighlightState state;
+  std::vector<TokenRun> runs;
+  for (size_t at = 1; at <= text.size(); at++) {
+    std::thread([&] {
+      downstreamHighlighter().tokenize("html", std::u16string_view(text).substr(0, at), &state, &runs, 1e9);
+    }).join();
+    // A stream on this thread in between must not leak into the block.
+    tokenize("ts", "const a = `open\n");
+  }
+  CHECK(state.resumed, "a block resumes on another thread");
+  CHECK(sameTokens(runs, want), "a block streamed across threads equals a whole pass");
+}
+
+/// A trap inside the module unwinds to the call that made it, which reports a
+/// failure instead of crashing. The thread then drops that instance, and a new
+/// one serves the next block.
+void testTraps() {
+  // An image whose first stack claims 2 GiB, so restoring it copies out of
+  // bounds.
+  std::vector<uint8_t> corrupt(304, 0);
+  corrupt[0] = corrupt[1] = corrupt[2] = 0xff;
+  corrupt[3] = 0x7f;
+  const uint8_t ts = findLanguage("ts")->id;
+  StreamLexer::discard();
+  const uint64_t before = StreamLexer::created();
+  for (int round = 0; round < 3; round++) {
+    StreamLexer *lexer = StreamLexer::current();
+    CHECK(lexer != nullptr && !lexer->start(ts, &corrupt), "a corrupt image traps rather than crashing");
+    StreamLexer::discard();
+  }
+  CHECK(StreamLexer::created() == before + 3, "every trapped instance is replaced");
+  StreamLexer *lexer = StreamLexer::current();
+  std::vector<uint32_t> records;
+  CHECK(lexer != nullptr && lexer->start(ts, nullptr) && lexer->lex("const a = 1;\n", &records) && !records.empty(),
+        "a new instance lexes after a trap");
+  CHECK(sameTokens(tokenize("ts", "const a = 1;\n"), wholeRuns("const a = 1;\n")), "the highlighter colors after a trap");
+}
+
 void testConcurrentPasses() {
   const std::vector<std::pair<std::string, std::string>> work = {
       {"ts", "export const a = 1;\n"},   {"py", "def f():\n    return 1\n"},
@@ -542,11 +575,11 @@ void testWorkCounters() {
   block.text = u"const first = 1;\n";
   HighlightStats stats;
   highlightCodeBlock(downstreamHighlighter(), &block, &state, 1e9, &stats);
-  CHECK(stats.bytesLexed == state.document.length() && stats.runsBuilt == block.tokens.size(),
+  CHECK(stats.bytesLexed == utf16ToUtf8(block.text).size() && stats.runsBuilt == block.tokens.size(),
         "work counters record requested lexer input and fresh runs");
   CHECK(stats.tokenBytesCopied == block.tokens.size() * sizeof(TokenRun) &&
-        stats.textBytesCopied == block.text.size() * sizeof(char16_t),
-        "owned initial conversion avoids another UTF-8 text copy");
+        stats.textBytesCopied == block.text.size() * sizeof(char16_t) + utf16ToUtf8(block.text).size(),
+        "an initial pass copies the text and converts it once");
   block.text.append(u"const second = 2;\n");
   const auto before = stats;
   highlightCodeBlock(downstreamHighlighter(), &block, &state, 1e9, &stats);
@@ -560,14 +593,13 @@ void testWorkCounters() {
   HighlightState settled;
   HighlightStats settledStats;
   highlightSettledCodeBlock(downstreamHighlighter(), &longBlock, &settled, 0.0, &settledStats);
-  CHECK(settledStats.bytesLexed == settled.document.length(), "settling includes work from the first pass and retries");
+  CHECK(settledStats.bytesLexed == utf16ToUtf8(longBlock.text).size(), "settling includes work from the first pass and retries");
 }
 
 } // namespace
 
 int main() {
-  testRegistry();
-  testDocumentAppends();
+  testLanguages();
   testTokens();
   testBoundaries();
   testBudget();
@@ -576,6 +608,8 @@ int main() {
   testIsolation();
   testDocuments();
   testHighlightCache();
+  testCrossThreadResume();
+  testTraps();
   testConcurrentPasses();
   testWorkCounters();
   return ds_check_result();

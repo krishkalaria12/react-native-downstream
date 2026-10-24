@@ -17,21 +17,12 @@ import { promisify } from 'node:util';
 
 export const CPP = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const MD4C = join(CPP, 'md4c');
-const LEXILLA = join(CPP, 'lexilla');
+const WASM = join(CPP, 'wasm');
 
 /** Symbol renames, matching Downstream.podspec and the Android CMakeLists. */
 const SYMBOL_PREFIXES = [
   '-Dmd_parse=downstream_md_parse',
   '-Dentity_lookup=downstream_entity_lookup',
-];
-
-/**
- * The vendored lexers rename their namespaces too, the way Lexilla and
- * Scintilla do to keep two copies in one binary apart.
- */
-const LEXILLA_PREFIXES = [
-  '-DLexilla=downstream_lexilla',
-  '-DScintilla=downstream_scintilla',
 ];
 
 // Release benchmarks share the engine source list and object cache with tests.
@@ -43,6 +34,9 @@ const CFLAGS = [
   ...OPTIMIZATION_FLAGS,
   '-DMD4C_USE_UTF8',
   ...SYMBOL_PREFIXES,
+  `-I${WASM}`,
+  `-I${join(WASM, 'wasm-rt')}`,
+  `-I${join(WASM, 'simde')}`,
 ];
 const CXXFLAGS = [
   '-std=c++20',
@@ -53,7 +47,6 @@ const CXXFLAGS = [
   '-pthread',
   '-DMD4C_USE_UTF8',
   ...SYMBOL_PREFIXES,
-  ...LEXILLA_PREFIXES,
   `-I${MD4C}`,
   `-I${CPP}`,
   `-I${join(CPP, 'downstream')}`,
@@ -62,8 +55,8 @@ const CXXFLAGS = [
   `-I${join(CPP, 'highlight')}`,
   `-I${join(CPP, 'theme')}`,
   `-I${join(CPP, 'math')}`,
-  `-I${LEXILLA}`,
-  `-I${join(LEXILLA, 'lexlib')}`,
+  `-I${WASM}`,
+  `-I${join(WASM, 'wasm-rt')}`,
 ];
 
 export const ENGINE = [
@@ -102,24 +95,19 @@ export const ENGINE = [
 ];
 
 /**
- * The highlighter and the vendored lexers, which together are a library the
- * three binaries below link rather than sources they each recompile.
+ * The highlighter and the vendored lexer module, which together are a library
+ * the binaries below link rather than sources they each recompile. The module
+ * and its runtime are one translation unit, HighlightsModule.c.
  */
 export const HIGHLIGHT_SOURCES = [
-  ...['lexers', 'lexlib'].flatMap((directory) =>
-    readdirSync(join(LEXILLA, directory))
-      .filter((name) => name.endsWith('.cxx'))
-      .sort()
-      .map((name) => join(LEXILLA, directory, name))
-  ),
-  ...[
-    'CodeBlocks.cpp',
-    'CodeDocument.cpp',
-    'CodeHighlighter.cpp',
-    'LanguageRegistry.cpp',
-    'LanguageTables.cpp',
-  ].map((name) => join(CPP, 'highlight', name)),
-];
+  'CodeBlocks.cpp',
+  'CodeHighlighter.cpp',
+  'HighlightsModule.c',
+  'IdentifierClasses.cpp',
+  'LanguageLookup.cpp',
+  'Languages.cpp',
+  'StreamLexer.cpp',
+].map((name) => join(CPP, 'highlight', name));
 
 const binaries = new Map();
 const objects = new Map();

@@ -1,21 +1,15 @@
 #pragma once
 
-#include "CodeDocument.h"
 #include "Document.h"
-#include "LanguageRegistry.h"
+#include "Languages.h"
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace downstream {
-
-/// Per-block engine state. Defined in CodeHighlighter.cpp because it owns a
-/// Lexilla lexer, whose namespace is renamed at compile time.
-struct HighlightEngine;
 
 /// Why the last highlighting pass ended, for the counters the Bench screen
 /// shows and for the tests that drive a budget to zero.
@@ -37,11 +31,11 @@ inline constexpr size_t kHighlightStopCount = static_cast<size_t>(HighlightStop:
 
 /// Resume state for one code block whose text is still growing.
 ///
-/// Lexilla lexers carry per-line state, so a block that only gained bytes at
-/// its end needs only its last line lexed again. The state keeps the document,
-/// its styles and line states, and the runs for every line before that one,
-/// which is why a long stream costs one line per snapshot rather than the whole
-/// block.
+/// The lexers run as a line stream that can stop at any line end and pick up
+/// there again, so a block that only gained bytes at its end needs only its
+/// last line lexed again. The state keeps the lexer state at the last settled
+/// line end and the runs for every line before it, which is why a long stream
+/// costs one line per snapshot rather than the whole block.
 ///
 /// A state only applies to text that extends what it was built from, and
 /// `CodeHighlighter::tokenize` checks that, so a caller may hand it any text in
@@ -66,9 +60,17 @@ struct HighlightState {
   std::string language;
   /// The block text the state was built from, as UTF-16.
   std::u16string text;
-  /// Byte offset into the lexer's UTF-8 text where the runs stop, which is the
-  /// start of the last line when the text has no final newline, so a token the
-  /// next chunk changes corrects itself.
+  /// UTF-8 length of `text`, and where its unfinished last line starts in
+  /// UTF-16 units. Both are kept up to date as the text grows, so a pass that
+  /// only checks the limit or defers a long line never converts the text.
+  size_t utf8Length{0};
+  size_t lineStartUtf16{0};
+  /// The lexer module's number for `language`.
+  uint8_t languageId{0};
+  /// UTF-8 bytes of the text settled so far: every line before the last one,
+  /// or before wherever the budget stopped. Runs past it are provisional and
+  /// rebuilt on the next pass, so a token the next chunk changes corrects
+  /// itself.
   size_t finalEnd{0};
   /// UTF-16 length of the lexed text up to finalEnd, so appending need not
   /// rescan what is already settled.
@@ -76,18 +78,16 @@ struct HighlightState {
   /// Runs covering the lexed text. Sorted, non-overlapping, and never covering
   /// Plain text.
   std::vector<TokenRun> runs;
-  /// The lexer's view of the whole text, in UTF-8, kept so a lexer that looks
-  /// back a line reads the styles and line states it would have found in an
-  /// editor.
-  CodeDocument document;
-  /// The lexer configured for this block, or null when none could be made.
-  std::unique_ptr<HighlightEngine> engine;
+  /// The lexer's saved state at finalEnd, which any thread's lexer can resume
+  /// from. Meaningless while finalEnd is zero, when the next pass starts the
+  /// block over.
+  std::vector<uint8_t> resume;
   /// Why the last pass stopped, and whether it continued the previous one
   /// rather than starting the block over.
   HighlightStop lastStop{HighlightStop::Skipped};
   bool resumed{false};
-  /// Work requested by the last pass. bytesLexed counts Lex() input windows,
-  /// not any additional backward reads performed inside a lexer.
+  /// Work requested by the last pass. bytesLexed counts the UTF-8 bytes fed to
+  /// the lexer, including the unfinished line each pass lexes again.
   uint64_t bytesLexed{0};
   uint64_t runsBuilt{0};
   /// Token payload copied into immutable publications, including the retained
@@ -96,8 +96,8 @@ struct HighlightState {
   uint64_t tokenBytesCopied{0};
   uint64_t textBytesCopied{0};
 
-  /// Only used by the parser's live append policy. This does not make any
-  /// tokens on the unfinished line immutable.
+  /// Only used by the parser's live append policy, in UTF-16 units. This does
+  /// not make any tokens on the unfinished line immutable.
   size_t nextLiveLineRefresh{0};
   size_t liveLineStart{0};
   /// A verified append cannot bring an oversized UTF-8 block back below the
@@ -113,9 +113,8 @@ private:
 
 /// Tokenizes fenced code blocks.
 ///
-/// The interface is engine-agnostic on purpose: a tree-sitter or TextMate
-/// engine can replace the Lexilla one for the languages where fidelity matters
-/// more than binary size, without the parser or the platforms changing.
+/// The interface is engine-agnostic on purpose: the parser and the platforms
+/// see only token runs, so the lexers behind it can change without them.
 class CodeHighlighter {
 public:
   virtual ~CodeHighlighter() = default;
@@ -132,7 +131,8 @@ public:
   virtual void tokenize(std::string_view info, std::u16string_view text, HighlightState *state,
                         std::vector<TokenRun> *runs, double budgetMs) = 0;
 
-  /// Lexers created since the process started. A document with no code block
+  /// Lexer instances created since the process started. There is at most one
+  /// per thread that has colored a block, and a document with no code block
   /// never creates one, which the isolation test checks.
   virtual uint64_t lexersCreated() const = 0;
 
@@ -165,8 +165,8 @@ protected:
   static void invalidateLineage(HighlightState *state) { state->sourceDocumentId_ = 0; }
 };
 
-/// The process-wide Lexilla highlighter. One per process is enough: a lexer
-/// holds no document state, and a `HighlightState` owns the one lexer it needs.
+/// The process-wide highlighter. One per process is enough: it holds no
+/// document state, and a `HighlightState` carries everything a block needs.
 CodeHighlighter &downstreamHighlighter();
 
 } // namespace downstream

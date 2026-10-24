@@ -1,63 +1,17 @@
 #include "CodeHighlighter.h"
 
+#include "StreamLexer.h"
+#include "Tokens.h"
 #include "Unicode.h"
 
-// CatalogueModules.h calls strcmp without including its declaration.
-#include <cstring>
-
-#include "ILexer.h"
-#include "LexerModule.h"
-// Lexilla's catalogue expects both of the above.
-#include "CatalogueModules.h"
-
 #include <algorithm>
-#include <array>
-#include <atomic>
 #include <chrono>
 
-// The LexerModule objects the vendored lexers export. Only these are
-// registered, so no other Lexilla lexer can be reached by name.
-extern const Lexilla::LexerModule lmBash;
-extern const Lexilla::LexerModule lmCPP;
-extern const Lexilla::LexerModule lmCss;
-extern const Lexilla::LexerModule lmDiff;
-extern const Lexilla::LexerModule lmHTML;
-extern const Lexilla::LexerModule lmJSON;
-extern const Lexilla::LexerModule lmLua;
-extern const Lexilla::LexerModule lmMarkdown;
-extern const Lexilla::LexerModule lmPython;
-extern const Lexilla::LexerModule lmRuby;
-extern const Lexilla::LexerModule lmRust;
-extern const Lexilla::LexerModule lmSQL;
-extern const Lexilla::LexerModule lmTOML;
-extern const Lexilla::LexerModule lmXML;
-extern const Lexilla::LexerModule lmYAML;
-
 namespace downstream {
-
-/// One code block's lexer, configured from the language table. It is created
-/// per block and lives as long as the block's resume state, which is what lets
-/// a lexer keep the cross-line state it built while a stream grows.
-struct HighlightEngine {
-  Scintilla::ILexer5 *lexer{nullptr};
-  std::array<TokenClass, 64> classes{};
-  HighlightEngine() = default;
-  HighlightEngine(const HighlightEngine &) = delete;
-  HighlightEngine &operator=(const HighlightEngine &) = delete;
-  ~HighlightEngine();
-};
-
 namespace {
 
-using Scintilla::ILexer5;
-
-/// Lexilla keeps a lexer's activity flag and its sub-styles in the high bits of
-/// a style byte, and its own `MaskActive` masks them off the same way. We never
-/// allocate sub-styles, so masking leaves exactly the SCE_ constant.
-constexpr int kStyleMask = 0x3f;
-
 /// Lines lexed between budget checks. Small enough that a stop lands within a
-/// line or two, large enough that a window costs less than a clock read.
+/// few lines, large enough that the lines cost more than a clock read.
 constexpr size_t kWindowLines = 32;
 
 // Relexing an unfinished 60 KiB line for every 16-byte append is quadratic.
@@ -65,86 +19,30 @@ constexpr size_t kWindowLines = 32;
 // points. A single lexer call can still exceed its time budget.
 constexpr size_t kLiveLineRefreshThreshold = 4096;
 
-/// Lexers created since the process started. A document with no code block
-/// leaves it at zero, which is what the isolation test checks.
-std::atomic<uint64_t> gLexersCreated{0};
+bool isHighSurrogate(char16_t unit) { return unit >= 0xd800 && unit <= 0xdbff; }
+bool isLowSurrogate(char16_t unit) { return unit >= 0xdc00 && unit <= 0xdfff; }
 
-/// The vendored lexers, as Lexilla's own static catalogue.
-const Lexilla::CatalogueModules &lexers() {
-  static const Lexilla::CatalogueModules *catalogue = [] {
-    auto *built = new Lexilla::CatalogueModules();
-    built->AddLexerModules({&lmBash, &lmCPP, &lmCss, &lmDiff, &lmHTML, &lmJSON, &lmLua, &lmMarkdown,
-                            &lmPython, &lmRuby, &lmRust, &lmSQL, &lmTOML, &lmXML, &lmYAML});
-    return built;
-  }();
-  return *catalogue;
-}
-
-/// A lexer configured for one language, or null when the name is not vendored.
-std::unique_ptr<HighlightEngine> createEngine(const LanguageTable &language) {
-  for (size_t index = 0; index < lexers().Count(); index++) {
-    if (language.lexer != lexers().Name(index)) {
-      continue;
-    }
-    auto engine = std::make_unique<HighlightEngine>();
-    engine->lexer = lexers().Create(index);
-    if (engine->lexer == nullptr) {
-      return nullptr;
-    }
-    for (const char *const *property = language.properties; *property != nullptr; property += 2) {
-      engine->lexer->PropertySet(property[0], property[1]);
-    }
-    for (int set = 0; language.words[set] != nullptr && language.words[set][0] != '\0'; set++) {
-      engine->lexer->WordListSet(set, language.words[set]);
-    }
-    for (const int32_t *entry = language.styles; *entry >= 0; entry += 2) {
-      if (entry[0] <= kStyleMask) {
-        engine->classes[entry[0]] = static_cast<TokenClass>(entry[1]);
-      }
-    }
-    gLexersCreated.fetch_add(1, std::memory_order_relaxed);
-    return engine;
-  }
-  return nullptr;
-}
-
-bool isHorizontalSpace(char value) {
-  return value == ' ' || value == '\t';
-}
-
-bool isUpperAscii(char value) {
-  return value >= 'A' && value <= 'Z';
-}
-
-/// The class a language's post-pass gives the identifier span `[start, end)`.
-/// Lexilla's lexers do not tell a call, a property, and a type apart, which is
-/// the largest visible gap against a TextMate theme; these three rules close
-/// most of it for the price of two byte comparisons.
-TokenClass promotedClass(const LanguageTable &language, std::string_view utf8, size_t lineStart, size_t start,
-                         size_t end) {
-  if ((language.marks & MarkCalls) != 0) {
-    size_t next = end;
-    while (next < utf8.size() && isHorizontalSpace(utf8[next])) {
-      next++;
-    }
-    if (next < utf8.size() && utf8[next] == '(') {
-      return TokenClass::Function;
+/// The length utf16ToUtf8 gives `text`, without converting it. A lone
+/// surrogate becomes U+FFFD, three bytes.
+size_t utf8Length(std::u16string_view text) {
+  size_t length = 0;
+  for (size_t index = 0; index < text.size(); index++) {
+    const char16_t unit = text[index];
+    if (unit < 0x80) {
+      length += 1;
+    } else if (unit < 0x800) {
+      length += 2;
+    } else if (isHighSurrogate(unit) && index + 1 < text.size() && isLowSurrogate(text[index + 1])) {
+      length += 4;
+      index++;
+    } else {
+      length += 3;
     }
   }
-  if ((language.marks & MarkProperties) != 0 && start > lineStart) {
-    size_t previous = start;
-    while (previous > lineStart && isHorizontalSpace(utf8[previous - 1])) {
-      previous--;
-    }
-    if (previous > lineStart && utf8[previous - 1] == '.') {
-      return TokenClass::Property;
-    }
-  }
-  if ((language.marks & MarkTypes) != 0 && isUpperAscii(utf8[start])) {
-    return TokenClass::Type;
-  }
-  return TokenClass::Plain;
+  return length;
 }
+
+bool isBlank(char16_t unit) { return unit == u' ' || unit == u'\t' || unit == u'\r' || unit == u'\n' || unit == u'\f'; }
 
 /// Drops the runs that reach into `[utf16, ...)`, so the region a pass is about
 /// to rebuild holds nothing from the last pass. A run that straddles the offset
@@ -160,89 +58,46 @@ void dropRunsFrom(std::vector<TokenRun> *runs, uint32_t utf16) {
   }
 }
 
-/// Joins the cached runs and the ones a pass just built into one maximal list.
-/// Only the join can repeat a class, so only the join is checked.
-void appendRuns(std::vector<TokenRun> *runs, const std::vector<TokenRun> &fresh) {
-  if (!fresh.empty() && !runs->empty()) {
-    TokenRun &last = runs->back();
-    if (last.end == fresh.front().start && last.token == fresh.front().token) {
-      last.end = fresh.front().end;
-      runs->insert(runs->end(), fresh.begin() + 1, fresh.end());
-      return;
-    }
-  }
-  runs->insert(runs->end(), fresh.begin(), fresh.end());
-}
-
-/// The runs for `[from, to)` in UTF-16 offsets counted from the block's start,
-/// with the post-pass already applied.
+/// Appends the runs for one lexed chunk. `records` are the module's
+/// (endUtf16, tokenId) pairs counted from `base`, the chunk's offset in `text`.
 ///
-/// Walks the region once. A style change closes the open run, and an
-/// identifier span, which carries no run of its own, is classified as it closes
-/// and appended then: every run already in `fresh` ends at or before the span,
-/// and the next one starts at or after it, so the list stays sorted.
-void buildRuns(std::string_view utf8, const CodeDocument &document, const LanguageTable &language,
-               const std::array<TokenClass, 64> &classes, size_t from, size_t to, uint32_t baseUtf16,
-               std::vector<TokenRun> *fresh) {
-  const std::vector<char> &styles = document.styles();
-  fresh->clear();
-  const bool promote = language.identifier >= 0 && language.marks != MarkNone;
-  const int identifier = language.identifier & kStyleMask;
-  // The start of the line the region begins on, which bounds the backward
-  // look for a property so a chain broken by a newline is not joined up.
-  size_t lineStart = from;
-  while (lineStart > 0 && utf8[lineStart - 1] != '\n') {
-    lineStart--;
-  }
-
-  TokenClass open = TokenClass::Plain;
-  uint32_t openStart = baseUtf16;
-  uint32_t offset = baseUtf16;
-  size_t spanStart = 0;
-  uint32_t spanStartUtf16 = 0;
-  bool inSpan = false;
-
-  size_t index = from;
-  while (index < to) {
-    const int style = static_cast<unsigned char>(styles[index]) & kStyleMask;
-    if (promote && style == identifier) {
-      if (!inSpan) {
-        inSpan = true;
-        spanStart = index;
-        spanStartUtf16 = offset;
+/// The module extends a token over the whitespace that follows it, and a
+/// line's indentation can lead its first token, so a run covers only the
+/// token's non-blank units and the gaps stay plain. Whitespace inside a token,
+/// as in a comment or a string, is the token's own.
+void appendRecords(const std::vector<uint32_t> &records, std::u16string_view text, uint32_t base,
+                   std::vector<TokenRun> *runs) {
+  const uint32_t limit = static_cast<uint32_t>(text.size());
+  uint32_t start = base;
+  for (size_t index = 0; index + 1 < records.size(); index += 2) {
+    const uint32_t end = std::min(limit, base + records[index]);
+    if (end <= start) {
+      continue;
+    }
+    const uint32_t id = records[index + 1];
+    const TokenClass token = id == StreamLexer::kLineEnd ? TokenClass::Plain : tokenClassFor(id);
+    if (token != TokenClass::Plain) {
+      uint32_t first = start;
+      uint32_t last = end;
+      while (first < last && isBlank(text[first])) {
+        first++;
       }
-    } else if (inSpan) {
-      inSpan = false;
-      const TokenClass promoted = promotedClass(language, utf8, lineStart, spanStart, index);
-      if (promoted != TokenClass::Plain) {
-        fresh->push_back({spanStartUtf16, offset, promoted});
+      while (last > first && isBlank(text[last - 1])) {
+        last--;
+      }
+      if (last > first) {
+        if (!runs->empty() && runs->back().end == first && runs->back().token == token) {
+          runs->back().end = last;
+        } else {
+          runs->push_back({first, last, token});
+        }
       }
     }
-
-    const TokenClass token = classes[style];
-    if (token != open) {
-      if (open != TokenClass::Plain) {
-        fresh->push_back({openStart, offset, open});
-      }
-      open = token;
-      openStart = offset;
-    }
-    const Utf8Step step = utf8StepAt(utf8, index);
-    offset += step.units;
-    index += step.bytes;
-  }
-  if (inSpan) {
-    const TokenClass promoted = promotedClass(language, utf8, lineStart, spanStart, index);
-    if (promoted != TokenClass::Plain) {
-      fresh->push_back({spanStartUtf16, offset, promoted});
-    }
-  }
-  if (open != TokenClass::Plain) {
-    fresh->push_back({openStart, offset, open});
+    start = end;
   }
 }
 
-class LexillaHighlighter final : public CodeHighlighter {
+class Highlighter final : public CodeHighlighter {
 public:
   void tokenize(std::string_view info, std::u16string_view text, HighlightState *state, std::vector<TokenRun> *runs,
                 double budgetMs) override {
@@ -250,7 +105,7 @@ public:
     tokenizeImpl(info, text, state, runs, budgetMs, false, false, false);
   }
 
-  uint64_t lexersCreated() const override { return gLexersCreated.load(std::memory_order_relaxed); }
+  uint64_t lexersCreated() const override { return StreamLexer::created(); }
 
 private:
   void tokenizeTrustedAppend(std::string_view info, std::u16string_view text, HighlightState *state,
@@ -259,9 +114,16 @@ private:
     tokenizeImpl(info, text, state, runs, budgetMs, true, live, terminalLineComplete);
   }
   void tokenizeTrustedDelta(std::string_view info, const SnapshotText &, std::u16string_view delta,
-                            HighlightState *state, SnapshotVector<TokenRun> *runs, double budgetMs,
-                            bool live, bool terminalLineComplete) override {
+                            HighlightState *state, SnapshotVector<TokenRun> *runs, double budgetMs, bool live,
+                            bool terminalLineComplete) override {
     tokenizeImpl(info, state->text, state, nullptr, budgetMs, true, live, terminalLineComplete, &delta, runs);
+  }
+
+  static void skip(HighlightState *state, std::vector<TokenRun> *runs, SnapshotVector<TokenRun> *publication) {
+    state->clear();
+    if (runs) runs->clear();
+    if (publication) publication->clear();
+    state->lastStop = HighlightStop::Skipped;
   }
 
   void tokenizeImpl(std::string_view info, std::u16string_view text, HighlightState *state,
@@ -271,42 +133,36 @@ private:
     state->resumed = false;
     state->bytesLexed = state->runsBuilt = state->tokenBytesCopied = state->textBytesCopied = 0;
     const HighlightStop previousStop = state->lastStop;
-    const LanguageTable *language = LanguageRegistry::find(info);
+    const Language *language = findLanguage(info);
     // UTF-8 is never shorter than UTF-16, so an over-long text is over the
     // limit before any of it is converted.
     const size_t textLength = text.size() + (delta ? delta->size() : 0);
     if (language == nullptr || textLength == 0 || textLength > kMaxHighlightBytes) {
-      state->clear();
-      if (runs) runs->clear();
-      if (publication) publication->clear();
-      state->lastStop = HighlightStop::Skipped;
+      skip(state, runs, publication);
       return;
     }
 
     // The state is reused only when the block grew, so a stream pays for its
     // last line and nothing else.
-    size_t from = 0;
-    uint32_t baseUtf16 = 0;
-    const bool joinsSurrogate = !state->text.empty() && state->text.size() < textLength &&
-        state->text.back() >= 0xd800 && state->text.back() <= 0xdbff &&
-        (delta ? delta->front() : text[state->text.size()]) >= 0xdc00 &&
-        (delta ? delta->front() : text[state->text.size()]) <= 0xdfff;
-    const bool appendApplies = trustedAppend && state->engine != nullptr &&
-        state->language == language->alias && state->text.size() <= textLength && !joinsSurrogate;
+    const bool appendApplies = trustedAppend && !state->language.empty() && state->language == language->alias &&
+        state->text.size() <= textLength;
     if (appendApplies || (!delta && state->applies(language->alias, text))) {
       state->resumed = true;
-      from = state->finalEnd;
-      baseUtf16 = state->finalUtf16;
-      // Only the bytes the block gained are converted, so a pass over a long
-      // streaming block costs its new tail rather than the whole thing.
       const std::u16string_view added = delta ? *delta : text.substr(state->text.size());
-      const std::string bytes = utf16ToUtf8(added);
-      state->document.append(bytes);
+      // A pair split across appends was counted as a replacement for its high
+      // half; whole, it is four bytes rather than three and three.
+      const bool joinsSurrogate = !state->text.empty() && !added.empty() && isHighSurrogate(state->text.back()) &&
+          isLowSurrogate(added.front());
+      state->utf8Length += utf8Length(added) - (joinsSurrogate ? 2 : 0);
+      const size_t newline = added.rfind(u'\n');
+      if (newline != std::u16string_view::npos) {
+        state->lineStartUtf16 = state->text.size() + newline + 1;
+      }
       state->text.append(added);
-      state->textBytesCopied = added.size() * sizeof(char16_t) + bytes.size();
+      state->textBytesCopied = added.size() * sizeof(char16_t);
     } else {
-      // A surrogate seam or language change requires a checked rebuild. Copy
-      // the old state before clear(), since delta calls view that very state.
+      // A language change or a rewrite starts the block over. Copy the old
+      // state before clear(), since delta calls view that very state.
       std::u16string rebuilt;
       if (delta) {
         rebuilt.assign(text);
@@ -315,31 +171,21 @@ private:
       }
       state->clear();
       state->language = language->alias;
+      state->languageId = language->id;
       state->text.assign(text);
-      state->document.resetOwned(utf16ToUtf8(text));
       state->textBytesCopied = text.size() * sizeof(char16_t);
-      state->engine = createEngine(*language);
-      if (state->engine == nullptr) {
-        if (runs) runs->clear();
-        if (publication) publication->clear();
-        state->lastStop = HighlightStop::Skipped;
-        return;
-      }
+      state->utf8Length = utf8Length(text);
+      const size_t newline = text.rfind(u'\n');
+      state->lineStartUtf16 = newline == std::u16string_view::npos ? 0 : newline + 1;
     }
-    if (state->document.length() > kMaxHighlightBytes) {
-      state->clear();
+    if (state->utf8Length > kMaxHighlightBytes) {
+      skip(state, runs, publication);
       state->overByteLimit = true;
-      if (runs) runs->clear();
-      if (publication) publication->clear();
-      state->lastStop = HighlightStop::Skipped;
       return;
     }
 
-    const std::string_view utf8 = state->document.text();
-    const size_t end = utf8.size();
-    const size_t lineStart = state->document.unstableStart();
-    const size_t lineLength = end - lineStart;
-    const bool sameUnfinishedLine = state->resumed && lineStart == state->liveLineStart;
+    const size_t lineLength = state->text.size() - state->lineStartUtf16;
+    const bool sameUnfinishedLine = state->resumed && state->lineStartUtf16 == state->liveLineStart;
     if (trustedAppend && live && !terminalLineComplete && sameUnfinishedLine &&
         previousStop != HighlightStop::Budget && lineLength > kLiveLineRefreshThreshold &&
         lineLength < state->nextLiveLineRefresh) {
@@ -350,27 +196,88 @@ private:
       state->lastStop = HighlightStop::Deferred;
       return;
     }
-    const size_t styledEnd = lex(state->engine->lexer, &state->document, from, end, budgetMs, &state->bytesLexed);
-    // Everything before the last line, or before wherever the budget stopped,
-    // is complete: no later chunk can change a token there.
-    const size_t stable = std::min(state->document.unstableStart(), styledEnd);
+
+    // Only the unsettled stretch is converted: whatever the budget left of the
+    // complete lines, then the unfinished last line. A surrogate pair split
+    // across appends is whole again here, because the stretch is converted
+    // from the text rather than kept as bytes.
+    const std::string utf8 = utf16ToUtf8(std::u16string_view(state->text).substr(state->finalUtf16));
+    state->textBytesCopied += utf8.size();
+    const size_t newline = utf8.rfind('\n');
+    const size_t lineStart = newline == std::string::npos ? 0 : newline + 1;
 
     // The last line is rebuilt every pass, so what the previous pass made of it
-    // goes before the new runs are added.
-    // The last retained run can merge with the rebuilt suffix, even when it
-    // ends exactly at the stable boundary. Publish that run again as well.
+    // goes before the new runs are added. The last retained run can merge with
+    // the rebuilt suffix, even when it ends exactly at the settled boundary, so
+    // publish that run again as well.
     const size_t retainedRuns = state->resumed ? static_cast<size_t>(std::lower_bound(
-        state->runs.begin(), state->runs.end(), baseUtf16,
+        state->runs.begin(), state->runs.end(), state->finalUtf16,
         [](const TokenRun &run, uint32_t boundary) { return run.end < boundary; }) - state->runs.begin()) : 0;
-    dropRunsFrom(&state->runs, baseUtf16);
-    buildRuns(utf8, state->document, *language, state->engine->classes, from, styledEnd, baseUtf16, &scratch());
-    appendRuns(&state->runs, scratch());
-    state->runsBuilt = scratch().size();
-    state->finalEnd = stable;
-    state->finalUtf16 = baseUtf16 + utf16Length(utf8.substr(from, stable - from));
+    dropRunsFrom(&state->runs, state->finalUtf16);
+
+    StreamLexer *lexer = StreamLexer::current();
+    if (lexer == nullptr || !lexer->start(state->languageId, state->finalEnd > 0 ? &state->resume : nullptr)) {
+      fail(state, runs, publication);
+      return;
+    }
+    std::vector<uint32_t> &records = scratch();
+    const auto started = std::chrono::steady_clock::now();
+    size_t at = 0;
+    uint32_t atUtf16 = state->finalUtf16;
+    size_t lines = 0;
+    bool stopped = false;
+    while (at < utf8.size()) {
+      // One line per call. The lexer looks ahead to the end of its input, so a
+      // chunk of several lines could color one line by the next, and a block's
+      // tokens would depend on where its passes happened to stop.
+      const size_t newlineAt = utf8.find('\n', at);
+      const size_t end = newlineAt == std::string::npos ? utf8.size() : newlineAt + 1;
+      const std::string_view chunk = std::string_view(utf8).substr(at, end - at);
+      if (!lexer->lex(chunk, &records)) {
+        fail(state, runs, publication);
+        return;
+      }
+      appendRecords(records, state->text, atUtf16, &state->runs);
+      state->bytesLexed += chunk.size();
+      atUtf16 += utf16Length(chunk);
+      at = end;
+      if (at == lineStart && at > 0) {
+        // Everything before the unfinished line is final: no later chunk can
+        // change a token there, so the stream is saved here and the pass after
+        // this one resumes from it.
+        if (!lexer->capture(&state->resume)) {
+          fail(state, runs, publication);
+          return;
+        }
+        state->finalEnd += at;
+        state->finalUtf16 = atUtf16;
+      }
+      // The budget is checked every window of lines and before the unfinished
+      // line, which is lexed whole.
+      if (++lines % kWindowLines != 0 && at != lineStart) {
+        continue;
+      }
+      const double spent =
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+      if (at < utf8.size() && spent >= budgetMs) {
+        stopped = true;
+        break;
+      }
+    }
+    if (stopped && at < lineStart) {
+      // The budget stopped inside the complete lines: settle what was lexed.
+      if (!lexer->capture(&state->resume)) {
+        fail(state, runs, publication);
+        return;
+      }
+      state->finalEnd += at;
+      state->finalUtf16 = atUtf16;
+    }
+
+    state->runsBuilt = state->runs.size() - retainedRuns;
     // A block whose last line has no newline yet is fully colored but not yet
     // final; only bytes the pass never reached mean it ran out of budget.
-    state->lastStop = styledEnd < end ? HighlightStop::Budget : HighlightStop::Complete;
+    state->lastStop = stopped ? HighlightStop::Budget : HighlightStop::Complete;
     if (publication) {
       const TokenRun *suffix = state->runs.empty() ? nullptr : state->runs.data() + retainedRuns;
       state->tokenBytesCopied = publication->replaceSuffix(
@@ -379,54 +286,26 @@ private:
       *runs = state->runs;
       state->tokenBytesCopied = state->runs.size() * sizeof(TokenRun);
     }
-    state->liveLineStart = lineStart;
+    state->liveLineStart = state->lineStartUtf16;
     state->nextLiveLineRefresh = std::max(kLiveLineRefreshThreshold, lineLength * 2);
   }
-  /// Per thread, because one highlighter serves the whole worker pool and a
-  /// pass builds its runs into this rather than allocating for a few entries.
-  static std::vector<TokenRun> &scratch() {
-    static thread_local std::vector<TokenRun> runs;
-    return runs;
+
+  /// A trapped lexer cannot be trusted with another block, so the thread drops
+  /// it, and this block stays plain rather than half-colored.
+  static void fail(HighlightState *state, std::vector<TokenRun> *runs, SnapshotVector<TokenRun> *publication) {
+    StreamLexer::discard();
+    skip(state, runs, publication);
   }
 
-  /// Lexes `[from, end)` in windows so a budget can be enforced between them,
-  /// and returns how far it got.
-  static size_t lex(ILexer5 *lexer, CodeDocument *document, size_t from, size_t end, double budgetMs,
-                    uint64_t *bytesLexed) {
-    auto view = codeDocumentView(*document);
-    const auto started = std::chrono::steady_clock::now();
-    size_t position = from;
-    while (position < end) {
-      const size_t line = document->lineIndexAt(position);
-      const size_t window = std::min(end, document->lineStart(line + kWindowLines));
-      if (window <= position) {
-        break;
-      }
-      // Resuming at a line start needs only the style the previous line ended
-      // in, which the document kept. A lexer that reaches further back reads
-      // the same styles and line states an editor would have given it.
-      const int initial = position > 0 ? static_cast<unsigned char>(document->styleAt(position - 1)) : 0;
-      lexer->Lex(static_cast<Sci_PositionU>(position), static_cast<Sci_Position>(window - position), initial,
-                 view.get());
-      *bytesLexed += window - position;
-      position = window;
-      const double spent =
-          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
-      if (position < end && spent >= budgetMs) {
-        break;
-      }
-    }
-    return position;
+  /// Per thread, because one highlighter serves the whole worker pool and every
+  /// chunk's records land here rather than in a fresh allocation.
+  static std::vector<uint32_t> &scratch() {
+    static thread_local std::vector<uint32_t> records;
+    return records;
   }
 };
 
 } // namespace
-
-HighlightEngine::~HighlightEngine() {
-  if (lexer != nullptr) {
-    lexer->Release();
-  }
-}
 
 HighlightState::HighlightState() = default;
 HighlightState::HighlightState(HighlightState &&other) noexcept = default;
@@ -444,13 +323,7 @@ HighlightState::~HighlightState() = default;
 /// alone for general callers. The parser's verified open-fence path avoids the
 /// comparison using exact snapshot lineage; arbitrary text still comes here.
 bool HighlightState::applies(std::string_view alias, std::u16string_view next) const {
-  // A previously unmatched high surrogate was encoded as U+FFFD. When the
-  // append supplies its low surrogate, that byte prefix must be rebuilt.
-  if (!text.empty() && text.size() < next.size() && text.back() >= 0xd800 && text.back() <= 0xdbff &&
-      next[text.size()] >= 0xdc00 && next[text.size()] <= 0xdfff) {
-    return false;
-  }
-  return engine != nullptr && language == alias && text.size() <= next.size() &&
+  return !language.empty() && language == alias && text.size() <= next.size() &&
       std::equal(text.begin(), text.end(), next.begin());
 }
 
@@ -459,27 +332,27 @@ void HighlightState::clear() {
   resumed = false;
   lastStop = HighlightStop::Skipped;
   language.clear();
+  languageId = 0;
   text.clear();
+  utf8Length = lineStartUtf16 = 0;
   finalEnd = 0;
   finalUtf16 = 0;
   bytesLexed = runsBuilt = tokenBytesCopied = textBytesCopied = 0;
   nextLiveLineRefresh = liveLineStart = 0;
   overByteLimit = false;
   runs.clear();
-  engine.reset();
-  document.reset({});
+  resume.clear();
 }
 
 void CodeHighlighter::tokenizeAppend(std::string_view info, const SnapshotText &text, std::u16string_view delta,
-                                    HighlightState *state,
-                                    SnapshotVector<TokenRun> *runs, double budgetMs, uint64_t previousDocumentId,
-                                    size_t previousLength, uint64_t nextDocumentId, bool live,
-                                    bool terminalLineComplete) {
+                                     HighlightState *state, SnapshotVector<TokenRun> *runs, double budgetMs,
+                                     uint64_t previousDocumentId, size_t previousLength, uint64_t nextDocumentId,
+                                     bool live, bool terminalLineComplete) {
   // Skipped blocks do not retain a lexer/text state. Recognize them before a
   // checked string-view conversion would flatten every growing snapshot.
   const bool retainedOversize = state->overByteLimit && previousDocumentId != 0 &&
       state->sourceDocumentId_ == previousDocumentId && previousLength + delta.size() == text.size();
-  if (retainedOversize || LanguageRegistry::find(info) == nullptr || text.empty() || text.size() > kMaxHighlightBytes) {
+  if (retainedOversize || findLanguage(info) == nullptr || text.empty() || text.size() > kMaxHighlightBytes) {
     state->clear();
     state->overByteLimit = retainedOversize;
     runs->clear();
@@ -500,7 +373,7 @@ void CodeHighlighter::tokenizeAppend(std::string_view info, const SnapshotText &
 }
 
 CodeHighlighter &downstreamHighlighter() {
-  static LexillaHighlighter highlighter;
+  static Highlighter highlighter;
   return highlighter;
 }
 
