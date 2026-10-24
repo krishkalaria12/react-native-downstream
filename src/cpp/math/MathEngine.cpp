@@ -59,12 +59,12 @@ struct Store {
     size_t operator()(const Key &key) const {
       // FNV-1a over the TeX and the flag. A hash here only has to spread keys
       // across buckets, and correctness comes from operator==.
-      size_t hash = 1469598103934665603ull;
+      uint64_t hash = 1469598103934665603ull;
       for (const char c : key.tex) {
         hash = (hash ^ static_cast<unsigned char>(c)) * 1099511628211ull;
       }
       hash = (hash ^ (key.display ? 1u : 0u)) * 1099511628211ull;
-      return hash;
+      return static_cast<size_t>(hash);
     }
   };
   struct CachedResult {
