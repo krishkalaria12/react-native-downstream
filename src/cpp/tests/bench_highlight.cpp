@@ -58,7 +58,45 @@ template <typename Work> void measure(const char *name, Work work, const Increme
   }
 }
 
+void measureLanguageFixtures() {
+  const std::pair<const char *, const char *> fixtures[] = {
+      {"ts", "export async function load(id: string) { return await fetch(`/api/${id}`); }\n"},
+      {"html", "<script>const value = `hello ${name}`;</script><style>.item { color: red; }</style>\n"},
+      {"python", "def total(rows):\n    return sum(row.price * row.qty for row in rows) # total\n"},
+      {"cpp", "template<class T> T add(T a, T b) { return a + b; } // sum\n"},
+      {"rust", "pub fn total(rows: &[u64]) -> u64 { rows.iter().sum() } // sum\n"},
+      {"json", "{\"name\": \"downstream\", \"enabled\": true, \"values\": [1, 2, 3]}\n"},
+      {"yaml", "services:\n  app:\n    image: downstream:latest\n    ports: [8080, 9090]\n"},
+      {"sql", "SELECT name, count(*) FROM users WHERE enabled = true GROUP BY name; -- users\n"},
+  };
+  for (const auto &[language, sample] : fixtures) {
+    const std::string_view line(sample);
+    std::string source;
+    while (source.size() + line.size() <= 60 * 1024) source += line;
+    const std::u16string text = utf8ToUtf16(source);
+    const std::string wholeName = std::string("fixture_whole_") + language;
+    measure(wholeName.c_str(), [&] {
+      HighlightState state;
+      std::vector<TokenRun> runs;
+      downstreamHighlighter().tokenize(language, text, &state, &runs, 1e9);
+      return runs.size();
+    });
+    const std::string streamName = std::string("fixture_stream_") + language;
+    measure(streamName.c_str(), [&] {
+      HighlightState state;
+      std::vector<TokenRun> runs;
+      for (size_t at = 0; at < text.size(); at += 256) {
+        downstreamHighlighter().tokenize(language, std::u16string_view(text).substr(0, std::min(at + 256, text.size())),
+                                        &state, &runs, 1e9, false);
+      }
+      downstreamHighlighter().tokenize(language, text, &state, &runs, 1e9);
+      return runs.size();
+    });
+  }
+}
+
 int main() {
+  measureLanguageFixtures();
   std::string code;
   while (code.size() + 51 <= 60 * 1024) {
     code += "const value = compute(user.id, 42); // next value\n";
