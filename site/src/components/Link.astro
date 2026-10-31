@@ -1,0 +1,20 @@
+---
+import type { HTMLAttributes } from 'astro/types';
+
+/**
+ * A plain link. External hrefs open in a new tab; `reload` opts a same-site
+ * link out of the client router so it does a normal full-page navigation.
+ */
+type Props = HTMLAttributes<'a'> & { href: string; reload?: boolean };
+
+const { href, reload = false, ...rest } = Astro.props;
+const external = /^https?:\/\//.test(href);
+---
+
+<a
+  href={href}
+  target={external ? '_blank' : undefined}
+  rel={external ? 'noreferrer' : undefined}
+  data-astro-reload={reload && !external ? '' : undefined}
+  {...rest}
+><slot />{external && <span class="ml-[0.2em] text-[0.85em] opacity-50" aria-hidden="true">↗</span>}</a>

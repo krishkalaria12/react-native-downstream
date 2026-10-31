@@ -1,0 +1,120 @@
+---
+import '@fontsource-variable/bricolage-grotesque/opsz.css';
+import '@fontsource-variable/instrument-sans/wdth.css';
+import '@fontsource-variable/newsreader/opsz-italic.css';
+import '@fontsource-variable/jetbrains-mono';
+import '../styles/global.css';
+import { ClientRouter } from 'astro:transitions';
+import SiteHeader from '../components/SiteHeader.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+import SearchDialog from '../components/SearchDialog.astro';
+import { absolute, site, type Schema } from '../data/site';
+
+type Props = {
+  /** Full document title. Defaults to the site title. */
+  title?: string;
+  description?: string;
+  /** Open Graph type: a page of the site, or an article such as a doc page. */
+  type?: 'website' | 'article';
+  /** JSON-LD nodes for this page, merged into one graph with the site's. */
+  schema?: Schema[];
+  noindex?: boolean;
+};
+
+const { title = site.title, description = site.description, type = 'website', schema = [], noindex = false } = Astro.props;
+
+// Pages build to `.html` files but are served without the extension.
+const path = Astro.url.pathname.replace(/(\/index)?\.html$/, '').replace(/\/$/, '') || '/';
+const canonical = absolute(path, Astro.site);
+const image = absolute(site.image.path, Astro.site);
+const websiteId = absolute('/#website', Astro.site);
+
+const graph = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'WebSite',
+      '@id': websiteId,
+      url: absolute('/', Astro.site),
+      name: site.name,
+      description: site.description,
+      inLanguage: 'en',
+      publisher: { '@type': 'Person', name: site.author.name, url: site.author.url },
+    },
+    ...schema.map((node) => ({ isPartOf: { '@id': websiteId }, ...node })),
+  ],
+};
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="generator" content={Astro.generator} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="canonical" href={canonical} />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <meta name="theme-color" content="#f4efd9" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="author" content={site.author.name} />
+    <meta name="robots" content={noindex ? 'noindex, follow' : 'index, follow, max-image-preview:large, max-snippet:-1'} />
+
+    <meta property="og:type" content={type} />
+    <meta property="og:site_name" content={site.name} />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={image} />
+    <meta property="og:image:width" content={String(site.image.width)} />
+    <meta property="og:image:height" content={String(site.image.height)} />
+    <meta property="og:image:alt" content={site.image.alt} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={image} />
+    <meta name="twitter:image:alt" content={site.image.alt} />
+
+    <script type="application/ld+json" is:inline set:html={JSON.stringify(graph)} />
+    <ClientRouter />
+  </head>
+  <body class="min-h-screen">
+    <a
+      href="#main"
+      class="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[100] focus:rounded-lg focus:border-[1.5px] focus:border-ink focus:bg-yellow focus:px-4 focus:py-2 focus:text-[15px] focus:font-semibold"
+      >Skip to content</a
+    >
+    <SiteHeader />
+    <main id="main">
+      <slot />
+    </main>
+    <SiteFooter />
+    <SearchDialog />
+
+    <script>
+      // One delegated handler for every copy button, so it keeps working after
+      // client-side navigations swap the page.
+      document.addEventListener('click', async (event) => {
+        const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-copy-code], [data-copy]');
+        if (!button) return;
+        const value =
+          button.dataset.copy ?? button.closest('.code-frame')?.querySelector('pre')?.textContent ?? '';
+        const label = button.textContent;
+        try {
+          await navigator.clipboard.writeText(value.replace(/\n$/, ''));
+          button.textContent = 'Copied';
+          button.dataset.copied = '';
+        } catch {
+          button.textContent = 'Press ⌘C';
+        }
+        setTimeout(() => {
+          button.textContent = label;
+          delete button.dataset.copied;
+        }, 1500);
+      });
+    </script>
+  </body>
+</html>

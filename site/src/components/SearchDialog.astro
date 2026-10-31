@@ -1,0 +1,162 @@
+---
+import { getSearchIndex } from '../data/search';
+
+const entries = await getSearchIndex();
+---
+
+<dialog
+  id="search-dialog"
+  class="m-0 mx-auto mt-[12vh] w-[min(100%-32px,620px)] overflow-visible bg-transparent p-0 backdrop:bg-ink/35 backdrop:backdrop-blur-[2px]"
+  aria-label="Search the docs"
+>
+  <div class="overflow-hidden rounded-2xl border-[1.5px] border-ink bg-cream shadow-[6px_6px_0_var(--color-ink)]">
+    <div class="flex items-center gap-3 border-b border-rule px-4">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" class="shrink-0 text-ink-faint" aria-hidden="true">
+        <circle cx="11" cy="11" r="7"></circle>
+        <path d="m20 20-3.5-3.5" stroke-linecap="round"></path>
+      </svg>
+      <input
+        id="search-input"
+        type="search"
+        placeholder="Search the docs"
+        autocomplete="off"
+        spellcheck="false"
+        class="h-14 w-full bg-transparent text-[17px] outline-none placeholder:text-ink-faint"
+        aria-controls="search-results"
+        aria-autocomplete="list"
+      />
+      <kbd class="kbd shrink-0">esc</kbd>
+    </div>
+    <ul id="search-results" role="listbox" class="max-h-[min(56vh,460px)] overflow-y-auto p-2" aria-label="Results"></ul>
+    <p id="search-empty" class="hidden px-5 pt-2 pb-6 text-[15px] text-ink-soft">
+      Nothing matches. Try a prop name like <code class="font-mono text-[13px]">onLinkPress</code> or a topic like tables.
+    </p>
+  </div>
+  <script type="application/json" id="search-index" set:html={JSON.stringify(entries)} />
+</dialog>
+
+<script>
+  import { navigate } from 'astro:transitions/client';
+
+  type Entry = { title: string; page: string; href: string; text: string };
+
+  let active = 0;
+  let results: Entry[] = [];
+
+  const els = () => ({
+    dialog: document.getElementById('search-dialog') as HTMLDialogElement | null,
+    input: document.getElementById('search-input') as HTMLInputElement | null,
+    list: document.getElementById('search-results') as HTMLUListElement | null,
+    empty: document.getElementById('search-empty'),
+  });
+
+  const loadIndex = (): Entry[] => {
+    const raw = document.getElementById('search-index')?.textContent ?? '[]';
+    return JSON.parse(raw) as Entry[];
+  };
+
+  const score = (entry: Entry, terms: string[]) => {
+    const title = entry.title.toLowerCase();
+    const haystack = `${title} ${entry.page.toLowerCase()} ${entry.text.toLowerCase()}`;
+    if (!terms.every((term) => haystack.includes(term))) return 0;
+    let value = 1;
+    for (const term of terms) {
+      if (title.startsWith(term)) value += 6;
+      else if (title.includes(term)) value += 3;
+    }
+    if (!entry.page) value += 1;
+    return value;
+  };
+
+  const escape = (value: string) =>
+    value.replace(/[&<>"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[char]!);
+
+  const render = () => {
+    const { input, list, empty } = els();
+    if (!input || !list || !empty) return;
+    const query = input.value.trim().toLowerCase();
+    const index = loadIndex();
+    const terms = query.split(/\s+/).filter(Boolean);
+    results = terms.length
+      ? index
+          .map((entry) => ({ entry, value: score(entry, terms) }))
+          .filter((item) => item.value > 0)
+          .sort((a, b) => b.value - a.value)
+          .slice(0, 12)
+          .map((item) => item.entry)
+      : index.filter((entry) => !entry.page);
+    active = Math.min(active, Math.max(0, results.length - 1));
+    empty.classList.toggle('hidden', results.length > 0);
+    list.innerHTML = results
+      .map(
+        (entry, i) => `
+        <li role="option" id="search-option-${i}" aria-selected="${i === active}">
+          <a href="${entry.href}" data-index="${i}"
+            class="flex items-baseline justify-between gap-4 rounded-xl px-3 py-2.5 ${i === active ? 'bg-yellow-soft' : ''}">
+            <span class="min-w-0">
+              <span class="block truncate text-[16px] font-semibold text-ink">${escape(entry.title)}</span>
+              ${entry.page ? `<span class="block truncate text-[13.5px] text-ink-faint">in ${escape(entry.page)}</span>` : entry.text ? `<span class="block truncate text-[13.5px] text-ink-faint">${escape(entry.text)}</span>` : ''}
+            </span>
+            ${i === active ? '<kbd class="kbd shrink-0">↵</kbd>' : ''}
+          </a>
+        </li>`,
+      )
+      .join('');
+    input.setAttribute('aria-activedescendant', results.length ? `search-option-${active}` : '');
+    list.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: 'nearest' });
+  };
+
+  const open = () => {
+    const { dialog, input } = els();
+    if (!dialog || !input || dialog.open) return;
+    dialog.showModal();
+    input.select();
+    active = 0;
+    render();
+  };
+
+  const close = () => els().dialog?.close();
+
+  // Registered once: module scripts survive client-side navigations, and the
+  // listeners resolve the dialog from the current document every time.
+  document.addEventListener('keydown', (event) => {
+    const target = event.target as HTMLElement | null;
+    const typing = target?.closest('input, textarea, [contenteditable]');
+    if ((event.key === 'k' && (event.metaKey || event.ctrlKey)) || (event.key === '/' && !typing)) {
+      event.preventDefault();
+      open();
+      return;
+    }
+    const { dialog } = els();
+    if (!dialog?.open) return;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      active = (active + step + results.length) % Math.max(results.length, 1);
+      render();
+    } else if (event.key === 'Enter' && results[active]) {
+      event.preventDefault();
+      close();
+      navigate(results[active].href);
+    }
+  });
+
+  document.addEventListener('input', (event) => {
+    if ((event.target as HTMLElement).id === 'search-input') {
+      active = 0;
+      render();
+    }
+  });
+
+  document.addEventListener('click', (event) => {
+    const target = event.target as HTMLElement;
+    if (target.closest('[data-search-open]')) {
+      open();
+      return;
+    }
+    const { dialog } = els();
+    if (!dialog?.open) return;
+    if (target === dialog) close();
+    if (target.closest('#search-results a')) close();
+  });
+</script>

@@ -1,0 +1,18 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout title="Page not found | Downstream" description="This page does not exist." noindex>
+  <section class="shell grid min-h-[60vh] content-center py-24">
+    <p class="label">404</p>
+    <h1 class="display mt-4 text-[clamp(48px,7vw,96px)]">
+      This page never <span class="serif-accent font-normal text-coral">arrived.</span>
+    </h1>
+    <p class="lead mt-6 max-w-[48ch]">The link may be old, or the page may have moved. Try the docs, or search them.</p>
+    <div class="mt-9 flex flex-wrap items-center gap-3">
+      <a href="/docs" class="btn btn-primary">Open the docs</a>
+      <button type="button" data-search-open class="btn btn-plain">Search <kbd class="kbd">⌘K</kbd></button>
+      <a href="/" class="text-link ml-2 text-[16px]">Home</a>
+    </div>
+  </section>
+</BaseLayout>
