@@ -58,6 +58,7 @@
     "typecheck:android": "node tests/android/typecheck.mjs",
     "test:fabric": "node tests/fabric/syntax-check.mjs",
     "release": "release-it --only-version",
+    "release:npm": "node scripts/publish.mjs",
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",
     "format:check": "oxfmt --check"
