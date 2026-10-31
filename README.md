@@ -19,7 +19,13 @@ Parsing and text preparation run on native worker threads. Streaming updates reu
 
 ## Video and real-device benchmarks
 
-A walkthrough video and benchmarks from real phones are coming soon. They will be added here when available.
+The [phone benchmark report](benchmarks/phone/REPORT.md) compares six streaming Markdown libraries on a OnePlus Nord CE 3 running Android 15. The [project site](site/README.md) turns the same numbers into charts, alongside the landing page and documentation.
+
+To work on the site locally:
+
+```sh
+pnpm --filter react-native-downstream-site dev
+```
 
 ## Install
 
