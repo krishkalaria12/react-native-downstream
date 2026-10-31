@@ -36,6 +36,7 @@
     "!**/__fixtures__",
     "!**/__mocks__",
     "!/tests",
+    "!src/cpp/tests",
     "!/benchmarks",
     "!**/.*"
   ],
