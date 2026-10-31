@@ -11,6 +11,8 @@
     // Serve dist/404.html with a 404 status for unknown paths.
     "not_found_handling": "404-page",
   },
-  // To serve the site on your own domain (the zone must be on this Cloudflare account):
-  // "routes": [{ "pattern": "downstream.krishkalaria.dev", "custom_domain": true }],
+  // Serve on the custom domain. The krishkalaria.in zone must be on this Cloudflare account.
+  "routes": [
+    { "pattern": "downstream.krishkalaria.in", "custom_domain": true },
+  ],
 }

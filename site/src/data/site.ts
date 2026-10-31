@@ -19,7 +19,7 @@ export type Schema = Record<string, unknown>;
 
 /** Absolute URL for a site path. */
 export const absolute = (path: string, base: URL | undefined) =>
-  new URL(path, base ?? 'https://downstream.krishkalaria.dev').href;
+  new URL(path, base ?? 'https://downstream.krishkalaria.in').href;
 
 export const breadcrumbs = (
   items: { name: string; path: string }[],

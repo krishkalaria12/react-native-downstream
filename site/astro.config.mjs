@@ -5,7 +5,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { codeFrame, docsHast } from './src/lib/markdown.mjs';
 
 export default defineConfig({
-  site: 'https://downstream.krishkalaria.dev',
+  site: 'https://downstream.krishkalaria.in',
   // Pages build to `docs/streaming.html`, so every URL is served, linked and
   // listed without a trailing slash and each page has one canonical address.
   trailingSlash: 'never',

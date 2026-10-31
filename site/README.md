@@ -47,7 +47,7 @@ To deploy on every push with Workers Builds, connect the repository in the Cloud
 
 Skipping the automatic install and filtering it to the site keeps the build from installing the React Native example app. Node is pinned by `site/.node-version`, and pnpm by `packageManager` in the root `package.json`.
 
-For a custom domain, uncomment the `routes` entry in `wrangler.jsonc`. The domain must be a zone on the same Cloudflare account. If the domain changes, update `site` in `astro.config.mjs` as well.
+The site is served at `downstream.krishkalaria.in` through the `routes` entry in `wrangler.jsonc`. The `krishkalaria.in` zone must be on the same Cloudflare account. If the domain changes, update `site` in `astro.config.mjs` as well.
 
 ## Content
 
