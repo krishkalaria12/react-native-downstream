@@ -1,0 +1,215 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import PhoneDemo from '../components/PhoneDemo.astro';
+import CodeBlock from '../components/CodeBlock.astro';
+import BenchmarkCards from '../components/BenchmarkCards.astro';
+import { absolute, site } from '../data/site';
+
+const software = {
+  '@type': 'SoftwareSourceCode',
+  '@id': absolute('/#software', Astro.site),
+  name: site.packageName,
+  alternateName: site.name,
+  description: site.description,
+  url: absolute('/', Astro.site),
+  codeRepository: site.repo,
+  sameAs: [site.repo, site.npm],
+  programmingLanguage: ['TypeScript', 'C++', 'Objective-C++', 'Kotlin'],
+  runtimePlatform: 'React Native',
+  targetProduct: { '@type': 'SoftwareApplication', operatingSystem: 'iOS, Android', applicationCategory: 'DeveloperApplication' },
+  license: 'https://opensource.org/licenses/MIT',
+  author: { '@type': 'Person', name: site.author.name, url: site.author.url },
+  keywords: 'React Native, Markdown, streaming, AI chat, native rendering, iOS, Android',
+};
+
+const steps = [
+  {
+    title: 'Append each chunk',
+    body: 'Hand every text delta to the controller as it arrives. Updates are batched per animation frame, so a burst of tokens is one update, not fifty.',
+  },
+  {
+    title: 'Closed blocks settle',
+    body: 'When a heading, list, table or fence is complete, it is laid out once and kept. Its native views are reused for the rest of the reply.',
+  },
+  {
+    title: 'Only the tail is redrawn',
+    body: 'The one block still being written is parsed and prepared again on a native worker. Half-written syntax can be previewed as it will look.',
+  },
+];
+
+const features = [
+  { title: 'Code blocks', body: 'Highlighting for 84 languages, line numbers, filenames, copy, download, wrap and expand.' },
+  { title: 'Tables', body: 'Scrollable grids with Markdown, CSV and TSV copy, export, and a full-screen view.' },
+  { title: 'Math', body: 'Optional native typesetting for display and inline formulas, steady while they stream.' },
+  { title: 'Images', body: 'HTTPS images with placeholders, alt-text fallback, and an allowlist of trusted hosts.' },
+  { title: 'Alerts and footnotes', body: 'GitHub alerts as native callouts, footnotes with working backlinks.' },
+  { title: 'Task lists and details', body: 'Real checkboxes that report presses, and collapsible details blocks.' },
+  { title: 'Links', body: 'Confirm before opening, resolve relative links, and handle long presses.' },
+  { title: 'CJK and RTL', body: 'Direction is chosen per block; emphasis and autolinks work in CJK text.' },
+  { title: 'Your own components', body: 'Render a fence language or an allowed tag with any React component.' },
+];
+
+const replyCode = `import { DownstreamMarkdown, createMarkdownStream } from 'react-native-downstream';
+import type { MarkdownStreamController } from 'react-native-downstream';
+import { streamText } from 'ai';
+
+type Message = { id: string; reply: MarkdownStreamController };
+
+// Run from your send button. The controller lives as long as its message.
+async function send(prompt: string, add: (message: Message) => void) {
+  const reply = createMarkdownStream({ preview: true });
+  add({ id: String(Date.now()), reply });
+
+  const { textStream } = streamText({ model, prompt });
+  for await (const chunk of textStream) reply.append(chunk);
+  reply.finish();
+}
+
+function Bubble({ message }: { message: Message }) {
+  return <DownstreamMarkdown stream={message.reply} animated caret="block" />;
+}`;
+
+const install = `pnpm add react-native-downstream
+
+# bare React Native: install pods, then rebuild
+npx pod-install
+
+# Expo: use a development build
+npx expo run:ios`;
+---
+
+<BaseLayout schema={[software]}>
+  <!-- Hero -->
+  <section class="shell-wide grid items-center gap-x-10 gap-y-14 pt-12 pb-20 lg:grid-cols-[1fr_1fr] lg:pt-16 lg:pb-28">
+    <div class="max-w-[620px]">
+      <h1 class="display text-[clamp(50px,6.3vw,94px)]">
+        Markdown that
+        <span class="serif-accent relative isolate ml-[0.08em] inline-block font-normal text-blue">
+          keeps up
+          <span class="absolute right-[-2%] bottom-[0.06em] left-[-2%] -z-10 h-[0.2em] -rotate-1 rounded-full bg-yellow" aria-hidden="true"></span>
+        </span>
+        with the model.
+      </h1>
+      <p class="lead mt-8 max-w-[50ch]">
+        Downstream is a native Markdown view for React Native chat apps. Hand it each chunk the model sends. Blocks
+        that are complete are laid out once and left alone, and parsing happens in native code, so your JavaScript
+        thread stays free for the rest of the app.
+      </p>
+
+      <div class="mt-9 flex flex-wrap items-center gap-3">
+        <a href="/docs/getting-started" class="btn btn-primary">Get started</a>
+        <div class="flex h-12 max-w-full min-w-0 items-center gap-1 rounded-xl border-[1.5px] border-ink/25 bg-cream/80 pr-1.5 pl-4">
+          <code class="truncate font-mono text-[13px] text-ink-soft sm:text-[14px]"><span class="text-ink-faint select-none">$ </span>pnpm add react-native-downstream</code>
+          <button
+            type="button"
+            data-copy="pnpm add react-native-downstream"
+            class="ml-2 h-9 shrink-0 rounded-lg px-3 text-[13.5px] font-semibold text-ink-soft transition-colors hover:bg-ink/5 hover:text-ink"
+            >Copy</button
+          >
+        </div>
+      </div>
+      <p class="mt-6 text-[14.5px] text-ink-faint">
+        Works on iOS and Android with the New Architecture. MIT licensed.
+      </p>
+    </div>
+
+    <PhoneDemo />
+  </section>
+
+  <!-- How it works -->
+  <section class="bg-ink py-24 text-paper lg:py-32">
+    <div class="shell-wide grid gap-14 lg:grid-cols-[0.9fr_1.1fr] lg:gap-20">
+      <div>
+        <h2 class="h-section max-w-[14ch]">Built for the unfinished sentence.</h2>
+        <p class="mt-6 max-w-[46ch] text-[17px] leading-relaxed text-paper/70">
+          Most Markdown views parse the whole string again on every update, so a reply gets slower the longer it
+          runs. Downstream treats a reply as an append-only document.
+        </p>
+        <ol class="mt-12 space-y-8">
+          {
+            steps.map((step, index) => (
+              <li class="grid grid-cols-[40px_1fr] gap-4">
+                <span class="grid h-10 w-10 place-items-center rounded-full bg-yellow font-display text-[17px] font-extrabold text-ink">
+                  {index + 1}
+                </span>
+                <div>
+                  <h3 class="h-card text-[21px]">{step.title}</h3>
+                  <p class="mt-1.5 max-w-[48ch] text-[15.5px] leading-relaxed text-paper/65">{step.body}</p>
+                </div>
+              </li>
+            ))
+          }
+        </ol>
+        <a href="/docs/streaming" class="btn btn-yellow mt-12">Read the streaming guide</a>
+      </div>
+
+      <div class="min-w-0 lg:pt-3">
+        <CodeBlock code={replyCode} lang="tsx" title="Reply.tsx" class="[&_.code-frame]:border-paper/25 [&_.code-frame]:shadow-[6px_6px_0_var(--color-blue)]" />
+        <p class="mt-5 text-[14.5px] text-paper/55">
+          One controller per message. It works with any source of text: the Vercel AI SDK, a WebSocket, or a
+          server-sent event stream.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="shell-wide py-24 lg:py-32">
+    <div class="grid gap-12 lg:grid-cols-[0.75fr_1.25fr] lg:gap-20">
+      <div>
+        <h2 class="h-section max-w-[12ch]">Everything a chat reply throws at it.</h2>
+        <p class="lead mt-6 max-w-[40ch]">
+          The controls readers expect are already built in, and each one can be styled or turned off.
+        </p>
+        <a href="/docs" class="text-link mt-6 inline-block text-[16px]">Browse the docs</a>
+      </div>
+      <ul class="grid border-t-[1.5px] border-ink sm:grid-cols-2 xl:grid-cols-3">
+        {
+          features.map((feature) => (
+            <li class="border-b border-ink/15 py-6 sm:pr-8">
+              <h3 class="h-card text-[20px]">{feature.title}</h3>
+              <p class="mt-1.5 text-[15.5px] leading-relaxed text-ink-soft">{feature.body}</p>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <!-- Benchmarks -->
+  <section class="border-t-[1.5px] border-ink bg-paper-deep/70 py-24 lg:py-32" id="benchmarks">
+    <div class="shell-wide">
+      <div class="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <h2 class="display text-[clamp(52px,7vw,104px)]">Benchmarks.</h2>
+          <p class="lead mt-6 max-w-[56ch]">
+            Six Markdown libraries rendering the same live model replies on a OnePlus Nord CE 3. Here is Downstream
+            against the two other native renderers. Where it loses, the card says so.
+          </p>
+        </div>
+        <a href="/benchmarks" class="btn btn-blue shrink-0">See every workload</a>
+      </div>
+
+      <div class="mt-14">
+        <BenchmarkCards />
+      </div>
+    </div>
+  </section>
+
+  <!-- Install -->
+  <section class="border-t-[1.5px] border-ink bg-yellow py-24 lg:py-28">
+    <div class="shell grid gap-12 lg:grid-cols-[0.9fr_1.1fr] lg:items-center lg:gap-16">
+      <div>
+        <h2 class="h-section max-w-[12ch]">Start with one message.</h2>
+        <p class="mt-6 max-w-[42ch] text-[17px] leading-relaxed text-ink/75">
+          Downstream needs the New Architecture and a native build. Expo Go cannot load it; a development build can.
+        </p>
+        <div class="mt-9 flex flex-wrap items-center gap-x-6 gap-y-3">
+          <a href="/docs/getting-started" class="btn btn-plain">Read the setup guide</a>
+          <a href="/docs/api" class="text-link text-[16px]">API reference</a>
+        </div>
+      </div>
+      <CodeBlock code={install} lang="sh" title="Terminal" class="min-w-0 [&_.code-frame]:shadow-[6px_6px_0_var(--color-ink)]" />
+    </div>
+  </section>
+</BaseLayout>

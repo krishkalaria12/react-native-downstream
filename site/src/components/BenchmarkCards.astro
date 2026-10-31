@@ -1,0 +1,572 @@
+---
+/**
+ * The homepage benchmark board: one card per claim, each with the number that
+ * matters, a short reading of it, and the bars or table it comes from. Cards
+ * where Downstream loses or ties say so with a stamp.
+ */
+import { iosAppCpu, metrics, workload, workloads, type LibraryName, type MetricKey } from '../data/benchmarks';
+import { formatNumber } from '../lib/format';
+
+const peers: LibraryName[] = ['Downstream', 'RN Streamdown', 'Enriched Markdown'];
+const short: Record<string, string> = { Downstream: 'Downstream', 'RN Streamdown': 'Streamdown', 'Enriched Markdown': 'Enriched' };
+const main = workloads.filter((item) => item.runs === '5 runs');
+const metricOf = (key: MetricKey) => metrics.find((metric) => metric.key === key)!;
+
+
+/** "1.8×" for a clear gap, "4%" for a close one. */
+const verdict = (better: number, worse: number) => {
+  const ratio = worse / better;
+  return ratio >= 1.1
+    ? { value: Number(ratio.toFixed(1)), decimals: 1, suffix: '×' }
+    : { value: Math.max(1, Math.round((ratio - 1) * 100)), decimals: 0, suffix: '%' };
+};
+const times = (better: number, worse: number) => {
+  const v = verdict(better, worse);
+  return `${formatNumber(v.value, v.decimals)}${v.suffix}`;
+};
+
+type Lane = { name: string; value: string; width: number; ours: boolean };
+type Row = { label: string; cells: { value: string; width: number; best: boolean }[] };
+type Card = {
+  title: string;
+  context: string;
+  outcome: 'win' | 'loss' | 'tie';
+  stamp?: string;
+  badge?: string;
+  figure: { value: number; decimals: number; suffix: string };
+  line: string;
+  note?: string;
+  lanes?: Lane[];
+  rows?: Row[];
+  wide?: boolean;
+};
+
+const lanes = (values: Record<string, number>, unit: string, decimals: number): Lane[] => {
+  const peak = Math.max(...Object.values(values));
+  return Object.entries(values).map(([name, value]) => ({
+    name,
+    value: `${formatNumber(value, decimals)} ${unit}`,
+    width: value / peak,
+    ours: name === 'Downstream',
+  }));
+};
+
+const androidLanes = (id: string, metric: MetricKey) => {
+  const results = workload(id).results;
+  const { unit, decimals } = metricOf(metric);
+  return lanes(Object.fromEntries(peers.map((name) => [name, results[name][metric]])), unit, decimals);
+};
+
+/** Downstream against the closer of the two other native renderers. */
+const nearest = (id: string, metric: MetricKey) => {
+  const results = workload(id).results;
+  const [first, second] = peers.slice(1).sort((a, b) => results[a][metric] - results[b][metric]);
+  return { first, second, ours: results.Downstream[metric], a: results[first][metric], b: results[second][metric] };
+};
+
+const sweep = (metric: MetricKey): Pick<Card, 'badge' | 'rows'> => {
+  const { decimals } = metricOf(metric);
+  const wins = main.filter((item) => peers.slice(1).every((name) => item.results[name][metric] > item.results.Downstream[metric]));
+  return {
+    badge: `Downstream ${wins.length} of ${main.length}`,
+    rows: main.map((item) => {
+      const values = peers.map((name) => item.results[name][metric]);
+      const peak = Math.max(...values);
+      const best = Math.min(...values);
+      return {
+        label: item.label,
+        cells: values.map((value) => ({ value: formatNumber(value, decimals), width: value / peak, best: value === best })),
+      };
+    }),
+  };
+};
+
+const cpuOne = nearest('ai-single', 'appCpu');
+const cpuFive = nearest('ai-concurrent-5', 'appCpu');
+const cpuMatrix = nearest('ai-feature-matrix', 'appCpu');
+const memory = nearest('ai-single', 'memory');
+const ui = nearest('ai-single', 'uiCpu');
+const jank = workload('ai-single').results;
+const p99 = workload('ai-concurrent-5').results;
+const ios = iosAppCpu.find((item) => item.id === 'ai-single')!.results;
+
+const cards: Card[] = [
+  {
+    title: 'App CPU',
+    context: 'One AI reply',
+    outcome: 'win',
+    figure: verdict(cpuOne.ours, cpuOne.a),
+    line: `less CPU than ${cpuOne.first}`,
+    note: `${times(cpuOne.ours, cpuOne.b)} less than ${cpuOne.second}`,
+    lanes: androidLanes('ai-single', 'appCpu'),
+  },
+  {
+    title: 'App CPU',
+    context: 'Five replies at once',
+    outcome: 'win',
+    figure: verdict(cpuFive.ours, cpuFive.a),
+    line: `less CPU than ${cpuFive.first}`,
+    note: `${times(cpuFive.ours, cpuFive.b)} less than ${cpuFive.second}`,
+    lanes: androidLanes('ai-concurrent-5', 'appCpu'),
+  },
+  {
+    title: 'Peak memory',
+    context: 'One AI reply',
+    outcome: 'win',
+    wide: true,
+    figure: verdict(memory.ours, memory.a),
+    line: `less memory than ${memory.first}`,
+    note: `${times(memory.ours, memory.b)} less than ${memory.second}`,
+    ...sweep('memory'),
+  },
+  {
+    title: 'UI thread CPU',
+    context: 'One AI reply',
+    outcome: 'win',
+    wide: true,
+    figure: verdict(ui.ours, ui.a),
+    line: `less main-thread work than ${ui.first}`,
+    note: `${times(ui.ours, ui.b)} less than ${ui.second}`,
+    ...sweep('uiCpu'),
+  },
+  {
+    title: 'Janky frames',
+    context: 'One AI reply',
+    outcome: 'loss',
+    stamp: 'Streamdown wins this one',
+    figure: verdict(jank['RN Streamdown'].jank, jank.Downstream.jank),
+    line: 'fewer janky frames than Downstream',
+    note: `Downstream still misses ${times(jank.Downstream.jank, jank['Markdown Display'].jank)} fewer than Markdown Display.`,
+    lanes: androidLanes('ai-single', 'jank'),
+  },
+  {
+    title: 'Frame time p99',
+    context: 'Five replies at once',
+    outcome: 'tie',
+    stamp: 'Photo finish',
+    figure: verdict(p99.Downstream.p99, p99['RN Streamdown'].p99),
+    line: 'faster than RN Streamdown',
+    note: 'All three stay within about two refreshes at 120 Hz.',
+    lanes: androidLanes('ai-concurrent-5', 'p99'),
+  },
+  {
+    title: 'App CPU',
+    context: 'Feature matrix',
+    outcome: 'win',
+    figure: verdict(cpuMatrix.ours, cpuMatrix.a),
+    line: `less CPU than ${cpuMatrix.first}`,
+    note: `${times(cpuMatrix.ours, cpuMatrix.b)} less than ${cpuMatrix.second}`,
+    lanes: androidLanes('ai-feature-matrix', 'appCpu'),
+  },
+  {
+    title: 'App CPU on iOS',
+    context: 'One AI reply, simulator',
+    outcome: 'win',
+    figure: verdict(ios.Downstream, ios['RN Streamdown']),
+    line: 'less CPU than RN Streamdown',
+    note: `${times(ios.Downstream, ios['Enriched Markdown'])} less than Enriched Markdown`,
+    lanes: lanes(Object.fromEntries(peers.map((name) => [name, ios[name]])), 's', 2),
+  },
+];
+---
+
+<ul class="bench-cards" role="list">
+  {
+    cards.map((card, index) => (
+      <li
+        class:list={['bench-card', card.wide && 'bench-card-wide', card.outcome !== 'win' && 'bench-card-quiet']}
+        data-bench-card
+        style={`--d: ${(index % 4) * 70}ms`}
+      >
+        <div class="flex items-start justify-between gap-3">
+          <h3 class="leading-tight">
+            <span class="h-card block text-[18px]">{card.title}</span>
+            <span class="mt-0.5 block text-[13.5px] text-ink-faint">{card.context}</span>
+          </h3>
+          {card.badge && <span class="bench-badge">{card.badge}</span>}
+          {card.outcome === 'win' && !card.badge && (
+            <svg class="bench-tick" viewBox="0 0 28 24" width="26" height="22" role="img" aria-label="Downstream wins">
+              <path d="M3 13.5c2.2 1.4 4.3 3.6 6.4 6.6C13 13 17.6 7.4 25 2.6" />
+            </svg>
+          )}
+          {card.stamp && <span class="bench-stamp">{card.stamp}</span>}
+        </div>
+
+        <div class="bench-body">
+          <div class="bench-call">
+            <p class="bench-figure">
+              <span
+                data-bench-count
+                data-value={card.figure.value}
+                data-decimals={card.figure.decimals}
+              >
+                {formatNumber(card.figure.value, card.figure.decimals)}
+              </span>
+              {card.figure.suffix}
+            </p>
+            <p class="mt-2 text-[16.5px] leading-snug font-semibold">{card.line}</p>
+            {card.note && <p class="mt-1 text-[14px] leading-snug text-ink-soft">{card.note}</p>}
+          </div>
+
+          {card.lanes && (
+            <div class="bench-lanes">
+              {card.lanes.map((lane, j) => (
+                <div class:list={['bench-lane', lane.ours && 'is-ours']} style={`--w: ${lane.width.toFixed(4)}; --j: ${j}`}>
+                  <span class="text-[13.5px]">{lane.name}</span>
+                  <span class="num text-[13px]">{lane.value}</span>
+                  <span class="bench-track">
+                    <span class="bench-bar" />
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {card.rows && (
+            <table class="bench-sheet">
+              <thead>
+                <tr>
+                  <th scope="col" class="text-left">
+                    <span class="sr-only">Workload</span>
+                  </th>
+                  {peers.map((name) => (
+                    <th scope="col" class="text-right">
+                      {short[name]}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {card.rows.map((row, j) => (
+                  <tr>
+                    <th scope="row" class="text-left">
+                      {row.label}
+                    </th>
+                    {row.cells.map((cell, k) => (
+                      <td class:list={['num text-right', cell.best && 'is-best', k === 0 && 'is-ours']}>
+                        {cell.value}
+                        <span class="bench-dash" style={`--w: ${cell.width.toFixed(4)}; --j: ${j}`} />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </li>
+    ))
+  }
+
+  <li class="bench-colophon" data-bench-card style="--d: 140ms">
+    <h3 class="h-card text-[18px]">The small print</h3>
+    <p class="mt-3 text-[14.5px] leading-relaxed text-ink-soft">
+      OnePlus Nord CE 3, Android 15 at 120 Hz. Release build on Hermes. Fresh model replies streamed live over USB. 198
+      measured runs, 15 Oct 2026.
+    </p>
+    <p class="mt-3 text-[14.5px] leading-relaxed text-ink-soft">
+      Every figure is a median of five cold starts, so one lucky run doesn't count. Lower is better everywhere.
+    </p>
+    <div class="mt-auto flex flex-col items-start gap-1.5 pt-5">
+      <a href="/benchmarks#method" class="text-link text-[15px]">How it was measured</a>
+      <a href="/benchmarks" class="text-link text-[15px]">All six libraries, every workload</a>
+    </div>
+  </li>
+</ul>
+
+<script>
+  const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const countUp = (el: HTMLElement) => {
+    const target = Number(el.dataset.value);
+    const decimals = Number(el.dataset.decimals);
+    const from = decimals ? 1 : 0;
+    const start = performance.now();
+    const duration = 900;
+    const step = (now: number) => {
+      const t = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3);
+      el.textContent = (from + (target - from) * eased).toFixed(decimals);
+      if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  };
+
+  document.addEventListener('astro:page-load', () => {
+    const cards = document.querySelectorAll<HTMLElement>('[data-bench-card]');
+    if (cards.length === 0) return;
+    if (reduced() || !('IntersectionObserver' in window)) {
+      cards.forEach((card) => card.setAttribute('data-landed', ''));
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const card = entry.target as HTMLElement;
+          card.setAttribute('data-landed', '');
+          const delay = parseFloat(getComputedStyle(card).getPropertyValue('--d')) || 0;
+          card.querySelectorAll<HTMLElement>('[data-bench-count]').forEach((el) => setTimeout(() => countUp(el), delay + 120));
+          observer.unobserve(card);
+        }
+      },
+      { rootMargin: '0px 0px -12% 0px' },
+    );
+    cards.forEach((card) => observer.observe(card));
+    document.addEventListener('astro:before-swap', () => observer.disconnect(), { once: true });
+  });
+</script>
+
+<style>
+  .bench-cards {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-auto-flow: dense;
+    gap: clamp(10px, 1.3vw, 18px);
+  }
+
+  .bench-card,
+  .bench-colophon {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: clamp(16px, 1.6vw, 22px);
+    border: 1.5px solid var(--color-ink);
+    border-radius: 16px;
+    background: var(--color-cream);
+    box-shadow: 0 18px 30px -24px rgb(60 40 10 / 55%);
+  }
+
+  .bench-card-wide {
+    grid-column: span 2;
+  }
+
+  .bench-card-quiet {
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .bench-colophon {
+    grid-column: span 2;
+    background: transparent;
+    box-shadow: none;
+    border-style: dashed;
+    border-color: rgb(28 27 25 / 40%);
+  }
+
+  .bench-tick {
+    flex: none;
+    margin-top: 2px;
+    overflow: visible;
+  }
+
+  .bench-tick path {
+    fill: none;
+    stroke: var(--color-blue);
+    stroke-width: 3.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .bench-badge {
+    flex: none;
+    padding: 3px 9px;
+    border-radius: 6px;
+    background: var(--color-ink);
+    color: var(--color-paper);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .bench-stamp {
+    flex: none;
+    max-width: 9.5em;
+    padding: 3px 8px;
+    border: 1.5px solid var(--color-coral);
+    border-radius: 4px;
+    color: var(--color-coral);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.25;
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    transform: rotate(3deg);
+  }
+
+  .bench-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+  }
+
+  .bench-card-wide .bench-body {
+    display: grid;
+    flex: none;
+    grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+    align-items: start;
+    column-gap: clamp(16px, 2.2vw, 32px);
+  }
+
+  .bench-call {
+    margin-top: clamp(14px, 1.6vw, 22px);
+  }
+
+  .bench-figure {
+    font-family: var(--font-display);
+    font-variation-settings: 'opsz' 96;
+    font-size: clamp(54px, 5.4vw, 76px);
+    font-weight: 800;
+    letter-spacing: -0.05em;
+    line-height: 0.9;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .bench-card-wide .bench-figure {
+    font-size: clamp(64px, 7.4vw, 108px);
+  }
+
+  .bench-lanes {
+    display: grid;
+    row-gap: 9px;
+    margin-top: auto;
+    padding-top: clamp(18px, 2vw, 26px);
+  }
+
+  .bench-lane {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    row-gap: 4px;
+    color: var(--color-ink-soft);
+  }
+
+  .bench-lane.is-ours {
+    color: var(--color-ink);
+    font-weight: 700;
+  }
+
+  .bench-track {
+    grid-column: 1 / -1;
+    height: 9px;
+  }
+
+  .bench-bar {
+    display: block;
+    width: max(4px, calc(100% * var(--w)));
+    height: 100%;
+    border-radius: 3px 6px 4px 7px / 5px 3px 6px 4px;
+    background: repeating-linear-gradient(
+      -55deg,
+      rgb(28 27 25 / 26%) 0 2px,
+      rgb(28 27 25 / 15%) 2px 6px
+    );
+    transform-origin: left center;
+  }
+
+  .is-ours .bench-bar {
+    background: var(--color-coral);
+  }
+
+  .bench-sheet {
+    width: 100%;
+    margin-top: clamp(14px, 1.6vw, 22px);
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  .bench-sheet thead th {
+    padding: 0 0 8px 10px;
+    border-bottom: 1.5px solid var(--color-ink);
+    color: var(--color-ink-faint);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+
+  .bench-sheet thead th:first-child {
+    padding-left: 0;
+  }
+
+  .bench-sheet tbody th {
+    padding: 9px 0;
+    border-bottom: 1px solid var(--color-rule);
+    font-weight: 400;
+    line-height: 1.2;
+  }
+
+  .bench-sheet td {
+    position: relative;
+    padding: 9px 0 9px 10px;
+    border-bottom: 1px solid var(--color-rule);
+    color: var(--color-ink-soft);
+  }
+
+  .bench-sheet tr:last-child > * {
+    border-bottom: 0;
+  }
+
+  .bench-sheet td.is-best {
+    color: var(--color-ink);
+    font-weight: 700;
+  }
+
+  .bench-dash {
+    position: absolute;
+    right: 0;
+    bottom: 3px;
+    width: calc((100% - 10px) * var(--w));
+    height: 3px;
+    border-radius: 2px;
+    background: rgb(28 27 25 / 20%);
+    transform-origin: right center;
+  }
+
+  .is-ours .bench-dash {
+    background: var(--color-coral);
+  }
+
+  @media (prefers-reduced-motion: no-preference) and (scripting: enabled) {
+    [data-bench-card] {
+      transition:
+        opacity 0.32s ease-out var(--d, 0s),
+        transform 0.55s cubic-bezier(0.2, 1.2, 0.3, 1) var(--d, 0s);
+    }
+
+    [data-bench-card]:not([data-landed]) {
+      opacity: 0;
+      transform: translateY(22px) rotate(-0.6deg);
+    }
+
+    .bench-bar,
+    .bench-dash {
+      transition: transform 0.62s cubic-bezier(0.2, 0.8, 0.2, 1) calc(var(--d, 0s) + 0.16s + var(--j, 0) * 70ms);
+    }
+
+    [data-bench-card]:not([data-landed]) :is(.bench-bar, .bench-dash) {
+      transform: scaleX(0);
+    }
+  }
+
+  @media (width <= 1100px) {
+    .bench-cards {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (width <= 640px) {
+    .bench-cards {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .bench-card-wide,
+    .bench-colophon {
+      grid-column: auto;
+    }
+
+    .bench-card-wide .bench-body {
+      display: flex;
+    }
+  }
+</style>

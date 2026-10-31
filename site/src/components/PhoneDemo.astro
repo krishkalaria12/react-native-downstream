@@ -1,0 +1,92 @@
+---
+/**
+ * The hero: a real recording of the example app streaming a live model reply
+ * on the iOS simulator, pinned to a board with two notes about what is
+ * happening on screen.
+ */
+---
+
+<figure class="mx-auto w-full max-w-[560px]" data-phone-demo>
+  <div class="relative">
+    <div class="grid-paper absolute inset-x-0 top-[6%] bottom-[4%] rotate-[1.2deg] rounded-[18px] border-[1.5px] border-ink bg-paper-deep" aria-hidden="true"></div>
+
+    <div class="relative mx-auto w-[min(78%,310px)] -rotate-[1.5deg]">
+      <div class="rounded-[46px] border-[1.5px] border-ink bg-ink p-[9px] shadow-[10px_12px_0_rgb(28_27_25/18%)]">
+        <div class="relative overflow-hidden rounded-[37px] bg-[#eceae3]" style="aspect-ratio: 600 / 1304">
+          <video
+            class="absolute inset-0 h-full w-full object-cover"
+            poster="/media/stream-demo-poster.jpg"
+            muted
+            loop
+            playsinline
+            preload="metadata"
+            aria-label="The Downstream example app streaming a model reply with a heading, a bullet list, a table, and a TypeScript code block"
+            data-demo-video
+          >
+            <source src="/media/stream-demo.webm" type="video/webm" />
+            <source src="/media/stream-demo.mp4" type="video/mp4" />
+          </video>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        class="absolute -bottom-4 left-1/2 flex h-9 -translate-x-1/2 items-center gap-2 rounded-full border-[1.5px] border-ink bg-cream px-4 text-[13.5px] font-semibold shadow-[2px_2px_0_var(--color-ink)]"
+        data-demo-toggle
+        aria-pressed="false"
+      >
+        <span data-demo-icon aria-hidden="true">❚❚</span>
+        <span data-demo-label>Pause</span>
+      </button>
+    </div>
+
+    <div class="note note-in absolute top-[13%] -left-[2%] w-[38%] max-w-[200px] -rotate-[5deg] bg-yellow px-4 pt-5 pb-4 sm:-left-[6%]">
+      <span class="tape"></span>
+      <p class="font-display text-[clamp(14px,1.5vw,17px)] leading-[1.18] font-bold tracking-[-0.02em]">
+        Finished blocks are laid out once, then left alone.
+      </p>
+    </div>
+
+    <div
+      class="note note-in absolute top-[52%] -right-[1%] w-[36%] max-w-[190px] rotate-[4deg] bg-blue px-4 pt-5 pb-4 text-white sm:-right-[5%]"
+      style="animation-delay: 140ms"
+    >
+      <span class="tape"></span>
+      <p class="font-display text-[clamp(14px,1.5vw,17px)] leading-[1.18] font-bold tracking-[-0.02em]">
+        Parsing runs in native code. Your JS thread stays free.
+      </p>
+    </div>
+  </div>
+
+  <figcaption class="mt-9 text-center text-[13.5px] text-ink-faint">
+    The example app on the iOS simulator, streaming a live reply.
+  </figcaption>
+</figure>
+
+<script>
+  document.addEventListener('astro:page-load', () => {
+    const root = document.querySelector('[data-phone-demo]');
+    const video = root?.querySelector<HTMLVideoElement>('[data-demo-video]');
+    const toggle = root?.querySelector<HTMLButtonElement>('[data-demo-toggle]');
+    if (!root || !video || !toggle) return;
+
+    const icon = toggle.querySelector('[data-demo-icon]')!;
+    const label = toggle.querySelector('[data-demo-label]')!;
+    const sync = () => {
+      const paused = video.paused;
+      icon.textContent = paused ? '▶' : '❚❚';
+      label.textContent = paused ? 'Play' : 'Pause';
+      toggle.setAttribute('aria-pressed', String(paused));
+    };
+
+    toggle.addEventListener('click', () => (video.paused ? video.play() : video.pause()));
+    video.addEventListener('play', sync);
+    video.addEventListener('pause', sync);
+
+    // Respect reduced motion: show the poster until someone presses play.
+    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      video.play().catch(() => sync());
+    }
+    sync();
+  });
+</script>
