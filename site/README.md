@@ -16,11 +16,38 @@ The dev server runs at `http://localhost:4321`.
 ## Build
 
 ```sh
-pnpm build
-pnpm preview
+pnpm build     # static output in dist/
+pnpm preview   # build, then serve dist/ with Wrangler as Cloudflare would
 ```
 
-Static output goes to `dist/`.
+## Deploy
+
+The site is served by Cloudflare Workers as static assets, with no Worker code. `wrangler.jsonc` sets the routing:
+
+- `html_handling: drop-trailing-slash` serves `/docs/streaming` and redirects `/docs/streaming/` and `/docs/streaming.html` to it. This matches the canonical URLs and the sitemap.
+- `not_found_handling: 404-page` serves `dist/404.html` with a 404 status.
+- `public/_headers` sets long-lived caching for the hashed files in `/_astro` and a few security headers.
+
+Deploy from your machine:
+
+```sh
+pnpm wrangler login   # once
+pnpm deploy
+```
+
+To deploy on every push with Workers Builds, connect the repository in the Cloudflare dashboard and use:
+
+| Setting           | Value                                                                                     |
+| ----------------- | ----------------------------------------------------------------------------------------- |
+| Root directory    | `site`                                                                                    |
+| Build command     | `pnpm install --frozen-lockfile --filter "react-native-downstream-site..." && pnpm build` |
+| Deploy command    | `pnpm exec wrangler deploy`                                                               |
+| Build watch paths | `site/*`                                                                                  |
+| Build variable    | `SKIP_DEPENDENCY_INSTALL=true`                                                            |
+
+Skipping the automatic install and filtering it to the site keeps the build from installing the React Native example app. Node is pinned by `site/.node-version`, and pnpm by `packageManager` in the root `package.json`.
+
+For a custom domain, uncomment the `routes` entry in `wrangler.jsonc`. The domain must be a zone on the same Cloudflare account. If the domain changes, update `site` in `astro.config.mjs` as well.
 
 ## Content
 
