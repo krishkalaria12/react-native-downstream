@@ -23,11 +23,21 @@ export function getSearchIndex() {
     const entries: SearchEntry[] = [];
     for (const doc of docs) {
       const href = `/docs/${doc.id}`;
-      entries.push({ title: doc.data.title, page: '', href, text: doc.data.description });
+      entries.push({
+        title: doc.data.title,
+        page: '',
+        href,
+        text: doc.data.description,
+      });
       const { headings } = await render(doc);
       for (const heading of headings) {
         if (heading.depth !== 2 && heading.depth !== 3) continue;
-        entries.push({ title: cleanHeading(heading.text), page: doc.data.title, href: `${href}#${heading.slug}`, text: '' });
+        entries.push({
+          title: cleanHeading(heading.text),
+          page: doc.data.title,
+          href: `${href}#${heading.slug}`,
+          text: '',
+        });
       }
     }
     entries.push({

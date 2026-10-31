@@ -32,12 +32,12 @@ A fence beginning with ` ```answer-card ` now renders `AnswerCard`.
 
 Each renderer receives:
 
-| Prop | Meaning |
-| --- | --- |
-| `code` | The fence's text, exactly what the code block's copy button copies. |
-| `language` | The info string's first word as written, cut at `:`. |
-| `meta` | The info string after the language, trimmed. Undefined when there is none. |
-| `isIncomplete` | True until the fence is settled. |
+| Prop           | Meaning                                                                    |
+| -------------- | -------------------------------------------------------------------------- |
+| `code`         | The fence's text, exactly what the code block's copy button copies.        |
+| `language`     | The info string's first word as written, cut at `:`.                       |
+| `meta`         | The info string after the language, trimmed. Undefined when there is none. |
+| `isIncomplete` | True until the fence is settled.                                           |
 
 Language matching is case-insensitive, and `language` can be an array of aliases.
 
@@ -95,8 +95,5 @@ This is what an app wants when `<user>Bob</user>` is a name, not a paragraph.
 `<details>` and `<summary>` are built in and provide collapsible sections. `controls.details.expand` configures their toggle.
 
 ```tsx
-<DownstreamMarkdown
-  markdown={text}
-  controls={{ details: { expand: true } }}
-/>
+<DownstreamMarkdown markdown={text} controls={{ details: { expand: true } }} />
 ```

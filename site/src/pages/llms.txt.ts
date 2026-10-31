@@ -5,7 +5,9 @@ import { site } from '../data/site';
 
 /** A plain-text map of the docs for language models, following llmstxt.org. */
 export const GET: APIRoute = async ({ site: base }) => {
-  const docs = new Map((await getCollection('docs')).map((entry) => [entry.id, entry]));
+  const docs = new Map(
+    (await getCollection('docs')).map((entry) => [entry.id, entry])
+  );
   const url = (path: string) => new URL(path, base).href;
 
   const sections = docGroups.map((group) => {
@@ -31,5 +33,7 @@ ${sections.join('\n\n')}
 - [All docs in one file](${url('/llms-full.txt')})
 `;
 
-  return new Response(body, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+  return new Response(body, {
+    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+  });
 };

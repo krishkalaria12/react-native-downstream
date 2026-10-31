@@ -24,10 +24,7 @@ Use `images={false}` to show alt text without fetching images.
 `markdownStyle.image` controls height, radius, margins, and placeholder color. Loaded images can also have a download control:
 
 ```tsx
-<DownstreamMarkdown
-  markdown={text}
-  controls={{ image: { download: true } }}
-/>
+<DownstreamMarkdown markdown={text} controls={{ image: { download: true } }} />
 ```
 
 Images are loaded at most four at a time and cancelled when no view needs them.

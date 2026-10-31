@@ -36,13 +36,13 @@ export async function load(url: string) {
 
 Downstream also accepts:
 
-| Form | Example |
-| --- | --- |
-| `filename=` | ` ```ts filename="src/app.ts" ` |
-| `lang:path` | ` ```js:src/app.js ` |
-| `showLineNumbers=N` | ` ```ts showLineNumbers=10 ` |
-| `showLineNumbers{N}` | ` ```ts showLineNumbers{10} ` |
-| `noLineNumbers` | ` ```ts noLineNumbers ` |
+| Form                 | Example                         |
+| -------------------- | ------------------------------- |
+| `filename=`          | ` ```ts filename="src/app.ts" ` |
+| `lang:path`          | ` ```js:src/app.js `            |
+| `showLineNumbers=N`  | ` ```ts showLineNumbers=10 `    |
+| `showLineNumbers{N}` | ` ```ts showLineNumbers{10} `   |
+| `noLineNumbers`      | ` ```ts noLineNumbers `         |
 
 Only the first word of the info string counts, so `TypeScript title="app.ts"` and `js:src/app.js` both resolve.
 
@@ -52,30 +52,30 @@ Code is colored natively in 84 languages, including languages embedded in others
 
 Identifiers are case-insensitive. Blocks with an unknown language, no language, or more than 64 KiB of code render as plain code.
 
-| Language | Identifiers |
-| --- | --- |
-| Bash | `bash`, `console`, `sh`, `shell`, `zsh` |
-| C | `c`, `h` |
-| C++ | `c++`, `cc`, `cpp`, `cxx`, `hpp` |
-| CSS | `css` |
-| Dart | `dart` |
-| Go | `go`, `golang` |
-| HTML | `htm`, `html` |
-| Java | `java` |
-| JavaScript | `js`, `jsx`, `mjs`, `cjs` |
-| JSON | `json`, `jsonc` |
-| Kotlin | `kotlin`, `kt`, `kts` |
-| Markdown | `markdown`, `md` |
-| PHP | `php` |
-| Python | `py`, `python`, `python3` |
-| Ruby | `rb`, `ruby` |
-| Rust | `rs`, `rust` |
-| SQL | `sql`, `mysql`, `postgres`, `sqlite` |
-| Swift | `swift` |
-| TSX | `tsx` |
-| TypeScript | `ts`, `typescript`, `mts`, `cts` |
-| Vue | `vue` |
-| YAML | `yaml`, `yml` |
+| Language   | Identifiers                             |
+| ---------- | --------------------------------------- |
+| Bash       | `bash`, `console`, `sh`, `shell`, `zsh` |
+| C          | `c`, `h`                                |
+| C++        | `c++`, `cc`, `cpp`, `cxx`, `hpp`        |
+| CSS        | `css`                                   |
+| Dart       | `dart`                                  |
+| Go         | `go`, `golang`                          |
+| HTML       | `htm`, `html`                           |
+| Java       | `java`                                  |
+| JavaScript | `js`, `jsx`, `mjs`, `cjs`               |
+| JSON       | `json`, `jsonc`                         |
+| Kotlin     | `kotlin`, `kt`, `kts`                   |
+| Markdown   | `markdown`, `md`                        |
+| PHP        | `php`                                   |
+| Python     | `py`, `python`, `python3`               |
+| Ruby       | `rb`, `ruby`                            |
+| Rust       | `rs`, `rust`                            |
+| SQL        | `sql`, `mysql`, `postgres`, `sqlite`    |
+| Swift      | `swift`                                 |
+| TSX        | `tsx`                                   |
+| TypeScript | `ts`, `typescript`, `mts`, `cts`        |
+| Vue        | `vue`                                   |
+| YAML       | `yaml`, `yml`                           |
 
 Set `syntaxHighlighting={false}` to disable coloring throughout the view.
 

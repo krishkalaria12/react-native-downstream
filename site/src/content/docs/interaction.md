@@ -25,14 +25,14 @@ import { Linking } from 'react-native';
 
 Events include the resolved `url`, the original `href`, and the source range.
 
-| Option | Behavior |
-| --- | --- |
-| `links.defaultOrigin` | Enables and resolves relative links against a base URL. |
-| `links.relative` | Enables relative links for your own router without a base URL. |
-| `markdownStyle.linkVariants` | Styles links by URL prefix. |
-| `onLinkLongPress` | Handles a hold on a link. The library does nothing with it by default. |
-| `linkPreview` | iOS link previews. Off by default. |
-| `disableAutolinkProtocols` | Disables automatic links for selected `http`, `https`, or `mailto` protocols. |
+| Option                       | Behavior                                                                      |
+| ---------------------------- | ----------------------------------------------------------------------------- |
+| `links.defaultOrigin`        | Enables and resolves relative links against a base URL.                       |
+| `links.relative`             | Enables relative links for your own router without a base URL.                |
+| `markdownStyle.linkVariants` | Styles links by URL prefix.                                                   |
+| `onLinkLongPress`            | Handles a hold on a link. The library does nothing with it by default.        |
+| `linkPreview`                | iOS link previews. Off by default.                                            |
+| `disableAutolinkProtocols`   | Disables automatic links for selected `http`, `https`, or `mailto` protocols. |
 
 ## Selection and task lists
 
@@ -86,14 +86,14 @@ Events include the resolved `url`, the original `href`, and the source range.
 
 ## Full option table
 
-| Option | Behavior and default |
-| --- | --- |
-| `selectable` | Native selection for settled text. On by default. |
-| `onTaskPress` | Reports a task checkbox press. |
-| `dir` | `auto`, `ltr`, or `rtl`. Defaults to automatic direction per block. |
-| `cjk` | CJK-friendly emphasis, strikethrough, and autolinks. On by default. |
-| `inlineHtml` | Supports `<br>`, `<sub>`, and `<sup>`. On by default. |
-| `syntax` | Optional superscript, subscript, highlight, underline, and spoiler. All off. |
-| `disableAutolinkProtocols` | Disables automatic links for selected protocols. |
-| `normalizeHtmlIndentation` | Normalizes indentation for documents that start with an HTML block. Off. |
-| `androidParagraphLayout` | `canonical` by default. `incremental` reuses completed lines in eligible streaming ASCII paragraphs. |
+| Option                     | Behavior and default                                                                                 |
+| -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `selectable`               | Native selection for settled text. On by default.                                                    |
+| `onTaskPress`              | Reports a task checkbox press.                                                                       |
+| `dir`                      | `auto`, `ltr`, or `rtl`. Defaults to automatic direction per block.                                  |
+| `cjk`                      | CJK-friendly emphasis, strikethrough, and autolinks. On by default.                                  |
+| `inlineHtml`               | Supports `<br>`, `<sub>`, and `<sup>`. On by default.                                                |
+| `syntax`                   | Optional superscript, subscript, highlight, underline, and spoiler. All off.                         |
+| `disableAutolinkProtocols` | Disables automatic links for selected protocols.                                                     |
+| `normalizeHtmlIndentation` | Normalizes indentation for documents that start with an HTML block. Off.                             |
+| `androidParagraphLayout`   | `canonical` by default. `incremental` reuses completed lines in eligible streaming ASCII paragraphs. |

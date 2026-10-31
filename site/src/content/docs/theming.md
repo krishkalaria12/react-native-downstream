@@ -35,20 +35,20 @@ Both accept a value or an array merged left to right. Element styles override th
 
 ## Theme tokens
 
-| Token | Controls |
-| --- | --- |
-| `colors.foreground` | Body and heading text. |
-| `colors.mutedForeground` | Quotes, h6, markers, alt text, control chrome. |
-| `colors.primary` | Links and footnote references. |
-| `colors.muted` | The code card, inline code, and table header row. |
-| `colors.border` | Table grid, rules, and quote bars. |
-| `colors.selection` | Text selection highlight. |
-| `radius` | Corner radius for code cards and tables. |
-| `fonts.sans` | Body font family. |
-| `fonts.heading` | Heading font family. |
-| `fonts.mono` | Code font family. |
-| `syntax` | Token colors by engine class. |
-| `maxFontSizeMultiplier` | Caps Dynamic Type and Android font scaling. |
+| Token                    | Controls                                          |
+| ------------------------ | ------------------------------------------------- |
+| `colors.foreground`      | Body and heading text.                            |
+| `colors.mutedForeground` | Quotes, h6, markers, alt text, control chrome.    |
+| `colors.primary`         | Links and footnote references.                    |
+| `colors.muted`           | The code card, inline code, and table header row. |
+| `colors.border`          | Table grid, rules, and quote bars.                |
+| `colors.selection`       | Text selection highlight.                         |
+| `radius`                 | Corner radius for code cards and tables.          |
+| `fonts.sans`             | Body font family.                                 |
+| `fonts.heading`          | Heading font family.                              |
+| `fonts.mono`             | Code font family.                                 |
+| `syntax`                 | Token colors by engine class.                     |
+| `maxFontSizeMultiplier`  | Caps Dynamic Type and Android font scaling.       |
 
 Colors accept strings or `{ light, dark }` pairs. Defaults follow the platform appearance, and a pair is drawn as a dynamic color, so switching appearance needs no new theme and no React render.
 

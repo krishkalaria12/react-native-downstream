@@ -9,14 +9,14 @@ Every number on this site comes from a measured run on a physical Android phone,
 
 ## The setup
 
-| | |
-| --- | --- |
-| Device | OnePlus Nord CE 3 (CPH2569), Android 15, 120 Hz, arm64 |
-| Build | Hermes release, New Architecture |
-| Model | `gpt-6-luna`, reasoning medium, streamed through the Vercel AI SDK |
-| Transport | Each text delta sent over USB the moment it arrived |
-| Runs | 198 measured, 36 warmups excluded |
-| Statistics | Median of 5 cold-process runs, 95% bootstrap confidence interval |
+|            |                                                                    |
+| ---------- | ------------------------------------------------------------------ |
+| Device     | OnePlus Nord CE 3 (CPH2569), Android 15, 120 Hz, arm64             |
+| Build      | Hermes release, New Architecture                                   |
+| Model      | `gpt-6-luna`, reasoning medium, streamed through the Vercel AI SDK |
+| Transport  | Each text delta sent over USB the moment it arrived                |
+| Runs       | 198 measured, 36 warmups excluded                                  |
+| Statistics | Median of 5 cold-process runs, 95% bootstrap confidence interval   |
 
 Libraries compared: Downstream, RN Streamdown, Enriched Markdown, Markdown Display, Marked, and Markdown Renderer. Each library renders the same replies with its own defaults.
 
@@ -24,14 +24,14 @@ Libraries compared: Downstream, RN Streamdown, Enriched Markdown, Markdown Displ
 
 Prose, a table, and a TypeScript block streaming into one view:
 
-| Library | App CPU | UI thread CPU | Peak memory | Janky frames | Frame p99 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| **Downstream** | **6.56 s** | **1.65 s** | **10.6 MiB** | 7.3% | **16.6 ms** |
-| RN Streamdown | 11.83 s | 2.74 s | 29.0 MiB | 2.1% | 11.3 ms |
-| Enriched Markdown | 9.60 s | 2.84 s | 16.6 MiB | 3.4% | 11.4 ms |
-| Markdown Display | 11.10 s | 4.14 s | 37.4 MiB | 53.1% | 40.9 ms |
-| Marked | 13.81 s | 6.29 s | 53.5 MiB | 47.6% | 79.3 ms |
-| Markdown Renderer | 13.32 s | 6.24 s | 45.6 MiB | 58.9% | 79.1 ms |
+| Library           |    App CPU | UI thread CPU |  Peak memory | Janky frames |   Frame p99 |
+| ----------------- | ---------: | ------------: | -----------: | -----------: | ----------: |
+| **Downstream**    | **6.56 s** |    **1.65 s** | **10.6 MiB** |         7.3% | **16.6 ms** |
+| RN Streamdown     |    11.83 s |        2.74 s |     29.0 MiB |         2.1% |     11.3 ms |
+| Enriched Markdown |     9.60 s |        2.84 s |     16.6 MiB |         3.4% |     11.4 ms |
+| Markdown Display  |    11.10 s |        4.14 s |     37.4 MiB |        53.1% |     40.9 ms |
+| Marked            |    13.81 s |        6.29 s |     53.5 MiB |        47.6% |     79.3 ms |
+| Markdown Renderer |    13.32 s |        6.24 s |     45.6 MiB |        58.9% |     79.1 ms |
 
 Downstream uses roughly 1.5× less app CPU and 1.6× less peak memory than the next closest library. The UI thread stays comparatively free because parsing, highlighting, and text preparation run on native worker threads.
 
@@ -44,14 +44,14 @@ Downstream uses roughly 1.5× less app CPU and 1.6× less peak memory than the n
 
 Concurrency is where the gap widens, because every library is asked to keep five documents live at the same time:
 
-| Library | App CPU | Peak memory | Janky frames | Frame p99 |
-| --- | ---: | ---: | ---: | ---: |
-| **Downstream** | **23.33 s** | **23.4 MiB** | **2.3%** | **14.0 ms** |
-| RN Streamdown | 48.86 s | 72.4 MiB | 2.2% | 14.1 ms |
-| Enriched Markdown | 44.76 s | 37.7 MiB | 4.4% | 16.7 ms |
-| Markdown Display | 53.17 s | 84.5 MiB | 64.1% | 159.1 ms |
-| Marked | 62.87 s | 100.6 MiB | 76.5% | 196.3 ms |
-| Markdown Renderer | 63.43 s | 167.5 MiB | 54.0% | 1002.3 ms |
+| Library           |     App CPU |  Peak memory | Janky frames |   Frame p99 |
+| ----------------- | ----------: | -----------: | -----------: | ----------: |
+| **Downstream**    | **23.33 s** | **23.4 MiB** |     **2.3%** | **14.0 ms** |
+| RN Streamdown     |     48.86 s |     72.4 MiB |         2.2% |     14.1 ms |
+| Enriched Markdown |     44.76 s |     37.7 MiB |         4.4% |     16.7 ms |
+| Markdown Display  |     53.17 s |     84.5 MiB |        64.1% |    159.1 ms |
+| Marked            |     62.87 s |    100.6 MiB |        76.5% |    196.3 ms |
+| Markdown Renderer |     63.43 s |    167.5 MiB |        54.0% |   1002.3 ms |
 
 The JavaScript renderers fall behind badly under concurrency. Their p99 frame times climb into hundreds of milliseconds while Downstream stays near one frame.
 

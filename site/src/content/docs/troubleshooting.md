@@ -186,16 +186,16 @@ Peak memory also depends on images, code highlighting, and how many documents ar
 
 `onError` receives a `MarkdownErrorEvent`. A rejected synchronous stream operation throws `MarkdownOperationError` with a `code`.
 
-| Code | Likely cause |
-| --- | --- |
-| `invalid_input` | Empty or malformed source, or an option the engine rejected. |
-| `input_limit` | The document is too large for one view. |
-| `invalid_state` | `append()` after `finish()` without `reset()`, or use after `dispose()`. |
-| `session_bound` | The same controller is rendered in a second view. |
-| `parse_failed` | Native parse failure. Capture the source and report it. |
-| `render_failed` | Native render failure. |
-| `control_failed` | A copy, download, wrap, expand, or full-screen action failed. |
-| `renderer_failed` | A custom fence renderer threw. |
+| Code              | Likely cause                                                             |
+| ----------------- | ------------------------------------------------------------------------ |
+| `invalid_input`   | Empty or malformed source, or an option the engine rejected.             |
+| `input_limit`     | The document is too large for one view.                                  |
+| `invalid_state`   | `append()` after `finish()` without `reset()`, or use after `dispose()`. |
+| `session_bound`   | The same controller is rendered in a second view.                        |
+| `parse_failed`    | Native parse failure. Capture the source and report it.                  |
+| `render_failed`   | Native render failure.                                                   |
+| `control_failed`  | A copy, download, wrap, expand, or full-screen action failed.            |
+| `renderer_failed` | A custom fence renderer threw.                                           |
 
 ```tsx
 onError={(error) => {

@@ -36,6 +36,7 @@ export function neighbours(slug: string) {
   const index = docLinks.findIndex((link) => link.slug === slug);
   return {
     previous: index > 0 ? docLinks[index - 1] : null,
-    next: index >= 0 && index < docLinks.length - 1 ? docLinks[index + 1] : null,
+    next:
+      index >= 0 && index < docLinks.length - 1 ? docLinks[index + 1] : null,
   };
 }

@@ -26,14 +26,14 @@ Create one controller per message, outside the component's render path, and keep
 
 ## Controller methods
 
-| Method | What it does |
-| --- | --- |
-| `append(chunk)` | Adds the next text chunk. Updates are batched by animation frame. |
-| `finish()` | Marks the response complete and renders the final Markdown. |
-| `reset(source?)` | Starts a new response, optionally with initial text. Use before appending again after `finish()`. |
-| `getSource()` | Returns a promise with the exact source you supplied. |
-| `setPreview(options)` | Changes how incomplete Markdown is displayed. |
-| `dispose()` | Releases the controller when the message is no longer needed. |
+| Method                | What it does                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------- |
+| `append(chunk)`       | Adds the next text chunk. Updates are batched by animation frame.                                 |
+| `finish()`            | Marks the response complete and renders the final Markdown.                                       |
+| `reset(source?)`      | Starts a new response, optionally with initial text. Use before appending again after `finish()`. |
+| `getSource()`         | Returns a promise with the exact source you supplied.                                             |
+| `setPreview(options)` | Changes how incomplete Markdown is displayed.                                                     |
+| `dispose()`           | Releases the controller when the message is no longer needed.                                     |
 
 Call `dispose()` when the message is removed. A disposed controller no longer publishes updates.
 
@@ -52,15 +52,15 @@ const stream = createMarkdownStream({
 });
 ```
 
-| Key | Effect |
-| --- | --- |
-| `emphasis` | Closes an open `*`, `_` or `~~` run so its content shows styled. |
-| `inlineCode` | Closes an unclosed backtick run. |
-| `links` | Shows an unfinished link as its text. The partial target is dropped, so nothing is tappable until `)` arrives. |
-| `images` | Shows an unfinished image as its alt text. |
-| `math` | Closes an unfinished inline `$$…$$` span once the prefix lays out. |
-| `htmlTags` | Hides a half-arrived allowlisted tag at the stream tail. |
-| `tables` | Hides a table until every row is complete. |
+| Key          | Effect                                                                                                         |
+| ------------ | -------------------------------------------------------------------------------------------------------------- |
+| `emphasis`   | Closes an open `*`, `_` or `~~` run so its content shows styled.                                               |
+| `inlineCode` | Closes an unclosed backtick run.                                                                               |
+| `links`      | Shows an unfinished link as its text. The partial target is dropped, so nothing is tappable until `)` arrives. |
+| `images`     | Shows an unfinished image as its alt text.                                                                     |
+| `math`       | Closes an unfinished inline `$$…$$` span once the prefix lays out.                                             |
+| `htmlTags`   | Hides a half-arrived allowlisted tag at the stream tail.                                                       |
+| `tables`     | Hides a table until every row is complete.                                                                     |
 
 Previews never change your source. `finish()` removes provisional formatting and renders the Markdown you actually sent.
 
@@ -82,14 +82,14 @@ Previews never change your source. `finish()` removes provisional formatting and
 />
 ```
 
-| Option | Default | Notes |
-| --- | --- | --- |
-| `animation` | `fadeIn` | Also `slideUp`, `blurIn`, or `none`. `blurIn` falls back to `fadeIn`. |
-| `sep` | `word` | `char` reveals one character at a time. |
-| `duration` | `150` | Milliseconds for one unit to reach full opacity. |
-| `stagger` | `40` | Delay between units, in milliseconds. |
-| `maxBacklogMs` | `320` | Caps how far a burst of text can delay the reveal. |
-| `easing` | `ease` | Any supported easing name. |
+| Option         | Default  | Notes                                                                 |
+| -------------- | -------- | --------------------------------------------------------------------- |
+| `animation`    | `fadeIn` | Also `slideUp`, `blurIn`, or `none`. `blurIn` falls back to `fadeIn`. |
+| `sep`          | `word`   | `char` reveals one character at a time.                               |
+| `duration`     | `150`    | Milliseconds for one unit to reach full opacity.                      |
+| `stagger`      | `40`     | Delay between units, in milliseconds.                                 |
+| `maxBacklogMs` | `320`    | Caps how far a burst of text can delay the reveal.                    |
+| `easing`       | `ease`   | Any supported easing name.                                            |
 
 Animation changes drawing without reflowing text. A copy, a selection, an export, and a screen reader all see the whole message. Reduce Motion disables the reveal.
 
