@@ -6,6 +6,7 @@
     "tests",
     "benchmarks",
     "scripts",
+    "site",
     "vitest.config.mts"
   ]
 }

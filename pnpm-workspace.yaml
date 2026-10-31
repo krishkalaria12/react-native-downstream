@@ -1,6 +1,7 @@
 packages:
   - example
   - math
+  - site
 allowBuilds:
   lefthook: false
   # esbuild's postinstall places the platform binary vite and vitest load. Without
