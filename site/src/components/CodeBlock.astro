@@ -1,0 +1,23 @@
+---
+import { Code } from 'astro:components';
+import { codeFrame } from '../lib/markdown.mjs';
+
+type Props = {
+  code: string;
+  lang: 'tsx' | 'ts' | 'sh';
+  title?: string;
+  class?: string;
+};
+
+const { code, lang, title, class: className } = Astro.props;
+---
+
+<div class:list={['[&_.code-frame]:my-0', className]}>
+  <Code
+    code={code}
+    lang={lang}
+    theme="github-dark-default"
+    meta={title ? `title="${title}"` : undefined}
+    transformers={[codeFrame]}
+  />
+</div>

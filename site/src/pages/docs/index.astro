@@ -1,0 +1,100 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import { docGroups } from '../../data/nav';
+import { breadcrumbs } from '../../data/site';
+
+const docs = await getCollection('docs');
+const bySlug = new Map(docs.map((entry) => [entry.id, entry]));
+
+const quickstart = `import { DownstreamMarkdown, createMarkdownStream } from 'react-native-downstream';
+
+// One controller per reply, created when the request starts.
+const stream = createMarkdownStream();
+
+// Give it to the view...
+export const Reply = () => <DownstreamMarkdown stream={stream} />;
+
+// ...and append text as it arrives.
+for await (const chunk of textStream) stream.append(chunk);
+stream.finish();`;
+---
+
+<BaseLayout
+  title="Documentation | Downstream, Native Markdown for React Native"
+  description="Install Downstream, stream AI replies into native Markdown views, and set up code blocks, tables, math, theming and custom renderers in React Native."
+  schema={[
+    breadcrumbs(
+      [
+        { name: 'Home', path: '/' },
+        { name: 'Docs', path: '/docs' },
+      ],
+      Astro.site,
+    ),
+  ]}
+>
+  <section class="shell grid gap-12 pt-14 pb-16 lg:grid-cols-[1fr_1fr] lg:items-end lg:pt-20">
+    <div>
+      <h1 class="display text-[clamp(48px,6.4vw,84px)]">Documentation</h1>
+      <p class="lead mt-6 max-w-[48ch]">
+        Everything from the first install to custom renderers. Start with the setup guide, then read Streaming:
+        it explains how the controller and the view fit together.
+      </p>
+      <div class="mt-8 flex flex-wrap items-center gap-3">
+        <a href="/docs/getting-started" class="btn btn-primary">Get started</a>
+        <button type="button" data-search-open class="btn btn-plain">
+          Search the docs <kbd class="kbd">/</kbd>
+        </button>
+      </div>
+    </div>
+    <div class="min-w-0 lg:-mb-6">
+      <CodeBlock code={quickstart} lang="tsx" title="Message.tsx" />
+    </div>
+  </section>
+
+  <section class="shell pb-24">
+    {
+      docGroups.map((group) => (
+        <div class="grid gap-6 border-t-[1.5px] border-ink py-10 md:grid-cols-[200px_1fr]">
+          <h2 class="font-display text-[22px] font-bold tracking-[-0.03em] [font-variation-settings:'opsz'_32]">{group.label}</h2>
+          <ul class="grid gap-x-8 gap-y-1 sm:grid-cols-2">
+            {group.items.map((item) => {
+              const entry = bySlug.get(item.slug);
+              return (
+                <li>
+                  <a href={`/docs/${item.slug}`} class="group -mx-3 block rounded-xl px-3 py-3 transition-colors hover:bg-cream">
+                    <span
+                      class="inline-block font-display text-[20px] font-bold tracking-[-0.025em] [font-variation-settings:'opsz'_32] group-hover:text-blue"
+                      transition:name={`doc-title-${item.slug}`}
+                    >
+                      {item.title}
+                    </span>
+                    {entry && (
+                      <span class="mt-1 block max-w-[46ch] text-[15px] leading-snug text-ink-soft">
+                        {entry.data.description}
+                      </span>
+                    )}
+                  </a>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))
+    }
+
+    <a
+      href="/benchmarks"
+      class="mt-6 flex flex-col gap-4 rounded-2xl border-[1.5px] border-ink bg-yellow p-7 shadow-[4px_4px_0_var(--color-ink)] transition-[translate,box-shadow] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0_var(--color-ink)] sm:flex-row sm:items-center sm:justify-between"
+    >
+      <span>
+        <span class="block font-display text-[26px] font-extrabold tracking-[-0.035em]">How fast is it?</span>
+        <span class="mt-1 block max-w-[56ch] text-[15.5px] text-ink-soft">
+          198 measured runs on a real phone: six streaming workloads, six Markdown libraries, with confidence intervals.
+        </span>
+      </span>
+      <span class="btn btn-plain shrink-0">Open the benchmarks</span>
+    </a>
+  </section>
+</BaseLayout>
