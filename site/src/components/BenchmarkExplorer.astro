@@ -1,0 +1,150 @@
+---
+import { libraries, metrics, workloads } from '../data/benchmarks';
+import { formatNumber } from '../lib/format';
+
+const initialMetric = metrics[0];
+const initialWorkload = workloads[0];
+
+const data = {
+  libraries,
+  metrics,
+  workloads: workloads.map(({ id, label, description, replies, runs, results }) => ({ id, label, description, replies, runs, results })),
+};
+
+const peak = Math.max(...libraries.map((library) => initialWorkload.results[library][initialMetric.key]));
+const tab =
+  'rounded-lg px-3 py-1.5 text-[14.5px] font-semibold text-ink-soft transition-colors hover:text-ink aria-pressed:bg-ink aria-pressed:text-paper';
+---
+
+<div class="rounded-2xl border-[1.5px] border-ink bg-cream" data-explorer>
+  <div class="flex flex-col gap-4 border-b border-rule p-4 sm:p-5">
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+      <span class="w-20 text-[13.5px] font-semibold text-ink-faint">Measure</span>
+      <div class="flex flex-wrap gap-1" role="group" aria-label="Measure">
+        {
+          metrics.map((metric) => (
+            <button type="button" class={tab} data-metric={metric.key} aria-pressed={metric.key === initialMetric.key ? "true" : "false"}>
+              {metric.label}
+            </button>
+          ))
+        }
+      </div>
+    </div>
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+      <span class="w-20 text-[13.5px] font-semibold text-ink-faint">Workload</span>
+      <div class="flex flex-wrap gap-1" role="group" aria-label="Workload">
+        {
+          workloads.map((item) => (
+            <button type="button" class={tab} data-workload={item.id} aria-pressed={item.id === initialWorkload.id ? "true" : "false"}>
+              {item.label}
+            </button>
+          ))
+        }
+      </div>
+    </div>
+  </div>
+
+  <div class="grid gap-8 p-5 sm:p-8 lg:grid-cols-[1fr_17rem] lg:gap-12">
+    <div class="space-y-2.5" aria-live="polite" data-rows>
+      {
+        libraries.map((library) => {
+          const value = initialWorkload.results[library][initialMetric.key];
+          const downstream = initialWorkload.results.Downstream[initialMetric.key];
+          const highlight = library === 'Downstream';
+          return (
+            <div class="grid grid-cols-[minmax(0,8.5rem)_1fr] items-center gap-x-4 sm:grid-cols-[11rem_1fr]" data-row={library}>
+              <span class:list={['truncate text-[15px]', highlight ? 'font-bold' : 'text-ink-soft']}>{library}</span>
+              <span class="flex min-w-0 items-center gap-3">
+                <span
+                  class:list={[
+                    'h-7 min-w-[3px] rounded-md transition-[width] duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)]',
+                    highlight ? 'bg-coral' : 'bg-ink/[0.16]',
+                  ]}
+                  style={`width:${(value / peak) * 74}%`}
+                  data-bar
+                />
+                <span class="num shrink-0 text-[14.5px]">
+                  <span class:list={[highlight ? 'font-bold' : 'text-ink-soft']} data-value>
+                    {formatNumber(value, initialMetric.decimals)}
+                  </span>
+                  <span class="text-ink-faint" data-unit> {initialMetric.unit}</span>
+                  {!highlight && (
+                    <span class="ml-1.5 text-[13px] text-ink-faint" data-multiple>
+                      {downstream > 0 ? `${(value / downstream).toFixed(2)}×` : ''}
+                    </span>
+                  )}
+                </span>
+              </span>
+            </div>
+          );
+        })
+      }
+    </div>
+
+    <div class="border-t border-rule pt-6 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-8">
+      <p class="h-card text-[19px]" data-workload-label>{initialWorkload.label}</p>
+      <p class="mt-1.5 text-[15px] leading-relaxed text-ink-soft" data-workload-about>{initialWorkload.description}</p>
+      <p class="mt-4 text-[14px] font-semibold text-ink-soft" data-metric-label>{initialMetric.label}</p>
+      <p class="mt-1 text-[14.5px] leading-relaxed text-ink-faint" data-metric-about>{initialMetric.about}</p>
+      <p class="mt-4 rounded-lg bg-paper px-3 py-2 text-[13.5px] leading-snug text-ink-soft" data-runs>
+        Median of 5 cold-process runs. Lower is better.
+      </p>
+    </div>
+  </div>
+
+  <script type="application/json" data-explorer-data set:html={JSON.stringify(data)} />
+</div>
+
+<script>
+  import { formatNumber } from '../lib/format';
+
+  type Metric = { key: string; label: string; unit: string; decimals: number; about: string };
+  type Workload = { id: string; label: string; description: string; runs: string; results: Record<string, Record<string, number>> };
+  type Data = { libraries: string[]; metrics: Metric[]; workloads: Workload[] };
+
+  document.addEventListener('astro:page-load', () => {
+    const root = document.querySelector<HTMLElement>('[data-explorer]');
+    if (!root) return;
+    const data = JSON.parse(root.querySelector('[data-explorer-data]')!.textContent!) as Data;
+    let metricKey = data.metrics[0].key;
+    let workloadId = data.workloads[0].id;
+
+    const update = () => {
+      const metric = data.metrics.find((m) => m.key === metricKey)!;
+      const workload = data.workloads.find((w) => w.id === workloadId)!;
+      const values = data.libraries.map((library) => workload.results[library][metric.key]);
+      const peak = Math.max(...values) || 1;
+      const downstream = workload.results.Downstream[metric.key];
+
+      data.libraries.forEach((library, i) => {
+        const row = root.querySelector(`[data-row="${library}"]`)!;
+        (row.querySelector('[data-bar]') as HTMLElement).style.width = `${(values[i] / peak) * 74}%`;
+        row.querySelector('[data-value]')!.textContent = formatNumber(values[i], metric.decimals);
+        row.querySelector('[data-unit]')!.textContent = ` ${metric.unit}`;
+        const multiple = row.querySelector('[data-multiple]');
+        if (multiple) multiple.textContent = downstream > 0 ? `${(values[i] / downstream).toFixed(2)}×` : '';
+      });
+
+      root.querySelector('[data-workload-label]')!.textContent = workload.label;
+      root.querySelector('[data-workload-about]')!.textContent = workload.description;
+      root.querySelector('[data-metric-label]')!.textContent = metric.label;
+      root.querySelector('[data-metric-about]')!.textContent = metric.about;
+      root.querySelector('[data-runs]')!.textContent =
+        workload.runs === '1 run'
+          ? 'One run per library, so there is no confidence interval. Read it as a direction, not a result.'
+          : 'Median of 5 cold-process runs. Lower is better.';
+
+      root.querySelectorAll<HTMLButtonElement>('[data-metric]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.metric === metricKey)));
+      root.querySelectorAll<HTMLButtonElement>('[data-workload]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.workload === workloadId)));
+      document.dispatchEvent(new CustomEvent('benchmark:metric', { detail: metricKey }));
+    };
+
+    root.addEventListener('click', (event) => {
+      const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button');
+      if (!button) return;
+      if (button.dataset.metric) metricKey = button.dataset.metric;
+      if (button.dataset.workload) workloadId = button.dataset.workload;
+      update();
+    });
+  });
+</script>

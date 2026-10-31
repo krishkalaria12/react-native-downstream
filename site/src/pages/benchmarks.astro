@@ -1,0 +1,541 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import BarChart from '../components/BarChart.astro';
+import BenchmarkExplorer from '../components/BenchmarkExplorer.astro';
+import Link from '../components/Link.astro';
+import { formatNumber } from '../lib/format';
+import {
+  featureMatrix,
+  iosAppCpu,
+  libraries,
+  metrics,
+  relativeByWorkload,
+  workloads,
+  type LibraryName,
+  type MetricKey,
+} from '../data/benchmarks';
+import { absolute, breadcrumbs, site } from '../data/site';
+
+const reports = 'https://github.com/krishkalaria12/react-native-downstream/blob/main/benchmarks/phone';
+const competitors = libraries.filter((library) => library !== 'Downstream');
+const main = workloads.filter((item) => item.runs === '5 runs');
+
+
+/** Downstream's lead over the best other library, per main workload. */
+const leadOverNextBest = (metric: MetricKey) =>
+  main.map((item) => Math.min(...competitors.map((library) => item.results[library][metric])) / item.results.Downstream[metric]);
+const range = (values: number[]) => `${formatNumber(Math.min(...values), 1)}–${formatNumber(Math.max(...values), 1)}×`;
+
+const cpuLead = leadOverNextBest('appCpu');
+const memoryLead = leadOverNextBest('memory');
+const uiLowest = main.every((item) => competitors.every((library) => item.results[library].uiCpu > item.results.Downstream.uiCpu));
+const smootherSomewhere = main.filter((item) => competitors.some((library) => item.results[library].jank < item.results.Downstream.jank));
+const smootherSummary = `Downstream does less work, but it is not the smoothest. In ${smootherSomewhere.length} of ${main.length} main workloads at least one other native renderer missed fewer frames, and often had a lower p99 too.`;
+
+const findings = [
+  {
+    value: range(cpuLead),
+    title: 'less app CPU than the next-best library',
+    body: `Downstream used the least app CPU in all ${main.length} main workloads. The gap grows with the size of the reply.`,
+    tone: 'bg-yellow',
+  },
+  {
+    value: range(memoryLead),
+    title: 'less peak memory than the next-best library',
+    body: 'Finished blocks are kept as compact native layouts, so memory does not climb with every update.',
+    tone: 'bg-blue-soft',
+  },
+  {
+    value: uiLowest ? 'Lowest' : 'Low',
+    title: 'UI thread CPU in every main workload',
+    body: 'Parsing and layout run on a native worker. The main thread is left for touches and scrolling.',
+    tone: 'bg-cream',
+  },
+];
+
+// Heatmap: ratio of each library's median to Downstream's. Above 1 means Downstream costs less.
+const relativeMetrics = metrics.filter((metric) => metric.relative);
+const parseRatio = (text: string) => ({ value: parseFloat(text), significant: text.endsWith('*') });
+const cell = (value: number) => {
+  const strength = Math.min(Math.abs(Math.log2(value)) / 3, 1);
+  const mix = Math.round(10 + strength * 80);
+  if (value >= 1.05) return `background: color-mix(in oklab, var(--color-blue) ${mix}%, var(--color-cream)); color: ${mix >= 58 ? 'white' : 'var(--color-ink)'}`;
+  if (value <= 0.95) return `background: color-mix(in oklab, var(--color-coral) ${Math.round(14 + strength * 70)}%, var(--color-cream))`;
+  return 'background: var(--color-paper)';
+};
+
+// Where Downstream is behind: its frame metrics next to the best other library's, per main workload.
+const frameMetrics = metrics.filter((metric) => metric.key === 'jank' || metric.key === 'p99');
+const behind = main.map((item) => ({
+  label: item.label,
+  cells: frameMetrics.map((metric) => {
+    const best = competitors.reduce((a, b) => (item.results[b][metric.key] < item.results[a][metric.key] ? b : a));
+    return { metric, own: item.results.Downstream[metric.key], best, theirs: item.results[best][metric.key] };
+  }),
+}));
+
+const matrixColumns: { key: keyof (typeof featureMatrix)[number]; name: LibraryName }[] = [
+  { key: 'downstream', name: 'Downstream' },
+  { key: 'streamdown', name: 'RN Streamdown' },
+  { key: 'enriched', name: 'Enriched Markdown' },
+];
+
+const iosCharts = ['ai-single', 'ai-concurrent-5'].map((id) => {
+  const entry = iosAppCpu.find((item) => item.id === id)!;
+  return {
+    label: entry.label,
+    items: libraries.map((name) => ({ name, value: entry.results[name], highlight: name === 'Downstream' })),
+  };
+});
+
+const dataset = {
+  '@type': 'Dataset',
+  name: 'Streaming Markdown rendering benchmarks for React Native',
+  description:
+    'App CPU, UI thread CPU, peak memory, janky frames, frame time and settle time for six React Native Markdown libraries (Downstream, RN Streamdown, Enriched Markdown, Markdown Display, Marked and Markdown Renderer) rendering live AI replies on a OnePlus Nord CE 3 running Android 15 at 120 Hz, plus app CPU on the iOS simulator.',
+  url: absolute('/benchmarks', Astro.site),
+  license: 'https://opensource.org/licenses/MIT',
+  isAccessibleForFree: true,
+  creator: { '@type': 'Person', name: site.author.name, url: site.author.url },
+  temporalCoverage: '2026-10-13/2026-10-18',
+  measurementTechnique: 'Perfetto traces of cold app processes, with SurfaceFlinger frame timelines and scheduler slices',
+  variableMeasured: metrics.map((metric) => `${metric.label} (${metric.unit})`),
+  keywords: ['React Native', 'Markdown', 'streaming', 'benchmark', 'AI chat', 'performance'],
+  distribution: [
+    { '@type': 'DataDownload', encodingFormat: 'text/markdown', contentUrl: `${reports}/REPORT.md` },
+    { '@type': 'DataDownload', encodingFormat: 'text/markdown', contentUrl: `${reports}/REPORT_IOS_SIMULATOR.md` },
+  ],
+};
+
+const facts = [
+  ['Device', 'OnePlus Nord CE 3'],
+  ['System', 'Android 15, 120 Hz'],
+  ['Runtime', 'Release APK, arm64 Hermes'],
+  ['Measured runs', '198'],
+  ['Recorded', '15 Oct 2026'],
+];
+
+const method = [
+  {
+    title: 'Live input',
+    body: 'One release APK holds every library. Each run is a cold process showing one library full screen. The Mac streams fresh model replies through the Vercel AI SDK and forwards each delta over USB. Timing starts at the first delta, so model thinking time is not counted.',
+  },
+  {
+    title: 'CPU',
+    body: 'Scheduler slices for every thread in the app process, split into UI thread, JS thread, RenderThread and everything else. This is exact on-CPU time, not sampling.',
+  },
+  {
+    title: 'Frames',
+    body: 'Perfetto records the SurfaceFlinger frame timeline. Janky frames are the share Android itself blames on the app. Frame time runs from CPU start to GPU done.',
+  },
+  {
+    title: 'Memory',
+    body: 'Anonymous RSS plus swap, polled every 100 ms. The peak increase is the highest value during the run minus the value when streaming started.',
+  },
+  {
+    title: 'Order and noise',
+    body: 'One warmup and five measured blocks. Each block runs every library and workload once, in a seeded random order. Before each run the app is force-stopped, background apps are killed, and the harness waits for the phone to cool.',
+  },
+  {
+    title: 'Limits',
+    body: 'One phone model. The shared app contains every library, so memory is not a per-package size. Clock speeds are not locked. Libraries render the same input differently, and unsupported syntax may stay literal.',
+  },
+];
+---
+
+<BaseLayout
+  title="React Native Markdown benchmarks | Downstream"
+  description="Six React Native Markdown libraries rendering live AI replies on a OnePlus Nord CE 3: app CPU, UI thread CPU, peak memory and frame times across six streaming workloads."
+  schema={[
+    dataset,
+    breadcrumbs(
+      [
+        { name: 'Home', path: '/' },
+        { name: 'Benchmarks', path: '/benchmarks' },
+      ],
+      Astro.site,
+    ),
+  ]}
+>
+  <!-- Hero -->
+  <section class="shell pt-14 pb-14 lg:pt-20">
+    <div class="grid gap-10 lg:grid-cols-[1.3fr_0.7fr] lg:items-end">
+      <div>
+        <h1 class="display text-[clamp(50px,7vw,96px)]">
+          Measured on a <span class="serif-accent font-normal text-coral">phone.</span>
+        </h1>
+        <p class="lead mt-7 max-w-[56ch]">
+          Six Markdown libraries render the same live model replies, streamed over USB to a real Android phone.
+          Every number below is a median, and lower is better everywhere. Where Downstream loses, this page says so.
+        </p>
+      </div>
+      <dl class="panel divide-y divide-rule text-[15px]">
+        {
+          facts.map(([term, value]) => (
+            <div class="flex items-baseline justify-between gap-4 px-5 py-3">
+              <dt class="text-ink-faint">{term}</dt>
+              <dd class="text-right font-semibold">{value}</dd>
+            </div>
+          ))
+        }
+      </dl>
+    </div>
+  </section>
+
+  <!-- Findings -->
+  <section class="shell pb-20">
+    <div class="grid gap-4 md:grid-cols-3">
+      {
+        findings.map((item) => (
+          <article class:list={['rounded-2xl border-[1.5px] border-ink p-6 sm:p-7', item.tone]}>
+            <p class="num font-display text-[clamp(38px,4vw,52px)] leading-none font-extrabold tracking-[-0.045em] [font-variation-settings:'opsz'_96]">
+              {item.value}
+            </p>
+            <h2 class="mt-3 text-[17px] leading-snug font-semibold">{item.title}</h2>
+            <p class="mt-2 text-[15px] leading-relaxed text-ink-soft">{item.body}</p>
+          </article>
+        ))
+      }
+    </div>
+  </section>
+
+  <!-- Explorer -->
+  <section class="border-t-[1.5px] border-ink bg-paper-deep/70 py-20 lg:py-24" id="explore">
+    <div class="shell">
+      <h2 class="h-section max-w-[18ch]">Pick a measure and a workload.</h2>
+      <p class="lead mt-5 max-w-[60ch]">
+        The coral bar is Downstream. The figure after each other library is how many times Downstream's median it
+        is, so 2.00× means twice the cost.
+      </p>
+      <div class="mt-10">
+        <BenchmarkExplorer />
+      </div>
+    </div>
+  </section>
+
+  <!-- Heatmap -->
+  <section class="shell py-20 lg:py-24" id="relative">
+    <div class="grid gap-6 lg:grid-cols-[1fr_auto] lg:items-end">
+      <div>
+        <h2 class="h-section max-w-[18ch]">Every workload at a glance.</h2>
+        <p class="lead mt-5 max-w-[62ch]">
+          Each cell is another library's median divided by Downstream's. Blue means Downstream costs less, coral
+          means it costs more. Bold values are significant (Mann-Whitney, p &lt; 0.05).
+        </p>
+      </div>
+      <div class="flex flex-wrap items-center gap-3 text-[13.5px] text-ink-soft" aria-hidden="true">
+        <span class="flex items-center gap-1.5"><span class="h-3.5 w-6 rounded bg-coral/70"></span>Downstream behind</span>
+        <span class="flex items-center gap-1.5"><span class="h-3.5 w-6 rounded bg-paper ring-1 ring-rule"></span>About even</span>
+        <span class="flex items-center gap-1.5"><span class="h-3.5 w-6 rounded bg-blue"></span>Downstream ahead</span>
+      </div>
+    </div>
+
+    <div class="mt-8 flex flex-wrap gap-1" role="group" aria-label="Measure for the comparison" data-heatmap-tabs>
+      {
+        relativeMetrics.map((metric, index) => (
+          <button
+            type="button"
+            class="rounded-lg px-3 py-1.5 text-[14.5px] font-semibold text-ink-soft transition-colors hover:text-ink aria-pressed:bg-ink aria-pressed:text-paper"
+            data-heatmap-metric={metric.key}
+            aria-pressed={index === 0 ? "true" : "false"}
+          >
+            {metric.label}
+          </button>
+        ))
+      }
+    </div>
+
+    <div class="mt-5">
+      {
+        relativeMetrics.map((metric, index) => (
+          <div class="overflow-x-auto rounded-2xl border-[1.5px] border-ink bg-cream" data-heatmap={metric.key} hidden={index !== 0}>
+            <table class="w-full min-w-[760px] border-collapse text-[14.5px]">
+              <caption class="sr-only">{metric.label} relative to Downstream</caption>
+              <thead>
+                <tr class="border-b border-rule">
+                  <th scope="col" class="px-4 py-3 text-left font-semibold text-ink-faint">{metric.label}</th>
+                  {workloads.map((item) => (
+                    <th scope="col" class="px-2 py-3 text-center text-[13.5px] leading-tight font-semibold">
+                      {item.label}
+                      {item.runs === '1 run' && <span class="mt-0.5 block text-[12px] font-normal text-ink-faint">one run</span>}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {competitors.map((library) => (
+                  <tr class="border-b border-rule last:border-b-0">
+                    <th scope="row" class="px-4 py-2 text-left font-semibold whitespace-nowrap">{library}</th>
+                    {workloads.map((item) => {
+                      const row = relativeByWorkload[item.id].find((entry) => entry.library === library)!;
+                      const { value, significant } = parseRatio(row[metric.key as keyof typeof row] as string);
+                      return (
+                        <td class="p-1">
+                          <span
+                            class:list={['num block rounded-md px-2 py-2 text-center', significant ? 'font-bold' : 'font-normal']}
+                            style={cell(value)}
+                          >
+                            {formatNumber(value, 2)}×
+                          </span>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))
+      }
+    </div>
+    <p class="mt-4 max-w-[70ch] text-[14.5px] leading-relaxed text-ink-faint">
+      The two huge workloads ran once per library, so their cells have no significance test. Settle time is left
+      out: many runs finished drawing before the last chunk was timed, so its medians are mostly zero.
+    </p>
+  </section>
+
+  <!-- Where it is behind -->
+  <section class="border-y-[1.5px] border-ink bg-coral-soft py-20 lg:py-24" id="behind">
+    <div class="shell grid gap-12 lg:grid-cols-[0.85fr_1.15fr] lg:gap-16">
+      <div>
+        <h2 class="h-section max-w-[14ch]">Where Downstream is behind.</h2>
+        <p class="mt-5 max-w-[46ch] text-[17px] leading-relaxed text-ink-soft">
+          {smootherSummary}
+        </p>
+        <p class="mt-4 max-w-[46ch] text-[17px] leading-relaxed text-ink-soft">
+          At 120 Hz a frame has 8.3 ms. All three native libraries keep their slowest frames near two refreshes;
+          the JavaScript renderers do not.
+        </p>
+        <Link href="/docs/performance" class="text-link mt-6 inline-block text-[16px]">Read the performance guide</Link>
+      </div>
+
+      <div class="overflow-x-auto rounded-2xl border-[1.5px] border-ink bg-cream">
+        <table class="w-full min-w-[560px] border-collapse text-[15px]">
+          <caption class="sr-only">Downstream's frame metrics next to the best other library</caption>
+          <thead>
+            <tr class="text-[13.5px] text-ink-faint">
+              <th scope="col" rowspan="2" class="border-b border-rule px-5 py-3 text-left align-bottom font-semibold">Workload</th>
+              {frameMetrics.map((metric) => (
+                <th scope="colgroup" colspan="2" class="border-l border-rule px-4 pt-3 text-left font-semibold text-ink">
+                  {metric.label} <span class="font-normal text-ink-faint">({metric.unit})</span>
+                </th>
+              ))}
+            </tr>
+            <tr class="border-b border-rule text-[13px] text-ink-faint">
+              {frameMetrics.map(() => (
+                <>
+                  <th scope="col" class="border-l border-rule px-4 pt-1 pb-3 text-left font-normal">Downstream</th>
+                  <th scope="col" class="px-4 pt-1 pb-3 text-left font-normal">Best other</th>
+                </>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {
+              behind.map((row) => (
+                <tr class="border-b border-rule last:border-b-0">
+                  <th scope="row" class="px-5 py-3.5 text-left font-semibold">{row.label}</th>
+                  {row.cells.map((cell) => (
+                    <>
+                      <td class:list={['num border-l border-rule px-4 py-3.5 text-[17px] font-bold', cell.own > cell.theirs ? 'text-coral' : 'text-blue']}>
+                        {formatNumber(cell.own, cell.metric.decimals)}
+                      </td>
+                      <td class="px-4 py-3.5">
+                        <span class="num block text-[17px] font-semibold">{formatNumber(cell.theirs, cell.metric.decimals)}</span>
+                        <span class="block text-[13px] leading-tight text-ink-faint">{cell.best}</span>
+                      </td>
+                    </>
+                  ))}
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="shell py-20 lg:py-24" id="features">
+    <h2 class="h-section max-w-[18ch]">What each library renders.</h2>
+    <p class="lead mt-5 max-w-[60ch]">
+      Speed only matters if the output is complete. Here is what the three native renderers support out of the box. The JavaScript renderers are left out: they have none of the streaming features, and highlighting, math or custom components need your own code.
+    </p>
+    <div class="mt-10 overflow-x-auto rounded-2xl border-[1.5px] border-ink bg-cream">
+      <table class="w-full min-w-[640px] border-collapse text-[15px]">
+        <thead>
+          <tr class="border-b-[1.5px] border-ink">
+            <th scope="col" class="px-5 py-3.5 text-left font-semibold text-ink-faint">Feature</th>
+            {
+              matrixColumns.map((column) => (
+                <th
+                  scope="col"
+                  class:list={[
+                    'px-3 py-3.5 text-center text-[13.5px] leading-tight font-semibold',
+                    column.name === 'Downstream' && 'bg-yellow-soft',
+                  ]}
+                >
+                  {column.name}
+                </th>
+              ))
+            }
+          </tr>
+        </thead>
+        <tbody>
+          {
+            featureMatrix.map((row) => (
+              <tr class="border-b border-rule last:border-b-0">
+                <th scope="row" class="px-5 py-3 text-left font-normal">{row.feature}</th>
+                {matrixColumns.map((column) => {
+                  const value = row[column.key];
+                  return (
+                    <td class:list={['px-3 py-3 text-center', column.name === 'Downstream' && 'bg-yellow-soft/60']}>
+                      {value === 'yes' ? (
+                        <span class="font-bold text-blue" aria-label="Yes">✓</span>
+                      ) : value === 'no' ? (
+                        <span class="text-ink-faint/60" aria-label="No">–</span>
+                      ) : (
+                        <span class="text-[13.5px] text-ink-soft">{value}</span>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))
+          }
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- iOS -->
+  <section class="border-t-[1.5px] border-ink bg-blue-soft py-20 lg:py-24" id="ios">
+    <div class="shell grid gap-12 lg:grid-cols-[0.8fr_1.2fr] lg:gap-16">
+      <div>
+        <h2 class="h-section max-w-[12ch]">The same order on iOS.</h2>
+        <p class="mt-5 max-w-[44ch] text-[17px] leading-relaxed text-ink-soft">
+          The same app and workloads on the iOS simulator, with animations off. A simulator runs on the Mac's CPU,
+          so the seconds are not iPhone seconds. Every library shares the app, the input and the Mac, so the ratios
+          are the part to read.
+        </p>
+        <Link href={`${reports}/REPORT_IOS_SIMULATOR.md`} class="text-link mt-6 inline-block text-[16px]">
+          Read the iOS report
+        </Link>
+      </div>
+      <div class="grid gap-5">
+        {
+          iosCharts.map((chart) => (
+            <figure class="rounded-2xl border-[1.5px] border-ink bg-cream p-6 sm:p-7">
+              <figcaption class="flex items-baseline justify-between gap-4">
+                <span class="h-card text-[19px]">{chart.label}</span>
+                <span class="text-[14px] text-ink-faint">App CPU, seconds</span>
+              </figcaption>
+              <BarChart class="mt-5" items={chart.items} unit="s" decimals={2} multiples />
+            </figure>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <!-- Full numbers -->
+  <section class="border-t-[1.5px] border-ink py-20 lg:py-24" id="tables">
+    <div class="shell">
+      <h2 class="h-section max-w-[18ch]">All the numbers.</h2>
+      <p class="lead mt-5 max-w-[60ch]">Medians for every library, measure and workload on the Android phone.</p>
+      <div class="mt-10 space-y-3">
+        {
+          workloads.map((item, index) => (
+            <details class="group rounded-2xl border-[1.5px] border-ink bg-cream" open={index === 0}>
+              <summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 sm:px-6 [&::-webkit-details-marker]:hidden">
+                <span>
+                  <span class="h-card block text-[19px]">{item.label}</span>
+                  <span class="mt-0.5 block text-[14.5px] text-ink-soft">
+                    {item.description} {item.runs === '1 run' ? 'One run per library.' : 'Median of 5 runs.'}
+                  </span>
+                </span>
+                <span class="grid h-8 w-8 shrink-0 place-items-center rounded-full border-[1.5px] border-ink/25 text-[18px] leading-none transition-transform duration-300 group-open:rotate-45" aria-hidden="true">+</span>
+              </summary>
+              <div class="overflow-x-auto border-t border-rule">
+                <table class="w-full min-w-[720px] border-collapse text-[14.5px]">
+                  <thead>
+                    <tr class="border-b border-rule text-ink-faint">
+                      <th scope="col" class="px-5 py-3 text-left font-semibold sm:px-6">Library</th>
+                      {metrics.map((metric) => (
+                        <th scope="col" class="px-3 py-3 text-right font-semibold whitespace-nowrap">
+                          {metric.label} <span class="font-normal">({metric.unit})</span>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {libraries.map((library) => {
+                      const own = library === 'Downstream';
+                      return (
+                        <tr class:list={['border-b border-rule last:border-b-0', own && 'bg-yellow-soft/60']}>
+                          <th scope="row" class:list={['px-5 py-2.5 text-left whitespace-nowrap sm:px-6', own ? 'font-bold' : 'font-normal']}>
+                            {library}
+                          </th>
+                          {metrics.map((metric) => {
+                            const value = item.results[library][metric.key];
+                            const best = Math.min(...libraries.map((other) => item.results[other][metric.key]));
+                            return (
+                              <td class:list={['num px-3 py-2.5 text-right', value === best ? 'font-bold text-blue' : 'text-ink-soft']}>
+                                {formatNumber(value, metric.decimals)}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          ))
+        }
+      </div>
+      <p class="mt-4 text-[14.5px] text-ink-faint">The best value in each column is in blue.</p>
+    </div>
+  </section>
+
+  <!-- Method -->
+  <section class="border-t-[1.5px] border-ink bg-paper-deep/70 py-20 lg:py-24" id="method">
+    <div class="shell">
+      <h2 class="h-section max-w-[18ch]">How it was measured.</h2>
+      <dl class="mt-10 grid gap-x-12 gap-y-8 md:grid-cols-2 lg:grid-cols-3">
+        {
+          method.map((item) => (
+            <div class="border-t-[1.5px] border-ink pt-4">
+              <dt class="h-card text-[19px]">{item.title}</dt>
+              <dd class="mt-2 text-[15.5px] leading-relaxed text-ink-soft">{item.body}</dd>
+            </div>
+          ))
+        }
+      </dl>
+      <div class="mt-12 flex flex-wrap items-center gap-x-6 gap-y-3">
+        <Link href={`${reports}/REPORT.md`} class="btn btn-plain">Read the full Android report</Link>
+        <Link href={`${reports}/bench.mjs`} class="text-link text-[16px]">See the harness</Link>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<script>
+  document.addEventListener('benchmark:metric', (event) => {
+    const key = (event as CustomEvent<string>).detail;
+    if (document.querySelector(`[data-heatmap="${key}"]`)) show(key);
+  });
+
+  document.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-heatmap-metric]');
+    if (button) show(button.dataset.heatmapMetric!);
+  });
+
+  function show(key: string) {
+    document.querySelectorAll<HTMLElement>('[data-heatmap]').forEach((table) => (table.hidden = table.dataset.heatmap !== key));
+    document
+      .querySelectorAll<HTMLButtonElement>('[data-heatmap-metric]')
+      .forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.heatmapMetric === key)));
+  }
+</script>

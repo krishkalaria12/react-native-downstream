@@ -1,0 +1,42 @@
+---
+import { formatNumber } from '../lib/format';
+
+type Item = { name: string; value: number; highlight?: boolean };
+
+type Props = {
+  items: Item[];
+  unit?: string;
+  decimals?: number;
+  /** Show each bar as a multiple of the highlighted item. */
+  multiples?: boolean;
+  class?: string;
+};
+
+const { items, unit = '', decimals = 1, multiples = false, class: className } = Astro.props;
+
+const peak = Math.max(...items.map((item) => item.value)) || 1;
+const base = items.find((item) => item.highlight)?.value ?? 0;
+---
+
+<div class:list={['space-y-2', className]}>
+  {
+    items.map((item) => (
+      <div class="grid grid-cols-[minmax(0,8.5rem)_1fr] items-center gap-x-4 sm:grid-cols-[10.5rem_1fr]">
+        <span class:list={['truncate text-[14.5px]', item.highlight ? 'font-bold text-ink' : 'text-ink-soft']}>{item.name}</span>
+        <span class="flex min-w-0 items-center gap-3">
+          <span
+            class:list={['h-[22px] min-w-[3px] rounded-[5px]', item.highlight ? 'bg-coral' : 'bg-ink/[0.16]']}
+            style={`width:${(item.value / peak) * 78}%`}
+          />
+          <span class:list={['num shrink-0 text-[14px]', item.highlight ? 'font-bold text-ink' : 'text-ink-soft']}>
+            {formatNumber(item.value, decimals)}
+            {unit && <span class="text-ink-faint"> {unit}</span>}
+            {multiples && !item.highlight && base > 0 && (
+              <span class="ml-1.5 text-[13px] text-ink-faint">{(item.value / base).toFixed(1)}×</span>
+            )}
+          </span>
+        </span>
+      </div>
+    ))
+  }
+</div>
