@@ -11,6 +11,9 @@ allowBuilds:
   # off so CI and fresh clones build without them; the phone benchmark enables it
   # and runs the download itself for its highlighted APK.
   react-native-enriched-markdown: false
+  # Wrangler's local runtime. Its postinstall only re-checks the platform binary that
+  # pnpm already installs, and deploys do not use it.
+  workerd: false
 minimumReleaseAgeExclude:
   - '@ai-sdk/gateway@4.0.100'
   - '@ai-sdk/openai@4.0.80'

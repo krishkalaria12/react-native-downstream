@@ -4,3 +4,6 @@ dist/
 
 # The root ignores lib/ for build output; this one is source.
 !src/lib/
+
+# Wrangler local state
+.wrangler/
