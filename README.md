@@ -21,6 +21,8 @@ Parsing and text preparation run on native worker threads. Streaming updates reu
 
 The [phone benchmark report](benchmarks/phone/REPORT.md) compares six streaming Markdown libraries on a OnePlus Nord CE 3 running Android 15. The [project site](site/README.md) turns the same numbers into charts, alongside the landing page and documentation.
 
+Use the [API and plugin benchmark](benchmarks/phone/API_BENCHMARK.md) to compare the growing-string and controller APIs with explicit code/math plugin profiles on an Android phone.
+
 To work on the site locally:
 
 ```sh

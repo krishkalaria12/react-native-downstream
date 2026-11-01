@@ -1,6 +1,7 @@
 import {
   Component,
   Fragment,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -9,7 +10,12 @@ import {
 import type { ReactNode } from 'react';
 import { ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { fetch as expoFetch } from 'expo/fetch';
-import { createMarkdownStream, Downstream } from 'react-native-downstream';
+import {
+  codeAvailable,
+  createMarkdownStream,
+  Downstream,
+  mathAvailable,
+} from 'react-native-downstream';
 import type { MarkdownStreamController } from 'react-native-downstream';
 import { code } from 'react-native-downstream-code';
 import { math } from 'react-native-downstream-math';
@@ -34,6 +40,14 @@ import {
 } from './phoneWorkloads';
 import type { PhoneChunk, PhoneWorkload } from './phoneWorkloads';
 import { replayFinishes } from './replayFinish';
+import {
+  API_BENCHMARK_VERSION,
+  apiBenchmarkPolicy,
+  publishesSourceUpdates,
+  usesApiBenchmarkProtocol,
+  validateApiBenchmarkConfig,
+  type ApiBenchmarkConfiguration,
+} from './apiBenchmark';
 
 const mathOptions = { singleDollarTextMath: true };
 const downstreamPlugins = {
@@ -127,6 +141,8 @@ const rendererStyle = {
 
 export type PhoneCandidate =
   | 'downstream-default'
+  | 'downstream-string'
+  | 'downstream-controller'
   | 'downstream-full'
   | 'downstream-incremental'
   | 'streamdown'
@@ -138,6 +154,10 @@ export type PhoneCandidate =
 const SHARED_PIPELINE = 'shipping renderer with cumulative markdown prop';
 /** What each candidate does per update, recorded with every result. */
 const PIPELINES: Record<PhoneCandidate, string> = {
+  'downstream-string':
+    'public Downstream children / owned incremental string session / explicit plugins / canonical Android paragraph layout',
+  'downstream-controller':
+    'public createMarkdownStream / explicit plugins / canonical Android paragraph layout / no parent source update per chunk',
   'downstream-default':
     'public createMarkdownStream default incremental parse / canonical Android paragraph layout',
   'downstream-full':
@@ -152,6 +172,7 @@ const PIPELINES: Record<PhoneCandidate, string> = {
 };
 
 interface RunConfig {
+  benchmarkVersion?: string;
   candidate: PhoneCandidate;
   workload: string;
   runId: string;
@@ -164,6 +185,7 @@ interface RunConfig {
   settleMs?: number;
   finishDelayMs?: number;
   math?: boolean;
+  preview?: boolean;
   endpoint?: string;
   source?: string;
   chunks?: PhoneChunk[] | string[];
@@ -182,6 +204,7 @@ interface Snapshot {
   sources: string[];
   revision: number;
   finished: boolean;
+  finishedThreads: boolean[];
 }
 interface RunSamples {
   deliveries: {
@@ -310,13 +333,44 @@ function Candidate({
   controller,
   testID,
   onError,
+  finished,
+  thread,
+  onConfiguration,
 }: {
   config: RunConfig;
   source: string;
   controller: MarkdownStreamController | null;
   testID: string;
   onError: (error: string) => void;
+  finished: boolean;
+  thread: number;
+  onConfiguration: (
+    thread: number,
+    configuration: ApiBenchmarkConfiguration
+  ) => void;
 }) {
+  const policy = apiBenchmarkPolicy(config);
+  const plugins = downstreamPlugins[policy.pluginKey];
+  const apiProtocol = usesApiBenchmarkProtocol(config);
+  useLayoutEffect(() => {
+    if (!apiProtocol) return;
+    onConfiguration(thread, {
+      sourceMode: policy.sourceMode,
+      plugins:
+        policy.sourceMode === 'peer'
+          ? []
+          : plugins.map((plugin) => plugin.name),
+      preview: policy.preview,
+      engines: { code: codeAvailable(), math: mathAvailable() },
+    });
+  }, [
+    apiProtocol,
+    onConfiguration,
+    thread,
+    policy.sourceMode,
+    policy.preview,
+    plugins,
+  ]);
   const syntaxHighlighting = config.syntaxHighlighting ?? false;
   const markdownStyle = syntaxHighlighting
     ? coloredNativeMarkdownStyle
@@ -338,6 +392,26 @@ function Candidate({
   }
   let document: ReactNode;
   switch (config.candidate) {
+    case 'downstream-string':
+      document = (
+        <Downstream
+          isAnimating={config.mode === 'stream' && !finished}
+          androidParagraphLayout="canonical"
+          markdownStyle={markdownStyle}
+          theme={downstreamTheme}
+          animated={config.animated ?? false}
+          plugins={plugins}
+          codeBlock={{ lineNumbers: false, maxHeight: 0 }}
+          preview={policy.preview ?? false}
+          controls={false}
+          selectable={false}
+          onError={(error) => onError(JSON.stringify(error))}
+        >
+          {source}
+        </Downstream>
+      );
+      break;
+    case 'downstream-controller':
     case 'downstream-default':
     case 'downstream-full':
     case 'downstream-incremental':
@@ -352,17 +426,9 @@ function Candidate({
           markdownStyle={markdownStyle}
           theme={downstreamTheme}
           animated={config.animated ?? false}
-          plugins={
-            config.math
-              ? syntaxHighlighting
-                ? downstreamPlugins.all
-                : downstreamPlugins.math
-              : syntaxHighlighting
-                ? downstreamPlugins.code
-                : downstreamPlugins.plain
-          }
+          plugins={plugins}
           codeBlock={{ lineNumbers: false, maxHeight: 0 }}
-          preview={false}
+          preview={policy.preview ?? false}
           controls={false}
           selectable={false}
           onError={(error) => onError(JSON.stringify(error))}
@@ -428,9 +494,17 @@ export default function PhoneBenchmark() {
     sources: [''],
     revision: 0,
     finished: false,
+    finishedThreads: [false],
   });
   const [status, setStatus] = useState('Waiting for benchmark configuration');
   const controllers = useRef<MarkdownStreamController[]>([]);
+  const configurations = useRef(new Map<number, ApiBenchmarkConfiguration>());
+  const recordConfiguration = useCallback(
+    (thread: number, configuration: ApiBenchmarkConfiguration) => {
+      configurations.current.set(thread, configuration);
+    },
+    []
+  );
   const samples = useRef<RunSamples>({
     deliveries: [],
     rafSamples: [],
@@ -512,6 +586,7 @@ export default function PhoneBenchmark() {
       }
       if (disposed || !activeConfig) return;
       const run = activeConfig;
+      validateApiBenchmarkConfig(run);
       const finishDelayMs = run.finishDelayMs ?? 0;
       if (
         !Number.isFinite(finishDelayMs) ||
@@ -548,13 +623,14 @@ export default function PhoneBenchmark() {
       if (run.trace && !run.candidate.startsWith('downstream-')) {
         throw new Error('Diagnostic tracing requires a Downstream candidate');
       }
-      if (run.candidate.startsWith('downstream-')) {
+      if (apiBenchmarkPolicy(run).sourceMode === 'controller') {
         const options = {
           math: run.math ? mathOptions : false,
           onError: (error: unknown) => reportError(JSON.stringify(error)),
         };
         controllers.current = Array.from({ length: threadCount }, () =>
-          run.candidate === 'downstream-default'
+          run.candidate === 'downstream-default' ||
+          run.candidate === 'downstream-controller'
             ? createMarkdownStream({ onError: options.onError })
             : createMarkdownStreamWithMode(
                 options,
@@ -600,6 +676,7 @@ export default function PhoneBenchmark() {
         sources: Array<string>(threadCount).fill(''),
         revision: 0,
         finished: false,
+        finishedThreads: Array<boolean>(threadCount).fill(false),
       });
       setConfig(run);
       const event = (type: string, extra = {}) =>
@@ -617,6 +694,13 @@ export default function PhoneBenchmark() {
       // Common empty-renderer mount settling. Startup is outside the measured run.
       await delay(1000);
       if (disposed) return;
+      if (
+        usesApiBenchmarkProtocol(run) &&
+        configurations.current.size !== threadCount
+      )
+        throw new Error(
+          'Renderer configuration did not commit before measurement.'
+        );
       const data = samples.current;
       let previousFrame = 0;
       const observeFrame = () => {
@@ -638,7 +722,17 @@ export default function PhoneBenchmark() {
       };
       let source = '';
       const sources = Array<string>(threadCount).fill('');
+      const finishedThreads = Array<boolean>(threadCount).fill(false);
       let revision = 0;
+      const publishSnapshot = () => {
+        if (!publishesSourceUpdates(run.candidate)) return;
+        setSnapshot({
+          sources: [...sources],
+          revision,
+          finished: finishedThreads.every(Boolean),
+          finishedThreads: [...finishedThreads],
+        });
+      };
       const deliver = (thread: number, text: string, dueMs: number | null) => {
         const actualMs = now() - data.startAt;
         const wallTimeMs = Date.now();
@@ -664,6 +758,8 @@ export default function PhoneBenchmark() {
           wallTimeMs: Date.now(),
         });
         controllers.current[thread]?.finish();
+        finishedThreads[thread] = true;
+        if (run.candidate === 'downstream-string') publishSnapshot();
       };
 
       if (run.live) {
@@ -709,7 +805,7 @@ export default function PhoneBenchmark() {
             }
             deliver(message.thread, message.text, null);
           }
-          setSnapshot({ sources: [...sources], revision, finished: done });
+          publishSnapshot();
         }
         if (disposed) return;
         if (!done)
@@ -732,17 +828,13 @@ export default function PhoneBenchmark() {
           if (disposed) return;
           deliver(thread, chunk.text, chunk.dueMs);
           if (lastChunk.get(thread) === index) finishes.schedule(thread);
-          setSnapshot({
-            sources: [...sources],
-            revision,
-            finished: index === chunks.length - 1,
-          });
+          publishSnapshot();
         }
         if (chunks.length === 0) {
           for (let thread = 0; thread < threadCount; thread += 1) {
             finishes.schedule(thread);
           }
-          setSnapshot({ sources, revision: 0, finished: true });
+          publishSnapshot();
         }
         await finishes.done();
         if (disposed) return;
@@ -764,6 +856,13 @@ export default function PhoneBenchmark() {
       await post(endpoint, '/result', {
         schemaVersion: 1,
         ...run,
+        ...(usesApiBenchmarkProtocol(run) && {
+          benchmarkVersion: API_BENCHMARK_VERSION,
+          apiConfig: configurations.current.get(0),
+          threadConfigurations: [...configurations.current.entries()].map(
+            ([thread, configuration]) => ({ thread, ...configuration })
+          ),
+        }),
         diagnostic: Boolean(run.trace || run.diagnostic),
         ...(trace && { trace }),
         syntaxHighlighting: run.syntaxHighlighting ?? false,
@@ -791,8 +890,9 @@ export default function PhoneBenchmark() {
         commits: data.commits,
         errors: data.errors,
         pipeline: PIPELINES[run.candidate],
-        measurementNotes:
-          'rAF gaps and React commits measure JS responsiveness; neither proves native presentation latency',
+        measurementNotes: usesApiBenchmarkProtocol(run)
+          ? 'rAF gaps measure JS responsiveness; commits record benchmark-parent source updates and exclude internal renderer subscriptions; neither proves native presentation latency'
+          : 'rAF gaps and React commits measure JS responsiveness; neither proves native presentation latency',
       });
     }
     void execute().catch(async (error) => {
@@ -846,6 +946,9 @@ export default function PhoneBenchmark() {
               <Candidate
                 config={config}
                 source={source}
+                finished={snapshot.finishedThreads[thread] ?? snapshot.finished}
+                thread={thread}
+                onConfiguration={recordConfiguration}
                 controller={controllers.current[thread] ?? null}
                 testID={
                   thread === 0

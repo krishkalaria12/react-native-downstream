@@ -81,7 +81,7 @@ const TRACE_PROCESSOR = {
   path: join(HERE, '.tools/trace_processor_shell'),
 };
 
-const CANDIDATES = {
+let CANDIDATES = {
   'downstream-default': 'Downstream',
   'streamdown': 'RN Streamdown',
   'enriched': 'Enriched Markdown',
@@ -89,9 +89,48 @@ const CANDIDATES = {
   'marked': 'Marked',
   'markdown-renderer': 'Markdown Renderer',
 };
-const BASELINE = 'downstream-default';
+let BASELINE = 'downstream-default';
+let benchmarkSuite;
+
+function suiteFingerprint() {
+  return sha(
+    JSON.stringify({
+      id: benchmarkSuite.id,
+      candidates: CANDIDATES,
+      baseline: BASELINE,
+      profiles: benchmarkSuite.profiles,
+    })
+  );
+}
+
+function assertSessionSuite(session) {
+  if ((session.benchmarkVersion ?? null) !== (benchmarkSuite?.id ?? null))
+    throw new Error(
+      'This session belongs to a different benchmark entrypoint.'
+    );
+  if (benchmarkSuite && session.suiteFingerprint !== suiteFingerprint())
+    throw new Error(
+      'Benchmark definitions changed; use a new result directory.'
+    );
+}
+
+function assertBuildSuite(record, profile) {
+  if (
+    (record.benchmarkVersion ?? null) !== (benchmarkSuite?.id ?? null) ||
+    (benchmarkSuite && record.suiteFingerprint !== suiteFingerprint()) ||
+    record.profile !== profile
+  )
+    throw new Error(
+      'Saved APK belongs to a different benchmark/profile; rebuild it.'
+    );
+}
 
 export function profileConfig(profile) {
+  if (benchmarkSuite) {
+    const config = benchmarkSuite.profiles[profile];
+    if (!config) throw new Error(`Unknown profile ${profile}`);
+    return { ...config };
+  }
   if (
     ![
       'highlighted',
@@ -110,7 +149,13 @@ export function profileConfig(profile) {
 export function candidatesForProfile(candidates, profile) {
   return profileConfig(profile).animated
     ? candidates.filter((candidate) =>
-        ['downstream-default', 'streamdown', 'enriched'].includes(candidate)
+        (
+          benchmarkSuite?.animatedCandidates ?? [
+            'downstream-default',
+            'streamdown',
+            'enriched',
+          ]
+        ).includes(candidate)
       )
     : candidates;
 }
@@ -876,6 +921,8 @@ const fmt = (value, digits) =>
   value == null || !Number.isFinite(value) ? '–' : value.toFixed(digits);
 
 function renderReport(session, runs, stats) {
+  if (benchmarkSuite?.renderReport)
+    return benchmarkSuite.renderReport(session, runs, stats);
   const lines = [];
   const device = session.device;
   const measured = runs.filter((run) => !run.config.warmup);
@@ -1466,6 +1513,13 @@ async function build(profile, outputDir) {
       'react-native-marked',
       'react-native-markdown-renderer',
       'remend',
+      ...(benchmarkSuite
+        ? [
+            'react-native-downstream',
+            'react-native-downstream-code',
+            'react-native-downstream-math',
+          ]
+        : []),
     ].map((name) => [name, exampleVersion(name)])
   );
   const apk = readFileSync(APK);
@@ -1479,6 +1533,13 @@ async function build(profile, outputDir) {
     apkBytes: apk.length,
     packages: versions,
     credentialsAbsent: true,
+    ...(benchmarkSuite && {
+      benchmarkVersion: benchmarkSuite.id,
+      suiteFingerprint: suiteFingerprint(),
+      profileConfig: profileConfig(profile),
+      lockfileSha256: sha(readFileSync(join(ROOT, 'pnpm-lock.yaml'))),
+      nodeVersion: process.version,
+    }),
   };
   mkdirSync(join(outputDir, 'builds'), { recursive: true });
   copyFileSync(APK, join(outputDir, 'builds', `${profile}.apk`));
@@ -1671,7 +1732,10 @@ export function appOptionErrors(config, result) {
     );
   if (config.trace && !result.trace?.enabled)
     errors.push('app did not collect requested diagnostic native tracing');
-  return errors;
+  return [
+    ...errors,
+    ...(benchmarkSuite?.appOptionErrors?.(config, result) ?? []),
+  ];
 }
 
 /**
@@ -1691,6 +1755,7 @@ export function loadResumeState(output) {
   const session = JSON.parse(
     readFileSync(join(output, 'session.json'), 'utf8')
   );
+  assertSessionSuite(session);
   if (session.schemaVersion !== 2 || !Array.isArray(session.order))
     throw new Error(
       'Resume needs a saved schemaVersion 2 session with its run order'
@@ -1718,6 +1783,7 @@ export function loadResumeState(output) {
     )
       throw new Error(`${name}: saved run does not match the session order`);
     if (record.status === 'ok') {
+      benchmarkSuite?.validateSavedRun?.(session, record);
       if (
         (record.config.finishDelayMs ?? 0) !== (session.finishDelayMs ?? 0) ||
         Boolean(record.config.trace) !== Boolean(session.diagnosticTrace)
@@ -1742,6 +1808,7 @@ export function loadResumeState(output) {
     )
       continue;
     const apkPath = join(output, 'builds', `${profile}.apk`);
+    if (buildRecord) assertBuildSuite(buildRecord, profile);
     if (
       !buildRecord ||
       !existsSync(apkPath) ||
@@ -1947,7 +2014,11 @@ async function measureOne(device, host, item, options, workload, ai) {
     finishDelayMs: options.finishDelayMs ?? 0,
     trace: Boolean(options.diagnosticTrace),
     ...profileConfig(item.profile),
-    math: WORKLOADS[item.workload].math ?? false,
+    math:
+      profileConfig(item.profile).math ??
+      WORKLOADS[item.workload].math ??
+      false,
+    ...(benchmarkSuite && { benchmarkVersion: benchmarkSuite.id }),
     ...(ai
       ? { live: { threads: prompts.length } }
       : { source: workload.source, chunks: workload.chunks }),
@@ -2083,6 +2154,11 @@ async function measureOne(device, host, item, options, workload, ai) {
       animationEnabled: result.animationEnabled,
       settleMs: result.settleMs,
       finishDelayAppliedMs: result.finishDelayAppliedMs,
+      ...(benchmarkSuite && {
+        benchmarkVersion: result.benchmarkVersion,
+        apiConfig: result.apiConfig,
+        threadConfigurations: result.threadConfigurations,
+      }),
     },
     ...(result.trace && { nativeTrace: result.trace }),
     ...(state.live && { live: state.live }),
@@ -2103,6 +2179,14 @@ async function measureOne(device, host, item, options, workload, ai) {
 }
 
 async function runSession(options) {
+  if (
+    benchmarkSuite &&
+    !options.resume &&
+    existsSync(join(options.output, 'session.json'))
+  )
+    throw new Error(
+      'Result directory already has a session; use resume or a new --output.'
+    );
   const resumed = options.resume ? loadResumeState(options.output) : null;
   if (resumed) {
     const { session, completed, pending } = resumed;
@@ -2141,8 +2225,6 @@ async function runSession(options) {
     );
     if (!pending.length) return report(options.output, options);
   }
-  await ensureTraceProcessor();
-  const device = await pickDevice(options.device);
   for (const id of options.workloads) {
     if (!WORKLOADS[id])
       throw new Error(
@@ -2161,6 +2243,20 @@ async function runSession(options) {
       )
     : null;
   const ai = recordings ? null : await loadModel(options);
+  if (
+    benchmarkSuite &&
+    resumed &&
+    Object.entries(workloads ?? {}).some(
+      ([id, workload]) =>
+        resumed.session.workloads[id]?.replaySha256 !==
+        sha(JSON.stringify(workload.chunks))
+    )
+  )
+    throw new Error(
+      'Replay chunks or cadence changed since the saved session; use the original recording.'
+    );
+  await ensureTraceProcessor();
+  const device = await pickDevice(options.device);
   for (const candidate of options.candidates) {
     if (!CANDIDATES[candidate])
       throw new Error(`Unknown candidate ${candidate}`);
@@ -2184,6 +2280,11 @@ async function runSession(options) {
   const startThermal = await device.thermal();
   const session = resumed?.session ?? {
     schemaVersion: 2,
+    ...(benchmarkSuite && {
+      benchmarkVersion: benchmarkSuite.id,
+      suiteFingerprint: suiteFingerprint(),
+      profileConfigurations: benchmarkSuite.profiles,
+    }),
     startedAt: new Date().toISOString(),
     output: options.output,
     device: { serial: device.serial, model, release, fingerprint },
@@ -2198,6 +2299,9 @@ async function runSession(options) {
               chunks: workloads[id].chunks.length,
               lastDueMs: workloads[id].chunks.at(-1).dueMs,
               sourceSha256: sha(workloads[id].source),
+              ...(benchmarkSuite && {
+                replaySha256: sha(JSON.stringify(workloads[id].chunks)),
+              }),
               threads: workloads[id].threads,
             }
           : {
@@ -2290,6 +2394,7 @@ async function runSession(options) {
             )
           : await build(profile, options.output);
       if (!savedBuild) session.builds.push(buildRecord);
+      assertBuildSuite(buildRecord, profile);
       log(`Installing ${profile} APK`);
       await device.adb(
         ['install', '-r', join(options.output, 'builds', `${profile}.apk`)],
@@ -2371,6 +2476,7 @@ function report(output, options = {}) {
   const session = JSON.parse(
     readFileSync(join(output, 'session.json'), 'utf8')
   );
+  assertSessionSuite(session);
   session.output = output;
   const runs = readdirSync(join(output, 'runs'))
     .filter((name) => name.endsWith('.json'))
@@ -2380,6 +2486,7 @@ function report(output, options = {}) {
   const measured = runs.filter(
     (run) => run.status === 'ok' && !run.config.warmup
   );
+  for (const run of measured) benchmarkSuite?.validateSavedRun?.(session, run);
   const failed = runs.filter((run) => run.status !== 'ok');
   const stats = summarize(measured, session.seed);
   writeFileSync(
@@ -2677,24 +2784,31 @@ async function selftest() {
 // ---------------------------------------------------------------------------
 // CLI
 
-async function main() {
+async function main(args = process.argv.slice(2)) {
   const { values, positionals } = parseArgs({
+    args,
     allowPositionals: true,
     options: {
       'device': { type: 'string' },
       'profiles': {
         type: 'string',
-        default: 'highlighted,highlighted-animated',
+        default:
+          benchmarkSuite?.defaultProfiles?.join(',') ??
+          'highlighted,highlighted-animated',
       },
       'repeats': { type: 'string', default: '5' },
       'seed': { type: 'string', default: '1' },
       'workloads': {
         type: 'string',
-        default: Object.keys(WORKLOADS).join(','),
+        default:
+          benchmarkSuite?.defaultWorkloads?.join(',') ??
+          Object.keys(WORKLOADS).join(','),
       },
       'candidates': {
         type: 'string',
-        default: Object.keys(CANDIDATES).join(','),
+        default:
+          benchmarkSuite?.defaultCandidates?.join(',') ??
+          Object.keys(CANDIDATES).join(','),
       },
       'replay': { type: 'string' },
       'output': { type: 'string' },
@@ -2725,7 +2839,10 @@ async function main() {
     workloads: values.workloads.split(','),
     candidates: values.candidates.split(','),
     replay: values.replay,
-    output: resolve(values.output ?? join(HERE, 'results', `bench-${stamp}`)),
+    output: resolve(
+      values.output ??
+        join(HERE, 'results', `${benchmarkSuite?.id ?? 'bench'}-${stamp}`)
+    ),
     model: values.model,
     reasoning: values.reasoning,
     maxBatteryC: values['max-battery-c']
@@ -2740,8 +2857,16 @@ async function main() {
     keepTraces: values['keep-traces'],
     skipBuild: values['skip-build'] || command === 'run',
     deviceSetup: !values['no-device-setup'],
-    publish: !values['no-publish'],
+    publish: benchmarkSuite ? false : !values['no-publish'],
   };
+  benchmarkSuite?.validateOptions?.(command, options);
+  for (const candidate of options.candidates) {
+    if (!CANDIDATES[candidate])
+      throw new Error(`Unknown candidate ${candidate}`);
+  }
+  for (const workload of options.workloads) {
+    if (!WORKLOADS[workload]) throw new Error(`Unknown workload ${workload}`);
+  }
   for (const profile of options.profiles) {
     profileConfig(profile);
     if (!candidatesForProfile(options.candidates, profile).length)
@@ -2749,7 +2874,8 @@ async function main() {
         `${profile}: no selected candidates support streaming animations`
       );
   }
-  if (!(options.repeats >= 2)) throw new Error('--repeats must be at least 2');
+  if (!Number.isSafeInteger(options.repeats) || options.repeats < 2)
+    throw new Error('--repeats must be an integer of at least 2');
   if (!Number.isFinite(options.settleMs) || options.settleMs <= 0)
     throw new Error('--settle-ms must be a positive finite number');
   if (command !== 'resume')
@@ -2762,6 +2888,26 @@ async function main() {
     throw new Error('--diagnostic-trace requires Downstream-only --candidates');
 
   switch (command) {
+    case 'plan': {
+      const plan = {
+        benchmarkVersion: benchmarkSuite?.id ?? null,
+        suiteFingerprint: benchmarkSuite ? suiteFingerprint() : null,
+        profiles: Object.fromEntries(
+          options.profiles.map((id) => [id, profileConfig(id)])
+        ),
+        candidates: options.candidates,
+        workloads: options.workloads,
+        order: schedule(
+          options.candidates,
+          options.workloads,
+          options.profiles,
+          options.repeats,
+          options.seed
+        ).map((item, index) => ({ ...item, index })),
+      };
+      console.log(JSON.stringify(plan, null, 2));
+      return plan;
+    }
     case 'capture':
       return capture(options);
     case 'build':
@@ -2795,11 +2941,32 @@ async function main() {
   }
 }
 
+/** Shared transport/build/report infrastructure; each CLI runs one isolated suite. */
+export async function runBenchmarkCLI(suite, args = process.argv.slice(2)) {
+  if (benchmarkSuite) throw new Error('A benchmark suite is already running.');
+  const previous = {
+    candidates: CANDIDATES,
+    baseline: BASELINE,
+  };
+  benchmarkSuite = suite;
+  if (suite) {
+    CANDIDATES = suite.candidates;
+    BASELINE = suite.baseline;
+  }
+  try {
+    return await main(args);
+  } finally {
+    benchmarkSuite = undefined;
+    CANDIDATES = previous.candidates;
+    BASELINE = previous.baseline;
+  }
+}
+
 if (
   process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  main().catch((error) => {
+  runBenchmarkCLI().catch((error) => {
     console.error(error.stack ?? error);
     process.exit(1);
   });
