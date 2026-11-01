@@ -2,7 +2,8 @@ import { processColor as rnProcessColor } from 'react-native';
 
 import type { TextStyle } from 'react-native';
 
-import type { MarkdownStyle } from './types';
+import type { MarkdownStyle, MarkdownViewProps } from './types';
+import { entries } from './theme';
 
 const processColor = rnProcessColor as (value: unknown) => unknown;
 
@@ -34,9 +35,12 @@ export type ResolvedLinkVariant = Readonly<{
  * and costs the platforms nothing, because there is nothing to match against.
  */
 export function resolveLinkVariants(
-  markdownStyle: MarkdownStyle | undefined
+  markdownStyle: MarkdownViewProps['markdownStyle']
 ): ReadonlyArray<ResolvedLinkVariant> {
-  const variants = markdownStyle?.linkVariants;
+  let variants: MarkdownStyle['linkVariants'];
+  for (const entry of entries<MarkdownStyle>(markdownStyle)) {
+    if (entry.linkVariants !== undefined) variants = entry.linkVariants;
+  }
   if (!variants || variants.length === 0) {
     return [];
   }

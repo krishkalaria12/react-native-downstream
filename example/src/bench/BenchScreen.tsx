@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { DownstreamMarkdown } from 'react-native-downstream';
+import { Downstream } from 'react-native-downstream';
 
 import { fixtures } from '../shared/fixtures';
 import type { ScheduleKind } from '../shared/schedule';
@@ -141,7 +141,7 @@ const TracedMarkdown = memo(function TracedMarkdownInner({
         }
       }}
     >
-      <DownstreamMarkdown stream={message.controllers[stream]!} />
+      <Downstream stream={message.controllers[stream]!} preview={false} />
     </View>
   );
 });
@@ -157,7 +157,7 @@ const CompletedRow = memo(function CompletedRowInner({
       <Text style={[t.s.caption, styles.completedLabel]}>
         {message.fixture} · stream {message.stream + 1}
       </Text>
-      <DownstreamMarkdown markdown={message.markdown} />
+      <Downstream>{message.markdown}</Downstream>
     </View>
   );
 });

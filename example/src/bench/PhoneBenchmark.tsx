@@ -9,10 +9,7 @@ import {
 import type { ReactNode } from 'react';
 import { ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { fetch as expoFetch } from 'expo/fetch';
-import {
-  createMarkdownStream,
-  DownstreamMarkdown,
-} from 'react-native-downstream';
+import { createMarkdownStream, Downstream } from 'react-native-downstream';
 import type { MarkdownStreamController } from 'react-native-downstream';
 import {
   createMarkdownStreamWithMode,
@@ -337,7 +334,7 @@ function Candidate({
     case 'downstream-full':
     case 'downstream-incremental':
       document = controller ? (
-        <DownstreamMarkdown
+        <Downstream
           stream={controller}
           androidParagraphLayout={
             config.candidate === 'downstream-incremental'
@@ -348,8 +345,8 @@ function Candidate({
           theme={downstreamTheme}
           animated={config.animated ?? false}
           syntaxHighlighting={syntaxHighlighting}
-          lineNumbers={false}
-          codeBlockMaxHeight={0}
+          codeBlock={{ lineNumbers: false, maxHeight: 0 }}
+          preview={false}
           controls={false}
           math={config.math ? mathOptions : false}
           selectable={false}
@@ -543,7 +540,7 @@ export default function PhoneBenchmark() {
         };
         controllers.current = Array.from({ length: threadCount }, () =>
           run.candidate === 'downstream-default'
-            ? createMarkdownStream(options)
+            ? createMarkdownStream({ onError: options.onError })
             : createMarkdownStreamWithMode(
                 options,
                 run.candidate === 'downstream-full' ? 'full' : 'incremental'

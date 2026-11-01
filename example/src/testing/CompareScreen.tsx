@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { DownstreamMarkdown } from 'react-native-downstream';
+import { Downstream } from 'react-native-downstream';
 import type { MarkdownStreamController } from 'react-native-downstream';
 
 import { fixtures } from '../shared/fixtures';
@@ -149,9 +149,10 @@ function Pane({
         // The peer's whole-tail fade, which is the whole of its animation support.
         <StreamdownMarkdown markdown={source} streamingAnimation={animated} />
       ) : stream ? (
-        <DownstreamMarkdown
+        <Downstream
           androidParagraphLayout="incremental"
           stream={stream}
+          preview={false}
           syntaxHighlighting={syntaxHighlighting}
           animated={animated}
           caret={animated ? 'block' : undefined}
@@ -159,7 +160,7 @@ function Pane({
       ) : (
         // An empty view keeps the Downstream pane mounted, and in the same
         // place in the tree, while Streamdown is the candidate under test.
-        <DownstreamMarkdown markdown="" animated={animated} />
+        <Downstream markdown="" animated={animated} />
       )}
       {run?.error != null && (
         <Text style={[t.s.caption, styles.paneError, { color: t.c.danger }]}>

@@ -1,7 +1,8 @@
 /* eslint-disable no-bitwise -- tag styles are a bitmask the native views read */
 import { processColor as rnProcessColor } from 'react-native';
 
-import type { MarkdownStyle } from './types';
+import type { MarkdownStyle, MarkdownViewProps } from './types';
+import { entries } from './theme';
 
 const processColor = rnProcessColor as (value: unknown) => unknown;
 
@@ -32,14 +33,17 @@ export type ResolvedTagStyle = Readonly<{
  * nothing, because there is nothing to match against.
  */
 export function resolveTagStyles(
-  markdownStyle: MarkdownStyle | undefined
+  markdownStyle: MarkdownViewProps['markdownStyle']
 ): ReadonlyArray<ResolvedTagStyle> {
-  const tags = markdownStyle?.tags;
-  if (!tags) {
-    return [];
+  const tags = new Map<string, NonNullable<MarkdownStyle['tags']>[string]>();
+  for (const entry of entries<MarkdownStyle>(markdownStyle)) {
+    for (const [name, style] of Object.entries(entry.tags ?? {})) {
+      const key = name.toLowerCase();
+      tags.set(key, { ...tags.get(key), ...style });
+    }
   }
   const resolved: ResolvedTagStyle[] = [];
-  for (const [name, style] of Object.entries(tags)) {
+  for (const [name, style] of tags) {
     if (typeof name !== 'string' || name.length === 0 || !style) {
       continue;
     }

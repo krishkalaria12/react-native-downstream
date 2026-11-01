@@ -19,7 +19,7 @@ import {
   resetAnimationWarnings,
 } from '../src/animation';
 import {
-  createMarkdownStream,
+  createMarkdownStreamWithMode,
   getStreamState,
 } from '../src/createMarkdownStream';
 import { DownstreamMarkdown } from '../src/DownstreamMarkdown';
@@ -47,7 +47,7 @@ let frames: FrameRequestCallback[] = [];
 const streams: { dispose(): void }[] = [];
 
 function stream() {
-  const created = createMarkdownStream();
+  const created = createMarkdownStreamWithMode({}, 'incremental');
   streams.push(created);
   return created;
 }

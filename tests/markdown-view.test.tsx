@@ -7,7 +7,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  createMarkdownStream,
+  createMarkdownStreamWithMode,
   getStreamState,
 } from '../src/createMarkdownStream';
 import { DownstreamMarkdown } from '../src/DownstreamMarkdown';
@@ -47,8 +47,8 @@ let root: Root | undefined;
 let committed: React.ReactElement | undefined;
 const streams: { dispose(): void }[] = [];
 
-function stream(): ReturnType<typeof createMarkdownStream> {
-  const created = createMarkdownStream();
+function stream(): ReturnType<typeof createMarkdownStreamWithMode> {
+  const created = createMarkdownStreamWithMode({}, 'incremental');
   streams.push(created);
   return created;
 }

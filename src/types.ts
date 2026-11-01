@@ -1,4 +1,4 @@
-/** Public API types. The stream controller types describe the planned session API. */
+/** Shared public types and the normalized props used by native rendering. */
 import type { ComponentType, ReactNode } from 'react';
 
 import type {
@@ -368,65 +368,15 @@ export type MarkdownLinkSafetyModalProps = Readonly<{
 
 export type MarkdownStreamOptions = Readonly<{
   onError?: (error: MarkdownErrorEvent) => void;
-  /**
-   * Provisional styling for the unstable tail.
-   *
-   * Off by default, so an open span renders as the literal text the writer
-   * sent. `true` enables every repair; an object enables the ones named.
-   * Changing it later re-renders the current tail without disturbing the
-   * canonical source.
-   */
-  preview?: boolean | MarkdownPreviewOptions;
-  /**
-   * Math parsing for this stream, read once at creation and kept by `reset()`.
-   *
-   * Parse options are part of a source's identity, so a stream takes them when
-   * it is created rather than per snapshot. The view's `math` prop still decides
-   * whether parsed formulas are typeset.
-   */
-  math?: boolean | MarkdownMathOptions;
-  /**
-   * Render `<br>`, `<sub>` and `<sup>`. Every other tag stays text. On by
-   * default; `false` restores the release that showed every tag as source.
-   */
-  inlineHtml?: boolean;
-  /** md4c's `^x^` and `~x~` syntaxes, both off by default. */
-  syntax?: MarkdownSyntaxOptions;
-  /**
-   * CJK-friendly emphasis, strikethrough and autolink boundaries. On by default;
-   * `false` restores CommonMark's intraword rules, where `**太字**` next to a
-   * punctuation mark and `~~` next to any letter both stay literal.
-   */
-  cjk?: boolean;
-  /** Which link destinations the source may contain; see `MarkdownLinksOptions`. */
-  links?: MarkdownLinksOptions;
-  /** Protocols a bare address may not autolink to. */
-  disableAutolinkProtocols?: MarkdownAutolinkProtocols;
-  /**
-   * Which HTML tags the source may use, beyond the built-in table; see
-   * `MarkdownAllowedTags`.
-   */
-  allowedTags?: MarkdownAllowedTags;
-  /**
-   * Leave a tag's content unstyled instead of parsing Markdown inside it. Off
-   * by default, and what an app whose custom tags are not Markdown wants:
-   * `<user>Bob</user>` is a name, not a paragraph.
-   */
-  literalTagContent?: boolean;
 }>;
 
-/** Created by createMarkdownStream(options), planned for the native session phase. */
+/** Text retained independently of a view. Parse and preview options live on the view. */
 export interface MarkdownStreamController {
   append(chunk: string): void;
   reset(source?: string): void;
   finish(): void;
   dispose(): void;
   getSource(): Promise<string>;
-  /**
-   * Turns provisional styling on or off for the rest of this stream. A settled
-   * stream keeps the literal source either way.
-   */
-  setPreview(options: boolean | MarkdownPreviewOptions): void;
 }
 
 /** Which kind of block a control acted on. */
@@ -1202,10 +1152,9 @@ type MarkdownViewBaseProps = Readonly<{
    * otherwise; `false` keeps every formula literal, which is exactly today's
    * parse and display.
    *
-   * A `stream` takes its parse options from `createMarkdownStream`, and this
-   * prop then only decides whether parsed formulas are typeset. Unsupported
-   * syntax, and every formula when the math package is absent, shows its source
-   * with its delimiters, as KaTeX's `throwOnError: false` does.
+   * This prop selects parsing and typesetting for both string and controller
+   * sources. A changed policy rebuilds the retained source. Unsupported syntax,
+   * and every formula when the math package is absent, shows its delimiters.
    */
   math?: boolean | MarkdownMathOptions;
   /** A formula that could not be typeset, once per distinct source per view. */
@@ -1367,14 +1316,14 @@ type MarkdownViewBaseProps = Readonly<{
    * own controller instead: on from the first append of a generation until
    * `finish()`, with an explicit value overriding that.
    *
-   * This decides the fade and the caret and nothing else. A complete document
-   * rendered with `animated` on is what `isAnimating: false` already describes,
-   * so it appears at once rather than animating text the reader was handed whole.
+   * For a string source, turning this on starts an incremental session and
+   * turning it off finishes the response. A controller source is finished by
+   * its own `finish()` method; this prop only overrides its fade and caret.
    */
   isAnimating?: boolean;
   /**
-   * Provisional formatting for incomplete Markdown. Enabled by default for a
-   * streaming `markdown` string. A controller keeps its own preview policy.
+   * Provisional formatting for incomplete Markdown. Enabled by default while
+   * streaming, for both string and controller sources.
    * Finishing a response always removes provisional formatting.
    */
   preview?: boolean | MarkdownPreviewOptions;

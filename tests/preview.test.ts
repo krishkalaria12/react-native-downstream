@@ -18,7 +18,6 @@ vi.mock(
 );
 
 import {
-  createMarkdownStream,
   createMarkdownStreamWithMode,
   getStreamState,
 } from '../src/createMarkdownStream';
@@ -64,7 +63,7 @@ function shown(sessionId: string): string {
 }
 
 type Harness = {
-  stream: MarkdownStreamController;
+  stream: ReturnType<typeof createMarkdownStreamWithMode>;
   sessionId: string;
   /** Appends through the real frame queue and returns what is now on screen. */
   append(...chunks: string[]): string;
@@ -76,9 +75,10 @@ function stream(
   },
   mode?: 'full' | 'incremental'
 ): Harness {
-  const controller = mode
-    ? createMarkdownStreamWithMode(options ?? {}, mode)
-    : createMarkdownStream(options);
+  const controller = createMarkdownStreamWithMode(
+    options ?? {},
+    mode ?? 'incremental'
+  );
   live.push(controller);
   const sessionId = getStreamState(controller).sessionId;
   return {
@@ -170,7 +170,10 @@ describe('the stream option reaches the native session', () => {
     // A typo here would otherwise silently change what a reader sees, which is
     // the one thing this option must never do by accident.
     expect(() =>
-      createMarkdownStream({ preview: 'yes' as unknown as boolean })
+      createMarkdownStreamWithMode(
+        { preview: 'yes' as unknown as boolean },
+        'incremental'
+      )
     ).toThrow();
   });
 

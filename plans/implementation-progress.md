@@ -34,10 +34,32 @@ strings with controllers on both platforms. An Android emulator is connected;
 no physical phone is attached, and `xcrun simctl` is unavailable. No performance
 parity claim has been established.
 
+## Phase 2
+
+Implemented `Downstream` with string children, optional `markdown` input, and
+external controllers. `DownstreamMarkdown` remains a deprecated alias. Added
+`DownstreamProvider` defaults, provider-first theme and element styles, grouped
+code block, table, image, and link options, and fence/tag component maps.
+Former flat props and renderer arrays retain compatibility with development
+warnings once per alias.
+
+Public controllers carry text and optional error handling. Their bound view
+owns parse and preview configuration, and a live option change rebuilds the
+accepted source under the new policy. Controllers can accumulate text before
+mount and while their rows are unmounted. The README documents the new API and
+migration, and example screens use the new component and grouped options.
+Benchmark views retain their previous preview and math policies explicitly;
+recorded benchmark results have not been changed.
+
+Validation: `pnpm test --maxWorkers=4` passed all 814 tests, and
+`pnpm test:native` passed all 467 tests. Root and example typechecks,
+`pnpm exec bob build`, lint, formatting, and `git diff --check` passed.
+Review found no remaining issues. Real-engine regressions cover buffering before
+mount, live policy changes with pending text, finished responses, remounts,
+allowed tags, literal tag styles, stale publications, and provider styles.
+
 ## Next
 
-Phase 2 remains unimplemented: `Downstream`, children input, provider defaults,
-grouped props, component maps, and view-owned options for external controllers.
-
 Phase 3 remains unimplemented: explicit plugin objects and math activation,
-the native highlighter package extraction, and the 0.2 migration documentation.
+the native highlighter package extraction, plugin migration guidance, and
+binary-size measurements. The phase 1 phone performance gate also remains open.

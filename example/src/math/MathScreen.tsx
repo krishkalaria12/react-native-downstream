@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
   createMarkdownStream,
-  DownstreamMarkdown,
+  Downstream,
   mathAvailable,
   type MarkdownImageEvent,
   type MarkdownMathErrorEvent,
@@ -116,7 +116,7 @@ function useHeldStream(state: StreamState): MarkdownStreamController | null {
       setStream(null);
       return undefined;
     }
-    const controller = createMarkdownStream({ math: true });
+    const controller = createMarkdownStream();
     controller.append(SOURCE + OPEN_TAIL);
     setStream(controller);
     return () => controller.dispose();
@@ -150,10 +150,11 @@ export function MathScreen() {
   const mathProp = math === 'default' ? undefined : math === 'on';
   const shared = {
     math: mathProp,
-    images: images === 'on',
-    allowedImagePrefixes: ALLOWED,
+    images:
+      images === 'on'
+        ? { allowedPrefixes: ALLOWED, onPress: onImagePress }
+        : false,
     onMathError,
-    onImagePress,
   };
 
   return (
@@ -187,9 +188,9 @@ export function MathScreen() {
         <SectionLabel>Document</SectionLabel>
         <View style={[t.s.card, styles.card]}>
           {stream ? (
-            <DownstreamMarkdown stream={stream} {...shared} />
+            <Downstream stream={stream} {...shared} />
           ) : (
-            <DownstreamMarkdown markdown={SOURCE} {...shared} />
+            <Downstream {...shared}>{SOURCE}</Downstream>
           )}
         </View>
 

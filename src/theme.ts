@@ -216,7 +216,7 @@ class Slots {
  * `null`, `false` and `undefined` are skipped, so `[preset, isUser && {...}]` is
  * the shape the API documents and needs no merge helper.
  */
-function entries<T>(value: Composable<T>): readonly T[] {
+export function entries<T>(value: Composable<T>): readonly T[] {
   if (value === undefined || value === null || value === false) return [];
   if (Array.isArray(value)) {
     return value.filter(

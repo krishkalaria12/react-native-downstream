@@ -62,36 +62,34 @@ Expo Go cannot load the native module.
 Pass a complete string, or update the string as your app receives text:
 
 ```tsx
-import { DownstreamMarkdown } from 'react-native-downstream';
+import { Downstream } from 'react-native-downstream';
 
 export function Message({ text }: { text: string }) {
   return (
-    <DownstreamMarkdown
-      markdown={text}
-      onError={(error) => console.warn(error.code, error.message)}
-    />
+    <Downstream onError={(error) => console.warn(error.code, error.message)}>
+      {text}
+    </Downstream>
   );
 }
 ```
 
-Links work with a confirmation before opening by default. Pass `onLinkPress` to handle navigation yourself.
+Links work with a confirmation before opening by default. Pass `links={{ onPress }}` to handle navigation yourself. The `markdown={text}` prop remains supported as an alternative to string children.
 
 ## Stream a response
 
-Pass the growing text as `markdown` and set `isAnimating` while the response is arriving. Downstream owns the incremental session and appends only the added text. With the AI SDK's `useChat`:
+Pass the growing text as children and set `isAnimating` while the response is arriving. Downstream owns the incremental session and appends only the added text. With the AI SDK's `useChat`:
 
 ```tsx
 import { useChat } from '@ai-sdk/react';
-import { DownstreamMarkdown } from 'react-native-downstream';
+import { Downstream } from 'react-native-downstream';
 
 export function Chat() {
   const { messages, status } = useChat();
   return messages.map((message) =>
     message.parts.map((part, index) =>
       part.type === 'text' ? (
-        <DownstreamMarkdown
+        <Downstream
           key={`${message.id}-${index}`}
-          markdown={part.text}
           isAnimating={
             status === 'streaming' &&
             message.role === 'assistant' &&
@@ -99,7 +97,9 @@ export function Chat() {
           }
           animated
           caret="block"
-        />
+        >
+          {part.text}
+        </Downstream>
       ) : null
     )
   );
@@ -113,18 +113,14 @@ Incomplete Markdown is previewed by default while streaming. Set `preview={false
 Create one controller per message when your transport emits chunks directly, or when a reply must continue while its list row is unmounted:
 
 ```tsx
-import {
-  createMarkdownStream,
-  DownstreamMarkdown,
-} from 'react-native-downstream';
+import { createMarkdownStream, Downstream } from 'react-native-downstream';
 
 const stream = createMarkdownStream({
-  preview: true,
   onError: (error) => console.warn(error.code, error.message),
 });
 
 // Render this view while chunks arrive.
-<DownstreamMarkdown stream={stream} animated caret="block" />;
+<Downstream stream={stream} animated caret="block" />;
 
 // In your response handler:
 stream.append('Hello ');
@@ -135,30 +131,30 @@ stream.finish();
 stream.dispose();
 ```
 
-Create the controller outside the component's render path, such as in the action that starts a reply. Each controller binds to one view. Pass either `markdown` or `stream` to a view.
+Create the controller outside the component's render path, such as in the action that starts a reply. Each controller binds to one view. A controller carries text; parse and preview options belong on the view or provider. The view creates the native session when it binds, and changing its parse options rebuilds the same source under the new policy. Text can continue accumulating while a list row is unmounted.
 
-| Method                | What it does                                                                                      |
-| --------------------- | ------------------------------------------------------------------------------------------------- |
-| `append(chunk)`       | Adds the next text chunk. Updates are batched by animation frame.                                 |
-| `finish()`            | Marks the response complete and renders the final Markdown.                                       |
-| `reset(source?)`      | Starts a new response, optionally with initial text. Use before appending again after `finish()`. |
-| `getSource()`         | Returns a promise with the exact source you supplied.                                             |
-| `setPreview(options)` | Changes how incomplete Markdown is displayed.                                                     |
-| `dispose()`           | Releases the controller when the message is no longer needed.                                     |
+| Method           | What it does                                                                                      |
+| ---------------- | ------------------------------------------------------------------------------------------------- |
+| `append(chunk)`  | Adds the next text chunk. Updates are batched by animation frame.                                 |
+| `finish()`       | Marks the response complete and renders the final Markdown.                                       |
+| `reset(source?)` | Starts a new response, optionally with initial text. Use before appending again after `finish()`. |
+| `getSource()`    | Returns a promise with the exact source you supplied.                                             |
+| `dispose()`      | Releases the controller when the message is no longer needed.                                     |
 
 ### Make incomplete Markdown readable
 
-A growing `markdown` string previews unfinished spans such as `**hello` by default. Controllers default to literal markers; use `preview: true` to enable provisional formatting. You can enable only the previews you want on either the view's `preview` prop or the controller's option:
+A streaming view previews unfinished spans such as `**hello` by default, whether its source is string children or a controller. Set `preview={false}` for literal markers, or enable selected features on the view:
 
 ```tsx
-const stream = createMarkdownStream({
-  preview: {
+<Downstream
+  stream={stream}
+  preview={{
     emphasis: true,
     inlineCode: true,
     links: true,
     math: true,
-  },
-});
+  }}
+/>
 ```
 
 The available preview keys are `emphasis`, `inlineCode`, `links`, `images`, `math`, `htmlTags`, and `tables`. Table preview hides an unfinished table until it is complete. An incomplete link can display its label, but becomes tappable only when its destination is complete.
@@ -170,7 +166,7 @@ Previews never change your source. `finish()` removes provisional formatting and
 `animated` fades in new words. Use an options object for character-by-character reveals, timing, or a slide animation:
 
 ```tsx
-<DownstreamMarkdown
+<Downstream
   stream={stream}
   animated={{
     animation: 'slideUp',
@@ -185,7 +181,7 @@ Previews never change your source. `finish()` removes provisional formatting and
 
 The defaults are `fadeIn`, word separation, a 150 ms duration, a 40 ms stagger, and `ease` easing. `maxBacklogMs` limits how far a burst of text can delay the reveal. `blurIn` falls back to `fadeIn`.
 
-A stream tracks its own animation state. For a controlled `markdown` string, pass `isAnimating={isStreaming}`. `onAnimationStart` and `onAnimationEnd` report changes to that state. The end callback fires when streaming stops, before any remaining fades finish.
+A stream tracks its own animation state. For string children or a `markdown` prop, pass `isAnimating={isStreaming}`. `onAnimationStart` and `onAnimationEnd` report changes to that state. The end callback fires when streaming stops, before any remaining fades finish.
 
 Animation changes drawing without reflowing the text. Reduce Motion disables the reveal, and the caret never appears in copied or selected text.
 
@@ -194,16 +190,15 @@ Animation changes drawing without reflowing the text. Reduce Motion disables the
 Fenced code gets syntax highlighting and a header with copy, download, and wrap controls. Long blocks scroll within their card and can be expanded.
 
 ```tsx
-<DownstreamMarkdown
-  markdown={text}
+<Downstream
   syntaxHighlighting
-  lineNumbers
-  codeBlockWrap={false}
-  codeBlockMaxHeight={400}
-/>
+  codeBlock={{ lineNumbers: true, wrap: false, maxHeight: 400 }}
+>
+  {text}
+</Downstream>
 ```
 
-Highlighting and line numbers are on by default. Wrapping is off, and the default height cap is 400 points. Set `codeBlockMaxHeight={0}` for full-height code. Line numbers never become part of copied code.
+Highlighting and line numbers are on by default. Wrapping is off, and the default height cap is 400 points. Set `codeBlock={{ maxHeight: 0 }}` for full-height code. Line numbers never become part of copied code.
 
 Name a file and choose the first line number in the fence metadata:
 
@@ -314,14 +309,14 @@ Code is colored natively in 84 languages, including languages embedded in others
 
 ## Tables, copy, and downloads
 
-Tables scroll when they exceed their available width or height. Their toolbar lets readers copy, download, expand, or open a full-screen view. The default height cap is 300 points; `tableMaxHeight={0}` removes it.
+Tables scroll when they exceed their available width or height. Their toolbar lets readers copy, download, expand, or open a full-screen view. The default height cap is 300 points; `table={{ maxHeight: 0 }}` removes it.
 
 Table copy offers Markdown, CSV, and TSV. It also includes HTML clipboard data so compatible spreadsheet apps can preserve the grid. Table downloads offer CSV and Markdown. Code copies as plain text and downloads with a language-appropriate extension. Downloads use the platform's save dialog.
 
 Configure controls individually and listen for completed actions:
 
 ```tsx
-<DownstreamMarkdown
+<Downstream
   markdown={text}
   controls={{
     code: {
@@ -342,16 +337,35 @@ Configure controls individually and listen for completed actions:
 
 Omitted controls stay enabled. Use `controls={false}` to hide them all, or `controls={{ code: false }}` to hide only code controls. Buttons become available when their own block settles, even if the rest of the response is still streaming.
 
-`onTableFullscreen` reports a full-screen request. Use `renderTableFullscreen` to replace the default modal with your own React content. Customize button labels and accessibility announcements with `translations`, and replace glyphs with `icons` using platform icon names or bundled image sources.
+`table.onFullscreen` reports a full-screen request. Use `table.renderFullscreen` to replace the default modal with your own React content. Customize button labels and accessibility announcements with `translations`, and replace glyphs with `icons` using platform icon names or bundled image sources.
+
+## App-wide defaults
+
+Set shared options once with `DownstreamProvider`:
+
+```tsx
+import { DownstreamProvider, presets } from 'react-native-downstream';
+
+<DownstreamProvider
+  theme={presets.github.theme}
+  markdownStyle={presets.github.markdownStyle}
+  codeBlock={{ wrap: true }}
+  links={{ defaultOrigin: 'https://docs.example.com' }}
+>
+  <App />
+</DownstreamProvider>;
+```
+
+Props on an individual view override provider defaults. Nested providers override outer providers. Grouped options inherit unspecified subfields, and component maps inherit entries that the view does not replace. `theme` and `markdownStyle` merge provider-first, then view styles, in the same left-to-right order as their array forms.
 
 ## Match your app's design
 
 Start with `presets.github` or `presets.streamdown`, then override what you need:
 
 ```tsx
-import { DownstreamMarkdown, presets } from 'react-native-downstream';
+import { Downstream, presets } from 'react-native-downstream';
 
-<DownstreamMarkdown
+<Downstream
   markdown={text}
   theme={[
     presets.github.theme,
@@ -380,13 +394,15 @@ For a VS Code or Shiki JSON theme, convert its token colors with `syntaxColorsFr
 
 ### Images
 
-An image-only paragraph renders as a native image with a loading placeholder and alt text on failure. Images are enabled by default and load over HTTPS. Restrict their sources with `allowedImagePrefixes`, or use `images={false}` to show alt text without fetching images.
+An image-only paragraph renders as a native image with a loading placeholder and alt text on failure. Images are enabled by default and load over HTTPS. Restrict their sources with `images.allowedPrefixes`, or use `images={false}` to show alt text without fetching images.
 
 ```tsx
-<DownstreamMarkdown
+<Downstream
   markdown={text}
-  allowedImagePrefixes={['https://cdn.example.com/']}
-  onImagePress={({ url }) => console.log('Image pressed', url)}
+  images={{
+    allowedPrefixes: ['https://cdn.example.com/'],
+    onPress: ({ url }) => console.log('Image pressed', url),
+  }}
 />
 ```
 
@@ -405,7 +421,7 @@ npx pod-install
 Math is enabled by default when the native math engine is installed. Use `math={false}` to keep formulas as source, or configure the delimiters:
 
 ```tsx
-<DownstreamMarkdown
+<Downstream
   markdown={text}
   math={{ singleDollarTextMath: true, brackets: true }}
   onMathError={({ source, message }) => console.warn(source, message)}
@@ -416,34 +432,31 @@ Supported forms include `$$...$$`, display blocks delimited by `$$`, fenced `mat
 
 Unsupported formulas, or formulas requested without an installed engine, display their source and report `onMathError`. During streaming, a formula keeps its last valid layout while more input arrives.
 
-For streams, set parsing options such as `math`, `syntax`, `links`, and `inlineHtml` when creating the controller. The view's `math` prop controls typesetting of formulas the stream has already parsed.
+For both strings and controllers, set parsing options such as `math`, `syntax`, `links`, and `inlineHtml` on the view or provider. Changing them on a bound stream rebuilds its accepted source without losing text or its finished state.
 
 ## Custom renderers and tags
 
 ### Render a fence with your own component
 
-Use `plugins.renderers` to turn a fenced language into an app component. A chart, diagram, or interactive card can sit inside the same Markdown document.
+Use `components.fences` to turn a fenced language into an app component. A chart, diagram, or interactive card can sit inside the same Markdown document.
 
 ```tsx
 import { Text } from 'react-native';
-import {
-  DownstreamMarkdown,
-  type CustomRendererProps,
-} from 'react-native-downstream';
+import { Downstream, type CustomRendererProps } from 'react-native-downstream';
 
 function AnswerCard({ code, isIncomplete }: CustomRendererProps) {
   return <Text>{isIncomplete ? 'Receiving answer...' : code}</Text>;
 }
 
-<DownstreamMarkdown
+<Downstream
   markdown={text}
-  plugins={{
-    renderers: [{ language: 'answer-card', component: AnswerCard }],
+  components={{
+    fences: { 'answer-card': AnswerCard },
   }}
 />;
 ```
 
-A fence beginning with ` ```answer-card ` now renders `AnswerCard`. Each renderer receives `code`, `language`, `meta`, and `isIncomplete`. Language matching is case-insensitive, and `language` can be an array of aliases.
+A fence beginning with ` ```answer-card ` now renders `AnswerCard`. Each renderer receives `code`, `language`, `meta`, and `isIncomplete`. Language matching is case-insensitive. To register aliases, map each language key to the same component.
 
 Use `isIncomplete` to show a placeholder until a structured payload is complete. An unloaded or failed renderer falls back to the native code card. A settled renderer failure reports `renderer_failed` through `onError`. You supply the rendering logic; registering a language does not execute its contents.
 
@@ -452,7 +465,7 @@ Use `isIncomplete` to show a placeholder until a structured payload is complete.
 Allow your app's tags and choose the attributes they can carry:
 
 ```tsx
-<DownstreamMarkdown
+<Downstream
   markdown={'Hello <user id="42">Sam</user>.'}
   allowedTags={{ user: ['id'] }}
   markdownStyle={{ tags: { user: { color: '#4f46e5', fontWeight: 700 } } }}
@@ -460,43 +473,68 @@ Allow your app's tags and choose the attributes they can carry:
 />
 ```
 
-Inline tags retain their text and use `markdownStyle.tags`. For a block tag placed on its own lines with blank lines around it, register `plugins.tags` as an array of `{ name, component }` entries. Its component receives `name`, allowed `attributes`, inner `markdown`, and `isIncomplete`.
+Inline tags retain their text and use `markdownStyle.tags`. For a block tag placed on its own lines with blank lines around it, register `components={{ tags: { user: UserCard } }}`. Its component receives `name`, allowed `attributes`, inner `markdown`, and `isIncomplete`.
 
-Without a custom block renderer, Downstream draws the tag's children natively. `plugins.fallbackComponent` provides a shared replacement for unmatched fences or allowed block tags. `literalTagContent` keeps tag contents as unstyled text.
+Without a custom block renderer, Downstream draws the tag's children natively. `components.fallback` provides a shared replacement for unmatched fences or allowed block tags. `literalTagContent` keeps tag contents as unstyled text.
 
 Built-in `<details>` and `<summary>` provide collapsible sections. `controls.details.expand` configures their toggle.
 
 ## Links, interaction, and text options
 
-Link presses show a confirmation by default. `linkSafety` can supply an asynchronous `onLinkCheck` or a custom `renderModal`. `linkSafety={false}` opens links directly. With `onLinkPress`, your app handles navigation and the built-in confirmation does not run:
+Link presses show a confirmation by default. `links.safety` can supply an asynchronous `onLinkCheck` or a custom `renderModal`. `links={{ safety: false }}` opens links directly. With `links.onPress`, your app handles navigation and the built-in confirmation does not run:
 
 ```tsx
 import { Linking } from 'react-native';
 
-<DownstreamMarkdown
+<Downstream
   markdown={text}
-  links={{ defaultOrigin: 'https://docs.example.com' }}
-  onLinkPress={({ url }) => {
-    Linking.openURL(url).catch(console.warn);
+  links={{
+    defaultOrigin: 'https://docs.example.com',
+    onPress: ({ url }) => {
+      Linking.openURL(url).catch(console.warn);
+    },
   }}
 />;
 ```
 
-`links.defaultOrigin` enables and resolves relative links. `links.relative` enables them for your own router without a base URL. Events include the resolved `url`, original `href`, and source range. Style links by URL prefix with `markdownStyle.linkVariants`, and handle holds with `onLinkLongPress`. iOS link previews are off by default; `linkPreview` enables them.
+`links.defaultOrigin` enables and resolves relative links. `links.relative` enables them for your own router without a base URL. Events include the resolved `url`, original `href`, and source range. Style links by URL prefix with `markdownStyle.linkVariants`, and handle holds with `links.onLongPress`. iOS link previews are off by default; `links={{ preview: true }}` enables them.
 
-| Option                     | Behavior and default                                                                                                                   |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `selectable`               | Native selection for settled text. On by default; unfinished text is not selectable. Set `false` for an app-owned message menu.        |
-| `onTaskPress`              | Reports a task checkbox press. Update your Markdown source to change its checked state.                                                |
-| `dir`                      | `auto`, `ltr`, or `rtl`. Defaults to automatic direction per block.                                                                    |
-| `cjk`                      | CJK-friendly emphasis, strikethrough, and autolinks. On by default.                                                                    |
-| `inlineHtml`               | Supports `<br>`, `<sub>`, and `<sup>`. On by default.                                                                                  |
-| `syntax`                   | Optional superscript, subscript, highlight, underline, and spoiler syntax. All off by default.                                         |
-| `disableAutolinkProtocols` | Disables automatic links for selected `http`, `https`, or `mailto` protocols.                                                          |
-| `normalizeHtmlIndentation` | Normalizes indentation for documents that start with an HTML block. Off by default.                                                    |
-| `androidParagraphLayout`   | Defaults to `canonical`. `incremental` reuses completed lines in eligible streaming ASCII paragraphs; text can reflow when it settles. |
+| Option                           | Behavior and default                                                                                                                   |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `selectable`                     | Native selection for settled text. On by default; unfinished text is not selectable. Set `false` for an app-owned message menu.        |
+| `onTaskPress`                    | Reports a task checkbox press. Update your Markdown source to change its checked state.                                                |
+| `dir`                            | `auto`, `ltr`, or `rtl`. Defaults to automatic direction per block.                                                                    |
+| `cjk`                            | CJK-friendly emphasis, strikethrough, and autolinks. On by default.                                                                    |
+| `inlineHtml`                     | Supports `<br>`, `<sub>`, and `<sup>`. On by default.                                                                                  |
+| `syntax`                         | Optional superscript, subscript, highlight, underline, and spoiler syntax. All off by default.                                         |
+| `links.disableAutolinkProtocols` | Disables automatic links for selected `http`, `https`, or `mailto` protocols.                                                          |
+| `normalizeHtmlIndentation`       | Normalizes indentation for documents that start with an HTML block. Off by default.                                                    |
+| `androidParagraphLayout`         | Defaults to `canonical`. `incremental` reuses completed lines in eligible streaming ASCII paragraphs; text can reflow when it settles. |
 
-For the complete TypeScript definitions, see [`src/types.ts`](src/types.ts).
+For the complete TypeScript definitions, see [`src/downstreamOptions.ts`](src/downstreamOptions.ts) and [`src/types.ts`](src/types.ts).
+
+## API migration
+
+The phase 2 API below is intended for 0.2. Flat view props and the former component name remain compatible aliases during 0.2.x, with one development warning per alias. `markdown` remains supported without a warning. The controller now carries only text and an optional `onError` handler.
+
+| Previous API                                                                                                               | Current API                                                                          |
+| -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `DownstreamMarkdown`                                                                                                       | `Downstream`                                                                         |
+| `markdown={text}`                                                                                                          | `{text}` as children, or keep `markdown={text}`                                      |
+| `codeBlockWrap`, `lineNumbers`, `codeBlockMaxHeight`                                                                       | `codeBlock={{ wrap, lineNumbers, maxHeight }}`                                       |
+| `tableMaxHeight`, `onTableFullscreen`, `renderTableFullscreen`                                                             | `table={{ maxHeight, onFullscreen, renderFullscreen }}`                              |
+| `allowedImagePrefixes`, `onImagePress`                                                                                     | `images={{ allowedPrefixes, onPress }}`; boolean `images` still works                |
+| `linkSafety`, `onLinkPress`, `onLinkLongPress`, `linkPreview`, `disableAutolinkProtocols`                                  | `links={{ safety, onPress, onLongPress, preview, disableAutolinkProtocols }}`        |
+| `plugins.renderers: [{ language, component }]`                                                                             | `components.fences: { [language]: component }`                                       |
+| `plugins.tags: [{ name, component }]`                                                                                      | `components.tags: { [name]: component }`                                             |
+| `plugins.fallbackComponent`                                                                                                | `components.fallback`                                                                |
+| `createMarkdownStream({ math, syntax, links, inlineHtml, cjk, allowedTags, literalTagContent, disableAutolinkProtocols })` | The same parse options on the view or provider; autolink protocols are under `links` |
+| `createMarkdownStream({ preview })`, `stream.setPreview(preview)`                                                          | The view or provider's `preview` prop; update the prop to change policy              |
+| Repeated options on every view                                                                                             | Shared defaults on `DownstreamProvider`                                              |
+
+Other view props keep their names: `style`, `selectable`, `syntaxHighlighting`, `androidParagraphLayout`, `controls`, `translations`, `theme`, `markdownStyle`, `math`, `onMathError`, `inlineHtml`, `syntax`, `cjk`, `links.relative`, `links.defaultOrigin`, `allowedTags`, `literalTagContent`, `normalizeHtmlIndentation`, `dir`, `onTagPress`, `onTaskPress`, `icons`, `animated`, `isAnimating`, `preview`, `caret`, `onAnimationStart`, `onAnimationEnd`, and `onError`. The controller's `append`, `reset`, `finish`, `getSource`, and `dispose` methods remain available.
+
+Phase 3 is still pending. Code highlighting remains built into the core and controlled by `syntaxHighlighting`; math still activates when its native engine is installed. Explicit feature plugins, the separate code-highlighter package, and the related binary-size measurements are not implemented yet.
 
 ## Fork and run locally
 

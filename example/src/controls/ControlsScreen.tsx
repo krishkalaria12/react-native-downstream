@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
   createMarkdownStream,
-  DownstreamMarkdown,
+  Downstream,
   type MarkdownControlEvent,
   type MarkdownControls,
   type MarkdownErrorEvent,
@@ -390,21 +390,17 @@ export function ControlsScreen() {
         <SectionLabel>Document</SectionLabel>
         <View style={[t.s.card, styles.card]}>
           {stream ? (
-            <DownstreamMarkdown
+            <Downstream
               stream={stream}
               controls={controls()}
-              codeBlockWrap={wrap}
-              lineNumbers={numbers}
-              codeBlockMaxHeight={maxHeight}
+              codeBlock={{ wrap, lineNumbers: numbers, maxHeight }}
               onError={onError}
             />
           ) : (
-            <DownstreamMarkdown
+            <Downstream
               markdown={SOURCE}
               controls={controls()}
-              codeBlockWrap={wrap}
-              lineNumbers={numbers}
-              codeBlockMaxHeight={maxHeight}
+              codeBlock={{ wrap, lineNumbers: numbers, maxHeight }}
               onError={onError}
             />
           )}

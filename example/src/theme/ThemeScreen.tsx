@@ -8,7 +8,7 @@ import {
   useColorScheme,
 } from 'react-native';
 import {
-  DownstreamMarkdown,
+  Downstream,
   presets,
   syntaxColorsFromTheme,
   type MarkdownPreset,
@@ -270,7 +270,7 @@ export function ThemeScreen() {
 
         <SectionLabel>Rendered</SectionLabel>
         <View style={[t.s.card, styles.card]}>
-          <DownstreamMarkdown markdown={SOURCE} {...capped} />
+          <Downstream {...capped}>{SOURCE}</Downstream>
         </View>
 
         <SectionLabel>From a VS Code theme</SectionLabel>
@@ -302,7 +302,7 @@ export function ThemeScreen() {
           </Group>
         </View>
         <View style={[t.s.card, styles.card]}>
-          <DownstreamMarkdown
+          <Downstream
             markdown={CODE_SAMPLE}
             theme={{ syntax: converted.syntax }}
             markdownStyle={{ codeBlock: converted.codeBlock }}

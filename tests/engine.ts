@@ -250,6 +250,7 @@ export type SessionOp =
   | { op: 'append'; chunk: string }
   | { op: 'replace'; source: string }
   | { op: 'preview'; features: number }
+  | { op: 'tags'; tags: readonly string[] }
   | { op: 'parse'; finished: boolean };
 
 function frame(op: string, payload: Buffer): Buffer {
@@ -272,6 +273,8 @@ function encodeOp(step: RevealStep): Buffer {
       mask.writeUInt32LE(step.features >>> 0);
       return frame('p', mask);
     }
+    case 'tags':
+      return frame('t', Buffer.from(step.tags.join(','), 'utf8'));
     case 'parse':
       return frame(step.finished ? 'f' : 'u', Buffer.alloc(0));
   }

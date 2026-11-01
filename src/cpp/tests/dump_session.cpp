@@ -81,6 +81,18 @@ int main(int argc, char **argv) {
       case 'r':
         parser.replace(payload);
         break;
+      case 't': {
+        std::vector<std::string> tags;
+        size_t start = 0;
+        while (start < payload.size()) {
+          const size_t comma = payload.find(',', start);
+          tags.emplace_back(payload.substr(start, comma == std::string_view::npos ? comma : comma - start));
+          if (comma == std::string_view::npos) break;
+          start = comma + 1;
+        }
+        parser.setParse(ParseOptions(parser.options().flags, tagPolicyFromStrings(tags)));
+        break;
+      }
       case 'p': {
         if (payload.size() != 4) {
           std::fputs("preview frame needs a u32 mask\n", stderr);

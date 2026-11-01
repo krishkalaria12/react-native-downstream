@@ -360,6 +360,13 @@ export const realEngineModule = {
       if (!session.finished) publish(session, sessionId);
     },
 
+    setParseTags(sessionId: string, tags: readonly string[]) {
+      const session = sessions.get(sessionId);
+      if (!session) return;
+      session.steps.push({ op: 'tags', tags });
+      if (!session.finished) publish(session, sessionId);
+    },
+
     onSnapshotReady(callback: SnapshotListener) {
       snapshotListeners.add(callback);
       return { remove: () => snapshotListeners.delete(callback) };

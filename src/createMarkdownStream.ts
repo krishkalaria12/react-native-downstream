@@ -17,11 +17,25 @@ import type {
   MarkdownErrorCode,
   MarkdownErrorEvent,
   MarkdownOperationError,
-  MarkdownAllowedTags,
   MarkdownPreviewOptions,
   MarkdownStreamController,
   MarkdownStreamOptions,
+  MarkdownViewProps,
 } from './types';
+
+/** Internal fixture/benchmark configuration. Public controllers only retain text. */
+export type MarkdownSessionOptions = Pick<
+  MarkdownViewProps,
+  | 'math'
+  | 'inlineHtml'
+  | 'syntax'
+  | 'cjk'
+  | 'links'
+  | 'disableAutolinkProtocols'
+  | 'literalTagContent'
+  | 'allowedTags'
+  | 'preview'
+>;
 
 const MAX_CHUNK_BYTES = 64 * 1024;
 const MAX_QUEUED_BYTES = 256 * 1024;
@@ -132,18 +146,10 @@ type InFlight = { bytes: number; sequence: number };
 class StreamState implements MarkdownStreamController {
   readonly sessionId: string;
   readonly mode: ParseMode;
-  /**
-   * The parse options — math, `inlineHtml` and `syntax` — kept for the life of
-   * the session.
-   *
-   * A stream's parse options are part of its sources' identity, so `reset()`
-   * keeps them rather than asking again: a stream whose delimiters changed
-   * mid-life would parse the same string two ways, and the reader would see a
-   * formula change shape without the document changing. The same is true of a
-   * `<br>` that starts being a break mid-life.
-   */
-  private readonly parseFlags: number;
+  private parseFlags: number | undefined;
+  private nativeCreated = false;
   private onError?: (error: MarkdownErrorEvent) => void;
+  private viewOnError?: (error: MarkdownErrorEvent) => void;
   private source = '';
   private sourcePages: string[] = [];
   private sourcePieces: string[] = [];
@@ -176,7 +182,12 @@ class StreamState implements MarkdownStreamController {
     this.sessionId = `downstream-${Date.now()}-${++nextSession}`;
     this.mode = mode;
     this.onError = options.onError;
-    this.parseFlags = resolveParseFlags(
+  }
+
+  /** Called by the bound view; equivalent policies keep the existing session. */
+  configure(options: MarkdownSessionOptions): void {
+    this.assertActive();
+    const flags = resolveParseFlags(
       {
         math: options.math,
         inlineHtml: options.inlineHtml,
@@ -188,17 +199,54 @@ class StreamState implements MarkdownStreamController {
       },
       mathAvailable()
     ).flags;
-    NativeDownstreamSession.create(this.sessionId, mode, this.parseFlags);
-    // Set after create, so a session always exists before it is configured.
-    if (options.preview !== undefined) {
-      this.setPreview(options.preview);
+    const tags = resolveAllowedTags(options.allowedTags).tags;
+    const features = previewFeatures(options.preview ?? false);
+    if (
+      this.nativeCreated &&
+      this.parseFlags === flags &&
+      tags.length === this.parseTags.length &&
+      tags.every((tag, i) => tag === this.parseTags[i])
+    ) {
+      this.setPreview(options.preview ?? false);
+      return;
     }
-    this.parseTags = resolveAllowedTags(options.allowedTags).tags;
-    if (this.parseTags.length > 0) {
-      NativeDownstreamSession.setParseTags(this.sessionId, this.parseTags);
+    const source = this.readSource();
+    const rebuilding = this.nativeCreated;
+    if (rebuilding) {
+      NativeDownstreamSession.dispose(this.sessionId);
+      this.generation++;
     }
+    if (this.frame !== undefined) cancelAnimationFrame(this.frame);
+    this.frame = undefined;
+    cancelSnapshotPublication(this.prepareSnapshotPublication);
+    this.pending = [];
+    this.inFlight = [];
+    this.queuedBytes = 0;
+    this.sequence = 0;
+    this.readySequence = 0;
+    this.parseFlags = flags;
+    this.parseTags = tags;
+    this.previewFeatures = features;
+    NativeDownstreamSession.create(this.sessionId, this.mode, flags);
+    this.nativeCreated = true;
     controllers.set(this.sessionId, this);
     listenForNativeEvents();
+    if (tags.length) NativeDownstreamSession.setParseTags(this.sessionId, tags);
+    if (features) NativeDownstreamSession.setPreview(this.sessionId, features);
+    if (this.tracing) NativeDownstreamSession.setTracing(this.sessionId, true);
+    // reset accepts a source larger than a transport chunk and starts a new
+    // generation, so old publications cannot target the rebuilt document.
+    if (source || this.generation > 0) {
+      if (!rebuilding) this.generation++;
+      NativeDownstreamSession.reset(this.sessionId, source, this.generation);
+    }
+    if (this.finished)
+      NativeDownstreamSession.finish(
+        this.sessionId,
+        this.generation,
+        this.sequence
+      );
+    if (rebuilding || source || this.generation > 0) this.publish();
   }
 
   append(chunk: string): void {
@@ -252,8 +300,11 @@ class StreamState implements MarkdownStreamController {
       this.sourcePieces = [];
     }
     this.sourceBytes += bytes;
-    this.queuedBytes += bytes;
     this.sequence++;
+    // Before the first view binds, text has no parsing policy yet. Keep only
+    // the canonical source; configure() seeds native with it on first bind.
+    if (!this.nativeCreated) return;
+    this.queuedBytes += bytes;
     const last = this.pending[this.pending.length - 1];
     if (last && last.bytes + bytes <= MAX_CHUNK_BYTES) {
       last.pieces.push(chunk);
@@ -361,7 +412,8 @@ class StreamState implements MarkdownStreamController {
       throw operationError(bytes.code, bytes.message);
     }
     const generation = this.generation + 1;
-    NativeDownstreamSession.reset(this.sessionId, source, generation);
+    if (this.nativeCreated)
+      NativeDownstreamSession.reset(this.sessionId, source, generation);
     if (this.frame !== undefined) cancelAnimationFrame(this.frame);
     this.frame = undefined;
     this.source = source;
@@ -391,11 +443,12 @@ class StreamState implements MarkdownStreamController {
         'Native append failed; finish was not sent. Retry finish or reset the stream.'
       );
     }
-    NativeDownstreamSession.finish(
-      this.sessionId,
-      this.generation,
-      this.sequence
-    );
+    if (this.nativeCreated)
+      NativeDownstreamSession.finish(
+        this.sessionId,
+        this.generation,
+        this.sequence
+      );
     this.finished = true;
     // The last snapshot is still scheduled, and every fade it started runs to its
     // end; this is the transition an app's `onAnimationEnd` reports. It fires
@@ -418,15 +471,20 @@ class StreamState implements MarkdownStreamController {
     this.sourcePages = [];
     this.sourcePieces = [];
     this.animationListeners.clear();
+    this.viewOnError = undefined;
     this.controlledSource = { source: '', bytes: 0 };
     this.controlledInput = undefined;
     controllers.delete(this.sessionId);
-    NativeDownstreamSession.dispose(this.sessionId);
+    if (this.nativeCreated) NativeDownstreamSession.dispose(this.sessionId);
     stopListeningIfUnused();
   }
 
   async getSource(): Promise<string> {
     this.assertActive();
+    return this.readSource();
+  }
+
+  private readSource(): string {
     if (this.sourcePages.length || this.sourcePieces.length) {
       this.source += this.sourcePages.join('') + this.sourcePieces.join('');
       this.sourcePages = [];
@@ -449,28 +507,9 @@ class StreamState implements MarkdownStreamController {
 
   setTracing(enabled: boolean): void {
     this.assertActive();
-    NativeDownstreamSession.setTracing(this.sessionId, enabled);
+    if (this.nativeCreated)
+      NativeDownstreamSession.setTracing(this.sessionId, enabled);
     this.tracing = enabled;
-  }
-
-  /**
-   * Replaces the HTML tags this stream's source may use.
-   *
-   * Read once, at creation, and kept by `reset()`: a tag policy decides which
-   * runs exist, so it is part of the source's identity in the same way the parse
-   * flags are, and a stream cannot change it under a document that is streaming.
-   */
-  setAllowedTags(allowedTags: MarkdownAllowedTags | undefined): void {
-    this.assertActive();
-    const tags = resolveAllowedTags(allowedTags).tags;
-    if (
-      tags.length === this.parseTags.length &&
-      tags.every((entry, index) => entry === this.parseTags[index])
-    ) {
-      return;
-    }
-    this.parseTags = tags;
-    NativeDownstreamSession.setParseTags(this.sessionId, tags);
   }
 
   setPreview(options: boolean | MarkdownPreviewOptions): void {
@@ -478,7 +517,8 @@ class StreamState implements MarkdownStreamController {
     const features = previewFeatures(options);
     if (features === this.previewFeatures) return;
     this.previewFeatures = features;
-    NativeDownstreamSession.setPreview(this.sessionId, features);
+    if (this.nativeCreated)
+      NativeDownstreamSession.setPreview(this.sessionId, features);
   }
 
   private trace(event: string, sequence: number): void {
@@ -512,7 +552,7 @@ class StreamState implements MarkdownStreamController {
     this.animationListeners.forEach((listener) => listener(next));
   }
 
-  bind(): () => void {
+  bind(onError?: (error: MarkdownErrorEvent) => void): () => void {
     this.assertActive();
     if (this.bound)
       throw operationError(
@@ -520,8 +560,10 @@ class StreamState implements MarkdownStreamController {
         'A Markdown stream can bind only one view.'
       );
     this.bound = true;
+    this.viewOnError = onError;
     return () => {
       this.bound = false;
+      this.viewOnError = undefined;
     };
   }
 
@@ -558,7 +600,7 @@ class StreamState implements MarkdownStreamController {
     )
       return;
     const code = isErrorCode(event.code) ? event.code : 'render_failed';
-    this.onError?.({ ...event, code });
+    (this.viewOnError ?? this.onError)?.({ ...event, code });
   }
 
   private publish(): void {
@@ -595,7 +637,7 @@ class StreamState implements MarkdownStreamController {
     message: string,
     sequence: number
   ): void {
-    this.onError?.({
+    (this.viewOnError ?? this.onError)?.({
       code,
       message,
       generation: this.generation,
@@ -658,15 +700,23 @@ function stopListeningIfUnused(): void {
 export function createMarkdownStream(
   options: MarkdownStreamOptions = {}
 ): MarkdownStreamController {
-  return createMarkdownStreamWithMode(options, 'incremental');
+  const unsupported = Object.keys(options).find((key) => key !== 'onError');
+  if (unsupported)
+    throw operationError(
+      'invalid_input',
+      `${unsupported} belongs on Downstream or DownstreamProvider, not createMarkdownStream.`
+    );
+  return new StreamState(options, 'incremental');
 }
 
 /** Internal switch for comparing both native parsers in one build. */
 export function createMarkdownStreamWithMode(
-  options: MarkdownStreamOptions,
+  options: MarkdownSessionOptions & MarkdownStreamOptions,
   mode: ParseMode
-): MarkdownStreamController {
-  return new StreamState(options, mode);
+): StreamState {
+  const state = new StreamState(options, mode);
+  state.configure(options);
+  return state;
 }
 
 /**

@@ -103,8 +103,8 @@ public:
   /// Read once, like the mode, because parse options are part of a source's
   /// identity: a session whose delimiters changed under it would parse the same
   /// bytes two ways, and the reader would see a formula change shape without the
-  /// document changing. JavaScript takes the option at `createMarkdownStream` and
-  /// keeps it across `reset()` for the same reason.
+  /// document changing. JavaScript binds the view's options to a native session,
+  /// keeps them across reset(), and rebuilds the session when the policy changes.
   const ParseOptions &options() const { return parse_; }
   void setParse(ParseOptions parse) {
     if (parse_ == parse) return;

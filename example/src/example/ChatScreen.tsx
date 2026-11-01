@@ -10,10 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import {
-  DownstreamMarkdown,
-  type MarkdownPlugins,
-} from 'react-native-downstream';
+import { Downstream, type DownstreamComponents } from 'react-native-downstream';
 
 import { ChartRenderer } from '../renderers/chart';
 import { CHAT_MODEL, CHAT_REASONING_EFFORT, chatSetupHint } from './chat';
@@ -70,8 +67,8 @@ function Prompt({ text }: { text: string }) {
  * spec is JSON the model produced, and the component is a bar chart drawn from
  * it. Everything else in an answer keeps the code card, which is the point.
  */
-const PLUGINS: MarkdownPlugins = {
-  renderers: [{ language: ['chart', 'chartjs'], component: ChartRenderer }],
+const COMPONENTS: DownstreamComponents = {
+  fences: { chart: ChartRenderer, chartjs: ChartRenderer },
 };
 
 function Answer({ message }: { message: ChatMessage }) {
@@ -93,9 +90,9 @@ function Answer({ message }: { message: ChatMessage }) {
       </View>
       <View style={styles.answerBody}>
         {message.stream ? (
-          <DownstreamMarkdown
+          <Downstream
             stream={message.stream}
-            plugins={PLUGINS}
+            components={COMPONENTS}
             animated
             caret="block"
             onError={({ code, message: text }) => console.warn(code, text)}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
   createMarkdownStream,
-  DownstreamMarkdown,
+  Downstream,
   type MarkdownAnimateOptions,
   type MarkdownErrorEvent,
   type MarkdownStreamController,
@@ -331,7 +331,7 @@ export function AnimationScreen() {
         <SectionLabel>Document</SectionLabel>
         <View style={[t.s.card, styles.card]}>
           {stream ? (
-            <DownstreamMarkdown
+            <Downstream
               stream={stream}
               animated={animated}
               caret={caret === 'none' ? undefined : caret}
@@ -340,7 +340,7 @@ export function AnimationScreen() {
               onError={onError}
             />
           ) : (
-            <DownstreamMarkdown
+            <Downstream
               markdown={source}
               animated={animated}
               caret={caret === 'none' ? undefined : caret}

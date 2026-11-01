@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import {
   createMarkdownStream,
-  DownstreamMarkdown,
+  Downstream,
   type MarkdownErrorEvent,
-  type MarkdownPlugins,
+  type DownstreamComponents,
   type MarkdownStreamController,
 } from 'react-native-downstream';
 
@@ -130,17 +130,18 @@ export function RenderersScreen() {
    * nothing: the language list and the component identities are what the view
    * compares, exactly as it does for `controls` and `theme`.
    */
-  const plugins = useMemo<MarkdownPlugins>(
+  const components = useMemo<DownstreamComponents>(
     () => ({
-      renderers: [
-        { language: ['chart', 'lazychart'], component: ChartRenderer },
-        { language: 'lazy', component: LazyChart },
-        { language: 'broken', component: BrokenRenderer },
+      fences: {
+        chart: ChartRenderer,
+        lazychart: ChartRenderer,
+        lazy: LazyChart,
+        broken: BrokenRenderer,
         // Phase 7's example: a `mermaid` fence becomes a diagram, drawn with
         // mermaid.js in a WebView that only shows the SVG it is given. The core
         // ships no diagram code; this screen is where it lives.
-        { language: 'mermaid', component: MermaidRenderer },
-      ],
+        mermaid: MermaidRenderer,
+      },
     }),
     []
   );
@@ -175,21 +176,21 @@ export function RenderersScreen() {
         <SectionLabel>Document</SectionLabel>
         <View style={[t.s.card, styles.card]}>
           {mode === 'stream' && streamed ? (
-            <DownstreamMarkdown
+            <Downstream
               stream={streamed}
-              plugins={plugins}
+              components={components}
               onError={onError}
             />
           ) : mode === 'held' && held ? (
-            <DownstreamMarkdown
+            <Downstream
               stream={held}
-              plugins={plugins}
+              components={components}
               onError={onError}
             />
           ) : (
-            <DownstreamMarkdown
+            <Downstream
               markdown={mode === 'held' ? heldSource : SOURCE}
-              plugins={plugins}
+              components={components}
               onError={onError}
             />
           )}

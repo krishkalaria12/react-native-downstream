@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { unstable_batchedUpdates } from 'react-native';
 
 import {
-  createMarkdownStream,
+  createMarkdownStreamWithMode,
   getStreamState,
 } from '../src/createMarkdownStream';
 import { MAX_SOURCE_BYTES } from '../src/controlledSource';
@@ -30,8 +30,8 @@ vi.mock(
 
 const streams: { dispose(): void }[] = [];
 
-function stream(): ReturnType<typeof createMarkdownStream> {
-  const created = createMarkdownStream();
+function stream(): ReturnType<typeof createMarkdownStreamWithMode> {
+  const created = createMarkdownStreamWithMode({}, 'incremental');
   streams.push(created);
   return created;
 }

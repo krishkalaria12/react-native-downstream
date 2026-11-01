@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  createMarkdownStream,
+  createMarkdownStreamWithMode,
   getStreamState,
 } from '../src/createMarkdownStream';
 import {
@@ -27,8 +27,8 @@ vi.mock(
 
 const streams: { dispose(): void }[] = [];
 
-function stream(): ReturnType<typeof createMarkdownStream> {
-  const created = createMarkdownStream();
+function stream(): ReturnType<typeof createMarkdownStreamWithMode> {
+  const created = createMarkdownStreamWithMode({}, 'incremental');
   streams.push(created);
   return created;
 }

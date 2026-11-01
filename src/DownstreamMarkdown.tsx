@@ -66,14 +66,7 @@ import { resolveTagStyles } from './tagStyles';
  */
 function useTagStyleProps(markdownStyle: MarkdownViewProps['markdownStyle']) {
   return useMemo(() => {
-    const style = Array.isArray(markdownStyle)
-      ? markdownStyle[markdownStyle.length - 1]
-      : markdownStyle;
-    const resolved = resolveTagStyles(
-      style === false || style === null || style === undefined
-        ? undefined
-        : style
-    );
+    const resolved = resolveTagStyles(markdownStyle);
     return {
       names: resolved.map((entry) => entry.name),
       colors: resolved.map((entry) => entry.color ?? -1),
@@ -86,16 +79,7 @@ function useLinkVariantProps(
   markdownStyle: MarkdownViewProps['markdownStyle']
 ) {
   return useMemo(() => {
-    // A composable style is an array; the resolver takes one style, so the last
-    // entry wins the way it does in the theme resolver.
-    const style = Array.isArray(markdownStyle)
-      ? markdownStyle[markdownStyle.length - 1]
-      : markdownStyle;
-    const variants = resolveLinkVariants(
-      style === false || style === null || style === undefined
-        ? undefined
-        : style
-    );
+    const variants = resolveLinkVariants(markdownStyle);
     const prefixes: string[] = [];
     const counts: number[] = [];
     const colors: number[] = [];
@@ -1415,7 +1399,37 @@ function StreamMarkdown({
   const revision = useSyncExternalStore(subscribe, getRevision, getRevision);
   const binding = state.binding();
 
-  useLayoutEffect(() => state.bind(), [state]);
+  const viewError = useRef(onError);
+  viewError.current = onError;
+  const handlesErrors = onError !== undefined;
+  useLayoutEffect(
+    () =>
+      state.bind(
+        handlesErrors ? (error) => viewError.current?.(error) : undefined
+      ),
+    [state, handlesErrors]
+  );
+  const parseFlags = resolveParseFlags(
+    {
+      math: rest.math,
+      inlineHtml: rest.inlineHtml,
+      syntax: rest.syntax,
+      cjk: rest.cjk,
+      links: rest.links,
+      autolinkProtocols: rest.disableAutolinkProtocols,
+      literalTagContent: rest.literalTagContent,
+    },
+    mathAvailable()
+  ).flags;
+  const parseTags = JSON.stringify(resolveAllowedTags(rest.allowedTags).tags);
+  const parseOptions = useRef(rest);
+  parseOptions.current = rest;
+  useLayoutEffect(() => {
+    state.configure({
+      ...parseOptions.current,
+      preview: parseOptions.current.preview ?? true,
+    });
+  }, [state, parseFlags, parseTags, rest.preview]);
 
   const generationRef = useMemo(
     () => ({ current: binding.generation }),

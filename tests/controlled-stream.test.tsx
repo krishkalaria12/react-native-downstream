@@ -3,7 +3,7 @@ import { act, StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DownstreamMarkdown } from '../src/DownstreamMarkdown';
 import {
-  createMarkdownStream,
+  createMarkdownStreamWithMode,
   getStreamState,
 } from '../src/createMarkdownStream';
 import { MAX_SOURCE_BYTES } from '../src/controlledSource';
@@ -93,7 +93,7 @@ describe('controlled streaming through the real incremental parser', () => {
     );
     runFrames();
     expect(sourceForSession(sessionId())).toBe('accepted');
-    expect(onError).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledTimes(1);
   });
   it('creates no sessions for settled messages and activates when streaming starts', () => {
     const create = vi.spyOn(native, 'create');
@@ -115,7 +115,10 @@ describe('controlled streaming through the real incremental parser', () => {
   it('appends only new text and matches a controller at every prefix and finish', () => {
     const append = vi.spyOn(native, 'append');
     const reset = vi.spyOn(native, 'reset');
-    const controller = createMarkdownStream({ preview: true });
+    const controller = createMarkdownStreamWithMode(
+      { preview: true },
+      'incremental'
+    );
     const state = getStreamState(controller);
     let text = '';
     view = mount(<DownstreamMarkdown markdown={text} isAnimating />);
@@ -191,9 +194,10 @@ describe('controlled streaming through the real incremental parser', () => {
     view = mount(<DownstreamMarkdown markdown="first" isAnimating />);
     runFrames();
     const id = sessionId();
+    const generation = nativeView.last()!.generation as number;
     view.rerender(<DownstreamMarkdown markdown="replacement" isAnimating />);
     runFrames();
-    expect(reset).toHaveBeenLastCalledWith(id, 'replacement', 1);
+    expect(reset).toHaveBeenLastCalledWith(id, 'replacement', generation + 1);
     view.rerender(
       <DownstreamMarkdown markdown="replacement done" isAnimating={false} />
     );
@@ -203,7 +207,11 @@ describe('controlled streaming through the real incremental parser', () => {
       <DownstreamMarkdown markdown="replacement done again" isAnimating />
     );
     runFrames();
-    expect(reset).toHaveBeenLastCalledWith(id, 'replacement done again', 2);
+    expect(reset).toHaveBeenLastCalledWith(
+      id,
+      'replacement done again',
+      generation + 2
+    );
     view.rerender(<DownstreamMarkdown markdown="" isAnimating={false} />);
     runFrames();
     expect(sourceForSession(id)).toBe('');
@@ -279,7 +287,7 @@ describe('controlled streaming through the real incremental parser', () => {
     );
     runFrames();
     expect(dispose).toHaveBeenCalledWith(first);
-    expect(sessionId()).not.toBe(first);
+    expect(sessionId()).toBe(first);
     expect(sourceForSession(sessionId())).toBe('^up^ more');
     expect(snapshotOf(sessionId())?.blocks[0]?.text).toBe('up more');
   });

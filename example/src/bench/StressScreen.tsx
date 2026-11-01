@@ -3,7 +3,7 @@ import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 import {
   createMarkdownStream,
-  DownstreamMarkdown,
+  Downstream,
   type MarkdownStreamController,
 } from 'react-native-downstream';
 
@@ -336,7 +336,7 @@ export function StressScreen({ autoStart = false }: { autoStart?: boolean }) {
         )}
         {streams.map((stream, index) => (
           <View key={`stream-${index}`} style={styles.message}>
-            <DownstreamMarkdown stream={stream} />
+            <Downstream stream={stream} />
           </View>
         ))}
         {history.map((markdown, index) => (
@@ -350,7 +350,7 @@ export function StressScreen({ autoStart = false }: { autoStart?: boolean }) {
                 historyDone.current();
             }}
           >
-            <DownstreamMarkdown markdown={markdown} />
+            <Downstream>{markdown}</Downstream>
           </View>
         ))}
       </ScrollView>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
-  DownstreamMarkdown,
+  Downstream,
   type MarkdownStreamController,
 } from 'react-native-downstream';
 
@@ -79,19 +79,16 @@ function DownstreamCase({
 }) {
   const [stream, setStream] = useState<MarkdownStreamController | null>(null);
   useEffect(() => {
-    const controller = createMarkdownStreamWithMode(
-      { preview: preview === 'on' },
-      mode
-    );
+    const controller = createMarkdownStreamWithMode({}, mode);
     controller.append(source);
     if (state === 'finished') controller.finish();
     setStream(controller);
     return () => controller.dispose();
-  }, [source, preview, mode, state]);
+  }, [source, mode, state]);
   return stream ? (
-    <DownstreamMarkdown stream={stream} />
+    <Downstream stream={stream} preview={preview === 'on'} />
   ) : (
-    <DownstreamMarkdown markdown="" />
+    <Downstream markdown="" />
   );
 }
 
