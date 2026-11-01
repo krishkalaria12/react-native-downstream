@@ -30,9 +30,10 @@ timed out in the existing inline-HTML corpus test; the four-worker run passed
 without changing the test or its timeout.
 
 Still pending: the plan's long-response phone benchmark comparing controlled
-strings with controllers on both platforms. An Android emulator is connected;
-no physical phone is attached, and `xcrun simctl` is unavailable. No performance
-parity claim has been established.
+strings with controllers on both platforms. No physical phone is attached.
+During phase 3, selecting the installed Xcode with `DEVELOPER_DIR` restored
+SDK and simulator access; the earlier `simctl` failure came from the active
+command-line-tools selection. No phone performance parity claim has been established.
 
 ## Phase 2
 
@@ -58,8 +59,40 @@ Review found no remaining issues. Real-engine regressions cover buffering before
 mount, live policy changes with pending text, finished responses, remounts,
 allowed tags, literal tag styles, stale publications, and provider styles.
 
-## Next
+## Phase 3
 
-Phase 3 remains unimplemented: explicit plugin objects and math activation,
-the native highlighter package extraction, plugin migration guidance, and
-binary-size measurements. The phase 1 phone performance gate also remains open.
+Implemented feature-plugin resolution, the math factory, and the optional code
+package. The public `math` and `syntaxHighlighting` props
+are replaced by `math(options)` and `code()` in the selected plugin array.
+Plugin defaults apply before app component maps and provider/view styles.
+An omitted array inherits the provider selection; an explicit array replaces it.
+
+The README and examples now use explicit plugins. The example app supplies
+`code()` and `math()` through its provider, while benchmark views select the
+same code/math features their profiles requested before the migration.
+Recorded benchmark results have not been changed. The math package now has its
+own install and usage guide.
+
+The core retains its small incremental policy and token adapters. The optional
+code package owns the lexer/runtime and installs a versioned C function table.
+Views without `code()` skip lexer work, even when the package is linked for
+another view. Core-only tests preserve plain-code copy and line-number layout.
+Development builds warn once when math is installed without a selected plugin.
+Explicit view tag allowlists replace inherited ones, including an empty list.
+
+Validation: 832 JavaScript tests and 467 native tests passed, along with the
+core-only smoke test, Fabric checks, root/example typechecks, package build,
+lint, and formatting for changed files. iOS simulator and Android arm64 native
+builds passed both with and without the code package. CI now builds both
+configurations. Package dry runs confirm the core omits the lexer/runtime and
+the code package contains them and their licenses.
+
+The repository-wide formatting check still reports two unchanged files:
+`plans/api-and-plugins.html` and `site/src/styles/global.css`.
+
+Matched unstripped engine archive measurements are recorded in the
+[size report](../benchmarks/phone/CODE_PACKAGE_SIZE.md). Core archive size fell
+by 20.26% on iOS arm64 and 22.37% on Android arm64-v8a. These are archive sizes,
+not APK/IPA download sizes or loaded-memory measurements.
+
+The phase 1 phone performance gate remains open. No packages were published.

@@ -10,7 +10,7 @@ Parsing and text preparation run on native worker threads. Streaming updates reu
 
 - GitHub-flavored Markdown with headings, nested lists, task lists, tables, blockquotes, strikethrough, footnotes, and alerts.
 - Incremental streaming from a growing string, with previews for incomplete Markdown and an optional stream controller.
-- Syntax-highlighted code with line numbers, filenames, copy, download, wrap, and expand controls.
+- Code with line numbers, filenames, copy, download, wrap, and expand controls, plus optional native syntax highlighting.
 - Scrollable tables with copy and export formats, an expand button, and a full-screen view.
 - Light and dark themes, ready-made presets, custom fonts, and styles for individual Markdown elements.
 - Word or character reveal animations and a streaming caret that respect Reduce Motion.
@@ -185,20 +185,50 @@ A stream tracks its own animation state. For string children or a `markdown` pro
 
 Animation changes drawing without reflowing the text. Reduce Motion disables the reveal, and the caret never appears in copied or selected text.
 
-## Code blocks
+## Feature plugins
 
-Fenced code gets syntax highlighting and a header with copy, download, and wrap controls. Long blocks scroll within their card and can be expanded.
+The core renders plain code blocks and includes tables, images, controls, link safety, CJK parsing, and the extra inline syntaxes. Native code highlighting and math typesetting are optional packages:
+
+```sh
+pnpm add react-native-downstream-code react-native-downstream-math
+# For a bare iOS app:
+npx pod-install
+```
+
+Rebuild the native app after installing either package. Select the features on a view or provider:
 
 ```tsx
+import { Downstream } from 'react-native-downstream';
+import { code } from 'react-native-downstream-code';
+import { math } from 'react-native-downstream-math';
+
+const plugins = [code(), math({ singleDollarTextMath: true })];
+
+<Downstream plugins={plugins} isAnimating={streaming}>
+  {text}
+</Downstream>;
+```
+
+Installing a package links its engine but does not activate it on a view. Omit a view's `plugins` to inherit the provider selection. An explicit array replaces that selection, so `plugins={[]}` opts out of all feature plugins and `plugins={[math()]}` selects only math.
+
+Plugins are named objects with optional `parse`, `native`, `fences`, `tags`, and `style` fields. The resolver applies them in array order; later entries override earlier defaults. Duplicate names are an error in development. App component maps and provider/view styles override plugin defaults. A plugin can supply `style.theme` and `style.markdownStyle`, or register a fence/tag component without adding a native engine. See [`DownstreamPlugin`](src/plugins.ts) for the complete contract.
+
+## Code blocks
+
+Fenced code has a header with copy, download, and wrap controls. Long blocks scroll within their card and can be expanded. Add `code()` for native syntax highlighting:
+
+```tsx
+import { code } from 'react-native-downstream-code';
+
 <Downstream
-  syntaxHighlighting
+  plugins={[code()]}
   codeBlock={{ lineNumbers: true, wrap: false, maxHeight: 400 }}
 >
   {text}
-</Downstream>
+</Downstream>;
 ```
 
-Highlighting and line numbers are on by default. Wrapping is off, and the default height cap is 400 points. Set `codeBlock={{ maxHeight: 0 }}` for full-height code. Line numbers never become part of copied code.
+Without the code package or its plugin, blocks render plain with the same layout and controls. Line numbers are on by default. Wrapping is off, and the default height cap is 400 points. Set `codeBlock={{ maxHeight: 0 }}` for full-height code. Line numbers never become part of copied code.
 
 Name a file and choose the first line number in the fence metadata:
 
@@ -213,7 +243,7 @@ export async function load(url: string) {
 
 Downstream also accepts `filename=`, `lang:path`, `showLineNumbers=N`, `showLineNumbers{N}`, and `noLineNumbers` for individual blocks.
 
-Code is colored natively in 84 languages, including languages embedded in others: script and style blocks in HTML, Vue, Svelte, and Astro, and fenced code inside Markdown and MDX. Identifiers are case-insensitive, and only the first word of the info string counts, so the info strings `TypeScript title="app.ts"` and `js:src/app.js` both resolve. Blocks with an unknown language, no language, or more than 64 KiB of code render as plain code. Set `syntaxHighlighting={false}` to disable coloring throughout the view.
+The code plugin colors 84 languages natively, including languages embedded in others: script and style blocks in HTML, Vue, Svelte, and Astro, and fenced code inside Markdown and MDX. Identifiers are case-insensitive, and only the first word of the info string counts, so the info strings `TypeScript title="app.ts"` and `js:src/app.js` both resolve. Blocks with an unknown language, no language, or more than 64 KiB of code render as plain code. Remove `code()` from the selected plugin array to disable coloring. `codeAvailable()` reports whether its native engine is installed in the current binary.
 
 <details>
 <summary>Languages and identifiers</summary>
@@ -345,8 +375,13 @@ Set shared options once with `DownstreamProvider`:
 
 ```tsx
 import { DownstreamProvider, presets } from 'react-native-downstream';
+import { code } from 'react-native-downstream-code';
+import { math } from 'react-native-downstream-math';
+
+const plugins = [code(), math()];
 
 <DownstreamProvider
+  plugins={plugins}
   theme={presets.github.theme}
   markdownStyle={presets.github.markdownStyle}
   codeBlock={{ wrap: true }}
@@ -356,7 +391,7 @@ import { DownstreamProvider, presets } from 'react-native-downstream';
 </DownstreamProvider>;
 ```
 
-Props on an individual view override provider defaults. Nested providers override outer providers. Grouped options inherit unspecified subfields, and component maps inherit entries that the view does not replace. `theme` and `markdownStyle` merge provider-first, then view styles, in the same left-to-right order as their array forms.
+Props on an individual view override provider defaults. Nested providers override outer providers. Grouped options inherit unspecified subfields, and component maps inherit entries that the view does not replace. `theme` and `markdownStyle` merge provider-first, then view styles, in the same left-to-right order as their array forms. Plugin defaults go before both. A view or nested provider's explicit `plugins` array replaces the inherited selection.
 
 ## Match your app's design
 
@@ -418,21 +453,23 @@ pnpm add react-native-downstream-math
 npx pod-install
 ```
 
-Math is enabled by default when the native math engine is installed. Use `math={false}` to keep formulas as source, or configure the delimiters:
+Select `math()` on a view or provider to enable formulas. Installing the package alone keeps them as source and produces a development warning when a view does not select the plugin. Configure delimiters through the factory:
 
 ```tsx
+import { math } from 'react-native-downstream-math';
+
 <Downstream
   markdown={text}
-  math={{ singleDollarTextMath: true, brackets: true }}
+  plugins={[math({ singleDollarTextMath: true, brackets: true })]}
   onMathError={({ source, message }) => console.warn(source, message)}
-/>
+/>;
 ```
 
 Supported forms include `$$...$$`, display blocks delimited by `$$`, fenced `math` blocks, `\(...\)`, and `\[...\]`. Single-dollar `$...$` math is off by default so currency stays text. `brackets: false` disables the backslash forms.
 
 Unsupported formulas, or formulas requested without an installed engine, display their source and report `onMathError`. During streaming, a formula keeps its last valid layout while more input arrives.
 
-For both strings and controllers, set parsing options such as `math`, `syntax`, `links`, and `inlineHtml` on the view or provider. Changing them on a bound stream rebuilds its accepted source without losing text or its finished state.
+For both strings and controllers, select math through the plugin array and set other parsing options such as `syntax`, `links`, and `inlineHtml` on the view or provider. Changing them on a bound stream rebuilds its accepted source without losing text or its finished state. To keep code coloring when replacing a provider's plugin selection, include both `code()` and `math()` in the view's array.
 
 ## Custom renderers and tags
 
@@ -515,26 +552,28 @@ For the complete TypeScript definitions, see [`src/downstreamOptions.ts`](src/do
 
 ## API migration
 
-The phase 2 API below is intended for 0.2. Flat view props and the former component name remain compatible aliases during 0.2.x, with one development warning per alias. `markdown` remains supported without a warning. The controller now carries only text and an optional `onError` handler.
+The API below is intended for 0.2. Flat view props and the former component name remain compatible aliases during 0.2.x, with one development warning per alias. `markdown` remains supported without a warning. The controller now carries only text and an optional `onError` handler. The former `math` and `syntaxHighlighting` props have been removed in favor of explicit feature plugins.
 
-| Previous API                                                                                                               | Current API                                                                          |
-| -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `DownstreamMarkdown`                                                                                                       | `Downstream`                                                                         |
-| `markdown={text}`                                                                                                          | `{text}` as children, or keep `markdown={text}`                                      |
-| `codeBlockWrap`, `lineNumbers`, `codeBlockMaxHeight`                                                                       | `codeBlock={{ wrap, lineNumbers, maxHeight }}`                                       |
-| `tableMaxHeight`, `onTableFullscreen`, `renderTableFullscreen`                                                             | `table={{ maxHeight, onFullscreen, renderFullscreen }}`                              |
-| `allowedImagePrefixes`, `onImagePress`                                                                                     | `images={{ allowedPrefixes, onPress }}`; boolean `images` still works                |
-| `linkSafety`, `onLinkPress`, `onLinkLongPress`, `linkPreview`, `disableAutolinkProtocols`                                  | `links={{ safety, onPress, onLongPress, preview, disableAutolinkProtocols }}`        |
-| `plugins.renderers: [{ language, component }]`                                                                             | `components.fences: { [language]: component }`                                       |
-| `plugins.tags: [{ name, component }]`                                                                                      | `components.tags: { [name]: component }`                                             |
-| `plugins.fallbackComponent`                                                                                                | `components.fallback`                                                                |
-| `createMarkdownStream({ math, syntax, links, inlineHtml, cjk, allowedTags, literalTagContent, disableAutolinkProtocols })` | The same parse options on the view or provider; autolink protocols are under `links` |
-| `createMarkdownStream({ preview })`, `stream.setPreview(preview)`                                                          | The view or provider's `preview` prop; update the prop to change policy              |
-| Repeated options on every view                                                                                             | Shared defaults on `DownstreamProvider`                                              |
+| Previous API                                                                                                               | Current API                                                                                                               |
+| -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `DownstreamMarkdown`                                                                                                       | `Downstream`                                                                                                              |
+| `markdown={text}`                                                                                                          | `{text}` as children, or keep `markdown={text}`                                                                           |
+| `codeBlockWrap`, `lineNumbers`, `codeBlockMaxHeight`                                                                       | `codeBlock={{ wrap, lineNumbers, maxHeight }}`                                                                            |
+| `tableMaxHeight`, `onTableFullscreen`, `renderTableFullscreen`                                                             | `table={{ maxHeight, onFullscreen, renderFullscreen }}`                                                                   |
+| `allowedImagePrefixes`, `onImagePress`                                                                                     | `images={{ allowedPrefixes, onPress }}`; boolean `images` still works                                                     |
+| `linkSafety`, `onLinkPress`, `onLinkLongPress`, `linkPreview`, `disableAutolinkProtocols`                                  | `links={{ safety, onPress, onLongPress, preview, disableAutolinkProtocols }}`                                             |
+| `plugins.renderers: [{ language, component }]`                                                                             | `components.fences: { [language]: component }`                                                                            |
+| `plugins.tags: [{ name, component }]`                                                                                      | `components.tags: { [name]: component }`                                                                                  |
+| `plugins.fallbackComponent`                                                                                                | `components.fallback`                                                                                                     |
+| `createMarkdownStream({ math, syntax, links, inlineHtml, cjk, allowedTags, literalTagContent, disableAutolinkProtocols })` | Math options go to `math(options)`; other parse options go on the view or provider, with autolink protocols under `links` |
+| `createMarkdownStream({ preview })`, `stream.setPreview(preview)`                                                          | The view or provider's `preview` prop; update the prop to change policy                                                   |
+| Repeated options on every view                                                                                             | Shared defaults on `DownstreamProvider`                                                                                   |
+| Built-in highlighting or `syntaxHighlighting`                                                                              | Install `react-native-downstream-code` and select `plugins={[code()]}`                                                    |
+| Math enabled by installation or `math={options}`                                                                           | Select `plugins={[math(options)]}` from `react-native-downstream-math`                                                    |
 
-Other view props keep their names: `style`, `selectable`, `syntaxHighlighting`, `androidParagraphLayout`, `controls`, `translations`, `theme`, `markdownStyle`, `math`, `onMathError`, `inlineHtml`, `syntax`, `cjk`, `links.relative`, `links.defaultOrigin`, `allowedTags`, `literalTagContent`, `normalizeHtmlIndentation`, `dir`, `onTagPress`, `onTaskPress`, `icons`, `animated`, `isAnimating`, `preview`, `caret`, `onAnimationStart`, `onAnimationEnd`, and `onError`. The controller's `append`, `reset`, `finish`, `getSource`, and `dispose` methods remain available.
+Other view props keep their names: `style`, `selectable`, `androidParagraphLayout`, `controls`, `translations`, `theme`, `markdownStyle`, `onMathError`, `inlineHtml`, `syntax`, `cjk`, `links.relative`, `links.defaultOrigin`, `allowedTags`, `literalTagContent`, `normalizeHtmlIndentation`, `dir`, `onTagPress`, `onTaskPress`, `icons`, `animated`, `isAnimating`, `preview`, `caret`, `onAnimationStart`, `onAnimationEnd`, and `onError`. The controller's `append`, `reset`, `finish`, `getSource`, and `dispose` methods remain available.
 
-Phase 3 is still pending. Code highlighting remains built into the core and controlled by `syntaxHighlighting`; math still activates when its native engine is installed. Explicit feature plugins, the separate code-highlighter package, and the related binary-size measurements are not implemented yet.
+`theme.syntax` and `syntaxColorsFromTheme` remain in core, so existing palettes continue to style code selected by `code()`. Plain code-block layout and controls do not require a plugin.
 
 ## Fork and run locally
 
@@ -609,6 +648,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and pull req
 [MIT](LICENSE). Vendored dependencies retain their own licenses:
 
 - [md4c](src/cpp/md4c/LICENSE.md) uses the BSD license.
-- The [syntax highlighting lexers](src/cpp/wasm/LICENSE.md) and the [wasm2c runtime](src/cpp/wasm/wasm-rt/LICENSE) use Apache-2.0, and [SIMDe](src/cpp/wasm/simde/COPYING) uses MIT; their notices must accompany copies.
+- The optional code package's [syntax highlighting lexers](code/cpp/wasm/LICENSE.md) and [wasm2c runtime](code/cpp/wasm/wasm-rt/LICENSE) use Apache-2.0, and [SIMDe](code/cpp/wasm/simde/COPYING) uses MIT; their notices must accompany copies.
 - The [language extension map](src/cpp/downstream/export-extensions.json) includes attribution to Streamdown under Apache-2.0.
 - The optional math package includes the [RaTeX license](math/licenses/RaTeX-LICENSE.txt) and [font license notices](math/licenses/THIRD_PARTY_NOTICES.txt).

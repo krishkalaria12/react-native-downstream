@@ -1,5 +1,8 @@
 # Phone streaming benchmark
 
+The optional code package's separate [native archive size report](CODE_PACKAGE_SIZE.md)
+records the phase 3 extraction. It does not change the streaming measurements below.
+
 CPH2569 · Android 15 · 120 Hz · arm64 Hermes release · 2026-10-15. 198 measured runs, 36 warmups excluded. Every number is the median of 5 cold-process runs, with its 95% bootstrap confidence interval in brackets. Lower is better everywhere.
 
 ## Workloads

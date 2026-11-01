@@ -55,7 +55,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ env.DOWNSTREAM_ENGINE_CACHE }}
-          key: ${{ runner.os }}-${{ runner.arch }}-engine-unit-v2-${{ hashFiles('src/cpp/**', 'tests/engine.ts', '.nvmrc') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-engine-unit-v2-${{ hashFiles('src/cpp/**', 'code/cpp/**', 'tests/engine.ts', '.nvmrc') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-engine-unit-v2-
             ${{ runner.os }}-${{ runner.arch }}-engine-host-v2-
@@ -85,13 +85,16 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ env.DOWNSTREAM_ENGINE_CACHE }}
-          key: ${{ runner.os }}-${{ runner.arch }}-engine-host-v2-${{ hashFiles('src/cpp/**', 'tests/engine.ts', '.nvmrc') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-engine-host-v2-${{ hashFiles('src/cpp/**', 'code/cpp/**', 'tests/engine.ts', '.nvmrc') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-engine-host-v2-
             ${{ runner.os }}-${{ runner.arch }}-engine-unit-v2-
 
       - name: Run native engine tests
         run: node --test src/cpp/tests/engine.test.mjs
+
+      - name: Build and test core without code package
+        run: node scripts/test-core-without-code.mjs
 
   # The Kotlin mirror of CodeLayout.h answers the same case table as the engine,
   # so a drift between the two copies fails here rather than on a device.

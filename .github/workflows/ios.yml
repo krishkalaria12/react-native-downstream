@@ -5,6 +5,7 @@ on:
     paths:
       - 'src/ios/**'
       - 'math/**'
+      - 'code/**'
       - 'src/cpp/**'
       - '!src/cpp/tests/**'
       - '!src/cpp/**/*.md'
@@ -28,6 +29,7 @@ on:
     paths:
       - 'src/ios/**'
       - 'math/**'
+      - 'code/**'
       - 'src/cpp/**'
       - '!src/cpp/tests/**'
       - '!src/cpp/**/*.md'
@@ -61,6 +63,12 @@ jobs:
   build-ios:
     runs-on: macos-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        code: [linked, absent]
+    env:
+      DOWNSTREAM_DISABLE_CODE_PACKAGE: ${{ matrix.code == 'absent' && '1' || '0' }}
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -92,6 +100,15 @@ jobs:
       - name: Compile native library
         run: >-
           xcodebuild -project example/ios/Pods/Pods.xcodeproj -scheme DownstreamMath
+          -configuration Debug -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath "$RUNNER_TEMP/downstream-ios-build"
+          CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO -jobs 3 build
+
+      - name: Compile optional code package
+        if: matrix.code == 'linked'
+        run: >-
+          xcodebuild -project example/ios/Pods/Pods.xcodeproj -scheme DownstreamCode
           -configuration Debug -sdk iphonesimulator
           -destination 'generic/platform=iOS Simulator'
           -derivedDataPath "$RUNNER_TEMP/downstream-ios-build"

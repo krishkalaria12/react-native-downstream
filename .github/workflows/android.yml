@@ -5,6 +5,7 @@ on:
     paths:
       - 'src/android/**'
       - 'math/**'
+      - 'code/**'
       - 'src/cpp/**'
       - '!src/cpp/tests/**'
       - '!src/cpp/**/*.md'
@@ -26,6 +27,7 @@ on:
     paths:
       - 'src/android/**'
       - 'math/**'
+      - 'code/**'
       - 'src/cpp/**'
       - '!src/cpp/tests/**'
       - '!src/cpp/**/*.md'
@@ -57,6 +59,12 @@ jobs:
   build-android:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        code: [linked, absent]
+    env:
+      DOWNSTREAM_DISABLE_CODE_PACKAGE: ${{ matrix.code == 'absent' && '1' || '0' }}
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -80,3 +88,8 @@ jobs:
       - name: Compile native library
         working-directory: example/android
         run: ./gradlew :react-native-downstream:compileDebugKotlin :react-native-downstream-math:compileDebugKotlin :app:externalNativeBuildDebug -PreactNativeArchitectures=x86_64 --build-cache --max-workers=2 --no-daemon
+
+      - name: Compile optional code package
+        if: matrix.code == 'linked'
+        working-directory: example/android
+        run: ./gradlew :react-native-downstream-code:compileDebugKotlin :react-native-downstream-code:externalNativeBuildDebug -PreactNativeArchitectures=x86_64 --build-cache --max-workers=2 --no-daemon

@@ -1,0 +1,34 @@
+{
+  "baseline": "cc65ca1",
+  "method": "unstripped static native engine archives, no React Native platform glue; identical generated WASM object reused after move",
+  "optimization": [
+    "-Oz",
+    "-DNDEBUG",
+    "-fvisibility=hidden",
+    "-ffunction-sections",
+    "-fdata-sections",
+    "-DMD4C_USE_UTF8=1",
+    "-Dmd_parse=downstream_md_parse",
+    "-Dentity_lookup=downstream_entity_lookup"
+  ],
+  "iosSdk": "iPhoneOS27.2.sdk",
+  "androidNdk": "27.1.12297006",
+  "results": [
+    {
+      "platform": "ios-arm64",
+      "beforeBytes": 2765976,
+      "coreBytes": 2205504,
+      "codeBytes": 582488,
+      "reductionBytes": 560472,
+      "reductionPercent": 20.263082543015557
+    },
+    {
+      "platform": "android-arm64-v8a",
+      "beforeBytes": 4990206,
+      "coreBytes": 3873886,
+      "codeBytes": 1159012,
+      "reductionBytes": 1116320,
+      "reductionPercent": 22.37021878455519
+    }
+  ]
+}
