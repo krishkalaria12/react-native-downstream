@@ -11,6 +11,8 @@ import { ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { fetch as expoFetch } from 'expo/fetch';
 import { createMarkdownStream, Downstream } from 'react-native-downstream';
 import type { MarkdownStreamController } from 'react-native-downstream';
+import { code } from 'react-native-downstream-code';
+import { math } from 'react-native-downstream-math';
 import {
   createMarkdownStreamWithMode,
   getStreamState,
@@ -34,6 +36,12 @@ import type { PhoneChunk, PhoneWorkload } from './phoneWorkloads';
 import { replayFinishes } from './replayFinish';
 
 const mathOptions = { singleDollarTextMath: true };
+const downstreamPlugins = {
+  plain: [],
+  code: [code()],
+  math: [math(mathOptions)],
+  all: [code(), math(mathOptions)],
+};
 
 const downstreamTheme = {
   colors: {
@@ -344,11 +352,18 @@ function Candidate({
           markdownStyle={markdownStyle}
           theme={downstreamTheme}
           animated={config.animated ?? false}
-          syntaxHighlighting={syntaxHighlighting}
+          plugins={
+            config.math
+              ? syntaxHighlighting
+                ? downstreamPlugins.all
+                : downstreamPlugins.math
+              : syntaxHighlighting
+                ? downstreamPlugins.code
+                : downstreamPlugins.plain
+          }
           codeBlock={{ lineNumbers: false, maxHeight: 0 }}
           preview={false}
           controls={false}
-          math={config.math ? mathOptions : false}
           selectable={false}
           onError={(error) => onError(JSON.stringify(error))}
         />

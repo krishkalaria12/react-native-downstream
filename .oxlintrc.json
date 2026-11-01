@@ -16,7 +16,7 @@
     "example/android/**",
     "example/dist/**",
     "src/cpp/md4c/**",
-    "src/cpp/wasm/**",
+    "code/cpp/wasm/**",
     "src/cpp/glew/**",
     "src/cpp/rapidjson/**",
     "src/cpp/react/**",

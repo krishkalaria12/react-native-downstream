@@ -1,6 +1,6 @@
 #pragma once
 
-// The vendored lexer module in src/cpp/wasm: wasm2c output compiled as plain C,
+// The vendored lexer module in code/cpp/wasm: wasm2c output compiled as plain C,
 // with no WebAssembly runtime involved. Every file that touches the module
 // includes this header rather than highlights.h, so the runtime configuration
 // and the private symbol names below are the same everywhere.

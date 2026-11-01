@@ -17,8 +17,7 @@ file(GLOB LIB_ENGINE_SRCS CONFIGURE_DEPENDS
   ${LIB_CPP_DIR}/session/*.cpp
   ${LIB_CPP_DIR}/fabric/*.cpp
   ${LIB_CPP_DIR}/remend/*.cpp)
-# HighlightsModule.c compiles the vendored lexer module in cpp/wasm as one
-# translation unit, so none of that directory is a source of its own.
+# Engine-independent highlighting policy. The optional lexer is a separate package.
 file(GLOB LIB_HIGHLIGHT_SRCS CONFIGURE_DEPENDS
   ${LIB_CPP_DIR}/highlight/*.c
   ${LIB_CPP_DIR}/highlight/*.cpp)
@@ -46,20 +45,13 @@ set_target_properties(downstream_md4c PROPERTIES
   C_VISIBILITY_PRESET hidden
   POSITION_INDEPENDENT_CODE ON)
 
-# The highlighter and the vendored lexer module are built apart from the rest
-# of the engine, so the module's include paths stay private to them. The
-# module renames its own runtime symbols in HighlightsModule.h, and they are
-# hidden as well, so another wasm2c runtime in the app cannot bind to them.
+# The core retains incremental token policy and the optional-lexer adapter.
 add_library(downstream_highlight STATIC ${LIB_HIGHLIGHT_SRCS})
 target_include_directories(downstream_highlight PUBLIC
   # The engine's root, because `Document.h` spells `math/MathLayout.h`.
   ${LIB_CPP_DIR}
   ${LIB_CPP_DIR}/downstream
   ${LIB_CPP_DIR}/highlight)
-target_include_directories(downstream_highlight PRIVATE
-  ${LIB_CPP_DIR}/wasm
-  ${LIB_CPP_DIR}/wasm/wasm-rt
-  ${LIB_CPP_DIR}/wasm/simde)
 set_target_properties(downstream_highlight PROPERTIES
   C_STANDARD 11
   C_VISIBILITY_PRESET hidden

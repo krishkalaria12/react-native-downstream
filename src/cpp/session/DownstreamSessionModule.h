@@ -82,6 +82,7 @@ public:
    * TypeScript spec, and codegen rejects anything else.
    */
   bool mathAvailable(jsi::Runtime &rt);
+  bool codeAvailable(jsi::Runtime &rt);
 
   /**
    * Puts `text` on the system clipboard.

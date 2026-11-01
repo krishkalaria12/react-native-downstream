@@ -10,6 +10,7 @@ class DownstreamPackage : ReactPackage {
     // Autolinking builds the package list before any JavaScript runs, so the
     // engine is registered before the first `mathAvailable()` asks for it.
     DownstreamNative.registerMathEngineIfInstalled()
+    DownstreamNative.registerCodeHighlighterIfInstalled()
   }
 
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {

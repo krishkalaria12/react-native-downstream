@@ -1,2 +1,7 @@
-// This package has no JavaScript API. See index.js.
-export {};
+import type {
+  DownstreamPlugin,
+  MarkdownMathOptions,
+} from 'react-native-downstream';
+
+/** Enable the installed native math engine for a view or provider. */
+export function math(options?: MarkdownMathOptions): DownstreamPlugin;

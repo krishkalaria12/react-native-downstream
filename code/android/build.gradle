@@ -1,0 +1,58 @@
+buildscript {
+  ext.safeExtGet = { name, fallback ->
+    rootProject.ext.has(name) ? rootProject.ext.get(name) : fallback
+  }
+
+  repositories {
+    google()
+    mavenCentral()
+  }
+
+  dependencies {
+    classpath "com.android.tools.build:gradle:8.7.2"
+    classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${safeExtGet('kotlinVersion', '2.1.20')}"
+  }
+}
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+
+def architectures = (findProperty("reactNativeArchitectures") ?: "armeabi-v7a,x86,x86_64,arm64-v8a")
+  .split(",").collect { it.trim() }.findAll { !it.isEmpty() }
+
+android {
+  namespace "com.downstream.code"
+  compileSdkVersion safeExtGet("compileSdkVersion", 36)
+  ndkVersion safeExtGet("ndkVersion", "27.1.12297006")
+
+  defaultConfig {
+    minSdkVersion safeExtGet("minSdkVersion", 24)
+    targetSdkVersion safeExtGet("targetSdkVersion", 36)
+    ndk { abiFilters.addAll(architectures) }
+    externalNativeBuild {
+      cmake { arguments "-DANDROID_STL=c++_shared" }
+    }
+  }
+
+  externalNativeBuild {
+    cmake { path "src/main/jni/CMakeLists.txt" }
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+
+  kotlinOptions {
+    jvmTarget = "17"
+  }
+}
+
+repositories {
+  google()
+  mavenCentral()
+}
+
+dependencies {
+  implementation "com.facebook.react:react-android"
+}

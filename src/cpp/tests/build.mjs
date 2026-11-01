@@ -17,7 +17,8 @@ import { promisify } from 'node:util';
 
 export const CPP = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const MD4C = join(CPP, 'md4c');
-const WASM = join(CPP, 'wasm');
+export const CODE_CPP = resolve(CPP, '../../code/cpp');
+const WASM = join(CODE_CPP, 'wasm');
 
 /** Symbol renames, matching Downstream.podspec and the Android CMakeLists. */
 const SYMBOL_PREFIXES = [
@@ -48,6 +49,7 @@ const CXXFLAGS = [
   '-DMD4C_USE_UTF8',
   ...SYMBOL_PREFIXES,
   `-I${MD4C}`,
+  `-I${CODE_CPP}`,
   `-I${CPP}`,
   `-I${join(CPP, 'downstream')}`,
   `-I${join(CPP, 'session')}`,
@@ -102,12 +104,18 @@ export const ENGINE = [
 export const HIGHLIGHT_SOURCES = [
   'CodeBlocks.cpp',
   'CodeHighlighter.cpp',
-  'HighlightsModule.c',
-  'IdentifierClasses.cpp',
   'LanguageLookup.cpp',
   'Languages.cpp',
   'StreamLexer.cpp',
 ].map((name) => join(CPP, 'highlight', name));
+
+export const CODE_SOURCES = [
+  'CodeHighlighterPlugin.cpp',
+  'NativeLexer.cpp',
+  'HighlightsModule.c',
+  'IdentifierClasses.cpp',
+].map((name) => join(CODE_CPP, name));
+const TEST_INSTALLER = join(CODE_CPP, 'TestInstall.cpp');
 
 const binaries = new Map();
 const objects = new Map();
@@ -145,6 +153,7 @@ function headerKey() {
     }
   }
   visit(CPP);
+  if (existsSync(CODE_CPP)) visit(CODE_CPP);
   headersKey = hash.digest('hex');
   return headersKey;
 }
@@ -222,14 +231,15 @@ function compileObject(source) {
 const isArchive = (source) => source.endsWith('.a');
 
 /** Reuse the same engine objects in every binary and in ccache. */
-export function compile(sources, name) {
+export function compile(sources, name, withCode = true) {
   const cached = binaries.get(name);
   if (cached !== undefined) return cached;
   mkdirSync(buildRoot(), { recursive: true });
   const linkObjects = sources.map((source) =>
     isArchive(source) ? source : compileObject(source)
   );
-  const archive = highlightArchive();
+  const archive = highlightArchive(withCode);
+  if (withCode) linkObjects.push(compileObject(TEST_INSTALLER));
   const compiler = process.env.CXX ?? 'c++';
   const key = digest(
     JSON.stringify([linkObjects, archive, CXXFLAGS, compilerKey(compiler)])
@@ -242,8 +252,11 @@ export function compile(sources, name) {
   return binary;
 }
 
-function highlightArchive() {
-  const linkObjects = HIGHLIGHT_SOURCES.map(compileObject);
+function highlightArchive(withCode) {
+  const linkObjects = [
+    ...HIGHLIGHT_SOURCES,
+    ...(withCode ? CODE_SOURCES : []),
+  ].map(compileObject);
   const archive = join(
     buildRoot(),
     `downstream-highlight-${digest(JSON.stringify(linkObjects))}.a`
@@ -267,7 +280,12 @@ export const MD4C_SOURCES = ['md4c.c', 'entity.c'].map((name) =>
 export async function prepareTargets(targets) {
   mkdirSync(buildRoot(), { recursive: true });
   const sources = [
-    ...new Set([...Object.values(targets).flat(), ...HIGHLIGHT_SOURCES]),
+    ...new Set([
+      ...Object.values(targets).flat(),
+      ...HIGHLIGHT_SOURCES,
+      ...CODE_SOURCES,
+      TEST_INSTALLER,
+    ]),
   ].filter((source) => !isArchive(source));
   let next = 0;
   let failed = false;

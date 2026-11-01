@@ -13,6 +13,7 @@
 #include "theme/Theme.h"
 #include "theme/ThemeLayout.h"
 #include "math/MathEngine.h"
+#include "highlight/StreamLexer.h"
 #include "math/MathSpeech.h"
 #include "theme/ThemeSlots.h"
 
@@ -1185,4 +1186,27 @@ Java_com_downstream_DownstreamNative_nativeImageName(JNIEnv *env, jclass /*clazz
   };
   const std::string name = imageDownloadName(utf8(url), utf8(alt), utf8(mimeType), utf8(configured));
   return toJavaString(env, utf8ToUtf16(name));
+}
+
+namespace {
+std::string &codeLibraryName() {
+  static auto *name = new std::string();
+  return *name;
+}
+const void *resolveCodeHighlighter() {
+  void *library = dlopen(codeLibraryName().c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (library == nullptr) return nullptr;
+  using Getter = const void *(*)();
+  const auto getter = reinterpret_cast<Getter>(dlsym(library, "DownstreamGetCodeHighlighter"));
+  return getter != nullptr ? getter() : nullptr;
+}
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_downstream_DownstreamNative_nativeRegisterCodeHighlighter(JNIEnv *env, jclass, jstring library) {
+  if (library == nullptr) return;
+  const char *name = env->GetStringUTFChars(library, nullptr);
+  if (name == nullptr) return;
+  codeLibraryName() = name;
+  env->ReleaseStringUTFChars(library, name);
+  downstream::installCodeHighlighterResolver(resolveCodeHighlighter);
 }

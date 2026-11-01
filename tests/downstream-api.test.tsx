@@ -287,7 +287,7 @@ describe('provider defaults', () => {
       table: { maxHeight: 140 },
       images: false,
       links: { relative: true, safety: false },
-      math: false,
+      plugins: [],
       selectable: false,
       components: { fences: { chart: Fence } },
     };

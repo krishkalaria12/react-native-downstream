@@ -29,7 +29,9 @@ int main(int argc, char **argv) {
   // marks every block settled, all before the platform text work, so the driver
   // does the same and its JSON is what a view receives.
   if (result.status == ParseStatus::Ok) {
-    result.document = highlightSettledCodeBlocks(downstreamHighlighter(), result.document, kHighlightBudgetMs, nullptr);
+    if (parse.codeHighlighting()) {
+      result.document = highlightSettledCodeBlocks(downstreamHighlighter(), result.document, kHighlightBudgetMs, nullptr);
+    }
     result.document = layoutMath(result.document);
     const auto count =
         static_cast<uint32_t>(std::min<size_t>(result.document->blocks.size(), std::numeric_limits<uint32_t>::max()));

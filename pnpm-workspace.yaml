@@ -1,6 +1,7 @@
 packages:
   - example
   - math
+  - code
   - site
 allowBuilds:
   lefthook: false

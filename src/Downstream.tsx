@@ -6,6 +6,8 @@ import {
   type DownstreamProps,
 } from './downstreamOptions';
 import { warnDeprecated } from './deprecations';
+import { resolvePlugins } from './plugins';
+import { mathAvailable, warnAboutUnusedMathEngine } from './parseFlags';
 
 export type { DownstreamProps } from './downstreamOptions';
 
@@ -17,10 +19,24 @@ export function Downstream({
   ...options
 }: DownstreamProps) {
   const defaults = useDownstreamDefaults();
-  const resolved = mergeDownstreamOptions(
+  const { featurePlugins, ...appOptions } = mergeDownstreamOptions(
     defaults,
     resolveDownstreamOptions(options)
   );
+  const features = resolvePlugins(featurePlugins ?? []);
+  const configured = mergeDownstreamOptions(features.options, appOptions);
+  const resolved = {
+    ...configured,
+    math: features.native.math ? (configured.math ?? true) : false,
+    syntaxHighlighting: features.native.code,
+  };
+  if (
+    typeof __DEV__ === 'boolean' &&
+    __DEV__ &&
+    !features.native.math &&
+    mathAvailable()
+  )
+    warnAboutUnusedMathEngine();
   const sources =
     Number(children !== undefined) +
     Number(markdown !== undefined) +

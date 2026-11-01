@@ -73,6 +73,8 @@ constexpr uint32_t SpoilerSyntax = 1u << 13;
 /// by default: `<user>**Bob**</user>` styles Bob unless the app says its
 /// custom tags are not Markdown.
 constexpr uint32_t LiteralTagContent = 1u << 14;
+/// A view without the code plugin never starts a lexer, even if it is installed.
+constexpr uint32_t NoCodeHighlight = 1u << 15;
 
 /// What `undefined` resolves to, and therefore what the codegen default is.
 ///
@@ -84,7 +86,7 @@ constexpr uint32_t Default = Enabled | Brackets | Cjk;
 
 constexpr uint32_t All = Enabled | SingleDollar | Brackets | InlineHtml | SuperscriptSyntax |
     SubscriptSyntax | LinkRelative | NoAutolinkMailto | NoAutolinkHttp | NoAutolinkHttps | Cjk |
-    HighlightSyntax | UnderlineSyntax | SpoilerSyntax | LiteralTagContent;
+    HighlightSyntax | UnderlineSyntax | SpoilerSyntax | LiteralTagContent | NoCodeHighlight;
 
 } // namespace ParseFlags
 
@@ -117,6 +119,7 @@ struct ParseOptions {
   bool underlineSyntax() const { return (flags & ParseFlags::UnderlineSyntax) != 0; }
   bool spoilerSyntax() const { return (flags & ParseFlags::SpoilerSyntax) != 0; }
   bool literalTagContent() const { return (flags & ParseFlags::LiteralTagContent) != 0; }
+  bool codeHighlighting() const { return (flags & ParseFlags::NoCodeHighlight) == 0; }
 
   /**
    * Whether a bare address of this protocol may become a link.

@@ -10,6 +10,7 @@
 #include "SessionTrace.h"
 #include "WorkerPool.h"
 #include "math/MathEngine.h"
+#include "highlight/StreamLexer.h"
 #include "Unicode.h"
 
 #include <algorithm>
@@ -265,6 +266,10 @@ bool DownstreamSessionModule::mathAvailable(jsi::Runtime & /*rt*/) {
   // binary does, which is a relaunch, so caching it here would be a second place
   // that could disagree with the layout pass about whether there is an engine.
   return downstream::MathEngine::available();
+}
+
+bool DownstreamSessionModule::codeAvailable(jsi::Runtime & /*rt*/) {
+  return downstream::codeHighlighterAvailable();
 }
 
 AsyncPromise<bool> DownstreamSessionModule::copyText(jsi::Runtime &rt, std::string text) {

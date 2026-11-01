@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Downstream } from 'react-native-downstream';
 import type { MarkdownStreamController } from 'react-native-downstream';
+import { code } from 'react-native-downstream-code';
+import { math } from 'react-native-downstream-math';
 
 import { fixtures } from '../shared/fixtures';
 import type { ScheduleKind } from '../shared/schedule';
@@ -42,6 +44,8 @@ import { space, useTheme } from '../ui/theme';
 import type { Tone } from '../ui/theme';
 
 const SEED = 20260928;
+const highlightedPlugins = [code(), math()];
+const plainPlugins = [math()];
 
 const SHAPES: ChipOption<WorkloadShape>[] = [
   { value: 'repeat', label: 'Repeat fixture' },
@@ -153,7 +157,7 @@ function Pane({
           androidParagraphLayout="incremental"
           stream={stream}
           preview={false}
-          syntaxHighlighting={syntaxHighlighting}
+          plugins={syntaxHighlighting ? highlightedPlugins : plainPlugins}
           animated={animated}
           caret={animated ? 'block' : undefined}
         />

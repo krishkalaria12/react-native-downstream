@@ -123,7 +123,9 @@ void PreparedDocument::prepare() {
     // Highlighting runs here, on the same worker job and so inside the
     // synchronous-layout budget, so the platform text work that follows sees
     // finished tokens.
-    result_.document = highlightSettledCodeBlocks(downstreamHighlighter(), result_.document, kHighlightBudgetMs, nullptr);
+    if (parse_.codeHighlighting()) {
+      result_.document = highlightSettledCodeBlocks(downstreamHighlighter(), result_.document, kHighlightBudgetMs, nullptr);
+    }
     // A controlled source is complete the moment it is parsed and this result
     // is cached, so every block settles: a later snapshot would only come from
     // a different source, and this one will not be parsed again.

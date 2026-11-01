@@ -443,8 +443,10 @@ ParseResult IncrementalParser::fullParse(ParseFallback reason, bool previewable,
   // mismatch alone would drop the shared prefix on the next parse.
   highlight_.clear();
   HighlightStats stats;
-  result.document = highlightSettledCodeBlocks(downstreamHighlighter(), result.document, kHighlightBudgetMs, &stats,
-                                               replaced_ ? nullptr : document_);
+  if (parse_.codeHighlighting()) {
+    result.document = highlightSettledCodeBlocks(downstreamHighlighter(), result.document, kHighlightBudgetMs, &stats,
+                                                 replaced_ ? nullptr : document_);
+  }
   noteHighlight(stats);
   // Math runs after highlighting and before anything compares blocks, for the
   // same reason: a layout is part of what a block draws, so comparing a block
@@ -542,6 +544,7 @@ void IncrementalParser::noteHighlight(const HighlightStats &stats) {
 }
 
 void IncrementalParser::highlightTail(Document *document) {
+  if (!parse_.codeHighlighting()) return;
   HighlightStats stats;
   std::vector<Block> &blocks = document->blocks.tail();
   // The tail is rebuilt from scratch, but unchanged code keeps its completed
@@ -994,7 +997,7 @@ bool IncrementalParser::commitRegion(size_t boundary) {
     // pass revisits its tokens. Complete them now so a budget stop does not
     // leave the rest of the shared block plain forever.
     // A local state keeps this away from the tail's.
-    if (block.kind == BlockKind::CodeBlock && !block.language.empty()) {
+    if (parse_.codeHighlighting() && block.kind == BlockKind::CodeBlock && !block.language.empty()) {
       highlightSettledCodeBlock(downstreamHighlighter(), &block, &committedHighlight, kHighlightBudgetMs, &stats);
     }
     // A committed formula is closed, inline or display, so it is laid out here
@@ -1244,7 +1247,7 @@ bool IncrementalParser::appendOpenFence() {
   Block &block = next->blocks.tail().back();
   fenceLineStart_ = lineStart;
   counters_.fenceSnapshotStorageBytesCopied += block.text.appendSnapshot(delta);
-  if (block.kind == BlockKind::CodeBlock && !block.language.empty()) {
+  if (parse_.codeHighlighting() && block.kind == BlockKind::CodeBlock && !block.language.empty()) {
     HighlightStats stats;
     downstreamHighlighter().tokenizeAppend(block.language, block.text, delta, &highlight_, &block.tokens,
                                        kHighlightBudgetMs, document_->id, document_->blocks.back().text.size(), next->id, !finished_, fencePendingNewline_);

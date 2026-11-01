@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 import { Linking, Platform, Settings, StyleSheet, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { DownstreamProvider } from 'react-native-downstream';
+import { code } from 'react-native-downstream-code';
+import { math } from 'react-native-downstream-math';
 
 import { BenchScreen } from './bench/BenchScreen';
 import { StressScreen } from './bench/StressScreen';
@@ -22,6 +25,8 @@ interface Launch {
   route: 'stress' | 'preview';
   preview?: PreviewLaunch;
 }
+
+const markdownPlugins = [code(), math()];
 
 /** `mode=incremental&state=finished&from=4`, as a URL query or a launch argument. */
 function parsePreviewLaunch(query: string): PreviewLaunch {
@@ -152,7 +157,9 @@ export default function App() {
     <SafeAreaProvider>
       <ThemeProvider>
         <ShellProvider>
-          <Navigation />
+          <DownstreamProvider plugins={markdownPlugins}>
+            <Navigation />
+          </DownstreamProvider>
         </ShellProvider>
       </ThemeProvider>
     </SafeAreaProvider>

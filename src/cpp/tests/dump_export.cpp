@@ -85,13 +85,16 @@ int main(int argc, char **argv) {
   const char16_t separator = separatorText.empty() ? u',' : static_cast<char16_t>(separatorText[0]);
 
   const std::string source((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
-  ParseResult result = parseMarkdown(source);
+  const ParseOptions parse;
+  ParseResult result = parseMarkdown(source, parse);
   if (result.status != ParseStatus::Ok) {
     return 0;
   }
   // The controlled path colors after the parse, so the model an export reads is
   // the one a view holds.
-  result.document = highlightSettledCodeBlocks(downstreamHighlighter(), result.document, kHighlightBudgetMs, nullptr);
+  if (parse.codeHighlighting()) {
+    result.document = highlightSettledCodeBlocks(downstreamHighlighter(), result.document, kHighlightBudgetMs, nullptr);
+  }
   const auto settled = static_cast<uint32_t>(
       std::min<size_t>(result.document->blocks.size(), std::numeric_limits<uint32_t>::max()));
   result.document = withSettledBlocks(result.document, settled);

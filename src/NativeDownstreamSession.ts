@@ -127,6 +127,8 @@ export interface Spec extends TurboModule {
    * binary does, which is a relaunch, so nothing here is cached on the native side.
    */
   mathAvailable(): boolean;
+  /** Whether the optional native code lexer is linked and installed. */
+  codeAvailable(): boolean;
   /**
    * Puts `text` on the system clipboard.
    *

@@ -9,6 +9,9 @@
 namespace downstream {
 
 struct StreamLexerModule;
+using CodeHighlighterResolver = const void *(*)();
+bool codeHighlighterAvailable();
+void installCodeHighlighterResolver(CodeHighlighterResolver resolver);
 
 /// One instance of the vendored lexer module, driven as a line stream.
 ///
@@ -55,10 +58,8 @@ public:
 
 private:
   StreamLexer();
-  bool reserve(size_t bytes);
 
   std::unique_ptr<StreamLexerModule> module_;
-  bool reset_{true};
 };
 
 } // namespace downstream

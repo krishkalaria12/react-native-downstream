@@ -35,6 +35,7 @@ export type MarkdownSessionOptions = Pick<
   | 'literalTagContent'
   | 'allowedTags'
   | 'preview'
+  | 'syntaxHighlighting'
 >;
 
 const MAX_CHUNK_BYTES = 64 * 1024;
@@ -196,6 +197,7 @@ class StreamState implements MarkdownStreamController {
         links: options.links,
         autolinkProtocols: options.disableAutolinkProtocols,
         literalTagContent: options.literalTagContent,
+        syntaxHighlighting: options.syntaxHighlighting,
       },
       mathAvailable()
     ).flags;

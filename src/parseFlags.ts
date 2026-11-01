@@ -1,13 +1,9 @@
 /* eslint-disable no-bitwise -- the native `parseFlags` prop is a bitmask */
 /**
- * Resolution of the `math` prop.
- *
- * Math is opt-in by installation: `react-native-downstream-math` ships the
- * engine, and a view with it typesets formulas while a view without it shows
- * every formula's source. That mirrors `@streamdown/math`, and it means the
- * default has to be asked of the platform rather than written here, so one
- * module owns the bit layout the parser reads and this file is the only place
- * that writes those bits.
+ * Resolution of normalized parse options. Public views resolve feature plugins
+ * first and pass `math: false` when no math plugin is selected. Raw native
+ * fixture helpers retain their installed-engine default when math is omitted.
+ * This module owns the bit layout shared by JavaScript and the parser.
  */
 import NativeDownstreamSession from './NativeDownstreamSession';
 import type {
@@ -51,6 +47,8 @@ export const PARSE_FLAG_SPOILER_SYNTAX = 1 << 13;
  * default; see `literalTagContent`.
  */
 export const PARSE_FLAG_LITERAL_TAG_CONTENT = 1 << 14;
+/** Skip lexer work for views that did not select the code plugin. */
+export const PARSE_FLAG_NO_CODE_HIGHLIGHT = 1 << 15;
 
 /** Every flag the engine understands. */
 export const PARSE_FLAGS_ALL =
@@ -68,7 +66,8 @@ export const PARSE_FLAGS_ALL =
   PARSE_FLAG_HIGHLIGHT_SYNTAX |
   PARSE_FLAG_UNDERLINE_SYNTAX |
   PARSE_FLAG_SPOILER_SYNTAX |
-  PARSE_FLAG_LITERAL_TAG_CONTENT;
+  PARSE_FLAG_LITERAL_TAG_CONTENT |
+  PARSE_FLAG_NO_CODE_HIGHLIGHT;
 
 export type ResolvedMath = Readonly<{
   /** Bitmask for the native `parseFlags` prop. */
@@ -105,6 +104,15 @@ export function mathAvailable(): boolean {
     // A host with no TurboModule at all — a bare test renderer, a server render
     // — has no engine, which is the same answer as a platform that reports the
     // package is not installed.
+    return false;
+  }
+}
+
+/** Whether the optional native highlighter is installed in this binary. */
+export function codeAvailable(): boolean {
+  try {
+    return NativeDownstreamSession.codeAvailable() === true;
+  } catch {
     return false;
   }
 }
@@ -155,6 +163,17 @@ export function resolveMath(
 }
 
 let warnedAboutMissingEngine = false;
+let warnedAboutUnusedEngine = false;
+
+/** Installing the engine alone no longer activates math for a public view. */
+export function warnAboutUnusedMathEngine(): void {
+  if (typeof __DEV__ !== 'boolean' || !__DEV__ || warnedAboutUnusedEngine)
+    return;
+  warnedAboutUnusedEngine = true;
+  console.warn(
+    'Downstream: the math engine is installed but this view has no math plugin. Import { math } from react-native-downstream-math and pass plugins={[math()]}.'
+  );
+}
 
 /**
  * One development warning per process, naming the package to install.
@@ -176,6 +195,7 @@ export function warnAboutMissingMathEngine(): void {
 /** Test hook: forgets the warning, so a case can observe it more than once. */
 export function resetMathEngineWarning(): void {
   warnedAboutMissingEngine = false;
+  warnedAboutUnusedEngine = false;
 }
 
 /** The props that decide which syntaxes a parse recognizes. */
@@ -187,6 +207,7 @@ export type MarkdownParseInput = Readonly<{
   links: MarkdownLinksOptions | undefined;
   autolinkProtocols: MarkdownAutolinkProtocols | undefined;
   literalTagContent: boolean | undefined;
+  syntaxHighlighting?: boolean;
 }>;
 
 /**
@@ -232,6 +253,7 @@ export function resolveParseFlags(
   if (input.literalTagContent === true) {
     flags |= PARSE_FLAG_LITERAL_TAG_CONTENT;
   }
+  if (input.syntaxHighlighting === false) flags |= PARSE_FLAG_NO_CODE_HIGHLIGHT;
   if (
     input.links?.relative === true ||
     typeof input.links?.defaultOrigin === 'string'

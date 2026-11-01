@@ -8,6 +8,8 @@ import {
   type MarkdownMathErrorEvent,
   type MarkdownStreamController,
 } from 'react-native-downstream';
+import { code } from 'react-native-downstream-code';
+import { math as mathPlugin } from 'react-native-downstream-math';
 
 import { Badge, ChipRow, Group } from '../ui/kit';
 import { Hero, Screen, SectionLabel, useScreenScroll } from '../ui/screen';
@@ -108,6 +110,8 @@ type StreamState = (typeof STATES)[number]['value'];
 
 const ALLOWED = ['https://picsum.photos', 'https://fastly.picsum.photos'];
 const LOG_LIMIT = 6;
+const mathPlugins = [code(), mathPlugin()];
+const codePlugins = [code()];
 
 function useHeldStream(state: StreamState): MarkdownStreamController | null {
   const [stream, setStream] = useState<MarkdownStreamController | null>(null);
@@ -147,9 +151,13 @@ export function MathScreen() {
     [push]
   );
 
-  const mathProp = math === 'default' ? undefined : math === 'on';
   const shared = {
-    math: mathProp,
+    plugins:
+      math === 'default'
+        ? undefined
+        : math === 'on'
+          ? mathPlugins
+          : codePlugins,
     images:
       images === 'on'
         ? { allowedPrefixes: ALLOWED, onPress: onImagePress }

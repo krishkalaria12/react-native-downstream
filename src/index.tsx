@@ -1,5 +1,6 @@
 export { Downstream, DownstreamMarkdown } from './Downstream';
 export { DownstreamProvider } from './DownstreamProvider';
+export type { DownstreamPlugin, DownstreamPluginParseOptions } from './plugins';
 export type { DownstreamProviderProps } from './DownstreamProvider';
 export type {
   DownstreamProps,
@@ -24,7 +25,7 @@ export {
   resolveLinkOptions,
   resolveLinkUrl,
 } from './linkSafety';
-export { mathAvailable, resolveParseFlags } from './parseFlags';
+export { codeAvailable, mathAvailable, resolveParseFlags } from './parseFlags';
 export { presets } from './presets';
 export { syntaxColorsFromTheme } from './syntaxTheme';
 export {
@@ -33,6 +34,7 @@ export {
   resolveMaxHeight,
 } from './types';
 export type { DownstreamProps as DownstreamMarkdownProps } from './downstreamOptions';
+export type { DownstreamProps as MarkdownViewProps } from './downstreamOptions';
 export type { ResolvedAnimate } from './animation';
 export type { MarkdownLinkSafetyModalProps } from './types';
 export type { ResolvedMath } from './parseFlags';
@@ -75,7 +77,6 @@ export type {
   MarkdownTheme,
   MarkdownTokenClass,
   MarkdownTranslations,
-  MarkdownViewProps,
   defaultCodeBlockMaxHeight,
 } from './types';
 export type { MarkdownIconSource } from './types';

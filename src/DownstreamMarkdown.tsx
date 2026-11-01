@@ -677,6 +677,7 @@ function useMathAndImages(
     disableAutolinkProtocols?: MarkdownViewProps['disableAutolinkProtocols'];
     allowedTags?: MarkdownViewProps['allowedTags'];
     literalTagContent?: MarkdownViewProps['literalTagContent'];
+    syntaxHighlighting?: boolean;
   },
   currentGeneration: () => number
 ) {
@@ -693,6 +694,7 @@ function useMathAndImages(
     disableAutolinkProtocols,
     allowedTags,
     literalTagContent,
+    syntaxHighlighting,
   } = props;
 
   // One read of the platform's answer for the lifetime of the process. A test
@@ -711,6 +713,7 @@ function useMathAndImages(
           links,
           autolinkProtocols: disableAutolinkProtocols,
           literalTagContent,
+          syntaxHighlighting,
         },
         engine.current
       ),
@@ -722,6 +725,7 @@ function useMathAndImages(
       links,
       disableAutolinkProtocols,
       literalTagContent,
+      syntaxHighlighting,
     ]
   );
   const resolvedStable = useRef(resolved);
@@ -1242,7 +1246,10 @@ function StaticMarkdown({
     () => generationRef.current,
     [generationRef]
   );
-  const images = useMathAndImages(rest, currentGeneration);
+  const images = useMathAndImages(
+    { ...rest, syntaxHighlighting },
+    currentGeneration
+  );
   const resolvedTheme = useStableTheme(
     useMemo(() => resolveTheme(theme, markdownStyle), [theme, markdownStyle])
   );
@@ -1418,12 +1425,13 @@ function StreamMarkdown({
       links: rest.links,
       autolinkProtocols: rest.disableAutolinkProtocols,
       literalTagContent: rest.literalTagContent,
+      syntaxHighlighting,
     },
     mathAvailable()
   ).flags;
   const parseTags = JSON.stringify(resolveAllowedTags(rest.allowedTags).tags);
-  const parseOptions = useRef(rest);
-  parseOptions.current = rest;
+  const parseOptions = useRef({ ...rest, syntaxHighlighting });
+  parseOptions.current = { ...rest, syntaxHighlighting };
   useLayoutEffect(() => {
     state.configure({
       ...parseOptions.current,
@@ -1532,7 +1540,10 @@ function StreamMarkdown({
     () => state.binding().generation,
     [state]
   );
-  const images = useMathAndImages(rest, currentGeneration);
+  const images = useMathAndImages(
+    { ...rest, syntaxHighlighting },
+    currentGeneration
+  );
   // A stream keeps its theme across a rebind, so a theme that has not changed
   // sends nothing however often a snapshot arrives.
   const resolvedTheme = useStableTheme(

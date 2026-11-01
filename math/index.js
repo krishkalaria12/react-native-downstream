@@ -1,4 +1,17 @@
-// This package has no JavaScript API. Installing it is the opt-in: its native
-// code hands RaTeX to Downstream when the app loads, and `mathAvailable()` from
-// `react-native-downstream` reports it.
-module.exports = {};
+/** Enable the installed native math engine for a Downstream view or provider. */
+function math(options = {}) {
+  if (
+    typeof options !== 'object' ||
+    options === null ||
+    Array.isArray(options)
+  ) {
+    throw new TypeError('Downstream math options must be an object.');
+  }
+  return {
+    name: 'math',
+    native: { math: true },
+    parse: { math: { ...options } },
+  };
+}
+
+module.exports = { math };

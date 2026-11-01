@@ -252,6 +252,12 @@ importers:
         specifier: 5.0.2
         version: 5.0.2(@types/node@26.6.3)(@vitest/coverage-v8@5.0.2)(happy-dom@20.14.5)(vite@8.3.1(@types/node@26.6.3)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
+  code:
+    devDependencies:
+      react-native-downstream:
+        specifier: workspace:*
+        version: link:..
+
   example:
     dependencies:
       '@ai-sdk/openai':
@@ -302,6 +308,9 @@ importers:
       react-native-downstream:
         specifier: workspace:*
         version: link:..
+      react-native-downstream-code:
+        specifier: workspace:*
+        version: link:../code
       react-native-downstream-math:
         specifier: workspace:*
         version: link:../math

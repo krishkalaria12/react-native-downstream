@@ -1047,6 +1047,19 @@ internal object DownstreamNative {
   fun mathSpeech(tex: String, display: Boolean): String =
     nativeMathSpeech(tex, display) ?: ""
 
+  fun registerCodeHighlighterIfInstalled() {
+    val installed = try {
+      Class.forName("com.downstream.code.DownstreamCodePackage", false, DownstreamNative::class.java.classLoader)
+      true
+    } catch (error: ClassNotFoundException) {
+      false
+    }
+    if (installed) nativeRegisterCodeHighlighter("libdownstream_code.so")
+  }
+
+  @JvmStatic
+  private external fun nativeRegisterCodeHighlighter(library: String)
+
   /** The math package's marker class, which autolinking puts on the classpath. */
   private const val MATH_PACKAGE_CLASS = "com.downstream.math.DownstreamMathPackage"
 

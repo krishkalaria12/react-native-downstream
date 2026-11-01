@@ -1,196 +1,103 @@
 #include "StreamLexer.h"
+#include "DownstreamCodeHighlighter.h"
 
-#include "HighlightsModule.h"
-#include "IdentifierClasses.h"
-
-#include <atomic>
-#include <cstring>
-
-#if !defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
-#error "the lexer module's memory is little-endian and is read in place"
-#endif
-
-namespace {
-
-/// Decodes the UTF-8 sequence of `length` bytes the module points at, or
-/// returns a value past the last code point when it is out of bounds.
-uint32_t pointAt(const w2c_env *env, uint32_t at, uint32_t length) {
-  const wasm_rt_memory_t *memory = env->memory;
-  if (length == 0 || length > 4 || at > memory->size || length > memory->size - at) {
-    return 0x110000;
-  }
-  const uint8_t *p = memory->data + at;
-  switch (length) {
-  case 1:
-    return p[0];
-  case 2:
-    return ((p[0] & 0x1fu) << 6) | (p[1] & 0x3fu);
-  case 3:
-    return ((p[0] & 0x0fu) << 12) | ((p[1] & 0x3fu) << 6) | (p[2] & 0x3fu);
-  default:
-    return ((p[0] & 0x07u) << 18) | ((p[1] & 0x3fu) << 12) | ((p[2] & 0x3fu) << 6) | (p[3] & 0x3fu);
-  }
-}
-
-} // namespace
-
-// The module's imports. It asks only about non-ASCII code points in
-// ECMAScript identifiers.
-extern "C" uint32_t w2c_env_is_id_start(struct w2c_env *env, uint32_t at, uint32_t length) {
-  return downstream::isIdentifierStart(pointAt(env, at, length)) ? 1 : 0;
-}
-
-extern "C" uint32_t w2c_env_is_id_continue(struct w2c_env *env, uint32_t at, uint32_t length) {
-  return downstream::isIdentifierContinue(pointAt(env, at, length)) ? 1 : 0;
-}
+#include <mutex>
 
 namespace downstream {
 namespace {
-
-// The module's control block, in its first memory page.
-constexpr uint32_t kLanguageAt = 0;
-constexpr uint32_t kModeAt = 1;
-constexpr uint32_t kInputLengthAt = 2;
-constexpr uint32_t kOutputStartAt = 6;
-constexpr uint32_t kOutputLengthAt = 10;
-/// Output mode 3: (endUtf16, tokenId) records, split at line terminators.
-constexpr uint8_t kLineRecords = 3;
-/// Input starts on the second page. The module reads a NUL sentinel after it
-/// and may look further ahead into reserved slack.
-constexpr uint32_t kInputAt = 65536;
-constexpr uint32_t kInputSlack = 96;
-constexpr uint64_t kPageBytes = 65536;
-/// Memory a thread's instance may keep between blocks. One long line can grow
-/// it much further, and that much is not held for the life of the thread.
-constexpr uint64_t kRetainedPages = 16;
-
-std::atomic<uint64_t> gCreated{0};
-
-uint32_t readU32(const uint8_t *at) {
-  uint32_t value;
-  std::memcpy(&value, at, sizeof(value));
-  return value;
+struct Installed {
+  std::mutex mutex;
+  DownstreamCodeHighlighterFunctions functions{};
+  CodeHighlighterResolver resolver{nullptr};
+};
+Installed &installed() {
+  static auto *value = new Installed();
+  return *value;
 }
 
-void writeU32(uint8_t *at, uint32_t value) { std::memcpy(at, &value, sizeof(value)); }
+bool valid(const DownstreamCodeHighlighterFunctions *functions) {
+  return functions != nullptr && functions->version == 1 && functions->size >= sizeof(*functions) &&
+      functions->create != nullptr && functions->destroy != nullptr && functions->start != nullptr &&
+      functions->lex != nullptr && functions->capture != nullptr && functions->reusable != nullptr &&
+      functions->created != nullptr;
+}
 
+DownstreamCodeHighlighterFunctions functions() {
+  auto &shared = installed();
+  std::lock_guard<std::mutex> lock(shared.mutex);
+  if (shared.functions.create == nullptr && shared.resolver != nullptr) {
+    const auto resolver = shared.resolver;
+    shared.resolver = nullptr;
+    const auto *resolved = static_cast<const DownstreamCodeHighlighterFunctions *>(resolver());
+    if (valid(resolved)) shared.functions = *resolved;
+  }
+  return shared.functions;
+}
 thread_local std::unique_ptr<StreamLexer> tLexer;
-
 } // namespace
 
 struct StreamLexerModule {
-  HighlightsModule instance{};
-  w2c_env env{};
-  bool live{false};
-  uint32_t imageMax{0};
-
-  ~StreamLexerModule() {
-    if (live) {
-      wasm2c_downstream__highlights_free(&instance);
-    }
-  }
-  wasm_rt_memory_t &memory() { return *w2c_downstream__highlights_memory(&instance); }
+  DownstreamCodeHighlighterFunctions functions;
+  void *instance{nullptr};
+  explicit StreamLexerModule(DownstreamCodeHighlighterFunctions api) : functions(api), instance(api.create()) {}
+  ~StreamLexerModule() { if (instance != nullptr) functions.destroy(instance); }
 };
 
-StreamLexer::StreamLexer() : module_(std::make_unique<StreamLexerModule>()) {
-  static std::atomic<bool> initialized{false};
-  if (!initialized.exchange(true)) {
-    wasm_rt_init();
-  }
-  module_->env.memory = nullptr;
-  if (downstream_highlights_instantiate(&module_->instance, &module_->env) != WASM_RT_TRAP_NONE) {
-    return;
-  }
-  module_->live = true;
-  module_->env.memory = &module_->memory();
-  module_->imageMax = w2c_downstream__highlights_streamImageMax(&module_->instance);
-  gCreated.fetch_add(1, std::memory_order_relaxed);
-}
-
+StreamLexer::StreamLexer() : module_(std::make_unique<StreamLexerModule>(functions())) {}
 StreamLexer::~StreamLexer() = default;
 
 StreamLexer *StreamLexer::current() {
-  if (tLexer != nullptr && tLexer->module_->memory().pages > kRetainedPages) {
-    tLexer.reset();
-  }
+  if (!codeHighlighterAvailable()) return nullptr;
+  if (tLexer != nullptr && !tLexer->module_->functions.reusable(tLexer->module_->instance)) tLexer.reset();
   if (tLexer == nullptr) {
     tLexer.reset(new StreamLexer());
-    if (!tLexer->module_->live) {
-      tLexer.reset();
-    }
+    if (tLexer->module_->instance == nullptr) tLexer.reset();
   }
   return tLexer.get();
 }
-
-uint64_t StreamLexer::created() { return gCreated.load(std::memory_order_relaxed); }
-
+uint64_t StreamLexer::created() {
+  const auto api = functions();
+  return api.created != nullptr ? api.created() : 0;
+}
 void StreamLexer::discard() { tLexer.reset(); }
 
-bool StreamLexer::reserve(size_t bytes) {
-  wasm_rt_memory_t &memory = module_->memory();
-  if (bytes <= memory.size) {
-    return true;
-  }
-  const uint64_t pages = (bytes - memory.size + kPageBytes - 1) / kPageBytes;
-  return wasm_rt_grow_memory(&memory, pages) != static_cast<uint64_t>(-1);
-}
-
 bool StreamLexer::start(uint8_t language, const std::vector<uint8_t> *image) {
-  if (!reserve(kInputAt + module_->imageMax + kInputSlack)) {
-    return false;
-  }
-  uint8_t *data = module_->memory().data;
-  data[kLanguageAt] = language;
-  reset_ = image == nullptr;
-  if (reset_) {
-    return downstream_highlights_clear(&module_->instance) == WASM_RT_TRAP_NONE;
-  }
-  if (image->size() > module_->imageMax) {
-    return false;
-  }
-  std::memcpy(data + kInputAt, image->data(), image->size());
-  return downstream_highlights_restore(&module_->instance, kInputAt, static_cast<uint32_t>(image->size())) ==
-      WASM_RT_TRAP_NONE;
+  return module_->functions.start(module_->instance, language,
+      image != nullptr ? image->data() : nullptr, image != nullptr ? image->size() : 0, image == nullptr);
 }
-
 bool StreamLexer::lex(std::string_view bytes, std::vector<uint32_t> *records) {
+  const uint32_t *data = nullptr;
+  size_t count = 0;
   records->clear();
-  if (bytes.size() > UINT32_MAX - kInputAt - kInputSlack || !reserve(kInputAt + bytes.size() + kInputSlack)) {
-    return false;
-  }
-  uint8_t *data = module_->memory().data;
-  std::memcpy(data + kInputAt, bytes.data(), bytes.size());
-  data[kInputAt + bytes.size()] = 0;
-  data[kModeAt] = kLineRecords;
-  writeU32(data + kInputLengthAt, static_cast<uint32_t>(bytes.size()));
-  if (downstream_highlights_stream(&module_->instance, reset_ ? 1 : 0) != WASM_RT_TRAP_NONE) {
-    return false;
-  }
-  reset_ = false;
-  // The call may have grown, and so moved, the memory.
-  const wasm_rt_memory_t &memory = module_->memory();
-  const uint32_t start = readU32(memory.data + kOutputStartAt);
-  const uint32_t length = readU32(memory.data + kOutputLengthAt);
-  if (start > memory.size || length > memory.size - start || length % 8 != 0) {
-    return false;
-  }
-  records->resize(length / sizeof(uint32_t));
-  std::memcpy(records->data(), memory.data + start, length);
+  if (!module_->functions.lex(module_->instance, bytes.data(), bytes.size(), &data, &count) ||
+      (count > 0 && data == nullptr) || count % 2 != 0) return false;
+  if (count > 0) records->assign(data, data + count);
   return true;
 }
-
 bool StreamLexer::capture(std::vector<uint8_t> *image) {
-  if (!reserve(kInputAt + module_->imageMax + kInputSlack)) {
-    return false;
-  }
-  uint32_t length = 0;
-  if (downstream_highlights_capture(&module_->instance, kInputAt, &length) != WASM_RT_TRAP_NONE ||
-      length > module_->imageMax) {
-    return false;
-  }
-  const uint8_t *data = module_->memory().data;
-  image->assign(data + kInputAt, data + kInputAt + length);
+  const uint8_t *data = nullptr;
+  size_t length = 0;
+  image->clear();
+  if (!module_->functions.capture(module_->instance, &data, &length) || (length > 0 && data == nullptr)) return false;
+  if (length > 0) image->assign(data, data + length);
   return true;
 }
 
+bool codeHighlighterAvailable() { return functions().create != nullptr; }
+void installCodeHighlighterResolver(CodeHighlighterResolver resolver) {
+  auto &shared = installed();
+  std::lock_guard<std::mutex> lock(shared.mutex);
+  shared.resolver = resolver;
+}
+void installCodeHighlighter(const DownstreamCodeHighlighterFunctions *api) {
+  if (!valid(api)) return;
+  auto &shared = installed();
+  std::lock_guard<std::mutex> lock(shared.mutex);
+  shared.functions = *api;
+  shared.resolver = nullptr;
+}
 } // namespace downstream
+
+extern "C" void DownstreamInstallCodeHighlighter(const void *functions) {
+  downstream::installCodeHighlighter(static_cast<const DownstreamCodeHighlighterFunctions *>(functions));
+}

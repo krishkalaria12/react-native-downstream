@@ -648,9 +648,24 @@ void testCrossLineLookahead() {
         "zero-budget retries finish with whole-input lookahead");
 }
 
+void testDisabledHighlighting() {
+  const uint64_t before = StreamLexer::created();
+  IncrementalParser parser(ParseMode::IncrementalTail,
+      ParseOptions(ParseFlags::NoCodeHighlight));
+  parser.append("```js\nconst answer = ");
+  parser.parse(false);
+  parser.append("42;\n```\n\nnext paragraph");
+  const auto result = parser.parse(true);
+  CHECK(result.status == ParseStatus::Ok, "a view without the plugin still parses code");
+  CHECK(result.document->blocks[0].tokens.empty(), "disabled highlighting produces no token runs");
+  CHECK(parser.counters().highlightBytesLexed == 0, "disabled highlighting does no lexer work");
+  CHECK(StreamLexer::created() == before, "disabled highlighting creates no lexer");
+}
+
 } // namespace
 
 int main() {
+  testDisabledHighlighting();
   testCrossLineLookahead();
   testLanguages();
   testTokens();

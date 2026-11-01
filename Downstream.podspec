@@ -21,8 +21,7 @@ Pod::Spec.new do |s|
     "src/cpp/session/*.{h,cpp}",
     "src/cpp/fabric/*.{h,cpp}",
     "src/cpp/remend/*.{h,cpp}",
-    # HighlightsModule.c compiles the vendored lexer module in src/cpp/wasm as
-    # one translation unit, so none of that directory is a source of its own.
+    # Small engine-independent highlighting policy and optional-lexer adapter.
     "src/cpp/highlight/*.{h,c,cpp}",
     "src/cpp/theme/*.{h,cpp}",
     # Math: the sizing, the display-list decoder, and the block pass. Listed
@@ -32,11 +31,10 @@ Pod::Spec.new do |s|
     "src/cpp/md4c/md4c.{c,h}",
     "src/cpp/md4c/entity.{c,h}",
   ]
-  # The lexer module, its runtime, and their license notices, which have to ship.
-  # Included by HighlightsModule.c and found on the header search path, never
-  # compiled or mapped on their own: its headers have generic names.
-  s.preserve_paths = "src/cpp/wasm/**/*"
-  s.private_header_files = "src/ios/**/*.h", "src/cpp/**/*.h"
+  s.public_header_files = "src/cpp/highlight/DownstreamCodeHighlighter.h"
+  s.private_header_files = Dir.glob("src/{ios,cpp}/**/*.h", base: __dir__).reject {
+    |path| path.end_with?("/DownstreamCodeHighlighter.h")
+  }
 
   s.pod_target_xcconfig = {
     "HEADER_SEARCH_PATHS" => [
@@ -54,9 +52,6 @@ Pod::Spec.new do |s|
       # `MathBlocks.h`, so the directory itself has to be on the path and not only
       # its parent.
       "\"$(PODS_TARGET_SRCROOT)/src/cpp/math\"",
-      "\"$(PODS_TARGET_SRCROOT)/src/cpp/wasm\"",
-      "\"$(PODS_TARGET_SRCROOT)/src/cpp/wasm/wasm-rt\"",
-      "\"$(PODS_TARGET_SRCROOT)/src/cpp/wasm/simde\"",
     ].join(" "),
     # Other libraries, such as Enriched Markdown, link their own md4c.
     # Prefixing ours keeps the linker from binding our calls to theirs. The lexer

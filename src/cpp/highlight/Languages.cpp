@@ -1,4 +1,4 @@
-// GENERATED FILE. The lexer table of src/cpp/wasm/highlights.c, by alias.
+// GENERATED FILE. The lexer table of code/cpp/wasm/highlights.c, by alias.
 //
 // Ids are the lexers' own language numbers, so this table and the module
 // must change together. Aliases are lower-case and sorted for binary search.
