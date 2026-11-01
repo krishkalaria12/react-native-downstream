@@ -1,4 +1,15 @@
-export { DownstreamMarkdown } from './DownstreamMarkdown';
+export { Downstream, DownstreamMarkdown } from './Downstream';
+export { DownstreamProvider } from './DownstreamProvider';
+export type { DownstreamProviderProps } from './DownstreamProvider';
+export type {
+  DownstreamProps,
+  DownstreamOptions,
+  DownstreamCodeBlockOptions,
+  DownstreamTableOptions,
+  DownstreamImagesOptions,
+  DownstreamLinksOptions,
+  DownstreamComponents,
+} from './downstreamOptions';
 export {
   defaultDuration,
   defaultMaxBacklogMs,
@@ -21,7 +32,7 @@ export {
   defaultTranslations,
   resolveMaxHeight,
 } from './types';
-export type { DownstreamMarkdownProps } from './DownstreamMarkdown';
+export type { DownstreamProps as DownstreamMarkdownProps } from './downstreamOptions';
 export type { ResolvedAnimate } from './animation';
 export type { MarkdownLinkSafetyModalProps } from './types';
 export type { ResolvedMath } from './parseFlags';
