@@ -9,7 +9,7 @@ Parsing and text preparation run on native worker threads. Streaming updates reu
 ## What you get
 
 - GitHub-flavored Markdown with headings, nested lists, task lists, tables, blockquotes, strikethrough, footnotes, and alerts.
-- A stream controller with append, finish, reset, and optional previews for incomplete Markdown.
+- Incremental streaming from a growing string, with previews for incomplete Markdown and an optional stream controller.
 - Syntax-highlighted code with line numbers, filenames, copy, download, wrap, and expand controls.
 - Scrollable tables with copy and export formats, an expand button, and a full-screen view.
 - Light and dark themes, ready-made presets, custom fonts, and styles for individual Markdown elements.
@@ -78,7 +78,39 @@ Links work with a confirmation before opening by default. Pass `onLinkPress` to 
 
 ## Stream a response
 
-For an append-only response, create one controller per message and keep it for that message's lifetime. Feed it text chunks from your API or SDK:
+Pass the growing text as `markdown` and set `isAnimating` while the response is arriving. Downstream owns the incremental session and appends only the added text. With the AI SDK's `useChat`:
+
+```tsx
+import { useChat } from '@ai-sdk/react';
+import { DownstreamMarkdown } from 'react-native-downstream';
+
+export function Chat() {
+  const { messages, status } = useChat();
+  return messages.map((message) =>
+    message.parts.map((part, index) =>
+      part.type === 'text' ? (
+        <DownstreamMarkdown
+          key={`${message.id}-${index}`}
+          markdown={part.text}
+          isAnimating={
+            status === 'streaming' &&
+            message.role === 'assistant' &&
+            message.id === messages.at(-1)?.id
+          }
+          animated
+          caret="block"
+        />
+      ) : null
+    )
+  );
+}
+```
+
+Incomplete Markdown is previewed by default while streaming. Set `preview={false}` to show literal markers, or pass an object to enable selected preview features. Setting `isAnimating` to false finishes the response and removes provisional formatting. Replacements reset the session; growth after finish starts a new generation. Sessions are disposed when their views unmount. Messages that mount already settled use a one-shot parse without creating sessions.
+
+### Advanced: feed chunks without React updates
+
+Create one controller per message when your transport emits chunks directly, or when a reply must continue while its list row is unmounted:
 
 ```tsx
 import {
@@ -116,7 +148,7 @@ Create the controller outside the component's render path, such as in the action
 
 ### Make incomplete Markdown readable
 
-By default, an unfinished span such as `**hello` shows its literal markers. `preview: true` applies provisional formatting while closing markers are still arriving. You can enable only the previews you want:
+A growing `markdown` string previews unfinished spans such as `**hello` by default. Controllers default to literal markers; use `preview: true` to enable provisional formatting. You can enable only the previews you want on either the view's `preview` prop or the controller's option:
 
 ```tsx
 const stream = createMarkdownStream({

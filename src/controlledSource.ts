@@ -10,9 +10,13 @@ export type SourceProblem = Pick<MarkdownErrorEvent, 'code' | 'message'>;
  * receives UTF-8, where a lone surrogate can no longer be detected, so the
  * check has to happen here.
  */
-export function checkedUtf8Bytes(source: string): number | SourceProblem {
-  let bytes = 0;
-  for (let i = 0; i < source.length; i++) {
+export function checkedUtf8Bytes(
+  source: string,
+  start = 0,
+  initialBytes = 0
+): number | SourceProblem {
+  let bytes = initialBytes;
+  for (let i = start; i < source.length; i++) {
     const unit = source.charCodeAt(i);
     if (unit < 0x80) {
       bytes += 1;
@@ -38,6 +42,31 @@ export function checkedUtf8Bytes(source: string): number | SourceProblem {
     }
   }
   return bytes;
+}
+
+export type CheckedStreamingSource = Readonly<{
+  source: string;
+  bytes: number;
+}>;
+
+/** Validate only the suffix when a controlled response grows. */
+export function checkStreamingSource(
+  previous: CheckedStreamingSource,
+  input: string,
+  streaming: boolean
+): CheckedStreamingSource | SourceProblem {
+  // An SDK can split a UTF-16 pair across updates. Native must only see the
+  // complete pair; a response that finishes with half a pair is still invalid.
+  const last = input.charCodeAt(input.length - 1);
+  const source =
+    streaming && last >= 0xd800 && last <= 0xdbff ? input.slice(0, -1) : input;
+  const extendsPrevious = source.startsWith(previous.source);
+  const bytes = checkedUtf8Bytes(
+    source,
+    extendsPrevious ? previous.source.length : 0,
+    extendsPrevious ? previous.bytes : 0
+  );
+  return typeof bytes === 'number' ? { source, bytes } : bytes;
 }
 
 export function checkSource(source: string): SourceProblem | null {

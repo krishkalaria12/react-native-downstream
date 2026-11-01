@@ -25,6 +25,7 @@ vi.mock('../src/NativeDownstreamSession', async () => {
     ...realEngineModule,
     default: {
       ...realEngineModule.default,
+      setParseTags: vi.fn(),
       tagSlots: queries.controlled,
       sessionTagSlots: queries.stream,
       sessionTagSlotChanges: queries.delta,
@@ -202,6 +203,47 @@ describe('tag renderer query reuse', () => {
     mount(<Capture revision={3} generation={1} />);
     expect(queries.delta.mock.calls.at(-1)?.[4]).toBe(0);
     expect(host.textContent).toBe('replacement');
+  });
+
+  it('growing controlled strings use session tag slots', () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(
+      (callback) => {
+        frames.push(callback);
+        return frames.length;
+      }
+    );
+    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+    const plugins = { tags: [{ name: 'chart', component: Chart }] };
+    mount(
+      <DownstreamMarkdown
+        markdown={source}
+        isAnimating
+        allowedTags={{ chart: true }}
+        plugins={plugins}
+      />
+    );
+    act(() => {
+      for (const callback of frames.splice(0)) callback(0);
+    });
+    act(() => {
+      for (const callback of frames.splice(0)) callback(0);
+    });
+    expect(queries.controlled).not.toHaveBeenCalled();
+    expect(queries.stream).toHaveBeenCalled();
+    expect(host.textContent).toBe('first');
+    mount(
+      <DownstreamMarkdown
+        markdown={source}
+        isAnimating={false}
+        allowedTags={{ chart: true }}
+        plugins={plugins}
+      />
+    );
+    act(() => {
+      for (const callback of frames.splice(0)) callback(0);
+    });
+    expect(queries.controlled).not.toHaveBeenCalled();
   });
 
   it('equivalent inline plugins and policies do not query again on parent updates', () => {

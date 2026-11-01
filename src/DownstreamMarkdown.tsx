@@ -20,11 +20,13 @@ import {
 import {
   acceptControlledSource,
   initialControlledSource,
+  type ControlledSource,
 } from './controlledSource';
 import { resolveAllowedTags, type ResolvedAllowedTags } from './allowedTags';
 import { resolveControls, type ResolvedControls } from './controls';
 import NativeDownstreamMarkdownView from './DownstreamMarkdownViewNativeComponent';
 import { getStreamState, type StreamState } from './createMarkdownStream';
+import { useControlledMarkdownStream } from './useControlledMarkdownStream';
 import {
   FenceSlots,
   resolveRenderers,
@@ -1093,8 +1095,29 @@ export function DownstreamMarkdown(props: DownstreamMarkdownProps) {
   );
 }
 
-function ControlledMarkdown({
-  markdown,
+function ControlledMarkdown(
+  props: Extract<MarkdownViewProps, { markdown: string }>
+) {
+  const [streaming, setStreaming] = useState(props.isAnimating === true);
+  const [controlled, setControlled] = useState(() =>
+    initialControlledSource(props.isAnimating === true ? '' : props.markdown)
+  );
+  // Once activated, retain the owned session through finish and later edits.
+  const active = streaming || props.isAnimating === true;
+  if (active && !streaming) setStreaming(true);
+  let current = controlled;
+  if (!active && current.input !== props.markdown) {
+    current = acceptControlledSource(current, props.markdown);
+    setControlled(current);
+  }
+  const stream = useControlledMarkdownStream(props, active, current.source);
+  if (!active) return <StaticMarkdown {...props} controlled={current} />;
+  if (!stream) return null;
+  return <StreamMarkdown {...props} markdown={undefined} stream={stream} />;
+}
+
+function StaticMarkdown({
+  controlled: current,
   style,
   selectable = true,
   syntaxHighlighting = true,
@@ -1125,18 +1148,9 @@ function ControlledMarkdown({
   renderTableFullscreen,
   onError,
   ...rest
-}: Extract<MarkdownViewProps, { markdown: string }>) {
-  const [controlled, setControlled] = useState(() =>
-    initialControlledSource(markdown)
-  );
-  // Derive the next accepted source during render so native never sees a
-  // rejected value.
-  let current = controlled;
-  if (current.input !== markdown) {
-    current = acceptControlledSource(current, markdown);
-    setControlled(current);
-  }
-
+}: Extract<MarkdownViewProps, { markdown: string }> & {
+  controlled: ControlledSource;
+}) {
   const { error, generation } = current;
   useEffect(() => {
     if (error) {

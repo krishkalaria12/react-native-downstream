@@ -529,6 +529,47 @@ describe('fence renderers, the code card fallback', () => {
 });
 
 describe('fence renderers while streaming', () => {
+  it('a growing controlled string reads session slots and settles at finish', () => {
+    const seen: CustomRendererProps[] = [];
+    const plugins = {
+      renderers: [{ language: 'mermaid', component: recorder(seen) }],
+    };
+    mount(
+      <DownstreamMarkdown
+        markdown={'```mermaid\ngraph TD;\n'}
+        isAnimating
+        plugins={plugins}
+      />
+    );
+    runFrames();
+    expect(seen.at(-1)).toMatchObject({
+      code: 'graph TD;',
+      isIncomplete: true,
+    });
+    rerender(
+      <DownstreamMarkdown
+        markdown={'```mermaid\ngraph TD;\nA-->B\n```'}
+        isAnimating
+        plugins={plugins}
+      />
+    );
+    runFrames();
+    expect(seen.at(-1)).toMatchObject({
+      code: 'graph TD;\nA-->B',
+      isIncomplete: true,
+    });
+    expect(slotWork.async).toBe(0);
+    rerender(
+      <DownstreamMarkdown
+        markdown={'```mermaid\ngraph TD;\nA-->B\n```'}
+        isAnimating={false}
+        plugins={plugins}
+      />
+    );
+    runFrames();
+    expect(seen.at(-1)?.isIncomplete).toBe(false);
+    expect(slots()).toHaveLength(1);
+  });
   it('a growing fence is incomplete and keeps its component', () => {
     const seen: CustomRendererProps[] = [];
     const created = stream();

@@ -1373,6 +1373,12 @@ type MarkdownViewBaseProps = Readonly<{
    */
   isAnimating?: boolean;
   /**
+   * Provisional formatting for incomplete Markdown. Enabled by default for a
+   * streaming `markdown` string. A controller keeps its own preview policy.
+   * Finishing a response always removes provisional formatting.
+   */
+  preview?: boolean | MarkdownPreviewOptions;
+  /**
    * A caret after the newest text, drawn while animating. None by default.
    *
    * It takes the color of the last character, sits after the last block of prose

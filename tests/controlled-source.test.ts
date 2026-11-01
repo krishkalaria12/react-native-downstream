@@ -2,6 +2,7 @@ import {
   acceptControlledSource,
   checkSource,
   checkedUtf8Bytes,
+  checkStreamingSource,
   initialControlledSource,
   MAX_SOURCE_BYTES,
 } from '../src/controlledSource';
@@ -43,6 +44,55 @@ describe('checkSource', () => {
     const cjk = '漢'.repeat(Math.floor(MAX_SOURCE_BYTES / 3) + 1);
     expect(cjk.length).toBeLessThan(MAX_SOURCE_BYTES);
     expect(checkSource(cjk)?.code).toBe('input_limit');
+  });
+});
+
+describe('checkStreamingSource', () => {
+  it('counts only appended UTF-8 bytes and validates replacements in full', () => {
+    const first = { source: '漢😀', bytes: 7 };
+    expect(checkStreamingSource(first, '漢😀é', true)).toEqual({
+      source: '漢😀é',
+      bytes: 9,
+    });
+    expect(checkStreamingSource(first, 'é', true)).toEqual({
+      source: 'é',
+      bytes: 2,
+    });
+    expect(checkedUtf8Bytes('\ud800é', 1, 7)).toBe(9);
+  });
+
+  it('holds a trailing high surrogate only while streaming', () => {
+    const previous = { source: 'a', bytes: 1 };
+    expect(checkStreamingSource(previous, 'a\ud83d', true)).toEqual(previous);
+    expect(checkStreamingSource(previous, 'a😀', true)).toEqual({
+      source: 'a😀',
+      bytes: 5,
+    });
+    expect(checkStreamingSource(previous, 'a\ud83d', false)).toMatchObject({
+      code: 'invalid_input',
+    });
+    expect(checkStreamingSource(previous, 'a\ud83dx', true)).toMatchObject({
+      code: 'invalid_input',
+    });
+    expect(checkStreamingSource(previous, 'a\udc00', true)).toMatchObject({
+      code: 'invalid_input',
+    });
+  });
+
+  it('rejects suffixes that exceed the running byte limit', () => {
+    const previous = {
+      source: 'a'.repeat(MAX_SOURCE_BYTES - 2),
+      bytes: MAX_SOURCE_BYTES - 2,
+    };
+    expect(checkStreamingSource(previous, previous.source + 'é', true)).toEqual(
+      {
+        source: previous.source + 'é',
+        bytes: MAX_SOURCE_BYTES,
+      }
+    );
+    expect(
+      checkStreamingSource(previous, previous.source + '漢', true)
+    ).toMatchObject({ code: 'input_limit' });
   });
 });
 

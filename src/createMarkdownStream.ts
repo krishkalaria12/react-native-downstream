@@ -4,7 +4,12 @@ import NativeDownstreamSession, {
   type SessionErrorEvent,
   type SnapshotReadyEvent,
 } from './NativeDownstreamSession';
-import { checkedUtf8Bytes, MAX_SOURCE_BYTES } from './controlledSource';
+import {
+  checkedUtf8Bytes,
+  checkStreamingSource,
+  MAX_SOURCE_BYTES,
+  type CheckedStreamingSource,
+} from './controlledSource';
 import { resolveAllowedTags } from './allowedTags';
 import { mathAvailable, resolveParseFlags } from './parseFlags';
 import { emitJsStreamTrace } from './streamTrace';
@@ -164,6 +169,8 @@ class StreamState implements MarkdownStreamController {
   /// is the default rather than a requirement.
   private streaming = false;
   private animationListeners = new Set<(animating: boolean) => void>();
+  private controlledSource: CheckedStreamingSource = { source: '', bytes: 0 };
+  private controlledInput?: { input: string; streaming: boolean };
 
   constructor(options: MarkdownStreamOptions, mode: ParseMode) {
     this.sessionId = `downstream-${Date.now()}-${++nextSession}`;
@@ -228,6 +235,10 @@ class StreamState implements MarkdownStreamController {
         `Queued Markdown exceeds ${MAX_QUEUED_BYTES} bytes of UTF-8.`
       );
     }
+    this.appendChecked(chunk, bytes);
+  }
+
+  private appendChecked(chunk: string, bytes: number): void {
     // The first accepted chunk of a generation is where text starts arriving,
     // which is the transition `onAnimationStart` reports. A chunk that only
     // refreshes a preview policy does not, so this is not on `setPreview`.
@@ -258,6 +269,51 @@ class StreamState implements MarkdownStreamController {
         this.flush();
       });
     }
+  }
+
+  /** Internal string-view path. The whole source is bounded to 1 MiB. */
+  updateControlledSource(input: string, streaming: boolean): string {
+    this.assertActive();
+    if (
+      this.controlledInput?.input === input &&
+      this.controlledInput.streaming === streaming
+    )
+      return this.controlledSource.source;
+    this.controlledInput = { input, streaming };
+    const next = checkStreamingSource(this.controlledSource, input, streaming);
+    if ('code' in next) {
+      this.emitError(next.code, next.message, this.sequence);
+      // A rejected final update must still settle the last valid document.
+      if (!streaming) this.finish();
+      return this.controlledSource.source;
+    }
+    const previous = this.controlledSource.source;
+    if (
+      (this.finished && (streaming || next.source !== previous)) ||
+      !next.source.startsWith(previous)
+    ) {
+      this.reset(next.source);
+    } else if (next.source !== previous) {
+      const addedBytes = next.bytes - this.controlledSource.bytes;
+      if (addedBytes <= MAX_CHUNK_BYTES) {
+        this.appendChecked(next.source.slice(previous.length), addedBytes);
+      } else {
+        // At most 16K UTF-16 units fit in one chunk, even for three-byte BMP
+        // characters. Keep surrogate pairs together at every boundary.
+        for (let start = previous.length; start < next.source.length;) {
+          let end = Math.min(start + 16 * 1024, next.source.length);
+          const last = next.source.charCodeAt(end - 1);
+          if (last >= 0xd800 && last <= 0xdbff) end--;
+          const chunk = next.source.slice(start, end);
+          const bytes = checkedUtf8Bytes(chunk) as number;
+          this.appendChecked(chunk, bytes);
+          start = end;
+        }
+      }
+    }
+    this.controlledSource = next;
+    if (!streaming) this.finish();
+    return next.source;
   }
 
   /** Send accepted chunks immediately. Useful before finish and in deterministic tests. */
@@ -362,6 +418,8 @@ class StreamState implements MarkdownStreamController {
     this.sourcePages = [];
     this.sourcePieces = [];
     this.animationListeners.clear();
+    this.controlledSource = { source: '', bytes: 0 };
+    this.controlledInput = undefined;
     controllers.delete(this.sessionId);
     NativeDownstreamSession.dispose(this.sessionId);
     stopListeningIfUnused();
