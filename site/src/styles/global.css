@@ -19,10 +19,14 @@
   --color-green: #2f7d5c;
   --color-code: #1f1d1a;
 
-  --font-display: 'Bricolage Grotesque Variable', 'Bricolage Grotesque', system-ui, sans-serif;
-  --font-sans: 'Instrument Sans Variable', 'Instrument Sans', system-ui, sans-serif;
+  --font-display:
+    'Bricolage Grotesque Variable', 'Bricolage Grotesque', system-ui, sans-serif;
+  --font-sans:
+    'Instrument Sans Variable', 'Instrument Sans', system-ui, sans-serif;
   --font-serif: 'Newsreader Variable', Newsreader, Georgia, serif;
-  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  --font-mono:
+    'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular,
+    monospace;
 
   --shadow-hard: 5px 5px 0 var(--color-ink);
   --shadow-hard-sm: 3px 3px 0 var(--color-ink);
@@ -241,7 +245,9 @@
     text-decoration-color: rgb(28 27 25 / 35%);
     text-decoration-thickness: 1.5px;
     text-underline-offset: 4px;
-    transition: text-decoration-color 140ms ease, color 140ms ease;
+    transition:
+      text-decoration-color 140ms ease,
+      color 140ms ease;
   }
 
   .text-link:hover {
@@ -341,7 +347,9 @@
     cursor: pointer;
     font-size: 12.5px;
     font-weight: 600;
-    transition: background-color 140ms ease, color 140ms ease;
+    transition:
+      background-color 140ms ease,
+      color 140ms ease;
   }
 
   .code-copy:hover {
@@ -424,7 +432,9 @@
     color: var(--color-ink-faint);
     font-weight: 500;
     opacity: 0;
-    transition: opacity 120ms ease, color 120ms ease;
+    transition:
+      opacity 120ms ease,
+      color 120ms ease;
   }
 
   .prose-docs :is(h2, h3):hover .heading-anchor,

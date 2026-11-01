@@ -87,8 +87,7 @@ builds passed both with and without the code package. CI now builds both
 configurations. Package dry runs confirm the core omits the lexer/runtime and
 the code package contains them and their licenses.
 
-The repository-wide formatting check still reports two unchanged files:
-`plans/api-and-plugins.html` and `site/src/styles/global.css`.
+Repository-wide formatting now passes after formatting the plan HTML and site stylesheet.
 
 Matched unstripped engine archive measurements are recorded in the
 [size report](../benchmarks/phone/CODE_PACKAGE_SIZE.md). Core archive size fell
