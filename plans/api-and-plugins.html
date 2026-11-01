@@ -1,0 +1,911 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan · One string in, plugins for the heavy parts — react-native-downstream</title>
+<style>
+  :root {
+    --paper: #f4efd9;
+    --paper-deep: #ebe5cc;
+    --cream: #fffcf2;
+    --ink: #1c1b19;
+    --ink-soft: #4d4a42;
+    --ink-faint: #7d786a;
+    --rule: #d9d1b4;
+    --yellow: #f5d94f;
+    --yellow-soft: #fbeeaa;
+    --blue: #3654d9;
+    --blue-deep: #24399e;
+    --blue-soft: #e1e5fb;
+    --coral: #f46d52;
+    --coral-soft: #fde0d8;
+    --green: #2f7d5c;
+    --code: #1f1d1a;
+
+    --font-display: 'Bricolage Grotesque Variable', 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+    --font-sans: 'Instrument Sans Variable', 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+    --font-serif: 'Newsreader Variable', Newsreader, Charter, Georgia, serif;
+    --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    --shadow-hard: 5px 5px 0 var(--ink);
+    --shadow-hard-sm: 3px 3px 0 var(--ink);
+    --measure: 68ch;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 1.5rem; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 16px/1.6 var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--blue-deep); text-underline-offset: 3px; }
+  a:focus-visible, summary:focus-visible {
+    outline: 3px solid var(--blue);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  code, pre { font-family: var(--font-mono); }
+  :not(pre) > code {
+    font-size: .86em;
+    background: var(--paper-deep);
+    border: 1px solid var(--rule);
+    padding: .05em .35em;
+    border-radius: 4px;
+    overflow-wrap: anywhere;
+  }
+
+  .shell {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 2.5rem 1.25rem 5rem;
+    display: grid;
+    gap: 2.5rem;
+  }
+  @media (min-width: 1100px) {
+    .shell { grid-template-columns: 210px minmax(0, 1fr); gap: 3.5rem; }
+  }
+
+  /* ---------- contents rail ---------- */
+  nav.toc { font-size: .9rem; }
+  nav.toc h2 {
+    font: 600 .78rem/1 var(--font-sans);
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 .9rem;
+  }
+  nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: .35rem; }
+  nav.toc a { text-decoration: none; color: var(--ink-soft); display: block; padding: .15rem 0; }
+  nav.toc a:hover { color: var(--ink); text-decoration: underline; }
+  nav.toc .n { font-family: var(--font-mono); color: var(--ink-faint); font-size: .8em; margin-right: .4rem; }
+  @media (min-width: 1100px) {
+    nav.toc { position: sticky; top: 2rem; align-self: start; }
+  }
+  @media (max-width: 1099px) {
+    nav.toc { border-bottom: 1px solid var(--rule); padding-bottom: 1.25rem; }
+    nav.toc ol { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  }
+
+  main { min-width: 0; }
+
+  /* ---------- header ---------- */
+  header.top { margin-bottom: 2.75rem; }
+  .eyebrow {
+    font: 500 .85rem/1.3 var(--font-mono);
+    color: var(--ink-soft);
+    margin: 0 0 1rem;
+  }
+  h1 {
+    font: 750 clamp(2.1rem, 4.6vw, 3.5rem)/1.04 var(--font-display);
+    letter-spacing: -.025em;
+    margin: 0 0 1.1rem;
+    max-width: 18ch;
+  }
+  h1 mark {
+    background: linear-gradient(transparent 58%, var(--yellow) 58%, var(--yellow) 92%, transparent 92%);
+    color: inherit;
+    padding: 0 .05em;
+  }
+  .lede {
+    font: 400 1.22rem/1.5 var(--font-serif);
+    color: var(--ink-soft);
+    max-width: var(--measure);
+    margin: 0 0 1.4rem;
+  }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: .5rem 1.5rem;
+    font-size: .88rem; color: var(--ink-soft);
+    margin: 0; padding: 0; list-style: none;
+  }
+  .meta b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- sections ---------- */
+  section { margin: 0 0 4rem; }
+  h2 {
+    font: 700 1.75rem/1.15 var(--font-display);
+    letter-spacing: -.015em;
+    margin: 0 0 1rem;
+    display: flex; align-items: baseline; gap: .75rem;
+  }
+  h2 .n {
+    font: 500 .95rem/1 var(--font-mono);
+    color: var(--ink-faint);
+  }
+  h3 {
+    font: 650 1.12rem/1.3 var(--font-display);
+    margin: 2rem 0 .6rem;
+  }
+  p, li { max-width: var(--measure); }
+  .prose p { margin: 0 0 1rem; }
+
+  /* ---------- before / after diptych ---------- */
+  .diptych {
+    display: grid; gap: 1.5rem;
+    margin: 1.75rem 0 1rem;
+  }
+  @media (min-width: 900px) { .diptych { grid-template-columns: 1fr 1fr; } }
+  figure.pane { margin: 0; min-width: 0; display: flex; flex-direction: column; }
+  figure.pane figcaption {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 1rem;
+    font-size: .9rem; margin-bottom: .55rem;
+  }
+  figure.pane figcaption b { font: 650 1rem/1.2 var(--font-display); }
+  figure.pane figcaption span { color: var(--ink-faint); font-family: var(--font-mono); font-size: .8rem; }
+  pre {
+    margin: 0;
+    background: var(--code);
+    color: #efe9d6;
+    border: 2px solid var(--ink);
+    border-radius: 10px;
+    box-shadow: var(--shadow-hard);
+    padding: 1.1rem 1.2rem;
+    font-size: .8rem;
+    line-height: 1.6;
+    overflow-x: auto;
+    tab-size: 2;
+    flex: 1;
+  }
+  .pane.before pre { box-shadow: 5px 5px 0 var(--coral); }
+  .pane.after pre { box-shadow: 5px 5px 0 var(--yellow); }
+  pre .k { color: #f0a48f; }
+  pre .s { color: #e8d27a; }
+  pre .t { color: #9fb2ff; }
+  pre .c { color: #8f8a7b; font-style: italic; }
+  pre .x { background: rgb(244 109 82 / 22%); border-radius: 3px; }
+  pre .g { background: rgb(245 217 79 / 18%); border-radius: 3px; }
+  .count {
+    display: flex; flex-wrap: wrap; gap: .4rem 1.25rem;
+    font-size: .88rem; color: var(--ink-soft);
+    margin: 1rem 0 0; padding: 0; list-style: none;
+  }
+  .count li::before { content: "– "; color: var(--ink-faint); }
+
+  /* ---------- findings ---------- */
+  .findings { display: grid; gap: 1rem; margin: 1.25rem 0 0; padding: 0; list-style: none; counter-reset: f; }
+  @media (min-width: 900px) { .findings { grid-template-columns: repeat(3, 1fr); } }
+  .findings li {
+    background: var(--cream);
+    border: 2px solid var(--ink);
+    border-radius: 10px;
+    padding: 1rem 1.1rem 1.1rem;
+    counter-increment: f;
+    max-width: none;
+  }
+  .findings li::before {
+    content: counter(f, decimal-leading-zero);
+    font: 500 .8rem/1 var(--font-mono);
+    color: var(--ink-faint);
+    display: block; margin-bottom: .55rem;
+  }
+  .findings b { display: block; font: 650 1.02rem/1.3 var(--font-display); margin-bottom: .35rem; }
+  .findings p { margin: 0; font-size: .93rem; color: var(--ink-soft); }
+  .findings .src { margin-top: .6rem; font-size: .8rem; color: var(--ink-faint); }
+
+  /* ---------- decision ledger ---------- */
+  .ledger { display: grid; gap: 0; margin-top: 1.25rem; border-top: 2px solid var(--ink); }
+  .decision {
+    display: grid;
+    gap: .35rem 1.5rem;
+    padding: 1.1rem 0 1.2rem;
+    border-bottom: 1px solid var(--rule);
+  }
+  @media (min-width: 900px) {
+    .decision { grid-template-columns: 3.2rem minmax(0, 1fr) minmax(0, 1.05fr); }
+  }
+  .decision .id {
+    font: 600 .85rem/1.6 var(--font-mono);
+    color: var(--ink-faint);
+  }
+  .decision .q { font: 600 1rem/1.4 var(--font-display); margin: 0 0 .5rem; max-width: none; }
+  .decision .chosen {
+    margin: 0;
+    display: inline;
+    background: var(--yellow-soft);
+    box-shadow: inset 0 -.5em 0 var(--yellow);
+    padding: .05em .2em;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+    font-weight: 500;
+  }
+  .decision .chosen code { background: rgb(255 252 242 / 55%); border-color: rgb(28 27 25 / 18%); }
+  .decision .tag {
+    display: inline-block;
+    font: 600 .68rem/1 var(--font-mono);
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    border: 1.5px solid var(--ink);
+    border-radius: 999px;
+    padding: .28rem .5rem .22rem;
+    margin-left: .35rem;
+    vertical-align: .12em;
+    background: var(--cream);
+  }
+  .decision .set-aside {
+    margin: .7rem 0 0; padding: 0; list-style: none;
+    font-size: .88rem; color: var(--ink-faint);
+  }
+  .decision .set-aside li { max-width: none; }
+  .decision .set-aside s { text-decoration-thickness: 1px; text-decoration-color: var(--ink-faint); }
+  .decision .why { font-size: .93rem; color: var(--ink-soft); margin: 0; max-width: none; }
+  .decision .why b { color: var(--ink); font-weight: 600; }
+  .note {
+    display: block; margin-top: .55rem;
+    font-size: .85rem; color: var(--blue-deep);
+  }
+
+  /* ---------- phases ---------- */
+  .spine {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+    margin: 1.25rem 0 2rem;
+    font-size: .9rem;
+  }
+  .spine .stop {
+    border: 2px solid var(--ink);
+    border-radius: 999px;
+    padding: .35rem .85rem;
+    background: var(--cream);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .spine .stop small { font-weight: 400; color: var(--ink-faint); font-family: var(--font-mono); margin-left: .35rem; }
+  .spine .arrow { color: var(--ink-faint); font-family: var(--font-mono); }
+  .spine .par { flex-basis: 100%; color: var(--ink-soft); font-size: .86rem; margin: .25rem 0 0; }
+
+  article.phase {
+    background: var(--cream);
+    border: 2px solid var(--ink);
+    border-radius: 14px;
+    box-shadow: var(--shadow-hard);
+    padding: 1.6rem 1.5rem 1.4rem;
+    margin: 0 0 2.25rem;
+  }
+  @media (min-width: 700px) { article.phase { padding: 2rem 2.1rem 1.7rem; } }
+  .phase-head {
+    display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+    gap: .5rem 1rem; margin-bottom: .6rem;
+  }
+  .phase-head h3 { margin: 0; font-size: 1.4rem; font-weight: 700; }
+  .phase-head h3 .n { font: 500 .95rem/1 var(--font-mono); color: var(--ink-faint); margin-right: .5rem; }
+  .release {
+    font: 600 .78rem/1 var(--font-mono);
+    border-radius: 6px;
+    padding: .38rem .55rem;
+    border: 1.5px solid var(--ink);
+    white-space: nowrap;
+  }
+  .release.safe { background: #dcefe5; }
+  .release.break { background: var(--coral-soft); }
+  .phase .goal { font: 400 1.08rem/1.5 var(--font-serif); color: var(--ink-soft); margin: 0 0 1.2rem; }
+  .phase-body { display: grid; gap: 1.5rem; }
+  @media (min-width: 960px) { .phase-body { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 2.25rem; } }
+  .phase h4 {
+    font: 600 .78rem/1 var(--font-sans);
+    letter-spacing: .06em; text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 .75rem;
+  }
+  ol.tasks { margin: 0; padding: 0; list-style: none; counter-reset: t; display: grid; gap: .8rem; }
+  ol.tasks > li {
+    counter-increment: t;
+    display: grid; grid-template-columns: 1.9rem minmax(0, 1fr);
+    font-size: .95rem;
+    max-width: none;
+  }
+  ol.tasks > li::before {
+    content: counter(t);
+    font: 600 .8rem/1.75 var(--font-mono);
+    color: var(--ink);
+    width: 1.45rem; height: 1.45rem;
+    border: 1.5px solid var(--ink);
+    border-radius: 50%;
+    display: grid; place-items: center;
+    line-height: 1;
+    margin-top: .1rem;
+  }
+  ol.tasks .files { display: block; font-size: .8rem; color: var(--ink-faint); margin-top: .2rem; }
+  ul.checks { margin: 0; padding: 0; list-style: none; display: grid; gap: .7rem; }
+  ul.checks li {
+    position: relative; padding-left: 1.6rem;
+    font-size: .93rem;
+    max-width: none;
+  }
+  ul.checks li::before {
+    content: ""; position: absolute; left: 0; top: .32rem;
+    width: .9rem; height: .9rem;
+    border: 1.5px solid var(--ink);
+    border-radius: 3px;
+    background: var(--paper);
+  }
+  .depends {
+    margin: 1.4rem 0 0; padding-top: 1rem;
+    border-top: 1px dashed var(--rule);
+    font-size: .88rem; color: var(--ink-soft);
+    max-width: none;
+  }
+  .depends b { color: var(--ink); }
+
+  /* ---------- tables ---------- */
+  .table-wrap {
+    overflow-x: auto;
+    border: 2px solid var(--ink);
+    border-radius: 10px;
+    background: var(--cream);
+    margin-top: 1.25rem;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; min-width: 640px; }
+  th, td { text-align: left; vertical-align: top; padding: .7rem .9rem; border-bottom: 1px solid var(--rule); }
+  thead th {
+    font: 600 .76rem/1.2 var(--font-sans);
+    letter-spacing: .05em; text-transform: uppercase;
+    color: var(--ink-soft);
+    background: var(--paper-deep);
+    border-bottom: 2px solid var(--ink);
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td code { white-space: nowrap; }
+  td.arrow { color: var(--ink-faint); font-family: var(--font-mono); width: 1.5rem; padding-inline: 0; text-align: center; }
+  td.ph { font: 500 .75rem/1 var(--font-mono); color: var(--ink-faint); white-space: nowrap; }
+
+  /* ---------- scope ---------- */
+  .scope { display: grid; gap: 1.25rem; margin-top: 1.25rem; }
+  @media (min-width: 900px) { .scope { grid-template-columns: 1fr 1fr; } }
+  .scope > div {
+    border: 2px solid var(--ink);
+    border-radius: 10px;
+    padding: 1.1rem 1.25rem;
+    background: var(--cream);
+  }
+  .scope > div.out { background: transparent; border-style: dashed; }
+  .scope h3 { margin-top: 0; }
+  .scope ul { margin: 0; padding-left: 1.1rem; font-size: .93rem; }
+  .scope li { margin-bottom: .4rem; }
+  .scope li span { color: var(--ink-faint); }
+
+  footer.end {
+    border-top: 2px solid var(--ink);
+    padding-top: 1.25rem;
+    font-size: .88rem;
+    color: var(--ink-soft);
+  }
+  footer.end p { margin: 0 0 .5rem; }
+
+  @media print {
+    body { background: #fff; font-size: 11pt; }
+    nav.toc { display: none; }
+    .shell { display: block; padding: 0; }
+    article.phase, pre, .findings li, .table-wrap, .scope > div { box-shadow: none; break-inside: avoid; }
+    section { margin-bottom: 2rem; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <nav class="toc" aria-label="Contents">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#shape"><span class="n">00</span>The change</a></li>
+      <li><a href="#why"><span class="n">01</span>Why</a></li>
+      <li><a href="#decisions"><span class="n">02</span>Decisions</a></li>
+      <li><a href="#phases"><span class="n">03</span>Phases</a></li>
+      <li><a href="#migration"><span class="n">04</span>Migration</a></li>
+      <li><a href="#risks"><span class="n">05</span>Risks</a></li>
+      <li><a href="#scope"><span class="n">06</span>Scope</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <header class="top">
+      <p class="eyebrow">react-native-downstream · API &amp; plugin plan</p>
+      <h1>One string in, <mark>plugins</mark> for the heavy parts</h1>
+      <p class="lede">The plain <code>useChat</code> code should take the fast streaming path. Every option moves onto the component, and code highlighting moves out of the core binary into a plugin package, as math already is.</p>
+      <ul class="meta">
+        <li><b>Drafted</b> 2026-10-31</li>
+        <li><b>Phase 1</b> 0.1.x, non-breaking</li>
+        <li><b>Phases 2–3</b> 0.2.0, one breaking release</li>
+        <li><b>Decisions</b> all 15 resolved with the recommended option</li>
+      </ul>
+    </header>
+
+    <section id="shape" aria-labelledby="shape-h">
+      <h2 id="shape-h"><span class="n">00</span>The change, in one picture</h2>
+      <div class="diptych">
+        <figure class="pane before">
+          <figcaption><b>Today</b><span>0.1.0</span></figcaption>
+<pre><code><span class="k">import</span> { DownstreamMarkdown, createMarkdownStream } <span class="k">from</span> <span class="s">'react-native-downstream'</span>;
+<span class="k">import type</span> { MarkdownStreamController } <span class="k">from</span> <span class="s">'react-native-downstream'</span>;
+<span class="k">import</span> { streamText } <span class="k">from</span> <span class="s">'ai'</span>;
+
+<span class="k">type</span> <span class="t">Message</span> = { id: <span class="t">string</span>; reply: <span class="t">MarkdownStreamController</span> };
+
+<span class="c">// The controller lives as long as its message.</span>
+<span class="k">async function</span> send(prompt: <span class="t">string</span>, add: (m: <span class="t">Message</span>) =&gt; <span class="t">void</span>) {
+  <span class="x">const reply = createMarkdownStream({ preview: true });</span>
+  add({ id: <span class="t">String</span>(Date.now()), reply });
+
+  <span class="k">const</span> { textStream } = streamText({ model, prompt });
+  <span class="x">for await (const chunk of textStream) reply.append(chunk);</span>
+  <span class="x">reply.finish();</span>
+}
+<span class="c">// …and dispose() it when the message goes away.</span>
+
+<span class="k">function</span> Bubble({ message }: { message: <span class="t">Message</span> }) {
+  <span class="k">return</span> &lt;<span class="t">DownstreamMarkdown</span> stream={message.reply} animated caret=<span class="s">"block"</span> /&gt;;
+}</code></pre>
+        </figure>
+        <figure class="pane after">
+          <figcaption><b>After 0.2.0</b><span>with useChat</span></figcaption>
+<pre><code><span class="k">import</span> { Downstream } <span class="k">from</span> <span class="s">'react-native-downstream'</span>;
+
+<span class="k">function</span> Bubble({ text, streaming }: { text: <span class="t">string</span>; streaming: <span class="t">boolean</span> }) {
+  <span class="k">return</span> (
+    &lt;<span class="t">Downstream</span> <span class="g">isAnimating={streaming}</span> animated caret=<span class="s">"block"</span>&gt;
+      <span class="g">{text}</span>
+    &lt;/<span class="t">Downstream</span>&gt;
+  );
+}
+
+<span class="c">// in the chat screen</span>
+&lt;<span class="t">Bubble</span> text={part.text} streaming={status === <span class="s">'streaming'</span>} /&gt;
+
+<span class="c">// once, at the app root</span>
+<span class="k">import</span> { DownstreamProvider, presets } <span class="k">from</span> <span class="s">'react-native-downstream'</span>;
+<span class="k">import</span> { code } <span class="k">from</span> <span class="s">'react-native-downstream-code'</span>;
+<span class="k">import</span> { math } <span class="k">from</span> <span class="s">'react-native-downstream-math'</span>;
+
+<span class="k">const</span> plugins = [code(), math({ singleDollarTextMath: <span class="k">true</span> })];
+
+&lt;<span class="t">DownstreamProvider</span> theme={presets.github.theme} plugins={plugins}&gt;
+  &lt;<span class="t">App</span> /&gt;
+&lt;/<span class="t">DownstreamProvider</span>&gt;</code></pre>
+        </figure>
+      </div>
+      <ul class="count">
+        <li>No controller to create, keep or dispose</li>
+        <li>Incremental parse and incomplete-Markdown preview come from a growing string</li>
+        <li>App-wide options set once</li>
+        <li><code>createMarkdownStream</code> stays as an advanced option</li>
+      </ul>
+    </section>
+
+    <section id="why" aria-labelledby="why-h">
+      <h2 id="why-h"><span class="n">01</span>Why</h2>
+      <div class="prose">
+        <p>Vercel's Streamdown and Software Mansion's <code>react-native-streamdown</code> both take a growing string. That matches what AI SDK's <code>useChat</code> gives you for each message. Ours asks for a chunk stream instead, and the obvious string code ends up on our slowest path.</p>
+      </div>
+      <ol class="findings">
+        <li>
+          <b>The string path reparses everything</b>
+          <p>Every change to the <code>markdown</code> prop starts a new generation and a full parse, with no incomplete-Markdown preview. The incremental engine only helps people who adopt the controller.</p>
+          <p class="src">src/controlledSource.ts · src/DownstreamMarkdown.tsx</p>
+        </li>
+        <li>
+          <b>Options are split across two places</b>
+          <p><code>math</code>, <code>syntax</code>, <code>links</code>, <code>inlineHtml</code>, <code>cjk</code> and <code>allowedTags</code> go on the controller for streams but on the view for strings. The view's <code>math</code> prop means something different in each case.</p>
+          <p class="src">src/types.ts · MarkdownStreamOptions vs MarkdownViewBaseProps</p>
+        </li>
+        <li>
+          <b>The heavy highlighter is always linked</b>
+          <p>The grammar module is 4.0 MB of generated C source in <code>src/cpp/wasm</code>, plus about 2.2k lines of highlighter, and every app links it. Math, 47 MB of vendor files, is already a separate package.</p>
+          <p class="src">Downstream.podspec · src/cpp/wasm · math/vendor</p>
+        </li>
+      </ol>
+    </section>
+
+    <section id="decisions" aria-labelledby="dec-h">
+      <h2 id="dec-h"><span class="n">02</span>Decisions</h2>
+      <div class="prose">
+        <p>Each question is settled with the recommended option, highlighted. The options set aside are listed under it so the choice can be revisited later.</p>
+      </div>
+
+      <div class="ledger">
+        <div class="decision" id="d1">
+          <div class="id">D1</div>
+          <div>
+            <p class="q">How does text get into the view?</p>
+            <p class="chosen">The source is the component's children, and the <code>markdown</code> prop keeps working.</p>
+            <ul class="set-aside">
+              <li><s>A controller as the only way to stream</s></li>
+              <li><s>A render prop</s></li>
+            </ul>
+          </div>
+          <p class="why">It's what <code>useChat</code> hands you and what both reference libraries accept. Keeping <code>markdown</code> means no existing call site breaks.</p>
+        </div>
+
+        <div class="decision" id="d2">
+          <div class="id">D2</div>
+          <div>
+            <p class="q">When does a string view get an incremental session?</p>
+            <p class="chosen">From the first render where <code>isAnimating</code> is true. A view that mounts already settled keeps today's one-shot parse.</p>
+            <ul class="set-aside">
+              <li><s>Always create a session</s></li>
+              <li><s>A separate <code>mode="static"</code> prop</s></li>
+            </ul>
+          </div>
+          <p class="why">A chat history with hundreds of settled messages shouldn't hold hundreds of native sessions. <code>isAnimating</code> already tells us text is arriving, so no new prop is needed.</p>
+        </div>
+
+        <div class="decision" id="d3">
+          <div class="id">D3</div>
+          <div>
+            <p class="q">What happens when the new string doesn't extend the old one?</p>
+            <p class="chosen">Call <code>reset(next)</code>, which starts a new generation.</p>
+            <ul class="set-aside">
+              <li><s>Diff the two strings and patch the document</s></li>
+            </ul>
+          </div>
+          <p class="why">Edits and regenerations are rare, and a reset does exactly what every update does today. Diffing is complexity with no clear benefit.</p>
+        </div>
+
+        <div class="decision" id="d4">
+          <div class="id">D4</div>
+          <div>
+            <p class="q">Is incomplete-Markdown preview on by default?</p>
+            <p class="chosen">Yes, while animating. A <code>preview</code> view prop overrides it.</p>
+            <ul class="set-aside">
+              <li><s>Off until asked for, as today</s></li>
+            </ul>
+          </div>
+          <p class="why">Both reference libraries fix up incomplete Markdown by default. <code>finish()</code> removes the provisional styling, so settled text renders exactly what was sent.</p>
+        </div>
+
+        <div class="decision" id="d5">
+          <div class="id">D5</div>
+          <div>
+            <p class="q">What happens to <code>createMarkdownStream</code>?</p>
+            <p class="chosen">It stays as an advanced option and only carries text. Parse options come from the view it's bound to.</p>
+            <ul class="set-aside">
+              <li><s>Remove it</s></li>
+              <li><s>Keep parse options on the controller</s></li>
+            </ul>
+          </div>
+          <p class="why">It's still the right tool for feeding chunks without re-rendering React, and for keeping a reply alive while a <code>FlatList</code> row is unmounted. Options then live in one place.</p>
+        </div>
+
+        <div class="decision" id="d6">
+          <div class="id">D6</div>
+          <div>
+            <p class="q">What is the component called?</p>
+            <p class="chosen"><code>Downstream</code>. <code>DownstreamMarkdown</code> stays as a deprecated alias through 0.2.x.</p>
+            <ul class="set-aside">
+              <li><s><code>Markdown</code></s> (too generic, clashes in apps)</li>
+              <li><s>Keep <code>DownstreamMarkdown</code></s></li>
+            </ul>
+          </div>
+          <p class="why">This mirrors <code>&lt;Streamdown&gt;</code>: the package name is the component name.</p>
+        </div>
+
+        <div class="decision" id="d7">
+          <div class="id">D7</div>
+          <div>
+            <p class="q">How are the breaking changes released?</p>
+            <p class="chosen">Phases 2 and 3 ship together as 0.2.0. Old flat prop names stay as deprecated aliases that warn in development for 0.2.x.</p>
+            <ul class="set-aside">
+              <li><s>Several smaller breaking releases</s></li>
+              <li><s>A hard cut with no aliases</s></li>
+            </ul>
+          </div>
+          <p class="why">One migration instead of three. Before 1.0, breaking changes are expected, and the aliases make the upgrade non-fatal.</p>
+        </div>
+
+        <div class="decision" id="d8">
+          <div class="id">D8</div>
+          <div>
+            <p class="q">How are app-wide defaults set?</p>
+            <p class="chosen">With <code>DownstreamProvider</code>. Props on a view win, and <code>theme</code> and <code>markdownStyle</code> merge with the provider's values first.</p>
+            <ul class="set-aside">
+              <li><s>A <code>createDownstream()</code> factory that returns a configured component</s></li>
+            </ul>
+          </div>
+          <p class="why">Both props already accept arrays that merge left to right, so the provider's value just goes first. A context also lets plugins be shared across screens.</p>
+        </div>
+
+        <div class="decision" id="d9">
+          <div class="id">D9</div>
+          <div>
+            <p class="q">What shape do plugins take?</p>
+            <p class="chosen">An array of plugin objects, each with a <code>name</code> and optional <code>parse</code>, <code>fences</code>, <code>tags</code>, <code>native</code> and <code>style</code>.</p>
+            <ul class="set-aside">
+              <li><s>Streamdown's fixed-key object, <code>{ code, math }</code></s></li>
+            </ul>
+          </div>
+          <p class="why">App and third-party plugins need to sit beside the official ones. With fixed keys, only plugins we already know about would fit. Array order also decides how styles merge.</p>
+        </div>
+
+        <div class="decision" id="d10">
+          <div class="id">D10</div>
+          <div>
+            <p class="q">Where do the app's component overrides go?</p>
+            <p class="chosen"><code>components={{ fences, tags, fallback }}</code>, with maps keyed by fence language and tag name.</p>
+            <ul class="set-aside">
+              <li><s>Today's <code>plugins.renderers</code> and <code>plugins.tags</code> arrays</s></li>
+            </ul>
+          </div>
+          <p class="why"><code>plugins</code> becomes the name for feature packages, and overrides belong to the app. Streamdown uses the same <code>components</code> name. <code>{ chart: ChartCard }</code> is shorter than <code>[{ language, component }]</code>.</p>
+        </div>
+
+        <div class="decision" id="d11">
+          <div class="id">D11</div>
+          <div>
+            <p class="q">How does math get turned on?</p>
+            <p class="chosen">Through an explicit <code>math(options)</code> plugin. If the engine is installed but no plugin is passed, a warning appears in development.</p>
+            <ul class="set-aside">
+              <li><s>Turn on automatically when the package is installed, as today</s></li>
+            </ul>
+          </div>
+          <p class="why">It works the same way as <code>code()</code>, and the delimiter options live with the plugin. The warning catches apps that would otherwise lose math without noticing.</p>
+        </div>
+
+        <div class="decision" id="d12">
+          <div class="id">D12</div>
+          <div>
+            <p class="q">What happens to code highlighting?</p>
+            <p class="chosen">It moves into <code>react-native-downstream-code</code> and installs through a C function-pointer hook, the same way <code>DownstreamInstallMathEngine</code> works. Without it, code blocks render plain.</p>
+            <ul class="set-aside">
+              <li><s>Keep it built in</s></li>
+              <li><s>A JavaScript highlighter</s></li>
+            </ul>
+          </div>
+          <p class="why">It's the only heavy feature in the core. A C hook is the only thing another pod can call, and math already proves the pattern on both platforms.</p>
+        </div>
+
+        <div class="decision" id="d13">
+          <div class="id">D13</div>
+          <div>
+            <p class="q">Where do code block layout options live?</p>
+            <p class="chosen">In the core, as <code>codeBlock={{ wrap, lineNumbers, maxHeight }}</code>. The plugin only handles highlighting.</p>
+            <ul class="set-aside">
+              <li><s>Settings on the <code>code()</code> plugin</s></li>
+            </ul>
+          </div>
+          <p class="why">Code blocks exist without the plugin, so their layout can't depend on it.
+            <span class="note">This corrects the earlier suggestion to move these options into the plugin.</span></p>
+        </div>
+
+        <div class="decision" id="d14">
+          <div class="id">D14</div>
+          <div>
+            <p class="q">What stays built in?</p>
+            <p class="chosen">CJK, the extra syntaxes (<code>^sup^</code>, <code>~sub~</code>, highlight, spoiler), autolinks, copy and download controls, link safety, and the fullscreen table.</p>
+            <ul class="set-aside">
+              <li><s>Make CJK a plugin, as Streamdown does</s></li>
+              <li><s>Split the UI pieces into packages</s></li>
+            </ul>
+          </div>
+          <p class="why">The syntax features are parser flags that cost almost nothing. The UI pieces are about 800 lines of JS in total. Extracting them would save nothing and add setup steps.</p>
+        </div>
+
+        <div class="decision" id="d15">
+          <div class="id">D15</div>
+          <div>
+            <p class="q">Is Mermaid part of this plan?</p>
+            <p class="chosen">No. It's a follow-up plugin built on <code>components.fences</code>, which would prove the plugin API works for third parties.</p>
+            <ul class="set-aside">
+              <li><s>Ship it alongside 0.2.0</s></li>
+            </ul>
+          </div>
+          <p class="why">It needs a rendering approach of its own, which would slow down the release.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="phases" aria-labelledby="ph-h">
+      <h2 id="ph-h"><span class="n">03</span>Phases</h2>
+
+      <div class="spine" aria-label="Phase order">
+        <span class="stop">1 · Strings stream<small>0.1.x</small></span>
+        <span class="arrow" aria-hidden="true">→</span>
+        <span class="stop">2 · One place for options<small>0.2.0</small></span>
+        <span class="arrow" aria-hidden="true">→</span>
+        <span class="stop">3 · Plugins<small>0.2.0</small></span>
+        <p class="par">The JS plugin work in phase 3 needs phase 2's <code>plugins</code> and <code>components</code> props. The native split of the highlighter (phase 3, task 3) touches only native code and can start alongside phase 2.</p>
+      </div>
+
+      <article class="phase" id="phase-1" aria-labelledby="p1-h">
+        <div class="phase-head">
+          <h3 id="p1-h"><span class="n">01</span>Strings take the stream path</h3>
+          <span class="release safe">0.1.x · non-breaking</span>
+        </div>
+        <p class="goal">A <code>markdown</code> string that grows while <code>isAnimating</code> is true gets the same incremental parse and preview as a controller.</p>
+        <div class="phase-body">
+          <div>
+            <h4>Tasks</h4>
+            <ol class="tasks">
+              <li><div>When <code>isAnimating</code> first turns true, <code>ControlledMarkdown</code> creates an incremental session it owns, and disposes it on unmount (D2).
+                <span class="files">src/DownstreamMarkdown.tsx · src/createMarkdownStream.ts</span></div></li>
+              <li><div>If the new string starts with the previous source, <code>append</code> only the added text. Otherwise <code>reset(next)</code> (D3).</div></li>
+              <li><div>Check only the added text, against a running byte total, instead of the whole string on every update. Hold back a trailing high surrogate until its pair arrives.
+                <span class="files">src/controlledSource.ts</span></div></li>
+              <li><div>When <code>isAnimating</code> turns false, call <code>finish()</code>. If the string grows again after that, reset with the full string.</div></li>
+              <li><div>Add a <code>preview</code> view prop, on by default while animating (D4).
+                <span class="files">src/types.ts</span></div></li>
+              <li><div>Send fence and tag renderers through the stream path's slot mechanism once a session exists, instead of the synchronous scan of the controlled source.
+                <span class="files">src/fenceRenderers.ts · src/tagRenderers.ts</span></div></li>
+              <li><div>In the README, lead "Stream a response" with the <code>useChat</code> string example, and move the controller under "Advanced".</div></li>
+            </ol>
+          </div>
+          <div>
+            <h4>Done when</h4>
+            <ul class="checks">
+              <li>A string grown chunk by chunk ends in the same document as the same chunks fed to <code>createMarkdownStream</code>. The test runs on the real engine and replays through <code>IncrementalParser</code>.</li>
+              <li>On a long response, the phone benchmark (<code>bench.mjs</code>, both platforms) shows per-update JS and native time for the string path within the controller path's numbers. Both are recorded.</li>
+              <li>A list of settled messages creates zero native sessions.</li>
+              <li>Preview styling is gone after <code>finish()</code>, and the settled output matches a one-shot parse.</li>
+              <li><code>pnpm test</code>, <code>test:native</code> and <code>typecheck</code> pass.</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <article class="phase" id="phase-2" aria-labelledby="p2-h">
+        <div class="phase-head">
+          <h3 id="p2-h"><span class="n">02</span>One place for options</h3>
+          <span class="release break">0.2.0 · breaking, with aliases</span>
+        </div>
+        <p class="goal">Every option goes on the component, and app-wide defaults are set once.</p>
+        <div class="phase-body">
+          <div>
+            <h4>Tasks</h4>
+            <ol class="tasks">
+              <li><div>Export <code>Downstream</code>. Keep <code>DownstreamMarkdown</code> as an alias that warns in development (D6).
+                <span class="files">src/index.tsx</span></div></li>
+              <li><div>Accept the source as children, and keep <code>markdown</code> working (D1).</div></li>
+              <li><div>Make parse options view-only: <code>math</code>, <code>syntax</code>, <code>links</code>, <code>inlineHtml</code>, <code>cjk</code>, <code>allowedTags</code>, <code>literalTagContent</code> and <code>disableAutolinkProtocols</code>. <code>createMarkdownStream</code> drops them. The bound view creates the session with its own flags, and rebuilds it from the stored source when they change (D5).
+                <span class="files">src/createMarkdownStream.ts · src/parseFlags.ts</span></div></li>
+              <li><div>Add <code>DownstreamProvider</code>, a context whose defaults merge under each view's props (D8).</div></li>
+              <li><div>Group the flat props into <code>codeBlock</code>, <code>table</code>, <code>images</code> and <code>links</code>. The old names stay as deprecated aliases (D7, D13).</div></li>
+              <li><div><code>components={{ fences, tags, fallback }}</code> replaces <code>plugins.renderers</code>, <code>plugins.tags</code> and <code>plugins.fallbackComponent</code> (D10).</div></li>
+            </ol>
+          </div>
+          <div>
+            <h4>Done when</h4>
+            <ul class="checks">
+              <li>Every 0.1 prop has a 0.2 equivalent or a documented removal in the <a href="#migration">migration table</a>.</li>
+              <li>Each deprecated alias warns once per prop in development and behaves the same as its replacement, with a test for each.</li>
+              <li>Changing a parse option on a live stream view re-renders the same source under the new options without losing any text.</li>
+              <li>A view inside a provider with no props of its own renders the same as a view given those props directly.</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <article class="phase" id="phase-3" aria-labelledby="p3-h">
+        <div class="phase-head">
+          <h3 id="p3-h"><span class="n">03</span>Plugins</h3>
+          <span class="release break">0.2.0 · breaking</span>
+        </div>
+        <p class="goal">Math and code highlighting become explicit plugins, and the core binary loses the highlighter.</p>
+        <div class="phase-body">
+          <div>
+            <h4>Tasks</h4>
+            <ol class="tasks">
+              <li><div>Add the <code>DownstreamPlugin</code> type and a resolver. Array order is kept, a duplicate <code>name</code> is a development error, and a plugin's fences, tags and styles merge under the app's <code>components</code> and styles (D9).</div></li>
+              <li><div>Export <code>math(options)</code> from <code>react-native-downstream-math</code>. The core turns math on only when that plugin is passed, and warns in development when the engine is installed but no plugin is (D11).
+                <span class="files">math/index.js · math/index.d.ts · src/parseFlags.ts</span></div></li>
+              <li><div>Create <code>react-native-downstream-code</code> next to <code>math/</code>. It holds <code>src/cpp/wasm</code> and the highlighter sources, plus a podspec and an Android library. It installs through <code>DownstreamInstallCodeHighlighter</code>: <code>+load</code> on iOS, and the package resolver on Android, as math does (D12). Before moving anything, check what in <code>src/cpp/highlight</code> plain code blocks still need, and keep that in the core.
+                <span class="files">Downstream.podspec · src/cpp/highlight · src/cpp/wasm · pnpm-workspace.yaml</span></div></li>
+              <li><div>Remove the <code>syntaxHighlighting</code> prop: highlighting is on exactly when the plugin is passed. <code>theme.syntax</code> and <code>syntaxColorsFromTheme</code> stay in the core theme.</div></li>
+              <li><div>Measure the core binary size before and after on iOS and Android, and add the numbers to the benchmark report.</div></li>
+            </ol>
+          </div>
+          <div>
+            <h4>Done when</h4>
+            <ul class="checks">
+              <li>The core builds and passes every test without the code package. Code blocks render plain, with copy and line numbers still working.</li>
+              <li>With <code>code()</code>, highlighted output matches 0.1 in a snapshot test.</li>
+              <li>With <code>math()</code>, math output matches 0.1, and the installed-but-unused warning fires.</li>
+              <li>The core's size reduction is reported in measured numbers for both platforms.</li>
+            </ul>
+          </div>
+        </div>
+        <p class="depends"><b>Depends on:</b> phase 2, tasks 4–6, for the <code>plugins</code> and <code>components</code> props. Task 3 doesn't, and can start earlier.</p>
+      </article>
+    </section>
+
+    <section id="migration" aria-labelledby="mig-h">
+      <h2 id="mig-h"><span class="n">04</span>Migration, 0.1 → 0.2</h2>
+      <div class="prose"><p>This table goes into the README as is. Rows from phase 2 keep working through deprecated aliases during 0.2.x. Rows from phase 3 change behavior and need the plugin added.</p></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th scope="col">0.1</th><th scope="col" aria-label="becomes"></th><th scope="col">0.2</th><th scope="col">Phase</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>&lt;DownstreamMarkdown&gt;</code></td><td class="arrow">→</td><td><code>&lt;Downstream&gt;</code></td><td class="ph">2 · alias</td></tr>
+            <tr><td><code>markdown={text}</code></td><td class="arrow">→</td><td><code>{text}</code> as children (<code>markdown</code> still works)</td><td class="ph">2</td></tr>
+            <tr><td><code>createMarkdownStream()</code> + <code>append</code> / <code>finish</code> for a <code>useChat</code> string</td><td class="arrow">→</td><td>Pass the string with <code>isAnimating</code></td><td class="ph">1</td></tr>
+            <tr><td><code>createMarkdownStream({ preview: true })</code></td><td class="arrow">→</td><td>On by default while animating, or the <code>preview</code> prop</td><td class="ph">1</td></tr>
+            <tr><td><code>createMarkdownStream({ math, syntax, links, … })</code></td><td class="arrow">→</td><td>The same options on <code>&lt;Downstream&gt;</code> or the provider</td><td class="ph">2</td></tr>
+            <tr><td><code>plugins={{ renderers: [{ language: 'chart', component: Chart }] }}</code></td><td class="arrow">→</td><td><code>components={{ fences: { chart: Chart } }}</code></td><td class="ph">2 · alias</td></tr>
+            <tr><td><code>plugins.tags: [{ name: 'user', component: UserChip }]</code></td><td class="arrow">→</td><td><code>components.tags: { user: UserChip }</code></td><td class="ph">2 · alias</td></tr>
+            <tr><td><code>plugins.fallbackComponent</code></td><td class="arrow">→</td><td><code>components.fallback</code></td><td class="ph">2 · alias</td></tr>
+            <tr><td><code>codeBlockWrap</code>, <code>lineNumbers</code>, <code>codeBlockMaxHeight</code></td><td class="arrow">→</td><td><code>codeBlock={{ wrap, lineNumbers, maxHeight }}</code></td><td class="ph">2 · alias</td></tr>
+            <tr><td><code>tableMaxHeight</code>, <code>onTableFullscreen</code>, <code>renderTableFullscreen</code></td><td class="arrow">→</td><td><code>table={{ maxHeight, onFullscreen, renderFullscreen }}</code></td><td class="ph">2 · alias</td></tr>
+            <tr><td><code>allowedImagePrefixes</code>, <code>onImagePress</code></td><td class="arrow">→</td><td><code>images={{ allowedPrefixes, onPress }}</code> (<code>images={false}</code> still turns images off)</td><td class="ph">2 · alias</td></tr>
+            <tr><td><code>linkSafety</code>, <code>onLinkPress</code>, <code>onLinkLongPress</code>, <code>linkPreview</code>, <code>disableAutolinkProtocols</code></td><td class="arrow">→</td><td>Inside <code>links={{ … }}</code>, next to <code>relative</code> and <code>defaultOrigin</code></td><td class="ph">2 · alias</td></tr>
+            <tr><td>Math on when the package is installed</td><td class="arrow">→</td><td><code>plugins={[math()]}</code></td><td class="ph">3 · warns</td></tr>
+            <tr><td><code>syntaxHighlighting</code> (on by default)</td><td class="arrow">→</td><td><code>plugins={[code()]}</code></td><td class="ph">3</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="risks" aria-labelledby="risk-h">
+      <h2 id="risk-h"><span class="n">05</span>Risks</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">Risk</th><th scope="col">Mitigation</th></tr></thead>
+          <tbody>
+            <tr><td>The <code>startsWith</code> check is O(n) on every update.</td><td>It's a native string comparison capped at the 1 MiB source limit. Check the length first. Phase 1's benchmark gate measures it.</td></tr>
+            <tr><td>An update boundary splits a surrogate pair.</td><td>Hold back a trailing high surrogate until the next update (phase 1, task 3), with a test that cuts between the two halves.</td></tr>
+            <tr><td>String users still re-render React on every token.</td><td>That's the same as with any string-based library. Document AI SDK's <code>experimental_throttle</code>, and point at the controller for apps that need to avoid re-renders.</td></tr>
+            <tr><td>A <code>FlatList</code> unmounts a streaming row, and its session goes with it.</td><td>On remount, the full string is parsed once, which is acceptable. Apps that need the session to survive use <code>createMarkdownStream</code> (D5).</td></tr>
+            <tr><td>Existing apps lose math without noticing after 0.2.0.</td><td>A development warning when the engine is installed but no plugin is passed, plus a migration row (D11).</td></tr>
+            <tr><td>Splitting the highlighter breaks native linking on one platform.</td><td>Copy the math package's exact pattern, and build the example with and without the code package in CI for both platforms.</td></tr>
+            <tr><td>Grouped props make 0.2.0 a large upgrade.</td><td>Deprecated aliases with one-time development warnings during 0.2.x, and the migration table in the README.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="scope" aria-labelledby="scope-h">
+      <h2 id="scope-h"><span class="n">06</span>Scope</h2>
+      <div class="scope">
+        <div>
+          <h3>In this plan</h3>
+          <ul>
+            <li>String-to-stream handling and preview by default <span>(phase 1)</span></li>
+            <li>Rename, children as source, view-only options, provider, grouped props, <code>components</code> <span>(phase 2)</span></li>
+            <li>The plugin type, an explicit <code>math()</code>, and the <code>react-native-downstream-code</code> package <span>(phase 3)</span></li>
+            <li>A migration table and size measurements</li>
+          </ul>
+        </div>
+        <div class="out">
+          <h3>Not in this plan</h3>
+          <ul>
+            <li>A Mermaid or chart plugin <span>(follow-up, D15)</span></li>
+            <li>Extracting CJK, the extra syntaxes, controls, link safety or the fullscreen table <span>(D14)</span></li>
+            <li>Diff-and-patch for strings that don't extend the previous one <span>(D3)</span></li>
+            <li>Removing the deprecated aliases <span>(after 0.2.x)</span></li>
+            <li>A codemod</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <footer class="end">
+      <p>Based on the API comparison with <a href="https://github.com/vercel/streamdown">vercel/streamdown</a> and <a href="https://github.com/software-mansion-labs/react-native-streamdown">software-mansion-labs/react-native-streamdown</a>, and on the current source of this repository.</p>
+    </footer>
+  </main>
+</div>
+</body>
+</html>
