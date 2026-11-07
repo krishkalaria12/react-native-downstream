@@ -1,6 +1,6 @@
 {
   "name": "@react-native-downstream/code",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Optional native syntax highlighting for React Native Downstream",
   "repository": {
     "type": "git",
