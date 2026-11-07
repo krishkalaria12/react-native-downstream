@@ -29,9 +29,9 @@ const plugins = [code()];
 </DownstreamProvider>;
 ```
 
-The plugin supplies highlighting. Layout remains in core through
-`codeBlock={{ wrap, lineNumbers, maxHeight }}`. Colors remain in `theme.syntax`,
-and `syntaxColorsFromTheme` converts VS Code/Shiki themes as before.
+The plugin supplies highlighting. Layout is set in core through
+`codeBlock={{ wrap, lineNumbers, maxHeight }}`. Colors come from `theme.syntax`,
+and `syntaxColorsFromTheme` converts VS Code/Shiki themes.
 
 An explicit view `plugins` array replaces its provider's selection. Use
 `plugins={[]}` for plain code in one view. If the provider also selects
@@ -39,7 +39,7 @@ An explicit view `plugins` array replaces its provider's selection. Use
 
 `codeAvailable()` from the core package reports whether the native lexer is
 installed, independently of plugin selection. Without the linked native
-package, code remains plain. With the package installed, views that omit the
+package, code renders plain. With the package installed, views that omit the
 plugin skip lexer work.
 
 The package owns the generated lexer, WASM-to-C runtime, and identifier tables.
@@ -56,5 +56,4 @@ native autolinking for those builds.
 
 The [lexer](cpp/wasm/LICENSE.md) and [wasm2c runtime](cpp/wasm/wasm-rt/LICENSE)
 use Apache-2.0; [SIMDe](cpp/wasm/simde/COPYING) uses MIT. Their notices ship with
-the package. See the [core README](../README.md) for language support and the
-migration guide.
+the package. See the [core README](../README.md) for language support.

@@ -44,8 +44,8 @@ selects `code()`, include `code()` when replacing its list with a local math
 configuration.
 
 `mathAvailable()` from the core package reports whether the native engine is
-installed, independently of a view's selected plugins. An installed engine no
-longer enables math automatically. Development builds warn when a view has an
+installed, independently of a view's selected plugins. Installing the engine
+does not enable math on its own. Development builds warn when a view has an
 installed engine without a math plugin.
 
 ## From a source checkout
@@ -58,5 +58,4 @@ pnpm --filter @react-native-downstream/math vendor
 ```
 
 Android resolves the matching RaTeX release through the package's Gradle
-dependency. See the [core README](../README.md) for styles, streaming, and the
-complete migration guide.
+dependency. See the [core README](../README.md) for styles and streaming.

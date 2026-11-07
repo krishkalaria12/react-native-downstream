@@ -75,7 +75,7 @@ export function Message({ text }: { text: string }) {
 }
 ```
 
-Links work with a confirmation before opening by default. Pass `links={{ onPress }}` to handle navigation yourself. The `markdown={text}` prop remains supported as an alternative to string children.
+Links work with a confirmation before opening by default. Pass `links={{ onPress }}` to handle navigation yourself.
 
 ## Stream a response
 
@@ -186,7 +186,7 @@ Previews never change your source. `finish()` removes provisional formatting and
 
 The defaults are `fadeIn`, word separation, a 150 ms duration, a 40 ms stagger, and `ease` easing. `maxBacklogMs` limits how far a burst of text can delay the reveal. `blurIn` falls back to `fadeIn`.
 
-A stream tracks its own animation state. For string children or a `markdown` prop, pass `isAnimating={isStreaming}`. `onAnimationStart` and `onAnimationEnd` report changes to that state. The end callback fires when streaming stops, before any remaining fades finish.
+A stream tracks its own animation state. For string children, pass `isAnimating={isStreaming}`. `onAnimationStart` and `onAnimationEnd` report changes to that state. The end callback fires when streaming stops, before any remaining fades finish.
 
 Animation changes drawing without reflowing the text. Reduce Motion disables the reveal, and the caret never appears in copied or selected text.
 
@@ -352,7 +352,6 @@ Configure controls individually and listen for completed actions:
 
 ```tsx
 <Downstream
-  markdown={text}
   controls={{
     code: {
       copy: { onCopy: (event) => console.log('Copied', event.language) },
@@ -367,7 +366,9 @@ Configure controls individually and listen for completed actions:
     },
     image: { download: false },
   }}
-/>
+>
+  {text}
+</Downstream>
 ```
 
 Omitted controls stay enabled. Use `controls={false}` to hide them all, or `controls={{ code: false }}` to hide only code controls. Buttons become available when their own block settles, even if the rest of the response is still streaming.
@@ -406,7 +407,6 @@ Start with `presets.github` or `presets.streamdown`, then override what you need
 import { Downstream, presets } from '@react-native-downstream/core';
 
 <Downstream
-  markdown={text}
   theme={[
     presets.github.theme,
     {
@@ -421,7 +421,9 @@ import { Downstream, presets } from '@react-native-downstream/core';
     presets.github.markdownStyle,
     { h1: { fontSize: 28 }, paragraph: { fontSize: 16 } },
   ]}
-/>;
+>
+  {text}
+</Downstream>;
 ```
 
 `theme` controls document colors, fonts, corner radius, syntax colors, and the font scale cap. `markdownStyle` controls individual elements, including headings, paragraphs, lists, blockquotes, code, tables, links, alerts, images, and math.
@@ -438,12 +440,13 @@ An image-only paragraph renders as a native image with a loading placeholder and
 
 ```tsx
 <Downstream
-  markdown={text}
   images={{
     allowedPrefixes: ['https://cdn.example.com/'],
     onPress: ({ url }) => console.log('Image pressed', url),
   }}
-/>
+>
+  {text}
+</Downstream>
 ```
 
 The default prefix list is `['*']`, allowing any HTTPS host. `markdownStyle.image` controls height, radius, margins, and placeholder color. Loaded images can also have a download control.
@@ -464,10 +467,11 @@ Select `math()` on a view or provider to enable formulas. Installing the package
 import { math } from '@react-native-downstream/math';
 
 <Downstream
-  markdown={text}
   plugins={[math({ singleDollarTextMath: true, brackets: true })]}
   onMathError={({ source, message }) => console.warn(source, message)}
-/>;
+>
+  {text}
+</Downstream>;
 ```
 
 Supported forms include `$$...$$`, display blocks delimited by `$$`, fenced `math` blocks, `\(...\)`, and `\[...\]`. Single-dollar `$...$` math is off by default so currency stays text. `brackets: false` disables the backslash forms.
@@ -494,11 +498,12 @@ function AnswerCard({ code, isIncomplete }: CustomRendererProps) {
 }
 
 <Downstream
-  markdown={text}
   components={{
     fences: { 'answer-card': AnswerCard },
   }}
-/>;
+>
+  {text}
+</Downstream>;
 ```
 
 A fence beginning with ` ```answer-card ` now renders `AnswerCard`. Each renderer receives `code`, `language`, `meta`, and `isIncomplete`. Language matching is case-insensitive. To register aliases, map each language key to the same component.
@@ -511,11 +516,12 @@ Allow your app's tags and choose the attributes they can carry:
 
 ```tsx
 <Downstream
-  markdown={'Hello <user id="42">Sam</user>.'}
   allowedTags={{ user: ['id'] }}
   markdownStyle={{ tags: { user: { color: '#4f46e5', fontWeight: 700 } } }}
   onTagPress={({ attributes }) => console.log('User', attributes.id)}
-/>
+>
+  {'Hello <user id="42">Sam</user>.'}
+</Downstream>
 ```
 
 Inline tags retain their text and use `markdownStyle.tags`. For a block tag placed on its own lines with blank lines around it, register `components={{ tags: { user: UserCard } }}`. Its component receives `name`, allowed `attributes`, inner `markdown`, and `isIncomplete`.
@@ -532,14 +538,15 @@ Link presses show a confirmation by default. `links.safety` can supply an asynch
 import { Linking } from 'react-native';
 
 <Downstream
-  markdown={text}
   links={{
     defaultOrigin: 'https://docs.example.com',
     onPress: ({ url }) => {
       Linking.openURL(url).catch(console.warn);
     },
   }}
-/>;
+>
+  {text}
+</Downstream>;
 ```
 
 `links.defaultOrigin` enables and resolves relative links. `links.relative` enables them for your own router without a base URL. Events include the resolved `url`, original `href`, and source range. Style links by URL prefix with `markdownStyle.linkVariants`, and handle holds with `links.onLongPress`. iOS link previews are off by default; `links={{ preview: true }}` enables them.
@@ -557,31 +564,6 @@ import { Linking } from 'react-native';
 | `androidParagraphLayout`         | Defaults to `canonical`. `incremental` reuses completed lines in eligible streaming ASCII paragraphs; text can reflow when it settles. |
 
 For the complete TypeScript definitions, see [`src/downstreamOptions.ts`](src/downstreamOptions.ts) and [`src/types.ts`](src/types.ts).
-
-## API migration
-
-The API below is intended for 0.2. Flat view props and the former component name remain compatible aliases during 0.2.x, with one development warning per alias. `markdown` remains supported without a warning. The controller now carries only text and an optional `onError` handler. The former `math` and `syntaxHighlighting` props have been removed in favor of explicit feature plugins.
-
-| Previous API                                                                                                               | Current API                                                                                                               |
-| -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `DownstreamMarkdown`                                                                                                       | `Downstream`                                                                                                              |
-| `markdown={text}`                                                                                                          | `{text}` as children, or keep `markdown={text}`                                                                           |
-| `codeBlockWrap`, `lineNumbers`, `codeBlockMaxHeight`                                                                       | `codeBlock={{ wrap, lineNumbers, maxHeight }}`                                                                            |
-| `tableMaxHeight`, `onTableFullscreen`, `renderTableFullscreen`                                                             | `table={{ maxHeight, onFullscreen, renderFullscreen }}`                                                                   |
-| `allowedImagePrefixes`, `onImagePress`                                                                                     | `images={{ allowedPrefixes, onPress }}`; boolean `images` still works                                                     |
-| `linkSafety`, `onLinkPress`, `onLinkLongPress`, `linkPreview`, `disableAutolinkProtocols`                                  | `links={{ safety, onPress, onLongPress, preview, disableAutolinkProtocols }}`                                             |
-| `plugins.renderers: [{ language, component }]`                                                                             | `components.fences: { [language]: component }`                                                                            |
-| `plugins.tags: [{ name, component }]`                                                                                      | `components.tags: { [name]: component }`                                                                                  |
-| `plugins.fallbackComponent`                                                                                                | `components.fallback`                                                                                                     |
-| `createMarkdownStream({ math, syntax, links, inlineHtml, cjk, allowedTags, literalTagContent, disableAutolinkProtocols })` | Math options go to `math(options)`; other parse options go on the view or provider, with autolink protocols under `links` |
-| `createMarkdownStream({ preview })`, `stream.setPreview(preview)`                                                          | The view or provider's `preview` prop; update the prop to change policy                                                   |
-| Repeated options on every view                                                                                             | Shared defaults on `DownstreamProvider`                                                                                   |
-| Built-in highlighting or `syntaxHighlighting`                                                                              | Install `@react-native-downstream/code` and select `plugins={[code()]}`                                                   |
-| Math enabled by installation or `math={options}`                                                                           | Select `plugins={[math(options)]}` from `@react-native-downstream/math`                                                   |
-
-Other view props keep their names: `style`, `selectable`, `androidParagraphLayout`, `controls`, `translations`, `theme`, `markdownStyle`, `onMathError`, `inlineHtml`, `syntax`, `cjk`, `links.relative`, `links.defaultOrigin`, `allowedTags`, `literalTagContent`, `normalizeHtmlIndentation`, `dir`, `onTagPress`, `onTaskPress`, `icons`, `animated`, `isAnimating`, `preview`, `caret`, `onAnimationStart`, `onAnimationEnd`, and `onError`. The controller's `append`, `reset`, `finish`, `getSource`, and `dispose` methods remain available.
-
-`theme.syntax` and `syntaxColorsFromTheme` remain in core, so existing palettes continue to style code selected by `code()`. Plain code-block layout and controls do not require a plugin.
 
 ## Fork and run locally
 
