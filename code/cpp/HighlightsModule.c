@@ -2,6 +2,12 @@
 // configuration in HighlightsModule.h reaches every file without build flags.
 // The vendored sources are generated, so their warnings are not ours to fix.
 
+// sigjmp_buf and sigsetjmp are POSIX, which glibc hides under a strict -std=c11
+// unless asked for before the first system header.
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "HighlightsModule.h"
 
 #include <setjmp.h>
