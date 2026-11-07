@@ -8,7 +8,7 @@ order: 9
 ## Component
 
 ```tsx
-import { DownstreamMarkdown } from 'react-native-downstream';
+import { DownstreamMarkdown } from '@react-native-downstream/core';
 ```
 
 `DownstreamMarkdown` takes either a complete `markdown` string or a `stream` controller, never both.
@@ -135,7 +135,7 @@ Both `theme` and `markdownStyle` accept one value or an array merged left to rig
 ## createMarkdownStream
 
 ```tsx
-import { createMarkdownStream } from 'react-native-downstream';
+import { createMarkdownStream } from '@react-native-downstream/core';
 
 const stream = createMarkdownStream({
   preview: true,
@@ -219,7 +219,7 @@ import {
   defaultMaxBacklogMs,
   resolveAnimate,
   resolveEasing,
-} from 'react-native-downstream';
+} from '@react-native-downstream/core';
 ```
 
 Every public type is exported from the package root, including `DownstreamMarkdownProps`, `MarkdownStreamOptions`, `MarkdownStreamController`, `MarkdownTheme`, `MarkdownStyle`, `MarkdownControls`, `MarkdownErrorEvent`, `MarkdownLinkPressEvent`, `MarkdownTagEvent`, `MarkdownImageEvent`, `MarkdownMathErrorEvent`, `CustomRenderer`, and `CustomRendererProps`.

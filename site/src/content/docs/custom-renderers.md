@@ -14,7 +14,7 @@ import { Text } from 'react-native';
 import {
   DownstreamMarkdown,
   type CustomRendererProps,
-} from 'react-native-downstream';
+} from '@react-native-downstream/core';
 
 function AnswerCard({ code, isIncomplete }: CustomRendererProps) {
   return <Text>{isIncomplete ? 'Receiving answer...' : code}</Text>;

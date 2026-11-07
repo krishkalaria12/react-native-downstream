@@ -10,7 +10,7 @@ A streaming response is an append-only document. `createMarkdownStream` gives yo
 ## Create a controller
 
 ```tsx
-import { createMarkdownStream } from 'react-native-downstream';
+import { createMarkdownStream } from '@react-native-downstream/core';
 
 const stream = createMarkdownStream({
   preview: true,

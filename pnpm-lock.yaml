@@ -254,7 +254,7 @@ importers:
 
   code:
     devDependencies:
-      react-native-downstream:
+      '@react-native-downstream/core':
         specifier: workspace:*
         version: link:..
 
@@ -269,6 +269,15 @@ importers:
       '@expo/vector-icons':
         specifier: ^15.1.1
         version: 15.1.1(expo-font@55.0.8(expo@55.0.31)(react-native@0.83.2(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.83.8(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.3.0)(react@19.2.0)(supports-color@8.1.1))(react@19.2.0))(react-native@0.83.2(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.83.8(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.3.0)(react@19.2.0)(supports-color@8.1.1))(react@19.2.0)
+      '@react-native-downstream/code':
+        specifier: workspace:*
+        version: link:../code
+      '@react-native-downstream/core':
+        specifier: workspace:*
+        version: link:..
+      '@react-native-downstream/math':
+        specifier: workspace:*
+        version: link:../math
       ai:
         specifier: 7.0.122
         version: 7.0.122(zod@4.6.7)
@@ -305,15 +314,6 @@ importers:
       react-native:
         specifier: 0.83.2
         version: 0.83.2(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.83.8(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.3.0)(react@19.2.0)(supports-color@8.1.1)
-      react-native-downstream:
-        specifier: workspace:*
-        version: link:..
-      react-native-downstream-code:
-        specifier: workspace:*
-        version: link:../code
-      react-native-downstream-math:
-        specifier: workspace:*
-        version: link:../math
       react-native-enriched-markdown:
         specifier: 1.1.1
         version: 1.1.1(katex@0.16.22)(react-native@0.83.2(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.83.8(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(@types/react@19.3.0)(react@19.2.0)(supports-color@8.1.1))(react@19.2.0)
@@ -363,7 +363,7 @@ importers:
 
   math:
     devDependencies:
-      react-native-downstream:
+      '@react-native-downstream/core':
         specifier: workspace:*
         version: link:..
 

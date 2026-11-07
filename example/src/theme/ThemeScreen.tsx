@@ -14,7 +14,7 @@ import {
   type MarkdownPreset,
   type MarkdownTheme,
   type VSCodeThemeJson,
-} from 'react-native-downstream';
+} from '@react-native-downstream/core';
 
 import { Badge, ChipRow, Group, Notice } from '../ui/kit';
 import {

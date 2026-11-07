@@ -13,7 +13,7 @@ const observed = vi.hoisted(() => ({
   }[],
   results: [] as Record<string, unknown>[],
 }));
-vi.mock('react-native-downstream', () => ({
+vi.mock('@react-native-downstream/core', () => ({
   Downstream: (props: Record<string, unknown>) => {
     observed.props.push(props);
     return null;

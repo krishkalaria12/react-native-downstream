@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the dependency-free checks against Gradle's compiled NativeDocument.
 
-First run example/android/gradlew :react-native-downstream:compileDebugKotlin
+First run example/android/gradlew :react-native-downstream_core:compileDebugKotlin
 from example/android. The runner reuses Kotlin artifacts already in Gradle's
 cache and installs no dependencies.
 """
@@ -14,7 +14,7 @@ import tempfile
 root = Path(__file__).resolve().parents[3]
 classes = root / "src/android/build/tmp/kotlin-classes/debug"
 if not (classes / "com/downstream/NativeDocument.class").exists():
-    raise SystemExit("Build :react-native-downstream:compileDebugKotlin in example/android first")
+    raise SystemExit("Build :react-native-downstream_core:compileDebugKotlin in example/android first")
 cache = Path(os.environ.get("GRADLE_USER_HOME", str(Path.home() / ".gradle"))) / "caches/modules-2/files-2.1"
 
 

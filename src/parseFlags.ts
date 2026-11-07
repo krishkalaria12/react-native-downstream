@@ -171,7 +171,7 @@ export function warnAboutUnusedMathEngine(): void {
     return;
   warnedAboutUnusedEngine = true;
   console.warn(
-    'Downstream: the math engine is installed but this view has no math plugin. Import { math } from react-native-downstream-math and pass plugins={[math()]}.'
+    'Downstream: the math engine is installed but this view has no math plugin. Import { math } from @react-native-downstream/math and pass plugins={[math()]}.'
   );
 }
 
@@ -187,7 +187,7 @@ export function warnAboutMissingMathEngine(): void {
   warnedAboutMissingEngine = true;
   console.warn(
     'Downstream: this document contains math, but no math engine is installed. ' +
-      'Add `react-native-downstream-math` to typeset it; formulas are shown as ' +
+      'Add `@react-native-downstream/math` to typeset it; formulas are shown as ' +
       'their source until then.'
   );
 }

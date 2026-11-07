@@ -1,4 +1,4 @@
-import type { MarkdownStreamController } from 'react-native-downstream';
+import type { MarkdownStreamController } from '@react-native-downstream/core';
 
 export function resetSessionControllers(
   controllers: readonly Pick<MarkdownStreamController, 'reset'>[]

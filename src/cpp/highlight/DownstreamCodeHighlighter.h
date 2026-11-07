@@ -1,6 +1,6 @@
 #pragma once
 
-// The only ABI shared with react-native-downstream-code. Buffers are borrowed
+// The only ABI shared with @react-native-downstream/code. Buffers are borrowed
 // until the next call on that instance; each package owns its own allocations.
 #include <stdbool.h>
 #include <stddef.h>

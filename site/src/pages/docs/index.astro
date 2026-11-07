@@ -8,7 +8,7 @@ import { breadcrumbs } from '../../data/site';
 const docs = await getCollection('docs');
 const bySlug = new Map(docs.map((entry) => [entry.id, entry]));
 
-const quickstart = `import { DownstreamMarkdown, createMarkdownStream } from 'react-native-downstream';
+const quickstart = `import { DownstreamMarkdown, createMarkdownStream } from '@react-native-downstream/core';
 
 // One controller per reply, created when the request starts.
 const stream = createMarkdownStream();

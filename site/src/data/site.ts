@@ -1,11 +1,11 @@
 export const site = {
   name: 'Downstream',
-  packageName: 'react-native-downstream',
+  packageName: '@react-native-downstream/core',
   title: 'Downstream: Native Markdown for React Native',
   description:
     'A native Markdown renderer for React Native, built for streaming AI chat. Finished blocks are laid out once, parsing runs in native code, and code, tables and math are built in.',
   repo: 'https://github.com/krishkalaria12/react-native-downstream',
-  npm: 'https://www.npmjs.com/package/react-native-downstream',
+  npm: 'https://www.npmjs.com/package/@react-native-downstream/core',
   author: { name: 'Krish Kalaria', url: 'https://github.com/krishkalaria12' },
   image: {
     path: '/og.png',

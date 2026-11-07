@@ -34,7 +34,7 @@ Images are loaded at most four at a time and cancelled when no view needs them.
 Math is optional. Install the typesetting package and rebuild your native app:
 
 ```sh
-pnpm add react-native-downstream-math
+pnpm add @react-native-downstream/math
 # For a bare iOS app:
 npx pod-install
 ```

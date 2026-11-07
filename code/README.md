@@ -1,4 +1,4 @@
-# react-native-downstream-code
+# @react-native-downstream/code
 
 Optional native syntax highlighting for React Native Downstream. The core
 renders plain code blocks, line numbers, and copy/download controls without
@@ -8,7 +8,7 @@ a view or provider.
 ## Install
 
 ```sh
-pnpm add react-native-downstream react-native-downstream-code
+pnpm add @react-native-downstream/core @react-native-downstream/code
 # Bare iOS apps:
 npx pod-install
 ```
@@ -19,8 +19,8 @@ build; Expo Go cannot load the native lexer.
 ## Use
 
 ```tsx
-import { Downstream, DownstreamProvider } from 'react-native-downstream';
-import { code } from 'react-native-downstream-code';
+import { Downstream, DownstreamProvider } from '@react-native-downstream/core';
+import { code } from '@react-native-downstream/code';
 
 const plugins = [code()];
 

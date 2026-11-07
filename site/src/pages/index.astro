@@ -49,8 +49,8 @@ const features = [
   { title: 'Your own components', body: 'Render a fence language or an allowed tag with any React component.' },
 ];
 
-const replyCode = `import { DownstreamMarkdown, createMarkdownStream } from 'react-native-downstream';
-import type { MarkdownStreamController } from 'react-native-downstream';
+const replyCode = `import { DownstreamMarkdown, createMarkdownStream } from '@react-native-downstream/core';
+import type { MarkdownStreamController } from '@react-native-downstream/core';
 import { streamText } from 'ai';
 
 type Message = { id: string; reply: MarkdownStreamController };
@@ -69,7 +69,7 @@ function Bubble({ message }: { message: Message }) {
   return <DownstreamMarkdown stream={message.reply} animated caret="block" />;
 }`;
 
-const install = `pnpm add react-native-downstream
+const install = `pnpm add @react-native-downstream/core
 
 # bare React Native: install pods, then rebuild
 npx pod-install
@@ -99,10 +99,10 @@ npx expo run:ios`;
       <div class="mt-9 flex flex-wrap items-center gap-3">
         <a href="/docs/getting-started" class="btn btn-primary">Get started</a>
         <div class="flex h-12 max-w-full min-w-0 items-center gap-1 rounded-xl border-[1.5px] border-ink/25 bg-cream/80 pr-1.5 pl-4">
-          <code class="truncate font-mono text-[13px] text-ink-soft sm:text-[14px]"><span class="text-ink-faint select-none">$ </span>pnpm add react-native-downstream</code>
+          <code class="truncate font-mono text-[13px] text-ink-soft sm:text-[14px]"><span class="text-ink-faint select-none">$ </span>pnpm add @react-native-downstream/core</code>
           <button
             type="button"
-            data-copy="pnpm add react-native-downstream"
+            data-copy="pnpm add @react-native-downstream/core"
             class="ml-2 h-9 shrink-0 rounded-lg px-3 text-[13.5px] font-semibold text-ink-soft transition-colors hover:bg-ink/5 hover:text-ink"
             >Copy</button
           >

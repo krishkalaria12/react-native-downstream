@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { MarkdownStreamController } from 'react-native-downstream';
+import type { MarkdownStreamController } from '@react-native-downstream/core';
 import {
   createMarkdownStreamWithMode,
   getStreamState,

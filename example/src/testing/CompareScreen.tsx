@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Downstream } from 'react-native-downstream';
-import type { MarkdownStreamController } from 'react-native-downstream';
-import { code } from 'react-native-downstream-code';
-import { math } from 'react-native-downstream-math';
+import { Downstream } from '@react-native-downstream/core';
+import type { MarkdownStreamController } from '@react-native-downstream/core';
+import { code } from '@react-native-downstream/code';
+import { math } from '@react-native-downstream/math';
 
 import { fixtures } from '../shared/fixtures';
 import type { ScheduleKind } from '../shared/schedule';

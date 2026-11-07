@@ -1148,7 +1148,7 @@ type MarkdownViewBaseProps = Readonly<{
    */
   plugins?: MarkdownPlugins;
   /**
-   * Typeset math. On when `react-native-downstream-math` is installed and off
+   * Typeset math. On when `@react-native-downstream/math` is installed and off
    * otherwise; `false` keeps every formula literal, which is exactly today's
    * parse and display.
    *

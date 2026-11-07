@@ -18,7 +18,7 @@ config = getBundleModeMetroConfig(config);
 const bundleModeResolver = config.resolver.resolveRequest;
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {
-  if (moduleName === 'react-native-downstream') {
+  if (moduleName === '@react-native-downstream/core') {
     return { type: 'sourceFile', filePath: librarySource };
   }
   return bundleModeResolver(context, moduleName, platform);

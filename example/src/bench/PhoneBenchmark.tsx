@@ -15,10 +15,10 @@ import {
   createMarkdownStream,
   Downstream,
   mathAvailable,
-} from 'react-native-downstream';
-import type { MarkdownStreamController } from 'react-native-downstream';
-import { code } from 'react-native-downstream-code';
-import { math } from 'react-native-downstream-math';
+} from '@react-native-downstream/core';
+import type { MarkdownStreamController } from '@react-native-downstream/core';
+import { code } from '@react-native-downstream/code';
+import { math } from '@react-native-downstream/math';
 import {
   createMarkdownStreamWithMode,
   getStreamState,

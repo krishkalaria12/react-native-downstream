@@ -8,7 +8,7 @@ order: 8
 Start with `presets.github` or `presets.streamdown`, then override what you need:
 
 ```tsx
-import { DownstreamMarkdown, presets } from 'react-native-downstream';
+import { DownstreamMarkdown, presets } from '@react-native-downstream/core';
 
 <DownstreamMarkdown
   markdown={text}
@@ -82,7 +82,7 @@ A key or property this renderer does not draw is reported once in development ra
 For a VS Code or Shiki JSON theme, convert its token colors with `syntaxColorsFromTheme`:
 
 ```tsx
-import { syntaxColorsFromTheme } from 'react-native-downstream';
+import { syntaxColorsFromTheme } from '@react-native-downstream/core';
 import myTheme from './my-theme.json';
 
 const converted = syntaxColorsFromTheme(myTheme);

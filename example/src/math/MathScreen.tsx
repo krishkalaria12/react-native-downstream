@@ -7,9 +7,9 @@ import {
   type MarkdownImageEvent,
   type MarkdownMathErrorEvent,
   type MarkdownStreamController,
-} from 'react-native-downstream';
-import { code } from 'react-native-downstream-code';
-import { math as mathPlugin } from 'react-native-downstream-math';
+} from '@react-native-downstream/core';
+import { code } from '@react-native-downstream/code';
+import { math as mathPlugin } from '@react-native-downstream/math';
 
 import { Badge, ChipRow, Group } from '../ui/kit';
 import { Hero, Screen, SectionLabel, useScreenScroll } from '../ui/screen';

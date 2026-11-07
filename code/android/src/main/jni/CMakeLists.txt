@@ -4,7 +4,7 @@ get_filename_component(CODE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../.. ABSOLUTE
 # Resolve the peer from this package so pnpm and published node_modules layouts
 # use the same headers rather than depending on a sibling checkout.
 execute_process(
-  COMMAND node -p "require.resolve('react-native-downstream/package.json', {paths: [process.argv[1]]})" ${CODE_DIR}
+  COMMAND node -p "require.resolve('@react-native-downstream/core/package.json', {paths: [process.argv[1]]})" ${CODE_DIR}
   OUTPUT_VARIABLE CORE_PACKAGE_JSON OUTPUT_STRIP_TRAILING_WHITESPACE
   COMMAND_ERROR_IS_FATAL ANY)
 get_filename_component(CORE_DIR ${CORE_PACKAGE_JSON} DIRECTORY)

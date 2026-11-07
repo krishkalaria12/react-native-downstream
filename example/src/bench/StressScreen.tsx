@@ -5,7 +5,7 @@ import {
   createMarkdownStream,
   Downstream,
   type MarkdownStreamController,
-} from 'react-native-downstream';
+} from '@react-native-downstream/core';
 
 import {
   setStreamTracing,

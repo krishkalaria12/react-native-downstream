@@ -1,4 +1,4 @@
-# react-native-downstream-math
+# @react-native-downstream/math
 
 Optional native math typesetting for React Native Downstream, using RaTeX and
 the KaTeX fonts. Installing the package links the engine; select `math()` on a
@@ -7,7 +7,7 @@ view or provider to enable it.
 ## Install
 
 ```sh
-pnpm add react-native-downstream react-native-downstream-math
+pnpm add @react-native-downstream/core @react-native-downstream/math
 # Bare iOS apps:
 npx pod-install
 ```
@@ -18,8 +18,8 @@ build; Expo Go cannot load this engine.
 ## Use
 
 ```tsx
-import { Downstream, DownstreamProvider } from 'react-native-downstream';
-import { math } from 'react-native-downstream-math';
+import { Downstream, DownstreamProvider } from '@react-native-downstream/core';
+import { math } from '@react-native-downstream/math';
 
 const plugins = [math({ singleDollarTextMath: true })];
 
@@ -54,7 +54,7 @@ The iOS XCFramework and fonts are pinned by `ratex-version.json`. Fetch them
 before installing pods if the vendored files are absent:
 
 ```sh
-pnpm --filter react-native-downstream-math vendor
+pnpm --filter @react-native-downstream/math vendor
 ```
 
 Android resolves the matching RaTeX release through the package's Gradle

@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
   Downstream,
   type MarkdownStreamController,
-} from 'react-native-downstream';
+} from '@react-native-downstream/core';
 
 import {
   createMarkdownStreamWithMode,

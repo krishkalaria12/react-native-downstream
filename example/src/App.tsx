@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { Linking, Platform, Settings, StyleSheet, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { DownstreamProvider } from 'react-native-downstream';
-import { code } from 'react-native-downstream-code';
-import { math } from 'react-native-downstream-math';
+import { DownstreamProvider } from '@react-native-downstream/core';
+import { code } from '@react-native-downstream/code';
+import { math } from '@react-native-downstream/math';
 
 import { BenchScreen } from './bench/BenchScreen';
 import { StressScreen } from './bench/StressScreen';

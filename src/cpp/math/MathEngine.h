@@ -3,7 +3,7 @@
 // One laid-out formula, and the seam the math engine is installed through.
 //
 // RaTeX is not linked into the core library. It ships in
-// `react-native-downstream-math`, an opt-in package, so an app that does not
+// `@react-native-downstream/math`, an opt-in package, so an app that does not
 // want a 3 MB binary does not get one and an app that installs it links one
 // engine. The surface between them is three C functions and a JSON string,
 // which is what `MathEngineFunctions` names.

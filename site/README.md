@@ -1,6 +1,6 @@
 # Downstream site
 
-The landing page, documentation, and phone benchmarks for `react-native-downstream`.
+The landing page, documentation, and phone benchmarks for `@react-native-downstream/core`.
 
 Built with Astro and Tailwind CSS. Fonts are self-hosted with Fontsource.
 

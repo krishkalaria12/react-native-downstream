@@ -1,5 +1,5 @@
 {
-  "name": "react-native-downstream-code",
+  "name": "@react-native-downstream/code",
   "version": "0.1.0",
   "description": "Optional native syntax highlighting for React Native Downstream",
   "repository": {
@@ -10,6 +10,9 @@
   "author": "Krish Kalaria <codewithkrish12@gmail.com>",
   "homepage": "https://github.com/krishkalaria12/react-native-downstream/tree/main/code#readme",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./index.js",
   "types": "./index.d.ts",
   "files": [
@@ -26,9 +29,9 @@
     "!android/.cxx"
   ],
   "peerDependencies": {
-    "react-native-downstream": "*"
+    "@react-native-downstream/core": "^0.1.0"
   },
   "devDependencies": {
-    "react-native-downstream": "workspace:*"
+    "@react-native-downstream/core": "workspace:*"
   }
 }

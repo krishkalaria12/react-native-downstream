@@ -6,7 +6,7 @@ import {
   type MarkdownErrorEvent,
   type DownstreamComponents,
   type MarkdownStreamController,
-} from 'react-native-downstream';
+} from '@react-native-downstream/core';
 
 import { Badge, ChipRow, Group, Notice } from '../ui/kit';
 import { Hero, Screen, SectionLabel, useScreenScroll } from '../ui/screen';

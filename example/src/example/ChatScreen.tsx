@@ -10,7 +10,10 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Downstream, type DownstreamComponents } from 'react-native-downstream';
+import {
+  Downstream,
+  type DownstreamComponents,
+} from '@react-native-downstream/core';
 
 import { ChartRenderer } from '../renderers/chart';
 import { CHAT_MODEL, CHAT_REASONING_EFFORT, chatSetupHint } from './chat';

@@ -94,10 +94,10 @@ A press with no `onLinkPress` opens the link after a confirmation. If nothing ha
 
 ## Math shows as source
 
-Math is enabled only when `react-native-downstream-math` is installed and the app has been rebuilt.
+Math is enabled only when `@react-native-downstream/math` is installed and the app has been rebuilt.
 
 ```sh
-pnpm add react-native-downstream-math
+pnpm add @react-native-downstream/math
 npx pod-install
 ```
 

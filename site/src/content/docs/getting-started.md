@@ -21,15 +21,15 @@ Downstream renders Markdown with native text on iOS and Android. Parsing and tex
 ## Install
 
 ```sh
-pnpm add react-native-downstream
+pnpm add @react-native-downstream/core
 ```
 
 Or with your app's package manager:
 
 ```sh
-npm install react-native-downstream
+npm install @react-native-downstream/core
 # or
-yarn add react-native-downstream
+yarn add @react-native-downstream/core
 ```
 
 For a bare iOS app, install the pods and rebuild:
@@ -51,7 +51,7 @@ npx expo run:android
 Pass a string when you already have the whole document:
 
 ```tsx
-import { DownstreamMarkdown } from 'react-native-downstream';
+import { DownstreamMarkdown } from '@react-native-downstream/core';
 
 export function Message({ text }: { text: string }) {
   return (
@@ -73,7 +73,7 @@ For an append-only response, create one controller per message and keep it for t
 import {
   createMarkdownStream,
   DownstreamMarkdown,
-} from 'react-native-downstream';
+} from '@react-native-downstream/core';
 
 const stream = createMarkdownStream({
   preview: true,

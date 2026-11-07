@@ -12,4 +12,4 @@ const binary = compile(
   false
 );
 execFileSync(binary, { stdio: 'inherit' });
-console.log('Core without react-native-downstream-code passed.');
+console.log('Core without @react-native-downstream/code passed.');

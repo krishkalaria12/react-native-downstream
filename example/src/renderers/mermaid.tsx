@@ -5,7 +5,7 @@ import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import type { WebViewMessageEvent } from 'react-native-webview/lib/WebViewTypes';
 
-import type { CustomRendererProps } from 'react-native-downstream';
+import type { CustomRendererProps } from '@react-native-downstream/core';
 
 /**
  * The Mermaid example renderer: a `plugins.renderers` component for `mermaid`

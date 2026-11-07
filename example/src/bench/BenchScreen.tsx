@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { Downstream } from 'react-native-downstream';
+import { Downstream } from '@react-native-downstream/core';
 
 import { fixtures } from '../shared/fixtures';
 import type { ScheduleKind } from '../shared/schedule';

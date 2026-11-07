@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   createMarkdownStream,
   type MarkdownStreamController,
-} from 'react-native-downstream';
+} from '@react-native-downstream/core';
 
 import { chatConfigured, streamChatReply, type ChatTurn } from './chat';
 

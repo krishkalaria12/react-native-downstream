@@ -1,5 +1,5 @@
 {
-  "name": "react-native-downstream",
+  "name": "@react-native-downstream/core",
   "version": "0.1.0",
   "description": "React Native Downstream",
   "repository": {
@@ -70,7 +70,8 @@
   ],
   "license": "MIT",
   "publishConfig": {
-    "registry": "https://registry.npmjs.org/"
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
   },
   "devDependencies": {
     "@commitlint/config-conventional": "^19.8.1",
@@ -140,7 +141,7 @@
   "release-it": {
     "git": {
       "commitMessage": "chore: release ${version}",
-      "tagName": "v${version}"
+      "tagName": "core-v${version}"
     },
     "npm": {
       "publish": true

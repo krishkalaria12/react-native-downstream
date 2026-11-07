@@ -1515,9 +1515,9 @@ async function build(profile, outputDir) {
       'remend',
       ...(benchmarkSuite
         ? [
-            'react-native-downstream',
-            'react-native-downstream-code',
-            'react-native-downstream-math',
+            '@react-native-downstream/core',
+            '@react-native-downstream/code',
+            '@react-native-downstream/math',
           ]
         : []),
     ].map((name) => [name, exampleVersion(name)])

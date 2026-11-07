@@ -32,15 +32,15 @@ pnpm --filter react-native-downstream-site dev
 ## Install
 
 ```sh
-pnpm add react-native-downstream
+pnpm add @react-native-downstream/core
 ```
 
 Or use your app's package manager:
 
 ```sh
-npm install react-native-downstream
+npm install @react-native-downstream/core
 # or
-yarn add react-native-downstream
+yarn add @react-native-downstream/core
 ```
 
 Downstream requires React Native's New Architecture and a native build on iOS or Android. For a bare React Native app, install iOS pods after adding the package, then rebuild your app:
@@ -64,7 +64,7 @@ Expo Go cannot load the native module.
 Pass a complete string, or update the string as your app receives text:
 
 ```tsx
-import { Downstream } from 'react-native-downstream';
+import { Downstream } from '@react-native-downstream/core';
 
 export function Message({ text }: { text: string }) {
   return (
@@ -83,7 +83,7 @@ Pass the growing text as children and set `isAnimating` while the response is ar
 
 ```tsx
 import { useChat } from '@ai-sdk/react';
-import { Downstream } from 'react-native-downstream';
+import { Downstream } from '@react-native-downstream/core';
 
 export function Chat() {
   const { messages, status } = useChat();
@@ -115,7 +115,10 @@ Incomplete Markdown is previewed by default while streaming. Set `preview={false
 Create one controller per message when your transport emits chunks directly, or when a reply must continue while its list row is unmounted:
 
 ```tsx
-import { createMarkdownStream, Downstream } from 'react-native-downstream';
+import {
+  createMarkdownStream,
+  Downstream,
+} from '@react-native-downstream/core';
 
 const stream = createMarkdownStream({
   onError: (error) => console.warn(error.code, error.message),
@@ -192,7 +195,7 @@ Animation changes drawing without reflowing the text. Reduce Motion disables the
 The core renders plain code blocks and includes tables, images, controls, link safety, CJK parsing, and the extra inline syntaxes. Native code highlighting and math typesetting are optional packages:
 
 ```sh
-pnpm add react-native-downstream-code react-native-downstream-math
+pnpm add @react-native-downstream/code @react-native-downstream/math
 # For a bare iOS app:
 npx pod-install
 ```
@@ -200,9 +203,9 @@ npx pod-install
 Rebuild the native app after installing either package. Select the features on a view or provider:
 
 ```tsx
-import { Downstream } from 'react-native-downstream';
-import { code } from 'react-native-downstream-code';
-import { math } from 'react-native-downstream-math';
+import { Downstream } from '@react-native-downstream/core';
+import { code } from '@react-native-downstream/code';
+import { math } from '@react-native-downstream/math';
 
 const plugins = [code(), math({ singleDollarTextMath: true })];
 
@@ -220,7 +223,7 @@ Plugins are named objects with optional `parse`, `native`, `fences`, `tags`, and
 Fenced code has a header with copy, download, and wrap controls. Long blocks scroll within their card and can be expanded. Add `code()` for native syntax highlighting:
 
 ```tsx
-import { code } from 'react-native-downstream-code';
+import { code } from '@react-native-downstream/code';
 
 <Downstream
   plugins={[code()]}
@@ -376,9 +379,9 @@ Omitted controls stay enabled. Use `controls={false}` to hide them all, or `cont
 Set shared options once with `DownstreamProvider`:
 
 ```tsx
-import { DownstreamProvider, presets } from 'react-native-downstream';
-import { code } from 'react-native-downstream-code';
-import { math } from 'react-native-downstream-math';
+import { DownstreamProvider, presets } from '@react-native-downstream/core';
+import { code } from '@react-native-downstream/code';
+import { math } from '@react-native-downstream/math';
 
 const plugins = [code(), math()];
 
@@ -400,7 +403,7 @@ Props on an individual view override provider defaults. Nested providers overrid
 Start with `presets.github` or `presets.streamdown`, then override what you need:
 
 ```tsx
-import { Downstream, presets } from 'react-native-downstream';
+import { Downstream, presets } from '@react-native-downstream/core';
 
 <Downstream
   markdown={text}
@@ -450,7 +453,7 @@ The default prefix list is `['*']`, allowing any HTTPS host. `markdownStyle.imag
 Install the optional typesetting package and rebuild your native app:
 
 ```sh
-pnpm add react-native-downstream-math
+pnpm add @react-native-downstream/math
 # For a bare iOS app:
 npx pod-install
 ```
@@ -458,7 +461,7 @@ npx pod-install
 Select `math()` on a view or provider to enable formulas. Installing the package alone keeps them as source and produces a development warning when a view does not select the plugin. Configure delimiters through the factory:
 
 ```tsx
-import { math } from 'react-native-downstream-math';
+import { math } from '@react-native-downstream/math';
 
 <Downstream
   markdown={text}
@@ -481,7 +484,10 @@ Use `components.fences` to turn a fenced language into an app component. A chart
 
 ```tsx
 import { Text } from 'react-native';
-import { Downstream, type CustomRendererProps } from 'react-native-downstream';
+import {
+  Downstream,
+  type CustomRendererProps,
+} from '@react-native-downstream/core';
 
 function AnswerCard({ code, isIncomplete }: CustomRendererProps) {
   return <Text>{isIncomplete ? 'Receiving answer...' : code}</Text>;
@@ -570,8 +576,8 @@ The API below is intended for 0.2. Flat view props and the former component name
 | `createMarkdownStream({ math, syntax, links, inlineHtml, cjk, allowedTags, literalTagContent, disableAutolinkProtocols })` | Math options go to `math(options)`; other parse options go on the view or provider, with autolink protocols under `links` |
 | `createMarkdownStream({ preview })`, `stream.setPreview(preview)`                                                          | The view or provider's `preview` prop; update the prop to change policy                                                   |
 | Repeated options on every view                                                                                             | Shared defaults on `DownstreamProvider`                                                                                   |
-| Built-in highlighting or `syntaxHighlighting`                                                                              | Install `react-native-downstream-code` and select `plugins={[code()]}`                                                    |
-| Math enabled by installation or `math={options}`                                                                           | Select `plugins={[math(options)]}` from `react-native-downstream-math`                                                    |
+| Built-in highlighting or `syntaxHighlighting`                                                                              | Install `@react-native-downstream/code` and select `plugins={[code()]}`                                                   |
+| Math enabled by installation or `math={options}`                                                                           | Select `plugins={[math(options)]}` from `@react-native-downstream/math`                                                   |
 
 Other view props keep their names: `style`, `selectable`, `androidParagraphLayout`, `controls`, `translations`, `theme`, `markdownStyle`, `onMathError`, `inlineHtml`, `syntax`, `cjk`, `links.relative`, `links.defaultOrigin`, `allowedTags`, `literalTagContent`, `normalizeHtmlIndentation`, `dir`, `onTagPress`, `onTaskPress`, `icons`, `animated`, `isAnimating`, `preview`, `caret`, `onAnimationStart`, `onAnimationEnd`, and `onError`. The controller's `append`, `reset`, `finish`, `getSource`, and `dispose` methods remain available.
 

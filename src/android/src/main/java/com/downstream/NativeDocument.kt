@@ -1064,7 +1064,7 @@ internal object DownstreamNative {
   private const val MATH_PACKAGE_CLASS = "com.downstream.math.DownstreamMathPackage"
 
   /**
-   * Registers RaTeX with the engine when `react-native-downstream-math` is
+   * Registers RaTeX with the engine when `@react-native-downstream/math` is
    * installed.
    *
    * Registering loads nothing: the engine opens `libratex_ffi.so` the first
