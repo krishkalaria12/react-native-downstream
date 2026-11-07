@@ -12,6 +12,7 @@ export const docGroups: { label: string; items: DocLink[] }[] = [
     label: 'Guide',
     items: [
       { slug: 'streaming', title: 'Streaming' },
+      { slug: 'plugins', title: 'Plugins & defaults' },
       { slug: 'code-blocks', title: 'Code blocks' },
       { slug: 'tables', title: 'Tables' },
       { slug: 'images-and-math', title: 'Images & math' },

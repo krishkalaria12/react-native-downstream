@@ -2,7 +2,7 @@
 title: Images & math
 description: HTTPS images with an allowlist, and optional native math typesetting that stays stable while streaming.
 group: Guide
-order: 5
+order: 6
 ---
 
 ## Images
@@ -10,21 +10,24 @@ order: 5
 An image-only paragraph renders as a native image with a loading placeholder and alt text on failure. Images are enabled by default and load over HTTPS.
 
 ```tsx
-<DownstreamMarkdown
-  markdown={text}
-  allowedImagePrefixes={['https://cdn.example.com/']}
-  onImagePress={({ url }) => console.log('Image pressed', url)}
-/>
+<Downstream
+  images={{
+    allowedPrefixes: ['https://cdn.example.com/'],
+    onPress: ({ url }) => console.log('Image pressed', url),
+  }}
+>
+  {text}
+</Downstream>
 ```
 
-The default prefix list is `['*']`, which allows any HTTPS host. Every image URL comes from model output, and a model that reads untrusted text can be made to fetch any URL. An app whose models read web pages, tool output, or email should pass its own CDN prefixes.
+The default `images.allowedPrefixes` list is `['*']`, which allows any HTTPS host. Every image URL comes from model output, and a model that reads untrusted text can be made to fetch any URL. An app whose models read web pages, tool output, or email should pass its own CDN prefixes.
 
 Use `images={false}` to show alt text without fetching images.
 
 `markdownStyle.image` controls height, radius, margins, and placeholder color. Loaded images can also have a download control:
 
 ```tsx
-<DownstreamMarkdown markdown={text} controls={{ image: { download: true } }} />
+<Downstream controls={{ image: { download: true } }}>{text}</Downstream>
 ```
 
 Images are loaded at most four at a time and cancelled when no view needs them.
@@ -39,15 +42,21 @@ pnpm add @react-native-downstream/math
 npx pod-install
 ```
 
-Math is enabled by default when the native math engine is installed. Use `math={false}` to keep formulas as source, or configure the delimiters:
+Select `math()` on a view or provider to typeset formulas, and configure the delimiters through the factory:
 
 ```tsx
-<DownstreamMarkdown
-  markdown={text}
-  math={{ singleDollarTextMath: true, brackets: true }}
+import { Downstream } from '@react-native-downstream/core';
+import { math } from '@react-native-downstream/math';
+
+<Downstream
+  plugins={[math({ singleDollarTextMath: true, brackets: true })]}
   onMathError={({ source, message }) => console.warn(source, message)}
-/>
+>
+  {text}
+</Downstream>;
 ```
+
+A view that does not select `math()` keeps formulas as source; development builds warn when the engine is installed but a view does not select it. `mathAvailable()` reports whether the engine is in the current binary.
 
 ### Supported forms
 
@@ -65,14 +74,10 @@ Unsupported formulas, or formulas requested without an installed engine, display
 
 During streaming, a formula keeps its last valid layout while more input arrives. A formula that is still growing does not report an error for every token.
 
-For streams, set math options when creating the controller. The view's `math` prop controls typesetting of formulas the stream has already parsed:
+String children and controllers both take their math policy from the view's plugin selection. Changing the selection rebuilds the source without losing text:
 
 ```tsx
-const stream = createMarkdownStream({
-  math: { singleDollarTextMath: true },
-});
-
-<DownstreamMarkdown stream={stream} math />;
+<Downstream stream={stream} plugins={[math({ singleDollarTextMath: true })]} />
 ```
 
 ### Styling

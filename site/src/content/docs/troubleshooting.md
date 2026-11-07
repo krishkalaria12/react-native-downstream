@@ -2,19 +2,19 @@
 title: Troubleshooting
 description: Fix the common native build, streaming, rendering, and performance problems.
 group: Reference
-order: 11
+order: 12
 ---
 
 ## The view renders nothing
 
-Check the content prop first. Pass either `markdown` or `stream`, never both:
+Check the source first. Pass one of string children, `markdown`, or `stream`:
 
 ```tsx
-// Complete document
-<DownstreamMarkdown markdown={text} />
+// A string that may still be growing
+<Downstream isAnimating={isStreaming}>{text}</Downstream>
 
-// Live response
-<DownstreamMarkdown stream={stream} />
+// Chunks fed through a controller
+<Downstream stream={stream} />
 ```
 
 A stream renders nothing until the first `append()`. If you created the controller in a component body, it may be recreated on every render; move it into the action that starts the reply, or into a ref.
@@ -62,88 +62,92 @@ After `finish()`, call `reset()` before appending again. A disposed controller p
 
 ## Incomplete Markdown shows its markers
 
-This is the default. An unfinished span such as `**hello` renders literally until its closing marker arrives. Enable provisional styling when you want it repaired:
+Streaming views preview unfinished spans such as `**hello` by default. Markers show when the view sets `preview={false}`, or passes a `preview` object that leaves that feature out:
 
 ```tsx
-const stream = createMarkdownStream({
-  preview: {
+<Downstream
+  stream={stream}
+  preview={{
     emphasis: true,
     inlineCode: true,
     links: true,
-  },
-});
+  }}
+/>
 ```
 
 Previews never change your source. If a preview is enabled but the marker still shows, the repair was not proven safe for that block, or the block had already ended.
 
 ## Links do nothing
 
-A press with no `onLinkPress` opens the link after a confirmation. If nothing happens at all:
+A press with no `links.onPress` opens the link after a confirmation. If nothing happens at all:
 
-- `linkSafety={false}` without an `onLinkPress` means the library still opens it, without asking. If it does not, your app's URL handling may be intercepting the request.
-- An `onLinkPress` replaces the built-in behavior entirely. Make sure your handler actually opens the URL.
+- `links={{ safety: false }}` without `onPress` means the library still opens it, without asking. If it does not, your app's URL handling may be intercepting the request.
+- `links.onPress` replaces the built-in behavior entirely. Make sure your handler actually opens the URL.
 - Relative links are off by default. Pass `links={{ relative: true }}` or `links={{ defaultOrigin: 'https://example.com' }}`.
 
 ```tsx
-<DownstreamMarkdown
-  markdown={text}
-  links={{ defaultOrigin: 'https://docs.example.com' }}
-  onLinkPress={({ url }) => router.push(url)}
-/>
+<Downstream
+  links={{
+    defaultOrigin: 'https://docs.example.com',
+    onPress: ({ url }) => router.push(url),
+  }}
+>
+  {text}
+</Downstream>
 ```
 
 ## Math shows as source
 
-Math is enabled only when `@react-native-downstream/math` is installed and the app has been rebuilt.
+Formulas are typeset only when `@react-native-downstream/math` is installed, the app has been rebuilt, and the view or its provider selects `math()`:
 
 ```sh
 pnpm add @react-native-downstream/math
 npx pod-install
 ```
 
-If formulas still show as source, check the delimiter. `$…$` is off by default; enable it explicitly:
-
 ```tsx
-<DownstreamMarkdown markdown={text} math={{ singleDollarTextMath: true }} />
+import { math } from '@react-native-downstream/math';
+
+<Downstream plugins={[math()]}>{text}</Downstream>;
 ```
 
-For a stream, set math options when creating the controller. The view's `math` prop only decides whether already-parsed formulas are typeset.
+Development builds warn when the engine is installed but a view does not select `math()`. A view's own `plugins` array replaces its provider's, so include `math()` there too.
+
+If formulas still show as source, check the delimiter. `$…$` is off by default; enable it explicitly with `math({ singleDollarTextMath: true })`.
 
 `onMathError` reports formulas the engine could not typeset, once per distinct source per view.
 
 ## Images do not load
 
-Images require HTTPS and must match `allowedImagePrefixes`. The default is `['*']`, which allows any HTTPS host.
+Images require HTTPS and must match `images.allowedPrefixes`. The default is `['*']`, which allows any HTTPS host.
 
 ```tsx
-<DownstreamMarkdown
-  markdown={text}
-  allowedImagePrefixes={['https://cdn.example.com/']}
-/>
+<Downstream images={{ allowedPrefixes: ['https://cdn.example.com/'] }}>
+  {text}
+</Downstream>
 ```
 
 An image inside a paragraph with other content renders as text rather than a block image. Only an image-only paragraph becomes a native image. `images={false}` shows alt text and makes no request.
 
 ## A code block is plain
 
-Highlighting covers 84 languages. A block stays plain when:
+Highlighting comes from `@react-native-downstream/code` and covers 84 languages. A block stays plain when:
 
+- The code package is not installed, or the app was not rebuilt after installing it. `codeAvailable()` reports whether it is in the binary.
+- The view or its provider does not select `code()`. A view's own `plugins` array replaces its provider's.
 - Its info string is unknown, missing, or misspelled.
 - The block exceeds 64 KiB of code.
-- `syntaxHighlighting={false}` is set.
 
 Identifiers are case-insensitive, but only the first word of the info string counts. See [Code blocks](/docs/code-blocks) for the accepted metadata forms.
 
 ## Code or tables are cut off
 
-Long code scrolls inside its card at `codeBlockMaxHeight` (400 points by default), and tables scroll at `tableMaxHeight` (300). The expand control lifts the cap for one block.
+Long code scrolls inside its card at `codeBlock.maxHeight` (400 points by default), and tables scroll at `table.maxHeight` (300). The expand control lifts the cap for one block.
 
 ```tsx
-<DownstreamMarkdown
-  markdown={text}
-  codeBlockMaxHeight={0}
-  tableMaxHeight="none"
-/>
+<Downstream codeBlock={{ maxHeight: 0 }} table={{ maxHeight: 'none' }}>
+  {text}
+</Downstream>
 ```
 
 `0`, `'0'`, `'none'`, `Infinity`, and `'Infinity'` all remove a cap.
@@ -152,7 +156,7 @@ Long code scrolls inside its card at `codeBlockMaxHeight` (400 points by default
 
 A renderer matches the normalized fence language, case-insensitively. Check that:
 
-- `plugins.renderers` includes the language.
+- `components.fences` has a key for the language.
 - The component is defined outside the render path, or is stable across renders.
 - The fence's first info word matches, before any `:` or metadata.
 
@@ -166,18 +170,19 @@ Line numbers, carets, and control chrome are never copied, selected, exported, o
 
 ## Animation does not run
 
-`animated` requires `isAnimating` for a controlled string. A stream tracks its own state. Reduce Motion disables the reveal, and Android's animator scale of 0 does the same.
+`animated` requires `isAnimating` for string children. A stream tracks its own state. Reduce Motion disables the reveal, and Android's animator scale of 0 does the same.
 
 `blurIn` falls back to `fadeIn` on platforms that cannot draw a blur. This is expected and reported once in development.
 
 ## The app uses more memory than expected
 
-Each stream controller holds its own document state. Dispose controllers when messages leave the screen:
+Views that take string children dispose their sessions when they unmount. A stream controller holds its own document state until you dispose it, so dispose it where the message is removed:
 
 ```tsx
-useEffect(() => {
-  return () => stream.dispose();
-}, [stream]);
+function removeMessage(message: Message) {
+  message.reply.dispose();
+  setMessages((messages) => messages.filter((m) => m !== message));
+}
 ```
 
 Peak memory also depends on images, code highlighting, and how many documents are mounted at once. Compare against the [benchmarks](/benchmarks) before assuming a regression.

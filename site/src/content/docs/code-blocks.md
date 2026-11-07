@@ -2,22 +2,32 @@
 title: Code blocks
 description: Syntax highlighting, filenames, line numbers, wrapping, copy, download, and expansion.
 group: Guide
-order: 3
+order: 4
 ---
 
-Fenced code gets syntax highlighting and a header with copy, download, and wrap controls. Long blocks scroll within their card and can be expanded.
+Fenced code has a header with copy, download, and wrap controls. Long blocks scroll within their card and can be expanded. Add the `code()` plugin for native syntax highlighting:
 
-```tsx
-<DownstreamMarkdown
-  markdown={text}
-  syntaxHighlighting
-  lineNumbers
-  codeBlockWrap={false}
-  codeBlockMaxHeight={400}
-/>
+```sh
+pnpm add @react-native-downstream/code
+# For a bare iOS app:
+npx pod-install
 ```
 
-Highlighting and line numbers are on by default. Wrapping is off, and the default height cap is 400 points. Set `codeBlockMaxHeight={0}` for full-height code.
+```tsx
+import { Downstream } from '@react-native-downstream/core';
+import { code } from '@react-native-downstream/code';
+
+<Downstream
+  plugins={[code()]}
+  codeBlock={{ lineNumbers: true, wrap: false, maxHeight: 400 }}
+>
+  {text}
+</Downstream>;
+```
+
+Rebuild your native app after installing the package. Without it, or without `code()` in the view's plugins, blocks render plain with the same layout and controls.
+
+Line numbers are on by default. Wrapping is off, and the default height cap is 400 points. Set `codeBlock={{ maxHeight: 0 }}` for full-height code.
 
 Line numbers are drawn beside the code and never become part of copied or selected text.
 
@@ -48,7 +58,7 @@ Only the first word of the info string counts, so `TypeScript title="app.ts"` an
 
 ## Languages
 
-Code is colored natively in 84 languages, including languages embedded in others: script and style blocks in HTML, Vue, Svelte, and Astro, and fenced code inside Markdown and MDX.
+The code plugin colors 84 languages natively, including languages embedded in others: script and style blocks in HTML, Vue, Svelte, and Astro, and fenced code inside Markdown and MDX.
 
 Identifiers are case-insensitive. Blocks with an unknown language, no language, or more than 64 KiB of code render as plain code.
 
@@ -77,15 +87,14 @@ Identifiers are case-insensitive. Blocks with an unknown language, no language, 
 | Vue        | `vue`                                   |
 | YAML       | `yaml`, `yml`                           |
 
-Set `syntaxHighlighting={false}` to disable coloring throughout the view.
+Remove `code()` from a view's plugins to render its code plain. `codeAvailable()` reports whether the native highlighter is installed in the current binary.
 
 ## Controls
 
 Configure code controls individually and listen for completed actions:
 
 ```tsx
-<DownstreamMarkdown
-  markdown={text}
+<Downstream
   controls={{
     code: {
       copy: { onCopy: (event) => console.log('Copied', event.language) },
@@ -94,7 +103,9 @@ Configure code controls individually and listen for completed actions:
       expand: true,
     },
   }}
-/>
+>
+  {text}
+</Downstream>
 ```
 
 Omitted controls stay enabled. Use `controls={false}` to hide them all, or `controls={{ code: false }}` to hide only code controls.
@@ -103,13 +114,10 @@ Buttons become available when their own block settles, even if the rest of the r
 
 ## Custom fence renderers
 
-To replace the code card for a language, register a renderer. See [Custom renderers](/docs/custom-renderers).
+To replace the code card for a language, map it to a component. See [Custom renderers](/docs/custom-renderers).
 
 ```tsx
-<DownstreamMarkdown
-  markdown={text}
-  plugins={{
-    renderers: [{ language: 'answer-card', component: AnswerCard }],
-  }}
-/>
+<Downstream components={{ fences: { 'answer-card': AnswerCard } }}>
+  {text}
+</Downstream>
 ```

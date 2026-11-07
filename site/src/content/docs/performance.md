@@ -2,7 +2,7 @@
 title: Performance
 description: What the native path measures on a real phone, why streaming reuses completed blocks, and how to read the benchmark numbers.
 group: Reference
-order: 10
+order: 11
 ---
 
 Every number on this site comes from a measured run on a physical Android phone, not a simulator or a JavaScript microbenchmark. The full tables, confidence intervals, and relative multipliers are on the [benchmarks page](/benchmarks).

@@ -46,42 +46,48 @@ npx expo run:ios
 npx expo run:android
 ```
 
-## Render a complete message
+## Render a message
 
-Pass a string when you already have the whole document:
+Pass the Markdown as a string child. Update the string as text arrives, and Downstream appends only what was added:
 
 ```tsx
-import { DownstreamMarkdown } from '@react-native-downstream/core';
+import { Downstream } from '@react-native-downstream/core';
 
 export function Message({ text }: { text: string }) {
   return (
-    <DownstreamMarkdown
-      markdown={text}
-      onError={(error) => console.warn(error.code, error.message)}
-    />
+    <Downstream onError={(error) => console.warn(error.code, error.message)}>
+      {text}
+    </Downstream>
   );
 }
 ```
 
-Links open only after a confirmation by default. Pass `onLinkPress` to handle navigation yourself.
+Links open only after a confirmation by default. Pass `links={{ onPress }}` to handle navigation yourself.
 
 ## Stream a response
 
-For an append-only response, create one controller per message and keep it for that message's lifetime. Create it outside the render path — in the action that starts the reply.
+Pass the growing text as children and set `isAnimating` while the response is arriving. Setting it to `false` finishes the response and removes provisional formatting:
+
+```tsx
+<Downstream isAnimating={isStreaming} animated caret="block">
+  {text}
+</Downstream>
+```
+
+When your transport emits chunks directly, or a reply must keep arriving while its list row is unmounted, feed a controller instead. Create one per message, outside the render path, in the action that starts the reply:
 
 ```tsx
 import {
   createMarkdownStream,
-  DownstreamMarkdown,
+  Downstream,
 } from '@react-native-downstream/core';
 
 const stream = createMarkdownStream({
-  preview: true,
   onError: (error) => console.warn(error.code, error.message),
 });
 
 // Render this view while chunks arrive.
-<DownstreamMarkdown stream={stream} animated caret="block" />;
+<Downstream stream={stream} animated caret="block" />;
 
 // In your response handler:
 stream.append('Hello ');
@@ -92,11 +98,33 @@ stream.finish();
 stream.dispose();
 ```
 
-Each controller binds to one view. Pass either `markdown` or `stream`, never both.
+Each controller binds to one view. A view takes string children, a `markdown` string, or a `stream`, one at a time.
+
+## Add code highlighting and math
+
+Native syntax highlighting and math typesetting are optional packages. Install them, rebuild, and select them on a view or on a provider for the whole app:
+
+```sh
+pnpm add @react-native-downstream/code @react-native-downstream/math
+npx pod-install
+```
+
+```tsx
+import { DownstreamProvider } from '@react-native-downstream/core';
+import { code } from '@react-native-downstream/code';
+import { math } from '@react-native-downstream/math';
+
+const plugins = [code(), math()];
+
+<DownstreamProvider plugins={plugins}>
+  <App />
+</DownstreamProvider>;
+```
 
 ## Where to go next
 
 - [Streaming](/docs/streaming) — previews, animation, carets, and the controller lifecycle.
 - [Code blocks](/docs/code-blocks) — highlighting, filenames, line numbers, and controls.
+- [Plugins & defaults](/docs/plugins) — feature plugins and app-wide options with `DownstreamProvider`.
 - [Theming](/docs/theming) — presets, tokens, and per-element styles.
 - [Benchmarks](/benchmarks) — what the native path buys you on a real phone.

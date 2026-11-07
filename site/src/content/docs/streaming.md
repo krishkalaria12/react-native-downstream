@@ -1,55 +1,90 @@
 ---
 title: Streaming
-description: Append chunks, preview unfinished Markdown, animate the reveal, and manage the controller lifecycle.
+description: Stream a growing string or feed a controller, preview unfinished Markdown, animate the reveal, and manage the controller lifecycle.
 group: Guide
 order: 2
 ---
 
-A streaming response is an append-only document. `createMarkdownStream` gives you a controller that accepts chunks, batches updates by animation frame, and keeps completed blocks stable while the tail changes.
+A streaming response is an append-only document. Downstream keeps completed blocks stable while the tail changes, and batches updates by animation frame. Give a view the growing string, or feed it chunks through a controller.
 
-## Create a controller
+## Stream a growing string
+
+Pass the text as children and set `isAnimating` while the response is arriving. Downstream owns the incremental session and appends only the added text. With the AI SDK's `useChat`:
 
 ```tsx
-import { createMarkdownStream } from '@react-native-downstream/core';
+import { useChat } from '@ai-sdk/react';
+import { Downstream } from '@react-native-downstream/core';
+
+export function Chat() {
+  const { messages, status } = useChat();
+  return messages.map((message) =>
+    message.parts.map((part, index) =>
+      part.type === 'text' ? (
+        <Downstream
+          key={`${message.id}-${index}`}
+          isAnimating={
+            status === 'streaming' &&
+            message.role === 'assistant' &&
+            message.id === messages.at(-1)?.id
+          }
+          animated
+          caret="block"
+        >
+          {part.text}
+        </Downstream>
+      ) : null
+    )
+  );
+}
+```
+
+Setting `isAnimating` to `false` finishes the response and removes provisional formatting. A replaced string resets the session, and growth after finishing starts a new generation. Sessions are disposed when their views unmount. A message that mounts already settled is parsed once, without a session.
+
+## Feed chunks through a controller
+
+Create a controller when your transport emits chunks directly, or when a reply must keep arriving while its list row is unmounted:
+
+```tsx
+import {
+  createMarkdownStream,
+  Downstream,
+} from '@react-native-downstream/core';
 
 const stream = createMarkdownStream({
-  preview: true,
   onError: (error) => console.warn(error.code, error.message),
 });
+
+<Downstream stream={stream} animated caret="block" />;
 ```
 
-Create one controller per message, outside the component's render path, and keep it for that message's lifetime. Each controller binds to one view.
-
-```tsx
-<DownstreamMarkdown stream={stream} animated caret="block" />
-```
+Create one controller per message, outside the component's render path, and keep it for that message's lifetime. Each controller binds to one view. Text keeps accumulating while the view is unmounted.
 
 ## Controller methods
 
-| Method                | What it does                                                                                      |
-| --------------------- | ------------------------------------------------------------------------------------------------- |
-| `append(chunk)`       | Adds the next text chunk. Updates are batched by animation frame.                                 |
-| `finish()`            | Marks the response complete and renders the final Markdown.                                       |
-| `reset(source?)`      | Starts a new response, optionally with initial text. Use before appending again after `finish()`. |
-| `getSource()`         | Returns a promise with the exact source you supplied.                                             |
-| `setPreview(options)` | Changes how incomplete Markdown is displayed.                                                     |
-| `dispose()`           | Releases the controller when the message is no longer needed.                                     |
+| Method           | What it does                                                                                      |
+| ---------------- | ------------------------------------------------------------------------------------------------- |
+| `append(chunk)`  | Adds the next text chunk. Updates are batched by animation frame.                                 |
+| `finish()`       | Marks the response complete and renders the final Markdown.                                       |
+| `reset(source?)` | Starts a new response, optionally with initial text. Use before appending again after `finish()`. |
+| `getSource()`    | Returns a promise with the exact source you supplied.                                             |
+| `dispose()`      | Releases the controller when the message is removed.                                              |
 
-Call `dispose()` when the message is removed. A disposed controller no longer publishes updates.
+A disposed controller publishes no updates.
 
 ## Make incomplete Markdown readable
 
-By default, an unfinished span such as `**hello` shows its literal markers. `preview: true` applies provisional formatting while closing markers are still arriving. Enable only the previews you want:
+While a response is streaming, an unfinished span such as `**hello` is previewed with provisional formatting by default, whether the source is string children or a controller. Set `preview={false}` on the view to show literal markers, or enable only the previews you want:
 
 ```tsx
-const stream = createMarkdownStream({
-  preview: {
+<Downstream
+  stream={stream}
+  preview={{
     emphasis: true,
     inlineCode: true,
     links: true,
     math: true,
-  },
-});
+  }}
+/>
 ```
 
 | Key          | Effect                                                                                                         |
@@ -62,14 +97,14 @@ const stream = createMarkdownStream({
 | `htmlTags`   | Hides a half-arrived allowlisted tag at the stream tail.                                                       |
 | `tables`     | Hides a table until every row is complete.                                                                     |
 
-Previews never change your source. `finish()` removes provisional formatting and renders the Markdown you actually sent.
+Previews never change your source. Finishing the response removes provisional formatting and renders the Markdown you actually sent. To change the policy mid-stream, update the `preview` prop.
 
 ## Animate arriving text
 
 `animated` fades in new words. Pass an options object for character-by-character reveals, timing, or a slide animation:
 
 ```tsx
-<DownstreamMarkdown
+<Downstream
   stream={stream}
   animated={{
     animation: 'slideUp',
@@ -93,23 +128,28 @@ Previews never change your source. `finish()` removes provisional formatting and
 
 Animation changes drawing without reflowing text. A copy, a selection, an export, and a screen reader all see the whole message. Reduce Motion disables the reveal.
 
-A stream tracks its own animation state. For a controlled `markdown` string, pass `isAnimating={isStreaming}`. `onAnimationStart` and `onAnimationEnd` report changes; the end callback fires when streaming stops, before any remaining fades finish.
+A stream tracks its own animation state. For string children, pass `isAnimating={isStreaming}`. `onAnimationStart` and `onAnimationEnd` report changes; the end callback fires when streaming stops, before any remaining fades finish.
 
 ## Caret
 
 `caret="block"` or `caret="circle"` draws a caret after the newest text while animating. It takes the color of the last character, sits after the last prose block or inside an open fence, and moves to its own line after a table, closed fence, or rule. The caret never appears in copied or selected text.
 
-## Parse options belong to the controller
+## Parse options belong to the view
 
-For streams, set parsing options such as `math`, `syntax`, `links`, and `inlineHtml` when creating the controller. The view's `math` prop only decides whether formulas the stream already parsed are typeset.
+A controller carries only text. Parsing options such as `syntax`, `links`, and `inlineHtml` go on the view or on a [`DownstreamProvider`](/docs/plugins), and math delimiters go to the `math()` plugin:
 
 ```tsx
-const stream = createMarkdownStream({
-  math: { singleDollarTextMath: true },
-  syntax: { superscript: true },
-  links: { defaultOrigin: 'https://docs.example.com' },
-});
+import { math } from '@react-native-downstream/math';
+
+<Downstream
+  stream={stream}
+  plugins={[math({ singleDollarTextMath: true })]}
+  syntax={{ superscript: true }}
+  links={{ defaultOrigin: 'https://docs.example.com' }}
+/>;
 ```
+
+Changing these options on a bound stream rebuilds its accepted source under the new policy without losing text or its finished state.
 
 ## Lifecycle rules
 

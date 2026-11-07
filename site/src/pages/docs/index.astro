@@ -8,17 +8,16 @@ import { breadcrumbs } from '../../data/site';
 const docs = await getCollection('docs');
 const bySlug = new Map(docs.map((entry) => [entry.id, entry]));
 
-const quickstart = `import { DownstreamMarkdown, createMarkdownStream } from '@react-native-downstream/core';
+const quickstart = `import { Downstream } from '@react-native-downstream/core';
 
-// One controller per reply, created when the request starts.
-const stream = createMarkdownStream();
-
-// Give it to the view...
-export const Reply = () => <DownstreamMarkdown stream={stream} />;
-
-// ...and append text as it arrives.
-for await (const chunk of textStream) stream.append(chunk);
-stream.finish();`;
+// Pass the reply as it grows. Downstream appends only the new text.
+export function Message({ text, streaming }: { text: string; streaming: boolean }) {
+  return (
+    <Downstream isAnimating={streaming} animated caret="block">
+      {text}
+    </Downstream>
+  );
+}`;
 ---
 
 <BaseLayout

@@ -2,16 +2,15 @@
 title: Theming
 description: Start from a preset, then override colors, fonts, radius, and individual Markdown elements.
 group: Guide
-order: 8
+order: 9
 ---
 
 Start with `presets.github` or `presets.streamdown`, then override what you need:
 
 ```tsx
-import { DownstreamMarkdown, presets } from '@react-native-downstream/core';
+import { Downstream, presets } from '@react-native-downstream/core';
 
-<DownstreamMarkdown
-  markdown={text}
+<Downstream
   theme={[
     presets.github.theme,
     {
@@ -26,7 +25,9 @@ import { DownstreamMarkdown, presets } from '@react-native-downstream/core';
     presets.github.markdownStyle,
     { h1: { fontSize: 28 }, paragraph: { fontSize: 16 } },
   ]}
-/>;
+>
+  {text}
+</Downstream>;
 ```
 
 `theme` controls document colors, fonts, corner radius, syntax colors, and the font scale cap. `markdownStyle` controls individual elements, including headings, paragraphs, lists, blockquotes, code, tables, links, alerts, images, and math.
@@ -59,8 +60,7 @@ Custom fonts must already be available in your app.
 `markdownStyle` uses `react-native-enriched-markdown`'s key and property names for every key this renderer draws, so a value written for the closest native peer works as it is.
 
 ```tsx
-<DownstreamMarkdown
-  markdown={text}
+<Downstream
   markdownStyle={{
     h1: { fontSize: 30, fontWeight: 800, marginBottom: 12 },
     paragraph: { fontSize: 16, lineHeight: 26 },
@@ -72,14 +72,16 @@ Custom fonts must already be available in your app.
     },
     table: { borderColor: '#1c1b19', headerBackgroundColor: '#3654d9' },
   }}
-/>
+>
+  {text}
+</Downstream>
 ```
 
 A key or property this renderer does not draw is reported once in development rather than silently ignored.
 
 ## Syntax colors from a VS Code theme
 
-For a VS Code or Shiki JSON theme, convert its token colors with `syntaxColorsFromTheme`:
+Syntax colors style code highlighted by the [`code()` plugin](/docs/code-blocks). To start from a VS Code or Shiki JSON theme, convert its token colors with `syntaxColorsFromTheme`:
 
 ```tsx
 import { syntaxColorsFromTheme } from '@react-native-downstream/core';
@@ -87,11 +89,12 @@ import myTheme from './my-theme.json';
 
 const converted = syntaxColorsFromTheme(myTheme);
 
-<DownstreamMarkdown
-  markdown={text}
+<Downstream
   theme={{ syntax: converted.syntax }}
   markdownStyle={{ codeBlock: { syntaxColors: converted.codeBlock } }}
-/>;
+>
+  {text}
+</Downstream>;
 ```
 
 ## Icons and labels
@@ -99,15 +102,16 @@ const converted = syntaxColorsFromTheme(myTheme);
 Replace control glyphs with platform icon names or bundled image sources, and customize labels and accessibility announcements:
 
 ```tsx
-<DownstreamMarkdown
-  markdown={text}
+<Downstream
   icons={{ copy: 'doc.on.doc', check: 'checkmark' }}
   translations={{
     copyCode: 'Copy code',
     copied: 'Copied',
     wrapCode: 'Wrap lines',
   }}
-/>
+>
+  {text}
+</Downstream>
 ```
 
 See the [API reference](/docs/api) for the full control and translation surface.

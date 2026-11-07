@@ -24,8 +24,8 @@ const software = {
 
 const steps = [
   {
-    title: 'Append each chunk',
-    body: 'Hand every text delta to the controller as it arrives. Updates are batched per animation frame, so a burst of tokens is one update, not fifty.',
+    title: 'Pass the growing text',
+    body: 'Give the view the reply as it grows. Downstream appends only the new text, and updates are batched per animation frame, so a burst of tokens is one update, not fifty.',
   },
   {
     title: 'Closed blocks settle',
@@ -38,7 +38,7 @@ const steps = [
 ];
 
 const features = [
-  { title: 'Code blocks', body: 'Highlighting for 84 languages, line numbers, filenames, copy, download, wrap and expand.' },
+  { title: 'Code blocks', body: 'Optional native highlighting for 84 languages, line numbers, filenames, copy, download, wrap and expand.' },
   { title: 'Tables', body: 'Scrollable grids with Markdown, CSV and TSV copy, export, and a full-screen view.' },
   { title: 'Math', body: 'Optional native typesetting for display and inline formulas, steady while they stream.' },
   { title: 'Images', body: 'HTTPS images with placeholders, alt-text fallback, and an allowlist of trusted hosts.' },
@@ -49,24 +49,22 @@ const features = [
   { title: 'Your own components', body: 'Render a fence language or an allowed tag with any React component.' },
 ];
 
-const replyCode = `import { DownstreamMarkdown, createMarkdownStream } from '@react-native-downstream/core';
-import type { MarkdownStreamController } from '@react-native-downstream/core';
-import { streamText } from 'ai';
+const replyCode = `import { useChat } from '@ai-sdk/react';
+import { Downstream } from '@react-native-downstream/core';
 
-type Message = { id: string; reply: MarkdownStreamController };
+export function Chat() {
+  const { messages, status } = useChat();
 
-// Run from your send button. The controller lives as long as its message.
-async function send(prompt: string, add: (message: Message) => void) {
-  const reply = createMarkdownStream({ preview: true });
-  add({ id: String(Date.now()), reply });
-
-  const { textStream } = streamText({ model, prompt });
-  for await (const chunk of textStream) reply.append(chunk);
-  reply.finish();
-}
-
-function Bubble({ message }: { message: Message }) {
-  return <DownstreamMarkdown stream={message.reply} animated caret="block" />;
+  return messages.map((message) => (
+    <Downstream
+      key={message.id}
+      isAnimating={status === 'streaming' && message === messages.at(-1)}
+      animated
+      caret="block"
+    >
+      {message.parts.map((part) => (part.type === 'text' ? part.text : '')).join('')}
+    </Downstream>
+  ));
 }`;
 
 const install = `pnpm add @react-native-downstream/core
@@ -144,9 +142,9 @@ npx expo run:ios`;
       </div>
 
       <div class="min-w-0 lg:pt-3">
-        <CodeBlock code={replyCode} lang="tsx" title="Reply.tsx" class="[&_.code-frame]:border-paper/25 [&_.code-frame]:shadow-[6px_6px_0_var(--color-blue)]" />
+        <CodeBlock code={replyCode} lang="tsx" title="Chat.tsx" class="[&_.code-frame]:border-paper/25 [&_.code-frame]:shadow-[6px_6px_0_var(--color-blue)]" />
         <p class="mt-5 text-[14.5px] text-paper/55">
-          One controller per message. It works with any source of text: the Vercel AI SDK, a WebSocket, or a
+          Pass the reply as it grows. It works with any source of text: the Vercel AI SDK, a WebSocket, or a
           server-sent event stream.
         </p>
       </div>
